@@ -24,7 +24,6 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            // One-time MediaProjection grant — reused until revoked
             backendClient.startCaptureWithPermission(
                 result.resultCode,
                 result.data!!,
@@ -55,7 +54,6 @@ class MainActivity : ComponentActivity() {
                         startActivity(Intent("android.settings.ACCESSIBILITY_SETTINGS"))
                     },
                     onRequestLiveView = {
-                        // Manual start from phone UI (also triggered by UI stream_control)
                         pendingFps = 3
                         pendingQuality = 45
                         val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -72,12 +70,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePairingUri(uri: Uri) {
-        val token = uri.getQueryParameter("token")
-        val backend = uri.getQueryParameter("backend")
-        val ws = uri.getQueryParameter("ws")
-        if (token != null && backend != null) {
-            backendClient.pair(backend, token, ws)
-        }
+        backendClient.pairFromUri(uri)
     }
 }
 
@@ -88,11 +81,15 @@ fun MainScreen(
     onRequestLiveView: () -> Unit,
 ) {
     var connectionStatus by remember { mutableStateOf("Disconnected") }
+    var routeStatus by remember { mutableStateOf("Route: —") }
     var lastTask by remember { mutableStateOf("No tasks yet") }
     var streamStatus by remember { mutableStateOf("idle") }
 
     LaunchedEffect(Unit) {
         backendClient.statusFlow.collect { connectionStatus = it }
+    }
+    LaunchedEffect(Unit) {
+        backendClient.routeFlow.collect { routeStatus = it }
     }
     LaunchedEffect(Unit) {
         backendClient.taskFlow.collect { lastTask = it }
@@ -113,8 +110,14 @@ fun MainScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(text = "Mobilerun", style = MaterialTheme.typography.headlineLarge)
+            Text(
+                text = "Wireless · no USB cable",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             StatusCard("Status", connectionStatus, connectionStatus.contains("Connected"))
+            StatusCard("Active route", routeStatus, routeStatus.contains("LAN") || routeStatus.contains("DISCOVERED") || routeStatus.contains("CLOUD"))
             StatusCard("Last Task", lastTask, true)
             StatusCard("Live stream", streamStatus, streamStatus == "streaming")
 
@@ -128,7 +131,7 @@ fun MainScreen(
             }
 
             Text(
-                text = "Scan a QR from the control UI to pair. Grant MediaProjection once for live view.",
+                text = "Scan QR once (stores LAN + cloud). Prefers Wi‑Fi/mDNS; falls back to AWS. Auto-reconnects.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

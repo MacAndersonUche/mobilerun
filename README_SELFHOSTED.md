@@ -64,14 +64,14 @@ This will:
 
 **Key Flow:**
 
-1. You run `mobilerun serve` on your PC
-2. Phone app connects to PC over WiFi (no USB needed!)
-3. You type a task in the UI or CLI
-4. Agent loop runs on PC (using your API keys & compute)
-5. Commands sent to phone via WebSocket
-6. Accessibility Service executes taps, swipes, etc.
-7. Screenshots and UI tree stream back to PC
-8. You see live progress in the web UI
+1. You run `mobilerun serve` on your PC (advertises `_mobilerun._tcp` via mDNS)
+2. Phone pairs once via QR (stores **LAN + AWS** WebSocket endpoints) — **never needs USB/ADB**
+3. APK auto-selects: NSD/mDNS LAN when on the same Wi‑Fi (lowest latency), else AWS cloud WS; seamless reconnect/backoff
+4. You type a task in the UI or CLI
+5. Agent loop runs on PC or cloud (your API keys & compute)
+6. Commands sent to phone via WebSocket; UI shows **active route + latency**
+7. Accessibility Service executes taps, swipes, etc.
+8. Live view frames stream back while the UI is subscribed
 
 ## 🔧 Installation
 
@@ -309,11 +309,12 @@ localStorage.setItem('backendUrl', 'http://your-server:8000');
 
 ### Features
 
-- ✅ **WiFi Connection:** No USB cable needed
+- ✅ **WiFi / cloud WebSocket:** No USB cable needed in any mode
+- ✅ **mDNS / NSD discovery:** Prefers laptop `_mobilerun._tcp` on LAN; falls back to AWS
+- ✅ **Dual-endpoint QR:** One scan stores LAN + cloud; shows route + latency in-app
 - ✅ **Accessibility Service:** Real gesture execution (tap, swipe, scroll)
 - ✅ **UI Tree Capture:** Sends layout XML to agent
-- ✅ **QR Code Pairing:** Easy setup
-- ✅ **Always Connected:** Reconnects automatically
+- ✅ **Always Connected:** Session token + exponential backoff reconnect
 
 ### Setup
 

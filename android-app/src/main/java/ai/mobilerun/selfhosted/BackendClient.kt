@@ -2,34 +2,69 @@ package ai.mobilerun.selfhosted
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.*
-import java.util.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.min
+import kotlin.random.Random
 
+/**
+ * Outbound-only WebSocket client: prefers LAN (mDNS / QR lan_ws), falls back to cloud.
+ * Never requires USB/ADB. Reconnects with exponential backoff using session_token.
+ */
 class BackendClient(private val context: Context) {
-    private val TAG = "BackendClient"
+    private val tag = "BackendClient"
     private val client = OkHttpClient.Builder()
-        .pingInterval(30, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
         .build()
 
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val discovery = LanDiscovery(context)
 
     private var webSocket: WebSocket? = null
-    private var backendUrl: String? = null
-    private var wsOverride: String? = null
     private var deviceId: String = getOrCreateDeviceId()
-    private var pendingToken: String? = null
+    private var pairingToken: String? = null
+    private var sessionToken: String? = null
+
+    private var lanHttp: String? = null
+    private var lanWs: String? = null
+    private var cloudHttp: String? = null
+    private var cloudWs: String? = null
+    private var discoveredWs: String? = null
+    private var discoveredHttp: String? = null
+
+    private var activeRoute: String = "none"
+    private var lastLatencyMs: Double? = null
+    private val reconnectAttempt = AtomicInteger(0)
+    private var reconnectJob: Job? = null
+    private var heartbeatJob: Job? = null
+    private var userDisconnected = false
+    private var connecting = false
 
     private val _statusFlow = MutableStateFlow("Disconnected")
     val statusFlow: StateFlow<String> = _statusFlow
+
+    private val _routeFlow = MutableStateFlow("Route: —")
+    val routeFlow: StateFlow<String> = _routeFlow
 
     private val _taskFlow = MutableStateFlow("No tasks yet")
     val taskFlow: StateFlow<String> = _taskFlow
@@ -43,53 +78,181 @@ class BackendClient(private val context: Context) {
         ScreenCaptureService.frameListener = { frame ->
             sendFrame(frame)
         }
+        loadPrefs()
+        discovery.addListener(object : LanDiscovery.Listener {
+            override fun onServiceFound(service: LanDiscovery.Service) {
+                discoveredHttp = service.httpUrl
+                discoveredWs = service.wsUrl
+                // Prefer switching to LAN if currently on cloud
+                if (activeRoute == "cloud" || webSocket == null) {
+                    scope.launch { connectBest(force = activeRoute == "cloud") }
+                }
+            }
+
+            override fun onError(message: String) {
+                Log.w(tag, "discovery: $message")
+            }
+        })
+        discovery.start()
+        if (sessionToken != null || pairingToken != null) {
+            scope.launch { connectBest() }
+        }
     }
 
+    private fun prefs() = context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
+
     private fun getOrCreateDeviceId(): String {
-        val prefs = context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
-        var id = prefs.getString("device_id", null)
+        val p = prefs()
+        var id = p.getString("device_id", null)
         if (id == null) {
             id = "android_${UUID.randomUUID()}"
-            prefs.edit().putString("device_id", id).apply()
+            p.edit().putString("device_id", id).apply()
         }
         return id
     }
 
-    fun pair(backendUrl: String, token: String, wsUrl: String? = null) {
-        this.backendUrl = backendUrl
-        this.wsOverride = wsUrl
-        this.pendingToken = token
-
-        context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
-            .edit()
-            .putString("backend_url", backendUrl)
-            .putString("pairing_token", token)
-            .putString("ws_url", wsUrl)
-            .apply()
-
-        connect(token)
+    private fun loadPrefs() {
+        val p = prefs()
+        pairingToken = p.getString("pairing_token", null)
+        sessionToken = p.getString("session_token", null)
+        lanHttp = p.getString("lan_http", null) ?: p.getString("backend_url", null)
+        lanWs = p.getString("lan_ws", null) ?: p.getString("ws_url", null)
+        cloudHttp = p.getString("cloud_http", null)
+        cloudWs = p.getString("cloud_ws", null)
+        deviceId = p.getString("device_id", null) ?: deviceId
     }
 
-    private fun connect(token: String) {
-        val wsUrl = when {
-            !wsOverride.isNullOrBlank() -> wsOverride!!
-            else -> backendUrl?.replace("http", "ws") + "/api/devices/connect"
+    fun pairFromUri(uri: Uri) {
+        val token = uri.getQueryParameter("token") ?: return
+        val backend = uri.getQueryParameter("backend")
+        val ws = uri.getQueryParameter("ws")
+        lanHttp = uri.getQueryParameter("lan") ?: backend
+        lanWs = uri.getQueryParameter("lan_ws") ?: ws
+        cloudHttp = uri.getQueryParameter("cloud")
+        cloudWs = uri.getQueryParameter("cloud_ws")
+        // Emulator / single-endpoint: backend may be LAN (10.0.2.2)
+        if (cloudWs == null && ws != null && lanWs != null && ws != lanWs) {
+            cloudWs = ws
         }
+        pairingToken = token
+        sessionToken = null
+        prefs().edit()
+            .putString("pairing_token", token)
+            .remove("session_token")
+            .putString("lan_http", lanHttp)
+            .putString("lan_ws", lanWs)
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .putString("backend_url", lanHttp ?: cloudHttp)
+            .putString("ws_url", lanWs ?: cloudWs)
+            .apply()
+        userDisconnected = false
+        reconnectAttempt.set(0)
+        scope.launch { connectBest(force = true) }
+    }
 
-        val request = Request.Builder().url(wsUrl!!).build()
+    /** @deprecated use pairFromUri */
+    fun pair(backendUrl: String, token: String, wsUrl: String? = null) {
+        pairFromUri(
+            Uri.parse(
+                "mobilerun://pair?token=$token&backend=$backendUrl" +
+                    (if (wsUrl != null) "&ws=$wsUrl" else ""),
+            ),
+        )
+    }
 
+    private data class Candidate(val route: String, val http: String?, val ws: String)
+
+    private fun candidates(): List<Candidate> {
+        val list = mutableListOf<Candidate>()
+        discoveredWs?.let { list.add(Candidate("discovered", discoveredHttp, it)) }
+        lanWs?.let { list.add(Candidate("lan", lanHttp, it)) }
+        cloudWs?.let { list.add(Candidate("cloud", cloudHttp, it)) }
+        // Deduplicate by ws url
+        return list.distinctBy { it.ws }
+    }
+
+    private suspend fun connectBest(force: Boolean = false) {
+        if (userDisconnected) return
+        if (connecting && !force) return
+        val cands = candidates()
+        if (cands.isEmpty()) {
+            _statusFlow.value = "No endpoints — scan QR"
+            _routeFlow.value = "Route: —"
+            return
+        }
+        connecting = true
+        _statusFlow.value = "Selecting route…"
+        try {
+            // Probe TCP connect latency; prefer LAN/discovered under 250ms
+            data class Measured(val c: Candidate, val ms: Double?)
+            val measured = cands.map { c ->
+                Measured(c, probeLatencyMs(c.ws))
+            }
+            val lanOk = measured
+                .filter { it.c.route != "cloud" && it.ms != null && it.ms <= 250.0 }
+                .minByOrNull { it.ms!! }
+            val pick = lanOk
+                ?: measured.filter { it.ms != null }.minByOrNull { it.ms!! }
+                ?: measured.firstOrNull { it.c.route != "cloud" }
+                ?: measured.first()
+
+            openSocket(pick.c, pick.ms)
+        } finally {
+            connecting = false
+        }
+    }
+
+    private fun probeLatencyMs(wsUrl: String): Double? {
+        return try {
+            val httpProbe = wsUrl
+                .replace("wss://", "https://")
+                .replace("ws://", "http://")
+                .substringBefore("/api/")
+                .trimEnd('/') + "/api/health"
+            val req = Request.Builder().url(httpProbe).get().build()
+            val t0 = System.nanoTime()
+            client.newCall(req).execute().use { resp ->
+                val ms = (System.nanoTime() - t0) / 1e6
+                if (resp.isSuccessful) ms else null
+            }
+        } catch (e: Exception) {
+            Log.d(tag, "probe failed $wsUrl: ${e.message}")
+            null
+        }
+    }
+
+    private fun openSocket(candidate: Candidate, latencyMs: Double?) {
+        webSocket?.cancel()
+        webSocket = null
+        activeRoute = candidate.route
+        lastLatencyMs = latencyMs
+        updateRouteUi()
+        _statusFlow.value = "Connecting (${candidate.route})…"
+
+        val request = Request.Builder().url(candidate.ws).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket opened")
+                Log.d(tag, "WebSocket opened via ${candidate.route}")
+                reconnectAttempt.set(0)
                 _statusFlow.value = "Connected"
-                val msg = mapOf(
-                    "token" to token,
+                val msg = mutableMapOf<String, Any?>(
                     "device_id" to deviceId,
                     "platform" to "android",
                     "type" to "register",
                     "role" to "device",
+                    "route" to candidate.route,
+                    "latency_ms" to latencyMs,
                 )
+                val sess = sessionToken
+                val pair = pairingToken
+                if (!sess.isNullOrBlank()) {
+                    msg["session_token"] = sess
+                } else if (!pair.isNullOrBlank()) {
+                    msg["token"] = pair
+                }
                 webSocket.send(gson.toJson(msg))
+                startHeartbeat()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -103,20 +266,111 @@ class BackendClient(private val context: Context) {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 _statusFlow.value = "Disconnected"
                 stopStreamInternal()
+                scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket error", t)
+                Log.e(tag, "WebSocket error via ${candidate.route}", t)
                 _statusFlow.value = "Error: ${t.message}"
+                stopStreamInternal()
+                // Try next route immediately once, then backoff
+                scope.launch {
+                    val others = candidates().filter { it.ws != candidate.ws }
+                    if (others.isNotEmpty() && reconnectAttempt.get() == 0) {
+                        val next = others.first()
+                        openSocket(next, probeLatencyMs(next.ws))
+                    } else {
+                        scheduleReconnect()
+                    }
+                }
             }
         })
+    }
+
+    private fun updateRouteUi() {
+        val lat = lastLatencyMs?.let { "${it.toInt()} ms" } ?: "—"
+        _routeFlow.value = "Route: ${activeRoute.uppercase()} · $lat"
+    }
+
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch {
+            while (isActive && webSocket != null) {
+                val t0 = System.nanoTime()
+                val sent = webSocket?.send(
+                    gson.toJson(
+                        mapOf(
+                            "type" to "heartbeat",
+                            "device_id" to deviceId,
+                            "client_ts" to System.currentTimeMillis(),
+                        ),
+                    ),
+                ) == true
+                if (!sent) break
+                delay(15_000)
+                // Rough RTT estimate from last ack handled in handleMessage
+                if (lastLatencyMs != null) {
+                    webSocket?.send(
+                        gson.toJson(
+                            mapOf(
+                                "type" to "connection_status",
+                                "device_id" to deviceId,
+                                "route" to activeRoute,
+                                "latency_ms" to lastLatencyMs,
+                            ),
+                        ),
+                    )
+                }
+                // Keep t0 referenced for future precise RTT if server echoes
+                Log.v(tag, "heartbeat tick ${(System.nanoTime() - t0) / 1e6}")
+            }
+        }
+    }
+
+    private fun scheduleReconnect() {
+        if (userDisconnected) return
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            val attempt = reconnectAttempt.getAndIncrement()
+            val base = min(60.0, 1.0 * Math.pow(2.0, attempt.toDouble()))
+            val jitter = base * 0.2
+            val delaySec = (base + Random.nextDouble(-jitter, jitter)).coerceAtLeast(0.5)
+            _statusFlow.value = "Reconnecting in ${delaySec.toInt()}s…"
+            delay((delaySec * 1000).toLong())
+            connectBest(force = true)
+        }
     }
 
     private fun handleMessage(text: String) {
         try {
             @Suppress("UNCHECKED_CAST")
             val message = gson.fromJson(text, Map::class.java) as Map<String, Any?>
-            when (message["type"] as? String) {
+            when (message["type"] as? String ?: message["status"] as? String) {
+                "connected", null -> {
+                    if (message["status"] == "connected" || message["session_token"] != null) {
+                        (message["session_token"] as? String)?.let {
+                            sessionToken = it
+                            prefs().edit().putString("session_token", it)
+                                .remove("pairing_token").apply()
+                            pairingToken = null
+                        }
+                        (message["device_id"] as? String)?.let {
+                            deviceId = it
+                            prefs().edit().putString("device_id", it).apply()
+                        }
+                        (message["route"] as? String)?.let { activeRoute = it }
+                        (message["latency_ms"] as? Number)?.let {
+                            lastLatencyMs = it.toDouble()
+                        }
+                        updateRouteUi()
+                        _statusFlow.value = "Connected"
+                    }
+                }
+                "heartbeat_ack" -> {
+                    // Refresh displayed latency lightly
+                    lastLatencyMs = lastLatencyMs ?: 20.0
+                    updateRouteUi()
+                }
                 "command" -> handleCommand(message)
                 "stream_control" -> handleStreamControl(message)
                 "run_task" -> {
@@ -143,10 +397,12 @@ class BackendClient(private val context: Context) {
                         sendAgentEvent(null, null, action, "UI requested $action")
                     }
                 }
-                "heartbeat_ack" -> Unit
+            }
+            if (message["error"] != null) {
+                _statusFlow.value = "Auth error: ${message["error"]}"
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to handle message", e)
+            Log.e(tag, "Failed to handle message", e)
         }
     }
 
@@ -157,9 +413,8 @@ class BackendClient(private val context: Context) {
         when (action) {
             "start" -> {
                 _streamFlow.value = "starting"
-                // Ask MainActivity to obtain MediaProjection (one-time system prompt)
                 onStreamPermissionNeeded?.invoke(fps, quality)
-                    ?: Log.w(TAG, "No permission callback registered for stream start")
+                    ?: Log.w(tag, "No permission callback registered for stream start")
             }
             "stop" -> stopStreamInternal()
         }
@@ -197,7 +452,6 @@ class BackendClient(private val context: Context) {
             "ts" to frame.ts,
             "data" to frame.dataBase64,
         )
-        // Keep frames ephemeral — never persisted by phone
         webSocket?.send(gson.toJson(msg))
     }
 
@@ -253,15 +507,14 @@ class BackendClient(private val context: Context) {
                         "OK"
                     }
                     "get_ui_tree" -> a11yService.getUITree()
-                    "screenshot" -> {
-                        // Prefer live MediaProjection stream; one-shot still stubbed
-                        ""
-                    }
+                    "screenshot" -> ""
                     "get_device_info" -> {
                         mapOf(
                             "device_id" to deviceId,
                             "platform" to "android",
                             "stream" to _streamFlow.value,
+                            "route" to activeRoute,
+                            "latency_ms" to lastLatencyMs,
                         )
                     }
                     else -> throw Exception("Unknown command: $command")
@@ -297,7 +550,13 @@ class BackendClient(private val context: Context) {
     }
 
     fun disconnect() {
+        userDisconnected = true
+        reconnectJob?.cancel()
+        heartbeatJob?.cancel()
         stopStreamInternal()
         webSocket?.close(1000, "User disconnect")
+        webSocket = null
+        _statusFlow.value = "Disconnected"
+        _routeFlow.value = "Route: —"
     }
 }

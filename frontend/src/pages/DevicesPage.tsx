@@ -10,6 +10,8 @@ interface Device {
   connected: boolean;
   connection_type: string;
   last_seen: string;
+  route?: string | null;
+  latency_ms?: number | null;
 }
 
 interface PairingInfo {
@@ -17,6 +19,9 @@ interface PairingInfo {
   qr_code: string;
   pairing_url: string;
   expires_in: number;
+  lan_ws?: string | null;
+  cloud_ws?: string | null;
+  mdns_service?: string;
 }
 
 export default function DevicesPage() {
@@ -151,8 +156,20 @@ export default function DevicesPage() {
               <>
                 <div className="text-center space-y-4">
                   <p className="text-gray-300">
-                    Scan this QR code with the Mobilerun app on your phone
+                    Scan once — stores LAN + cloud WebSocket endpoints. No USB
+                    cable. Phone prefers Wi‑Fi/mDNS, then falls back to AWS.
                   </p>
+                  {(pairingInfo.lan_ws || pairingInfo.cloud_ws) && (
+                    <p className="text-xs text-gray-500 break-all">
+                      {pairingInfo.lan_ws && (
+                        <>
+                          LAN: {pairingInfo.lan_ws}
+                          <br />
+                        </>
+                      )}
+                      {pairingInfo.cloud_ws && <>Cloud: {pairingInfo.cloud_ws}</>}
+                    </p>
+                  )}
 
                   <div className="bg-white p-4 rounded-lg inline-block">
                     <img
@@ -220,8 +237,18 @@ function DeviceCard({ device }: { device: Device }) {
           <span className="capitalize">{device.platform}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-400">Connection:</span>
-          <span className="capitalize">{device.connection_type}</span>
+          <span className="text-gray-400">Route:</span>
+          <span className="uppercase">
+            {device.route || device.connection_type || '—'}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-400">Latency:</span>
+          <span>
+            {device.latency_ms != null
+              ? `${Math.round(device.latency_ms)} ms`
+              : '—'}
+          </span>
         </div>
         <div className="flex justify-between">
           <span className="text-gray-400">Status:</span>

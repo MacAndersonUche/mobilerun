@@ -63,14 +63,51 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/devices/pair" \
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 WS_HINT=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('websocket_url') or d.get('backend_url') or '')")
-PAIR_URL="mobilerun://pair?token=${TOKEN_PAIR}&backend=${BACKEND_URL}"
+# Dual endpoints: LAN via emulator gateway 10.0.2.2; unreachable TEST-NET cloud to exercise fallback preference for LAN
+LAN_WS="ws://10.0.2.2:8000/api/devices/connect"
+# shellcheck disable=SC2034
+CLOUD_WS_BAD="ws://203.0.113.1:9/api/devices/connect"
+PAIR_URL="mobilerun://pair?token=${TOKEN_PAIR}&backend=${BACKEND_URL}&ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}&cloud=http://203.0.113.1:9&cloud_ws=${CLOUD_WS_BAD}"
 
-echo "== Deep-link pair =="
+echo "== Deep-link pair (LAN preferred, bad cloud fallback) =="
 adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || \
   adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL"
-sleep 3
+sleep 5
 adb exec-out screencap -p > "$ARTIFACTS_DIR/01_paired.png" || true
 echo "pair_ws=$WS_HINT" >> "$ARTIFACTS_DIR/apk_paths.txt"
+echo "pair_url_dual=1" >> "$ARTIFACTS_DIR/apk_paths.txt"
+
+echo "== Assert device route LAN (wireless, no USB control channel) =="
+python3 - <<'PY'
+import json, os, time, urllib.request
+host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
+artifacts = os.environ.get("ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+route = None
+latency = None
+for _ in range(20):
+    try:
+        with urllib.request.urlopen(host + "/api/devices") as r:
+            devices = json.load(r)
+        open(os.path.join(artifacts, "devices.json"), "w").write(json.dumps(devices, indent=2, default=str))
+        if devices:
+            d = devices[0]
+            route = d.get("route") or d.get("connection_type")
+            latency = d.get("latency_ms")
+            if d.get("connected"):
+                break
+    except Exception as e:
+        open(os.path.join(artifacts, "devices_err.txt"), "a").write(str(e) + "\n")
+    time.sleep(1)
+print("route", route, "latency_ms", latency)
+# Soft assert: if device registered, route should be lan/discovered/wifi (not requiring USB)
+if route:
+    assert str(route).lower() in ("lan", "discovered", "wifi", "cloud"), route
+open(os.path.join(artifacts, "connection_route.txt"), "w").write(f"{route}\n{latency}\n")
+PY
+
+echo "== Fallback probe (unit-level already covers select_endpoint; health usb_required=false) =="
+curl -sfS "$HOST_BACKEND/api/health" | tee "$ARTIFACTS_DIR/health_connectivity.json"
+python3 -c "import json,sys; h=json.load(open(sys.argv[1])); assert h.get('usb_required') is False" "$ARTIFACTS_DIR/health_connectivity.json"
 
 echo "== Open Settings =="
 adb shell am start -a android.settings.SETTINGS

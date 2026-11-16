@@ -65,6 +65,8 @@ active_runs: Dict[str, Dict[str, Any]] = {}
 run_history: List[Dict[str, Any]] = []
 websocket_clients: List[WebSocket] = []
 pairing_tokens: Dict[str, Dict[str, Any]] = {}
+# Long-lived device sessions for reconnect without USB / without re-scan
+device_sessions: Dict[str, Dict[str, Any]] = {}  # session_token -> meta
 device_websockets: Dict[str, WebSocket] = {}
 
 
@@ -108,6 +110,8 @@ class DeviceInfo(BaseModel):
     connected: bool
     connection_type: str
     last_seen: datetime
+    route: Optional[str] = None
+    latency_ms: Optional[float] = None
 
 
 class PairingRequest(BaseModel):
@@ -199,6 +203,8 @@ async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
                 connected=device_data.get("connected", False),
                 connection_type=device_data.get("connection_type", "unknown"),
                 last_seen=device_data.get("last_seen", datetime.now()),
+                route=device_data.get("route"),
+                latency_ms=device_data.get("latency_ms"),
             )
         )
     return devices
@@ -213,7 +219,23 @@ async def health():
         "step_driven": os.environ.get("STEP_DRIVEN", "false"),
         "use_aws_storage": os.environ.get("USE_AWS_STORAGE", "false"),
         "websocket_api": os.environ.get("WEBSOCKET_API_ENDPOINT", ""),
+        "mdns_service": "_mobilerun._tcp",
+        "usb_required": False,
     }
+
+
+def _lan_endpoints(port: Optional[int] = None) -> tuple[str, str]:
+    """HTTP + WS URLs for laptop LAN (mDNS / QR)."""
+    try:
+        from mobilerun.server.mdns import get_lan_ip
+
+        ip = get_lan_ip(os.environ.get("HOST"))
+    except Exception:
+        ip = "127.0.0.1"
+    p = port or int(os.environ.get("PORT", "8000"))
+    http = f"http://{ip}:{p}"
+    ws = f"ws://{ip}:{p}/api/devices/connect"
+    return http, ws
 
 
 @app.post("/api/devices/pair")
@@ -221,18 +243,35 @@ async def initiate_pairing(
     request: PairingRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """
-    Initiate device pairing. Returns QR code with backend URL and token.
-    Cloud: QR points phone at WebSocket API; REST URL is the HTTP API.
+    Initiate device pairing. Returns QR with LAN + cloud WebSocket endpoints.
+    Phone never needs USB/ADB — it dials out and auto-selects the best route.
     """
+    from mobilerun.connectivity.endpoints import build_pairing_url, http_to_ws
+
     token = secrets.token_urlsafe(32)
 
-    backend_url = os.environ.get("BACKEND_URL") or os.environ.get(
-        "API_URL", "http://localhost:8000"
-    )
-    ws_url = (
-        os.environ.get("WEBSOCKET_API_ENDPOINT")
-        or backend_url.replace("http", "ws").rstrip("/") + "/api/devices/connect"
-    )
+    cloud_http = os.environ.get("BACKEND_URL") or os.environ.get("API_URL") or ""
+    cloud_ws = os.environ.get("WEBSOCKET_API_ENDPOINT") or ""
+    # Local serve: advertise LAN even when BACKEND_URL points at AWS
+    lan_http, lan_ws = _lan_endpoints()
+    use_aws = os.environ.get("USE_AWS_STORAGE", "false").lower() == "true"
+    if use_aws and cloud_http:
+        # On Lambda, "LAN" is not meaningful — primary is cloud
+        backend_url = cloud_http
+        ws_url = cloud_ws or http_to_ws(cloud_http)
+        lan_http_out, lan_ws_out = None, None
+        cloud_http_out, cloud_ws_out = cloud_http, ws_url
+    else:
+        backend_url = lan_http
+        ws_url = lan_ws
+        lan_http_out, lan_ws_out = lan_http, lan_ws
+        # Optional cloud fallback baked into the same QR (env override)
+        cloud_http_out = cloud_http or os.environ.get("CLOUD_BACKEND_URL") or None
+        cloud_ws_out = (
+            cloud_ws
+            or os.environ.get("CLOUD_WEBSOCKET_URL")
+            or (http_to_ws(cloud_http_out) if cloud_http_out else None)
+        )
 
     expires_at = datetime.now().timestamp() + 600
     pairing_data = {
@@ -244,6 +283,10 @@ async def initiate_pairing(
         "expires_at": expires_at,
         "backend_url": backend_url,
         "websocket_url": ws_url,
+        "lan_http": lan_http_out,
+        "lan_ws": lan_ws_out,
+        "cloud_http": cloud_http_out,
+        "cloud_ws": cloud_ws_out,
     }
 
     pairing_tokens[token] = pairing_data
@@ -260,13 +303,22 @@ async def initiate_pairing(
                 "platform": request.platform,
                 "expires_at": expires_at,
                 "backend_url": backend_url,
+                "cloud_ws": cloud_ws_out,
+                "lan_ws": lan_ws_out,
             },
         )
     except Exception as e:
         logger.warning("Could not persist pairing token: %s", e)
 
-    # Phone deep link: token + HTTP backend + WS endpoint for cloud
-    pairing_url = f"mobilerun://pair?token={token}&backend={backend_url}&ws={ws_url}"
+    pairing_url = build_pairing_url(
+        token=token,
+        backend=backend_url,
+        ws=ws_url,
+        lan_http=lan_http_out,
+        lan_ws=lan_ws_out,
+        cloud_http=cloud_http_out,
+        cloud_ws=cloud_ws_out,
+    )
 
     qr = qrcode.QRCode(
         version=1,
@@ -289,6 +341,11 @@ async def initiate_pairing(
         "pairing_url": pairing_url,
         "backend_url": backend_url,
         "websocket_url": ws_url,
+        "lan_http": lan_http_out,
+        "lan_ws": lan_ws_out,
+        "cloud_http": cloud_http_out,
+        "cloud_ws": cloud_ws_out,
+        "mdns_service": "_mobilerun._tcp",
         "expires_in": 600,
     }
 
@@ -296,43 +353,58 @@ async def initiate_pairing(
 @app.websocket("/api/devices/connect")
 async def device_websocket(websocket: WebSocket):
     """
-    WebSocket for device connection (outbound from phone to backend).
-    Device sends pairing token to authenticate.
+    WebSocket for device connection (outbound from phone — no USB/ADB).
+    Auth: one-time pairing token OR long-lived session_token for reconnect.
     """
     await websocket.accept()
     device_id = None
 
     try:
-        # Receive pairing/auth message
         data = await websocket.receive_json()
         token = data.get("token")
+        session_token = data.get("session_token")
+        route = (data.get("route") or "wifi").lower()
+        latency_ms = data.get("latency_ms")
+        pairing_data = None
 
-        if not token or token not in pairing_tokens:
-            await websocket.send_json({"error": "Invalid or expired token"})
+        if session_token and session_token in device_sessions:
+            sess = device_sessions[session_token]
+            device_id = sess["device_id"]
+            pairing_data = {
+                "device_name": sess.get("name") or device_id,
+                "platform": sess.get("platform", "android"),
+            }
+        elif token and token in pairing_tokens:
+            pairing_data = pairing_tokens[token]
+            if datetime.now().timestamp() > pairing_data["expires_at"]:
+                await websocket.send_json({"error": "Token expired"})
+                await websocket.close()
+                del pairing_tokens[token]
+                return
+            device_id = data.get("device_id") or f"device_{secrets.token_hex(8)}"
+            del pairing_tokens[token]
+            # Issue reconnect session
+            session_token = secrets.token_urlsafe(32)
+            device_sessions[session_token] = {
+                "device_id": device_id,
+                "name": pairing_data["device_name"],
+                "platform": pairing_data["platform"],
+                "created_at": datetime.now().isoformat(),
+            }
+        else:
+            await websocket.send_json({"error": "Invalid or expired token / session"})
             await websocket.close()
             return
 
-        pairing_data = pairing_tokens[token]
-
-        # Check token expiration (10 minutes)
-        if datetime.now().timestamp() > pairing_data["expires_at"]:
-            await websocket.send_json({"error": "Token expired"})
-            await websocket.close()
-            del pairing_tokens[token]  # Clean up expired token
-            return
-
-        device_id = data.get("device_id") or f"device_{secrets.token_hex(8)}"
-
-        # Consume token (one-time use)
-        del pairing_tokens[token]
-
-        # Register device
+        conn_type = route if route in ("lan", "cloud", "discovered") else "wifi"
         connected_devices[device_id] = {
             "device_id": device_id,
             "name": pairing_data["device_name"],
             "platform": pairing_data["platform"],
             "connected": True,
-            "connection_type": "wifi",
+            "connection_type": conn_type,
+            "route": conn_type,
+            "latency_ms": latency_ms,
             "last_seen": datetime.now(),
         }
 
@@ -342,12 +414,19 @@ async def device_websocket(websocket: WebSocket):
             {
                 "status": "connected",
                 "device_id": device_id,
+                "session_token": session_token,
+                "route": conn_type,
+                "latency_ms": latency_ms,
             }
         )
 
-        logger.info(f"Device {device_id} connected")
+        logger.info(
+            "Device %s connected via %s (latency=%s)",
+            device_id,
+            conn_type,
+            latency_ms,
+        )
 
-        # Keep connection alive and handle messages
         while True:
             try:
                 message = await websocket.receive_json()
@@ -358,7 +437,6 @@ async def device_websocket(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Device connection error: {e}")
     finally:
-        # Clean up
         if device_id:
             if device_id in connected_devices:
                 connected_devices[device_id]["connected"] = False
@@ -389,7 +467,34 @@ async def handle_device_message(device_id: str, message: dict):
     if msg_type == "heartbeat":
         ws = device_websockets.get(device_id)
         if ws:
-            await ws.send_json({"type": "heartbeat_ack"})
+            await ws.send_json(
+                {
+                    "type": "heartbeat_ack",
+                    "server_ts": int(datetime.now().timestamp() * 1000),
+                }
+            )
+
+    elif msg_type == "connection_status":
+        # Phone reports active route + measured RTT
+        dev = connected_devices.setdefault(device_id, {})
+        if message.get("route"):
+            route = str(message["route"]).lower()
+            dev["route"] = route
+            dev["connection_type"] = route
+        if message.get("latency_ms") is not None:
+            try:
+                dev["latency_ms"] = float(message["latency_ms"])
+            except (TypeError, ValueError):
+                pass
+        await broadcast_to_ui(
+            device_id,
+            {
+                "type": "connection_status",
+                "device_id": device_id,
+                "route": dev.get("route"),
+                "latency_ms": dev.get("latency_ms"),
+            },
+        )
 
     elif msg_type == "task_update":
         task_id = message.get("task_id")

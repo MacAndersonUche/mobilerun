@@ -169,6 +169,27 @@ def serve_command(host: str, port: int, no_browser: bool, allow_unauthenticated:
         except Exception as e:
             logger.warning(f"Failed to open browser: {e}")
 
+    # Advertise on LAN so phones discover via NSD/mDNS (_mobilerun._tcp)
+    advertiser = None
+    try:
+        from mobilerun.server.mdns import MobilerunAdvertiser
+
+        advertiser = MobilerunAdvertiser(port=port, host=host)
+        if advertiser.start():
+            click.echo(
+                f"📡 mDNS: _mobilerun._tcp → {advertiser.lan_http} "
+                f"(phones prefer this over cloud when on same Wi‑Fi)"
+            )
+            os.environ.setdefault("LAN_HTTP_URL", advertiser.lan_http)
+            os.environ.setdefault("LAN_WS_URL", advertiser.lan_ws)
+        else:
+            click.echo(
+                "⚠️  mDNS advertise unavailable (install zeroconf). "
+                "QR still includes LAN IP for direct connect."
+            )
+    except Exception as e:
+        logger.warning("mDNS setup failed: %s", e)
+
     # Import here to ensure env vars are set first
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
     from backend.main import app
@@ -184,3 +205,6 @@ def serve_command(host: str, port: int, no_browser: bool, allow_unauthenticated:
         )
     except KeyboardInterrupt:
         click.echo("\n\n👋 Shutting down Mobilerun Control Center...")
+    finally:
+        if advertiser:
+            advertiser.stop()
