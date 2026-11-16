@@ -246,10 +246,13 @@ print("selector cache v2 ok", r1.get("source"), r2.get("cache_hit"))
 PY
 
 echo "== Selector multi-variant: 3 alternating MockDating layouts =="
-adb shell am force-stop ai.mobilerun.mockdating || true
+# Force-stop between each variant so layout_variant recreates MainActivity
+# (am start alone reuses the running instance and keeps the prior layout).
 for LV in v1 v2 v3; do
+  adb shell am force-stop ai.mobilerun.mockdating || true
+  sleep 0.4
   adb shell am start -n ai.mobilerun.mockdating/.MainActivity --es layout_variant "$LV"
-  sleep 1.5
+  sleep 1.8
   adb exec-out screencap -p > "$ARTIFACTS_DIR/multi_${LV}.png" || true
   adb shell uiautomator dump /sdcard/multi_${LV}.xml 2>/dev/null || true
   adb pull /sdcard/multi_${LV}.xml "$ARTIFACTS_DIR/multi_${LV}_ui.xml" 2>/dev/null || true
