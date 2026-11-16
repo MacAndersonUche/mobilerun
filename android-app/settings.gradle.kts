@@ -15,7 +15,3 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Mobilerun Self-Hosted"
-include(":app")
-
-// Point to the android-app directory as the app module
-project(":app").projectDir = file(".")
