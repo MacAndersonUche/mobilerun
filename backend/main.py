@@ -1373,7 +1373,9 @@ async def submit_task(
 
     if not kicked and task["status"] != "failed":
         task["status"] = "failed"
-        task["error"] = "Step worker not configured — cannot run cloud agent on this backend"
+        task["error"] = (
+            "Step worker not configured — cannot run cloud agent on this backend"
+        )
 
     return TaskStatus(**task)
 
