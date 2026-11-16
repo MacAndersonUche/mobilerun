@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Smartphone, Wifi, WifiOff, Download } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Smartphone, Wifi, WifiOff, Download, QrCode, Copy, RefreshCw } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import { Badge, Card, EmptyState, LoadingBlock } from '../components/ui';
@@ -32,15 +31,14 @@ export default function DevicesPage() {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [apkQr, setApkQr] = useState<string | null>(null);
   const [apkUrl, setApkUrl] = useState<string | null>(null);
+  const [pairQr, setPairQr] = useState<string | null>(null);
+  const [pairUrl, setPairUrl] = useState<string | null>(null);
+  const [httpsLink, setHttpsLink] = useState<string | null>(null);
+  const [pairExpires, setPairExpires] = useState<number | null>(null);
+  const [pairErr, setPairErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    loadDevices();
-    loadApk();
-    const interval = setInterval(loadDevices, 3000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const loadDevices = async () => {
+  const loadDevices = useCallback(async () => {
     try {
       const response = await axios.get(`${getBackendUrl()}/api/devices`, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
@@ -50,7 +48,7 @@ export default function DevicesPage() {
       console.error('Failed to load devices:', error);
       setDevices([]);
     }
-  };
+  }, []);
 
   const loadApk = async () => {
     try {
@@ -62,15 +60,114 @@ export default function DevicesPage() {
     }
   };
 
+  const createPairQr = async () => {
+    setPairErr(null);
+    try {
+      const res = await axios.post(
+        `${getBackendUrl()}/api/auth/pair/create`,
+        { device_name: 'Android', platform: 'android' },
+        { headers: { Authorization: `Bearer ${getAuthToken()}` } },
+      );
+      setPairQr(res.data.qr_code);
+      setPairUrl(res.data.pairing_url);
+      setHttpsLink(res.data.https_link);
+      setPairExpires(Date.now() + (res.data.expires_in || 600) * 1000);
+    } catch (e: unknown) {
+      const msg = axios.isAxiosError(e)
+        ? String(e.response?.data?.detail || e.message)
+        : 'Could not create pairing QR';
+      setPairErr(msg);
+    }
+  };
+
+  useEffect(() => {
+    loadDevices();
+    loadApk();
+    createPairQr();
+    const interval = setInterval(loadDevices, 3000);
+    return () => clearInterval(interval);
+  }, [loadDevices]);
+
+  const copyLink = async () => {
+    const link = httpsLink || pairUrl;
+    if (!link) return;
+    await navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const revoke = async (deviceId: string) => {
+    try {
+      await axios.delete(`${getBackendUrl()}/api/devices/${encodeURIComponent(deviceId)}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      await loadDevices();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const expiresLabel =
+    pairExpires != null
+      ? `Expires in ~${Math.max(0, Math.round((pairExpires - Date.now()) / 60000))} min`
+      : null;
+
   return (
     <div className="mr-page space-y-6">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight">Devices</h2>
         <p className="text-sm text-mute">
-          Hosted UI manages agents · APK executes on the phone. Link by signing
-          into the same Cognito account — QR is download-only.
+          Install the APK, then scan the connect QR below. No URL or sign-in on
+          the phone — pairing is tied to this Cognito account.
         </p>
       </div>
+
+      <Card elev className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <QrCode size={18} className="text-accent" />
+            <h3 className="font-medium">Connect phone</h3>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-sm text-accent"
+            onClick={createPairQr}
+          >
+            <RefreshCw size={14} /> New QR
+          </button>
+        </div>
+        <p className="text-sm text-mute">
+          Short-lived single-use code (~10 min). Open MobileRun on the phone and
+          tap Scan QR, or open the copyable link after install.
+        </p>
+        {pairErr && <p className="text-sm text-red-400">{pairErr}</p>}
+        {pairQr ? (
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+            <div className="rounded-xl bg-white p-3">
+              <img
+                src={`data:image/png;base64,${pairQr}`}
+                alt="Connect phone QR"
+                className="h-40 w-40"
+              />
+            </div>
+            <div className="space-y-2 text-sm">
+              {expiresLabel && <p className="text-mute">{expiresLabel}</p>}
+              <button
+                type="button"
+                onClick={copyLink}
+                className="inline-flex items-center gap-1 text-accent"
+              >
+                <Copy size={14} /> {copied ? 'Copied' : 'Copy link'}
+              </button>
+              {(httpsLink || pairUrl) && (
+                <p className="break-all text-xs text-mute">{httpsLink || pairUrl}</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <LoadingBlock label="Creating pairing QR…" />
+        )}
+      </Card>
 
       <Card elev className="space-y-3">
         <div className="flex items-center gap-2">
@@ -78,9 +175,8 @@ export default function DevicesPage() {
           <h3 className="font-medium">Install APK</h3>
         </div>
         <p className="text-sm text-mute">
-          Scan to download the latest GitHub release APK. After install, open
-          MobileRun → complete permissions → Sign in and link phone (same
-          account as this UI).
+          Download-only QR for the latest GitHub release. After install, use
+          Connect phone above — not a separate login.
         </p>
         {apkQr ? (
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
@@ -105,9 +201,6 @@ export default function DevicesPage() {
         ) : (
           <LoadingBlock label="Loading download QR…" />
         )}
-        <Link to="/account" className="inline-block text-sm text-accent">
-          Approve a device code on Account →
-        </Link>
       </Card>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -119,17 +212,21 @@ export default function DevicesPage() {
           <div className="col-span-full">
             <EmptyState
               title="No phones linked"
-              hint="Install via QR above, then sign in on the APK with your Cognito account."
+              hint="Install the APK, then scan the Connect phone QR with the app."
               action={
-                <Link to="/account" className="mr-btn-primary text-sm">
-                  Open Account
-                </Link>
+                <button type="button" className="mr-btn-primary text-sm" onClick={createPairQr}>
+                  Refresh connect QR
+                </button>
               }
             />
           </div>
         ) : (
           devices.map((device) => (
-            <DeviceCard key={device.device_id} device={device} />
+            <DeviceCard
+              key={device.device_id}
+              device={device}
+              onRevoke={() => revoke(device.device_id)}
+            />
           ))
         )}
       </div>
@@ -137,7 +234,13 @@ export default function DevicesPage() {
   );
 }
 
-function DeviceCard({ device }: { device: Device }) {
+function DeviceCard({
+  device,
+  onRevoke,
+}: {
+  device: Device;
+  onRevoke: () => void;
+}) {
   const perms = device.permissions || {};
   const rows: [string, boolean | undefined][] = [
     ['Accessibility', perms.accessibility],
@@ -203,6 +306,13 @@ function DeviceCard({ device }: { device: Device }) {
             </li>
           ))}
         </ul>
+        <button
+          type="button"
+          onClick={onRevoke}
+          className="mt-3 text-sm text-red-400 hover:underline"
+        >
+          Revoke access
+        </button>
       </div>
     </div>
   );

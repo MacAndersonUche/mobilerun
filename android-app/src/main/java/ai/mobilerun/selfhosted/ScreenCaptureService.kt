@@ -60,6 +60,18 @@ class ScreenCaptureService : Service() {
             val ts: Long,
             val dataBase64: String,
         )
+
+        /** True when MediaProjection virtual display is actively emitting frames. */
+        fun isStreaming(): Boolean = instance?.streaming?.get() == true
+
+        /** Adjust fps/quality without re-prompting MediaProjection consent. */
+        fun updateParams(fps: Int, quality: Int) {
+            instance?.let {
+                it.fps = fps.coerceIn(1, 8)
+                it.quality = quality.coerceIn(20, 85)
+                Log.i(TAG, "capture params updated fps=${it.fps} q=${it.quality}")
+            }
+        }
     }
 
     private var mediaProjection: MediaProjection? = null

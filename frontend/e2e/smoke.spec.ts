@@ -56,6 +56,7 @@ test('authenticated routes', async ({ page }) => {
 
   await page.goto('/devices');
   await expect(page.getByRole('heading', { name: 'Install APK' })).toBeVisible();
-  await expect(page.getByText('download-only', { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Connect phone' })).toBeVisible();
+  await expect(page.getByText('Download-only', { exact: false })).toBeVisible();
   await shot(page, '15-devices-apk-qr');
 });

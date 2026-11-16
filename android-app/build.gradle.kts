@@ -18,6 +18,23 @@ android {
         versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Baked production endpoints — no manual URL / sign-in required
+        buildConfigField(
+            "String",
+            "DEFAULT_CLOUD_HTTP",
+            "\"https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com\"",
+        )
+        buildConfigField(
+            "String",
+            "DEFAULT_CLOUD_WS",
+            "\"wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod\"",
+        )
+        buildConfigField(
+            "String",
+            "PAIR_UI_HINT",
+            "\"https://macsmobilerun.netlify.app\"",
+        )
     }
 
     signingConfigs {
@@ -52,6 +69,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -76,6 +94,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
     // Cognito Hosted UI via Custom Tabs (PKCE); device-code flow needs no extra lib
     implementation("androidx.browser:browser:1.8.0")
+    // Long-lived device credential storage
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
     // QR Code scanning
     implementation("com.google.mlkit:barcode-scanning:17.3.0")

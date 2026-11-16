@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -54,6 +56,22 @@ class BackendClient(private val context: Context) {
     private var discoveredWs: String? = null
     private var discoveredHttp: String? = null
 
+    companion object {
+        val DEFAULT_CLOUD_HTTP: String = BuildConfig.DEFAULT_CLOUD_HTTP
+        val DEFAULT_CLOUD_WS: String = BuildConfig.DEFAULT_CLOUD_WS
+
+        /** Map known HTTP API → WS API (they are separate API Gateways). */
+        fun cloudWsForHttp(http: String?): String? {
+            if (http.isNullOrBlank()) return null
+            val base = http.trimEnd('/')
+            return when {
+                base.contains("68tgk4z5n6.execute-api") -> DEFAULT_CLOUD_WS
+                base.contains("execute-api") -> null
+                else -> null
+            }
+        }
+    }
+
     private var activeRoute: String = "none"
     private var lastLatencyMs: Double? = null
     private val reconnectAttempt = AtomicInteger(0)
@@ -74,6 +92,15 @@ class BackendClient(private val context: Context) {
     private val _streamFlow = MutableStateFlow("idle")
     val streamFlow: StateFlow<String> = _streamFlow
 
+    private val _pairedFlow = MutableStateFlow(false)
+    val pairedFlow: StateFlow<Boolean> = _pairedFlow
+
+    private val _pairErrorFlow = MutableStateFlow<String?>(null)
+    val pairErrorFlow: StateFlow<String?> = _pairErrorFlow
+
+    private val _pairBusyFlow = MutableStateFlow(false)
+    val pairBusyFlow: StateFlow<Boolean> = _pairBusyFlow
+
     var onStreamPermissionNeeded: ((fps: Int, quality: Int) -> Unit)? = null
 
     init {
@@ -81,12 +108,16 @@ class BackendClient(private val context: Context) {
             sendFrame(frame)
         }
         loadPrefs()
+        // Always have cloud defaults baked in
+        if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
+        if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
+        _pairedFlow.value = !sessionToken.isNullOrBlank()
         discovery.addListener(object : LanDiscovery.Listener {
             override fun onServiceFound(service: LanDiscovery.Service) {
                 discoveredHttp = service.httpUrl
                 discoveredWs = service.wsUrl
-                // Prefer switching to LAN if currently on cloud
-                if (activeRoute == "cloud" || webSocket == null) {
+                // Prefer switching to LAN if currently on cloud (local laptop nearby)
+                if (sessionToken != null && (activeRoute == "cloud" || webSocket == null)) {
                     scope.launch { connectBest(force = activeRoute == "cloud") }
                 }
             }
@@ -102,18 +133,53 @@ class BackendClient(private val context: Context) {
         }
     }
 
+    fun isPaired(): Boolean = !sessionToken.isNullOrBlank()
+
+    fun setCloudEndpoints(http: String, ws: String?) {
+        cloudHttp = http.trimEnd('/')
+        cloudWs = ws ?: cloudWsForHttp(cloudHttp) ?: DEFAULT_CLOUD_WS
+        prefs().edit()
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .putString("backend_url", cloudHttp)
+            .putString("ws_url", cloudWs)
+            .apply()
+    }
+
+    fun unpair() {
+        userDisconnected = true
+        webSocket?.cancel()
+        webSocket = null
+        sessionToken = null
+        pairingToken = null
+        authToken = null
+        secure().edit().remove("session_token").remove("device_id").remove("owner").apply()
+        prefs().edit().remove("session_token").remove("pairing_token").apply()
+        _pairedFlow.value = false
+        _statusFlow.value = "Unpaired"
+    }
+
     /** After Cognito / device-code login — register with JWT (no pairing QR). */
     fun setAuthToken(token: String, backendHttp: String? = null, backendWs: String? = null) {
         authToken = token
         if (backendHttp != null) {
-            cloudHttp = backendHttp
-            prefs().edit().putString("cloud_http", backendHttp)
-                .putString("backend_url", backendHttp).apply()
+            cloudHttp = backendHttp.trimEnd('/')
+            prefs().edit().putString("cloud_http", cloudHttp)
+                .putString("backend_url", cloudHttp).apply()
         }
-        if (backendWs != null) {
-            cloudWs = backendWs
-            prefs().edit().putString("cloud_ws", backendWs)
-                .putString("ws_url", backendWs).apply()
+        val resolvedWs = backendWs
+            ?: cloudWsForHttp(cloudHttp)
+            ?: cloudWs
+            ?: DEFAULT_CLOUD_WS
+        cloudWs = resolvedWs
+        prefs().edit().putString("cloud_ws", resolvedWs)
+            .putString("ws_url", resolvedWs).apply()
+        // Prefer cloud when linking against the hosted API — do not get stuck on stale LAN.
+        if (cloudHttp?.contains("execute-api") == true) {
+            lanWs = null
+            lanHttp = null
+            discoveredWs = null
+            discoveredHttp = null
         }
         userDisconnected = false
         reconnectAttempt.set(0)
@@ -136,70 +202,162 @@ class BackendClient(private val context: Context) {
         sessionToken = session
         if (device != null) {
             deviceId = device
-            prefs().edit().putString("device_id", device).apply()
         }
-        prefs().edit().putString("session_token", session)
+        secure().edit()
+            .putString("session_token", session)
+            .putString("device_id", deviceId)
+            .putString("owner", owner)
+            .apply()
+        prefs().edit()
             .putString("user_email", owner)
-            .remove("pairing_token").apply()
+            .remove("pairing_token")
+            .remove("session_token")
+            .apply()
         pairingToken = null
+        if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
+        if (cloudWs.isNullOrBlank()) cloudWs = cloudWsForHttp(cloudHttp) ?: DEFAULT_CLOUD_WS
+        prefs().edit()
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .apply()
+        _pairedFlow.value = true
         userDisconnected = false
         reconnectAttempt.set(0)
         scope.launch { connectBest(force = true) }
     }
 
     fun defaultBackendHttp(): String? =
-        cloudHttp ?: lanHttp ?: discoveredHttp ?: prefs().getString("backend_url", null)
+        cloudHttp ?: lanHttp ?: discoveredHttp
+            ?: prefs().getString("backend_url", null)
+            ?: DEFAULT_CLOUD_HTTP
 
     private fun prefs() = context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
+    private fun secure() = SecurePrefs.get(context)
 
     private fun getOrCreateDeviceId(): String {
-        val p = prefs()
-        var id = p.getString("device_id", null)
+        val s = secure()
+        var id = s.getString("device_id", null) ?: prefs().getString("device_id", null)
         if (id == null) {
             id = "android_${UUID.randomUUID()}"
-            p.edit().putString("device_id", id).apply()
+            s.edit().putString("device_id", id).apply()
+            prefs().edit().putString("device_id", id).apply()
         }
         return id
     }
 
     private fun loadPrefs() {
         val p = prefs()
+        val s = secure()
         pairingToken = p.getString("pairing_token", null)
-        sessionToken = p.getString("session_token", null)
-        lanHttp = p.getString("lan_http", null) ?: p.getString("backend_url", null)
-        lanWs = p.getString("lan_ws", null) ?: p.getString("ws_url", null)
-        cloudHttp = p.getString("cloud_http", null)
-        cloudWs = p.getString("cloud_ws", null)
-        deviceId = p.getString("device_id", null) ?: deviceId
+        sessionToken = s.getString("session_token", null) ?: p.getString("session_token", null)
+        cloudHttp = p.getString("cloud_http", null) ?: DEFAULT_CLOUD_HTTP
+        cloudWs = p.getString("cloud_ws", null) ?: DEFAULT_CLOUD_WS
+        val legacyBackend = p.getString("backend_url", null)
+        if (legacyBackend?.contains("execute-api") == true) {
+            cloudHttp = legacyBackend
+        }
+        cloudWs = cloudWsForHttp(cloudHttp) ?: cloudWs ?: DEFAULT_CLOUD_WS
+        lanHttp = p.getString("lan_http", null)
+        lanWs = p.getString("lan_ws", null)
+        if (lanHttp?.contains("execute-api") == true) lanHttp = null
+        if (lanWs?.contains("execute-api") == true) lanWs = null
+        deviceId = s.getString("device_id", null) ?: p.getString("device_id", null) ?: deviceId
+        // Migrate plaintext session into encrypted store
+        if (!sessionToken.isNullOrBlank()) {
+            s.edit().putString("session_token", sessionToken)
+                .putString("device_id", deviceId).apply()
+            p.edit().remove("session_token").apply()
+        }
     }
 
+    /**
+     * QR / deep-link pairing: exchange single-use token for long-lived session_token,
+     * then auto-connect over cloud (LAN mDNS remains a faster fallback when available).
+     */
     fun pairFromUri(uri: Uri) {
         val token = uri.getQueryParameter("token") ?: return
-        val backend = uri.getQueryParameter("backend")
-        val ws = uri.getQueryParameter("ws")
-        lanHttp = uri.getQueryParameter("lan") ?: backend
-        lanWs = uri.getQueryParameter("lan_ws") ?: ws
-        cloudHttp = uri.getQueryParameter("cloud")
-        cloudWs = uri.getQueryParameter("cloud_ws")
-        // Emulator / single-endpoint: backend may be LAN (10.0.2.2)
-        if (cloudWs == null && ws != null && lanWs != null && ws != lanWs) {
-            cloudWs = ws
-        }
-        pairingToken = token
-        sessionToken = null
+        val cloud = uri.getQueryParameter("cloud")
+            ?: uri.getQueryParameter("backend")
+            ?: DEFAULT_CLOUD_HTTP
+        val cws = uri.getQueryParameter("cloud_ws")
+            ?: uri.getQueryParameter("ws")
+            ?: cloudWsForHttp(cloud)
+            ?: DEFAULT_CLOUD_WS
+        lanHttp = uri.getQueryParameter("lan")
+        lanWs = uri.getQueryParameter("lan_ws")
+        if (lanHttp?.contains("execute-api") == true) lanHttp = null
+        if (lanWs?.contains("execute-api") == true) lanWs = null
+        cloudHttp = cloud.trimEnd('/')
+        cloudWs = cws
         prefs().edit()
-            .putString("pairing_token", token)
-            .remove("session_token")
-            .putString("lan_http", lanHttp)
-            .putString("lan_ws", lanWs)
             .putString("cloud_http", cloudHttp)
             .putString("cloud_ws", cloudWs)
-            .putString("backend_url", lanHttp ?: cloudHttp)
-            .putString("ws_url", lanWs ?: cloudWs)
+            .putString("lan_http", lanHttp)
+            .putString("lan_ws", lanWs)
             .apply()
-        userDisconnected = false
-        reconnectAttempt.set(0)
-        scope.launch { connectBest(force = true) }
+        _pairBusyFlow.value = true
+        _pairErrorFlow.value = null
+        scope.launch {
+            try {
+                claimPairingToken(token)
+                userDisconnected = false
+                reconnectAttempt.set(0)
+                ConnectionService.start(context)
+                connectBest(force = true)
+            } catch (e: Exception) {
+                Log.e(tag, "pair claim failed", e)
+                _pairErrorFlow.value = e.message ?: "Pairing failed"
+            } finally {
+                _pairBusyFlow.value = false
+            }
+        }
+    }
+
+    private fun claimPairingToken(token: String) {
+        val httpBase = (cloudHttp ?: DEFAULT_CLOUD_HTTP).trimEnd('/')
+        val body = gson.toJson(
+            mapOf(
+                "token" to token,
+                "device_name" to android.os.Build.MODEL,
+                "platform" to "android",
+                "device_id" to deviceId,
+            ),
+        ).toRequestBody("application/json".toMediaType())
+        val req = Request.Builder()
+            .url("$httpBase/api/auth/pair/claim")
+            .post(body)
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                error("claim failed: ${resp.code} $text")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
+            val session = map["session_token"] as? String ?: error("no session_token")
+            val did = map["device_id"] as? String
+            val owner = map["owner"] as? String
+            (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
+            (map["cloud_ws"] as? String)?.let { cloudWs = it }
+            (map["access_token"] as? String)?.let { authToken = it }
+            sessionToken = session
+            pairingToken = null
+            if (did != null) deviceId = did
+            secure().edit()
+                .putString("session_token", session)
+                .putString("device_id", deviceId)
+                .putString("owner", owner)
+                .apply()
+            prefs().edit()
+                .remove("pairing_token")
+                .remove("session_token")
+                .putString("cloud_http", cloudHttp)
+                .putString("cloud_ws", cloudWs)
+                .putString("user_email", owner)
+                .apply()
+            _pairedFlow.value = true
+            _statusFlow.value = "Paired · connecting…"
+        }
     }
 
     /** @deprecated use pairFromUri */
@@ -216,9 +374,21 @@ class BackendClient(private val context: Context) {
 
     private fun candidates(): List<Candidate> {
         val list = mutableListOf<Candidate>()
+        // Prefer cloud when we have an execute-api backend (prod phone linking)
+        val preferCloud = cloudHttp?.contains("execute-api") == true ||
+            cloudWs?.contains("execute-api") == true
+        if (preferCloud) {
+            val ws = cloudWs ?: cloudWsForHttp(cloudHttp) ?: DEFAULT_CLOUD_WS
+            list.add(Candidate("cloud", cloudHttp ?: DEFAULT_CLOUD_HTTP, ws))
+        }
         discoveredWs?.let { list.add(Candidate("discovered", discoveredHttp, it)) }
         lanWs?.let { list.add(Candidate("lan", lanHttp, it)) }
-        cloudWs?.let { list.add(Candidate("cloud", cloudHttp, it)) }
+        if (!preferCloud) {
+            val ws = cloudWs ?: cloudWsForHttp(cloudHttp)
+            if (ws != null) {
+                list.add(Candidate("cloud", cloudHttp ?: DEFAULT_CLOUD_HTTP, ws))
+            }
+        }
         // Deduplicate by ws url
         return list.distinctBy { it.ws }
     }
@@ -238,15 +408,24 @@ class BackendClient(private val context: Context) {
             // Probe TCP connect latency; prefer LAN/discovered under 250ms
             data class Measured(val c: Candidate, val ms: Double?)
             val measured = cands.map { c ->
-                Measured(c, probeLatencyMs(c.ws))
+                Measured(c, probeLatencyMs(c.ws, c.http))
             }
-            val lanOk = measured
-                .filter { it.c.route != "cloud" && it.ms != null && it.ms <= 250.0 }
-                .minByOrNull { it.ms!! }
-            val pick = lanOk
-                ?: measured.filter { it.ms != null }.minByOrNull { it.ms!! }
-                ?: measured.firstOrNull { it.c.route != "cloud" }
-                ?: measured.first()
+            val preferCloud = cloudHttp?.contains("execute-api") == true
+            val pick = if (preferCloud) {
+                // Prod / device-code link: always prefer reachable cloud WS first
+                measured.firstOrNull { it.c.route == "cloud" && it.ms != null }
+                    ?: measured.firstOrNull { it.c.route == "cloud" }
+                    ?: measured.filter { it.ms != null }.minByOrNull { it.ms!! }
+                    ?: measured.first()
+            } else {
+                val lanOk = measured
+                    .filter { it.c.route != "cloud" && it.ms != null && it.ms <= 250.0 }
+                    .minByOrNull { it.ms!! }
+                lanOk
+                    ?: measured.filter { it.ms != null }.minByOrNull { it.ms!! }
+                    ?: measured.firstOrNull { it.c.route != "cloud" }
+                    ?: measured.first()
+            }
 
             openSocket(pick.c, pick.ms)
         } finally {
@@ -254,13 +433,22 @@ class BackendClient(private val context: Context) {
         }
     }
 
-    private fun probeLatencyMs(wsUrl: String): Double? {
+    private fun probeLatencyMs(wsUrl: String, httpHint: String? = null): Double? {
         return try {
-            val httpProbe = wsUrl
-                .replace("wss://", "https://")
-                .replace("ws://", "http://")
-                .substringBefore("/api/")
-                .trimEnd('/') + "/api/health"
+            // Prefer HTTP API /api/health — WS API Gateway has no health route
+            val httpProbe = when {
+                !httpHint.isNullOrBlank() && httpHint.contains("execute-api") ->
+                    httpHint.trimEnd('/') + "/api/health"
+                wsUrl.contains("execute-api") && !cloudHttp.isNullOrBlank() ->
+                    cloudHttp!!.trimEnd('/') + "/api/health"
+                else ->
+                    wsUrl
+                        .replace("wss://", "https://")
+                        .replace("ws://", "http://")
+                        .substringBefore("/api/")
+                        .trimEnd('/') + "/api/health"
+            }
+            // Also accept bare /health once deployed
             val req = Request.Builder().url(httpProbe).get().build()
             val t0 = System.nanoTime()
             client.newCall(req).execute().use { resp ->
@@ -330,7 +518,7 @@ class BackendClient(private val context: Context) {
                     val others = candidates().filter { it.ws != candidate.ws }
                     if (others.isNotEmpty() && reconnectAttempt.get() == 0) {
                         val next = others.first()
-                        openSocket(next, probeLatencyMs(next.ws))
+                        openSocket(next, probeLatencyMs(next.ws, next.http))
                     } else {
                         scheduleReconnect()
                     }
@@ -349,15 +537,16 @@ class BackendClient(private val context: Context) {
         heartbeatJob = scope.launch {
             while (isActive && webSocket != null) {
                 val t0 = System.nanoTime()
-                val sent = webSocket?.send(
-                    gson.toJson(
-                        mapOf(
-                            "type" to "heartbeat",
-                            "device_id" to deviceId,
-                            "client_ts" to System.currentTimeMillis(),
-                        ),
-                    ),
-                ) == true
+                val hb = mutableMapOf<String, Any?>(
+                    "type" to "heartbeat",
+                    "device_id" to deviceId,
+                    "client_ts" to System.currentTimeMillis(),
+                    "route" to activeRoute,
+                    "latency_ms" to lastLatencyMs,
+                )
+                sessionToken?.let { hb["session_token"] = it }
+                authToken?.let { hb["auth_token"] = it }
+                val sent = webSocket?.send(gson.toJson(hb)) == true
                 if (!sent) break
                 delay(15_000)
                 // Rough RTT estimate from last ack handled in handleMessage
@@ -498,6 +687,13 @@ class BackendClient(private val context: Context) {
         val quality = (message["quality"] as? Number)?.toInt() ?: 45
         when (action) {
             "start" -> {
+                // Reuse active MediaProjection — Android 14+ consent is one-shot per grant
+                if (ScreenCaptureService.isStreaming()) {
+                    ScreenCaptureService.updateParams(fps, quality)
+                    _streamFlow.value = "streaming"
+                    sendAgentEvent(null, null, "stream_resume", "Live view resumed (consent reused)")
+                    return
+                }
                 _streamFlow.value = "starting"
                 onStreamPermissionNeeded?.invoke(fps, quality)
                     ?: Log.w(tag, "No permission callback registered for stream start")
@@ -507,6 +703,10 @@ class BackendClient(private val context: Context) {
     }
 
     fun startCaptureWithPermission(resultCode: Int, data: Intent, fps: Int, quality: Int) {
+        // Persist grant extras so a later stream_control can restart without UI if process alive
+        prefs().edit()
+            .putBoolean("media_projection_granted", true)
+            .apply()
         val intent = Intent(context, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_START
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
