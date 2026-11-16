@@ -43,12 +43,14 @@ function Shell() {
   if (
     typeof window !== 'undefined' &&
     (window.location.pathname.startsWith('/auth/') ||
-      window.location.pathname.startsWith('/pair'))
+      window.location.pathname.startsWith('/pair') ||
+      window.location.pathname.startsWith('/p/'))
   ) {
     return (
       <Routes>
         <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/pair" element={<PairPage />} />
+        <Route path="/p/:code" element={<PairPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
@@ -120,6 +122,7 @@ function Shell() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route path="/pair" element={<PairPage />} />
+            <Route path="/p/:code" element={<PairPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

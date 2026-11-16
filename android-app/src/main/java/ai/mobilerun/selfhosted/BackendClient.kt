@@ -38,6 +38,20 @@ class BackendClient(private val context: Context) {
         .readTimeout(0, TimeUnit.SECONDS)
         .build()
 
+    /** LAN/emulator claim — fail fast (≤2s connect) so mobile-data phones reach AWS quickly. */
+    private val claimLanClient = OkHttpClient.Builder()
+        .connectTimeout(2, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(4, TimeUnit.SECONDS)
+        .build()
+
+    /** AWS / execute-api claim — normal timeouts for mobile data. */
+    private val claimCloudClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
+        .build()
+
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
     private val discovery = LanDiscovery(context)
@@ -333,27 +347,85 @@ class BackendClient(private val context: Context) {
         }
     }
 
-    /** Pull token from mobilerun://pair?…, https://…/pair?…, or raw query. */
+    /** Pull code from mobilerun://pair?c=…, https://…/p/CODE, /pair?token=…, or raw. */
     fun extractPairToken(uri: Uri): String? {
-        uri.getQueryParameter("token")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        // Some scanners wrap the URL; try parsing the whole string again
-        val raw = uri.toString()
-        val marker = "token="
-        val idx = raw.indexOf(marker)
-        if (idx >= 0) {
-            val rest = raw.substring(idx + marker.length)
-            val end = rest.indexOfFirst { it == '&' || it == '#' || it == ' ' }
-            val value = if (end < 0) rest else rest.substring(0, end)
-            return Uri.decode(value).trim().takeIf { it.isNotEmpty() }
+        uri.getQueryParameter("c")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            return it.uppercase()
         }
+        uri.getQueryParameter("token")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            return it.uppercase()
+        }
+        val path = uri.path.orEmpty()
+        // https://…/p/ABC12345
+        val segs = path.split('/').filter { it.isNotEmpty() }
+        if (segs.size >= 2 && segs[segs.size - 2].equals("p", ignoreCase = true)) {
+            return segs.last().uppercase().takeIf { it.isNotEmpty() }
+        }
+        if (segs.size >= 2 && segs[segs.size - 2].equals("pair", ignoreCase = true)) {
+            return segs.last().uppercase().takeIf { it.isNotEmpty() }
+        }
+        val raw = uri.toString()
+        for (marker in listOf("c=", "token=", "/p/")) {
+            val idx = raw.indexOf(marker, ignoreCase = true)
+            if (idx >= 0) {
+                val rest = raw.substring(idx + marker.length)
+                val end = rest.indexOfFirst { it == '&' || it == '#' || it == ' ' || it == '?' }
+                val value = if (end < 0) rest else rest.substring(0, end)
+                return Uri.decode(value).trim().uppercase().takeIf { it.isNotEmpty() }
+            }
+        }
+        // Bare short code
+        val bare = raw.trim().uppercase()
+        if (bare.matches(Regex("^[A-Z0-9]{6,8}$"))) return bare
         return null
     }
 
     fun lastPairError(): String? =
         prefs().getString("last_pair_error", null)?.takeIf { it.isNotBlank() }
 
+    /** True for emulator/LAN hosts that are safe to try before AWS. */
+    private fun isLocalClaimBase(base: String): Boolean {
+        val h = base.lowercase()
+        return h.contains("10.0.2.2") ||
+            h.contains("127.0.0.1") ||
+            h.contains("localhost") ||
+            h.contains("192.168.") ||
+            Regex("""://10\.\d+\.""").containsMatchIn(h) ||
+            h.contains(".local")
+    }
+
+    /** True for the baked AWS API (or another execute-api). Skip TEST-NET probes. */
+    private fun isCloudClaimBase(base: String): Boolean {
+        val h = base.lowercase()
+        if (h.contains("203.0.113.") || h.contains("198.51.100.") || h.contains("192.0.2.")) {
+            return false
+        }
+        return h.contains("execute-api") ||
+            h.trimEnd('/') == DEFAULT_CLOUD_HTTP.trimEnd('/').lowercase()
+    }
+
+    /**
+     * Claim order for real phones (often mobile data, no LAN):
+     * 1) local LAN only if present (≤2s connect), then
+     * 2) execute-api / baked DEFAULT_CLOUD_HTTP.
+     * Never block on unreachable cloud= probe hosts.
+     */
+    private fun claimHttpBases(): List<String> {
+        val out = linkedSetOf<String>()
+        lanHttp?.trimEnd('/')?.takeIf { it.isNotBlank() && isLocalClaimBase(it) }?.let { out.add(it) }
+        cloudHttp?.trimEnd('/')?.takeIf { it.isNotBlank() }?.let { c ->
+            if (isLocalClaimBase(c) || isCloudClaimBase(c)) out.add(c)
+        }
+        // Always end on baked AWS so mobile-data / code-only pairing works when
+        // LAN is absent or times out in ≤2s.
+        out.add(DEFAULT_CLOUD_HTTP.trimEnd('/'))
+        return out.toList()
+    }
+
     private fun claimPairingToken(token: String) {
-        val httpBase = (cloudHttp ?: DEFAULT_CLOUD_HTTP).trimEnd('/')
+        val bases = claimHttpBases()
+        Log.i(tag, "claim bases=$bases")
+
         val body = gson.toJson(
             mapOf(
                 "token" to token,
@@ -362,81 +434,121 @@ class BackendClient(private val context: Context) {
                 "device_id" to deviceId,
             ),
         ).toRequestBody("application/json".toMediaType())
-        val req = Request.Builder()
-            .url("$httpBase/api/auth/pair/claim")
-            .post(body)
-            .build()
-        client.newCall(req).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) {
-                val detail = try {
+
+        var lastErr: Exception? = null
+        var map: Map<String, Any?>? = null
+        var usedBase: String? = null
+        for (httpBase in bases) {
+            val t0 = System.nanoTime()
+            val http = if (isLocalClaimBase(httpBase)) claimLanClient else claimCloudClient
+            try {
+                val req = Request.Builder()
+                    .url("$httpBase/api/auth/pair/claim")
+                    .post(body)
+                    .build()
+                http.newCall(req).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = try {
+                            @Suppress("UNCHECKED_CAST")
+                            (gson.fromJson(text, Map::class.java) as? Map<String, Any?>)?.get("detail")
+                        } catch (_: Exception) {
+                            null
+                        }
+                        error("Claim failed (${resp.code}): ${detail ?: text.ifBlank { resp.message }}")
+                    }
                     @Suppress("UNCHECKED_CAST")
-                    (gson.fromJson(text, Map::class.java) as? Map<String, Any?>)?.get("detail")
-                } catch (_: Exception) {
-                    null
+                    map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
+                    usedBase = httpBase
                 }
-                error("Claim failed (${resp.code}): ${detail ?: text.ifBlank { resp.message }}")
+                Log.i(
+                    tag,
+                    "claim ok via $httpBase in ${(System.nanoTime() - t0) / 1_000_000}ms",
+                )
+                break
+            } catch (e: Exception) {
+                val ms = (System.nanoTime() - t0) / 1_000_000
+                Log.w(tag, "claim via $httpBase failed in ${ms}ms: ${e.message}")
+                // Prefer the first network/local failure over a later "invalid token"
+                // from the wrong environment (local code claimed against AWS).
+                if (lastErr == null || isLocalClaimBase(httpBase)) {
+                    lastErr = e
+                }
             }
-            @Suppress("UNCHECKED_CAST")
-            val map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
-            val session = map["session_token"] as? String ?: error("no session_token in claim response")
-            val did = map["device_id"] as? String
-            val owner = map["owner"] as? String
-            // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
-            // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
-            val localOverride =
-                httpBase.contains("10.0.2.2") ||
-                    httpBase.contains("127.0.0.1") ||
-                    httpBase.contains("localhost")
-            if (!localOverride) {
-                (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
-                (map["cloud_ws"] as? String)?.let { cloudWs = it }
-            }
-            (map["access_token"] as? String)?.let { authToken = it }
-            // Always fall back to baked prod endpoints after claim
-            if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
-            if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
-            sessionToken = session
-            pairingToken = null
-            if (did != null) deviceId = did
-            secure().edit()
-                .putString("session_token", session)
-                .putString("device_id", deviceId)
-                .putString("owner", owner)
-                .apply()
-            prefs().edit()
-                .remove("pairing_token")
-                .remove("session_token")
-                .putString("cloud_http", cloudHttp)
-                .putString("cloud_ws", cloudWs)
-                .putString("user_email", owner)
-                .putString("last_pair_error", "")
-                .apply()
-            _pairedFlow.value = true
-            _pairErrorFlow.value = null
-            _statusFlow.value = "Paired · connecting…"
         }
+        val claimed = map ?: throw (lastErr ?: IllegalStateException("Claim failed"))
+        val httpBase = usedBase ?: DEFAULT_CLOUD_HTTP
+        val session = claimed["session_token"] as? String ?: error("no session_token in claim response")
+        val did = claimed["device_id"] as? String
+        val owner = claimed["owner"] as? String
+        // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
+        // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
+        val localOverride = isLocalClaimBase(httpBase)
+        if (!localOverride) {
+            (claimed["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
+            (claimed["cloud_ws"] as? String)?.let { cloudWs = it }
+        }
+        (claimed["access_token"] as? String)?.let { authToken = it }
+        // Always fall back to baked prod endpoints after claim
+        if (cloudHttp.isNullOrBlank() || !isCloudClaimBase(cloudHttp!!)) {
+            cloudHttp = DEFAULT_CLOUD_HTTP
+        }
+        if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
+        sessionToken = session
+        pairingToken = null
+        if (did != null) deviceId = did
+        secure().edit()
+            .putString("session_token", session)
+            .putString("device_id", deviceId)
+            .putString("owner", owner)
+            .apply()
+        prefs().edit()
+            .remove("pairing_token")
+            .remove("session_token")
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .putString("user_email", owner)
+            .putString("last_pair_error", "")
+            .apply()
+        _pairedFlow.value = true
+        _pairErrorFlow.value = null
+        _statusFlow.value = "Paired · connecting…"
     }
 
-    /** Paste / type the short pairing token from the Devices page (no QR). */
+    /** Paste / type the short pairing code from Devices (no QR). */
     fun pairWithCode(rawCode: String) {
         val raw = rawCode.trim().trim('"')
-        if (raw.contains("://") || raw.contains("/pair?")) {
+        if (raw.contains("://") || raw.contains("/pair") || raw.contains("/p/")) {
             pairFromUri(Uri.parse(raw))
             return
         }
-        var token = raw.removePrefix("token=")
-        if (token.contains("token=")) {
-            token = token.substringAfter("token=")
+        var token = raw
+        for (prefix in listOf("token=", "TOKEN=", "c=", "C=")) {
+            if (token.startsWith(prefix)) token = token.removePrefix(prefix)
         }
         token = token.substringBefore('&').substringBefore('#').trim()
+            .filter { it.isLetterOrDigit() }
+            .uppercase()
         if (token.isBlank()) {
-            val msg = "Paste the pairing code from Devices (or the full link)"
+            val msg = "Enter the pairing code from Devices (or the full link)"
             _pairErrorFlow.value = msg
             prefs().edit().putString("last_pair_error", msg).apply()
             return
         }
-        pairFromUri(Uri.parse("mobilerun://pair?token=${Uri.encode(token)}"))
+        // Code alone → baked AWS API (works on mobile data with no LAN server).
+        lanHttp = null
+        lanWs = null
+        discoveredHttp = null
+        discoveredWs = null
+        cloudHttp = DEFAULT_CLOUD_HTTP
+        cloudWs = DEFAULT_CLOUD_WS
+        prefs().edit()
+            .remove("lan_http")
+            .remove("lan_ws")
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .apply()
+        pairFromUri(Uri.parse("mobilerun://pair?c=${Uri.encode(token)}"))
     }
 
     /** @deprecated use pairFromUri */

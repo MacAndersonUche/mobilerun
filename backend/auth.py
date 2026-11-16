@@ -28,7 +28,7 @@ COGNITO_APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID", "")
 ALLOWED_USER_EMAILS = {
     e.strip().lower()
     for e in os.environ.get(
-        "ALLOWED_USER_EMAILS", "macandersonuche@yahoo.com,admin"
+        "ALLOWED_USER_EMAILS", "macandersonuche@yahoo.com,admin,ci-e2e"
     ).split(",")
     if e.strip()
 }

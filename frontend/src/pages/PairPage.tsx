@@ -1,25 +1,33 @@
 import { useEffect, useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Card } from '../components/ui';
 
 /**
- * HTTPS landing for pairing links (https://macsmobilerun.netlify.app/pair?token=…).
- * Tries to open the mobilerun:// deep link; falls back to install/connect instructions.
+ * HTTPS landing for pairing:
+ * - https://…/p/ABC12345 (preferred short QR)
+ * - https://…/pair?c=… or ?token=…
+ * Tries to open the mobilerun:// deep link; falls back to install instructions.
  */
 export default function PairPage() {
+  const { code: pathCode } = useParams<{ code?: string }>();
   const [params] = useSearchParams();
+
+  const code = useMemo(() => {
+    const fromPath = (pathCode || '').trim();
+    const fromQuery = (params.get('c') || params.get('token') || '').trim();
+    return (fromPath || fromQuery).toUpperCase();
+  }, [pathCode, params]);
+
   const deepLink = useMemo(() => {
-    const qs = params.toString();
-    return qs ? `mobilerun://pair?${qs}` : null;
-  }, [params]);
+    if (!code) return null;
+    return `mobilerun://pair?c=${encodeURIComponent(code)}`;
+  }, [code]);
 
   useEffect(() => {
     if (!deepLink) return;
-    // Attempt to hand off to the installed APK (custom scheme).
     const t = window.setTimeout(() => {
       window.location.href = deepLink;
     }, 50);
-    // Retry once — some browsers swallow the first navigation from a QR landing.
     const t2 = window.setTimeout(() => {
       window.location.href = deepLink;
     }, 800);
@@ -38,16 +46,21 @@ export default function PairPage() {
           <Link to="/devices" className="text-accent">
             Devices
           </Link>
-          , then tap Scan QR (or open this link again).
+          , then enter the pairing code or scan again.
         </p>
+        {code && (
+          <p className="font-mono text-lg tracking-widest text-white" data-testid="pair-landing-code">
+            {code}
+          </p>
+        )}
         {deepLink && (
           <a href={deepLink} className="inline-block text-sm text-accent break-all">
             Open in MobileRun app
           </a>
         )}
-        {!params.get('token') && (
+        {!code && (
           <p className="text-sm text-red-400">
-            This link is missing a pairing token. Generate a new QR on Devices.
+            This link is missing a pairing code. Generate a new code on Devices.
           </p>
         )}
       </Card>

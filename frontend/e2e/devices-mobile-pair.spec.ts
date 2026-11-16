@@ -13,20 +13,20 @@ test.describe('Devices same-phone pairing (mobile)', () => {
   });
 
   test('shows Connect this phone, QR, and copyable code', async ({ page }) => {
-    // Stub pair/create so the page always has a token (no Cognito needed)
-    const fakeToken = 'mobileTestToken_ABCDEF1234567890';
+    const fakeToken = 'AB3K7Q2M';
     await page.route('**/api/auth/pair/create', async (route) => {
-      const pairing_url = `mobilerun://pair?token=${fakeToken}`;
-      const https_link = `https://macsmobilerun.netlify.app/pair?token=${fakeToken}`;
+      const pairing_url = `mobilerun://pair?c=${fakeToken}`;
+      const https_link = `https://macsmobilerun.netlify.app/p/${fakeToken}`;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           token: fakeToken,
+          code: fakeToken,
           pairing_url,
           https_link,
+          short_link: https_link,
           qr_code:
-            // 1x1 png base64 — enough for <img> presence; real QR tested via API
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
           expires_in: 600,
           cloud_http: PROD_API,
@@ -51,7 +51,7 @@ test.describe('Devices same-phone pairing (mobile)', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           apk_url:
-            'https://github.com/MacAndersonUche/mobilerun/releases/download/apk-119/mobilerun.apk',
+            'https://github.com/MacAndersonUche/mobilerun/releases/download/apk-137/mobilerun.apk',
           qr_code:
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
         }),
@@ -68,6 +68,9 @@ test.describe('Devices same-phone pairing (mobile)', () => {
       timeout: 20000,
     });
 
+    // Generate code first (no auto-create)
+    await page.getByTestId('generate-pairing-code-primary').click();
+
     const connectBtn = page.getByTestId('connect-this-phone');
     await expect(connectBtn).toBeVisible();
     await expect(connectBtn).toBeEnabled();
@@ -82,9 +85,8 @@ test.describe('Devices same-phone pairing (mobile)', () => {
     await expect(page.getByTestId('pairing-code')).toHaveText(fakeToken);
     await expect(page.getByTestId('download-app-first')).toBeVisible();
     await expect(page.getByTestId('https-pair-fallback')).toBeVisible();
+    await expect(page.getByTestId('pairing-short-link')).toContainText('/p/');
 
-    // Clicking should attempt navigation to mobilerun:// (may fail in desktop
-    // chromium; we assert the hint appears).
     await connectBtn.click();
     await expect(page.getByTestId('connect-hint')).toBeVisible({ timeout: 5000 });
   });

@@ -58,11 +58,12 @@ test.describe('prod API + hosted UI', () => {
     expect(typeof urls.stored === 'string' || urls.stored === null).toBeTruthy();
   });
 
-  test('pair/create returns compact https QR payload and claim works', async ({
+  test('pair/create returns short /p/CODE QR and claim works (ci-e2e)', async ({
     request,
   }) => {
+    // Dedicated CI user — never pollute Mac/admin device list
     const login = await request.post(`${PROD_API}/api/auth/login`, {
-      data: { username: 'admin', password: 'admin' },
+      data: { username: 'ci-e2e', password: 'admin' },
     });
     expect(login.status()).toBe(200);
     const { access_token } = await login.json();
@@ -72,22 +73,26 @@ test.describe('prod API + hosted UI', () => {
     });
     expect(created.status()).toBe(200);
     const body = await created.json();
-    expect(body.token).toBeTruthy();
-    expect(body.https_link).toContain('/pair?token=');
-    expect(body.pairing_url).toContain('mobilerun://pair?token=');
-    // After deploy: compact (no cloud_ws in primary pairing_url). Soft until then.
+    expect(body.code || body.token).toBeTruthy();
+    const code = body.code || body.token;
+    expect(code.length).toBeGreaterThanOrEqual(6);
+    expect(code.length).toBeLessThanOrEqual(8);
+    const link = body.short_link || body.https_link || '';
+    expect(link).toContain('/p/');
+    expect(body.pairing_url).toMatch(/mobilerun:\/\/pair\?(c|token)=/);
     const compact = !String(body.pairing_url).includes('cloud_ws=');
     test.info().annotations.push({
       type: 'note',
-      description: `pairing_url compact=${compact} len=${String(body.pairing_url).length}`,
+      description: `pairing_url compact=${compact} code=${code} link=${link}`,
     });
 
+    const deviceId = `device_pw_${Date.now()}`;
     const claim = await request.post(`${PROD_API}/api/auth/pair/claim`, {
       data: {
-        token: body.token,
+        token: code,
         device_name: 'playwright-phone',
         platform: 'android',
-        device_id: `device_pw_${Date.now()}`,
+        device_id: deviceId,
       },
     });
     expect(claim.status()).toBe(200);
@@ -101,6 +106,12 @@ test.describe('prod API + hosted UI', () => {
     expect(devices.status()).toBe(200);
     const list = await devices.json();
     expect(list.some((d: { device_id: string }) => d.device_id === creds.device_id)).toBeTruthy();
+
+    // Cleanup so CI devices never accumulate
+    const del = await request.delete(`${PROD_API}/api/devices/${creds.device_id}`, {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+    expect(del.status()).toBe(200);
   });
 
   test('devices page does not show Failed to fetch from LAN', async ({

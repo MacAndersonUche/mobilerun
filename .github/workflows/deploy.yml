@@ -177,33 +177,109 @@ jobs:
           echo "HTTP $code"
           test "$code" = "401" -o "$code" = "403"
 
-          echo "Login + device-code + QR pair create + APK download QR..."
-          # Default admin/admin unless ADMIN_PASSWORD overridden in Lambda env
+          echo "Purge test/CI devices from Mac + admin Dynamo lists (keep real devices only if any)..."
+          pip install -q boto3
+          python3 <<'PY'
+          import time
+          import boto3
+
+          table_name = "mobilerun-settings"
+          tbl = boto3.resource("dynamodb").Table(table_name)
+          owners = [
+              "macandersonuche@yahoo.com",
+              "admin@local",
+              "admin",
+              "ci-e2e@local",
+              "ci-e2e",
+          ]
+
+          def looks_like_test(name: str, did: str) -> bool:
+              blob = f"{name} {did}".lower()
+              return any(
+                  t in blob
+                  for t in (
+                      "smoke",
+                      "emu",
+                      "emulator",
+                      "ci-",
+                      "ci_",
+                      "test",
+                      "pixel_ci",
+                      "device_ci",
+                      "github",
+                      "runner",
+                      "verify-phone",
+                      "smoke-phone",
+                  )
+              )
+
+          for owner in owners:
+              key = f"user:{owner}:devices"
+              item = tbl.get_item(Key={"key": key}).get("Item") or {}
+              data = item.get("data") or {}
+              devices = dict(data.get("devices") or {})
+              if not devices:
+                  print(f"{owner}: empty")
+                  continue
+              keep = {}
+              removed = []
+              for did, row in devices.items():
+                  row = dict(row or {})
+                  name = str(row.get("name") or row.get("device_name") or "")
+                  did_s = str(did)
+                  # Mac Cognito: keep real phones; admin/ci: clear all
+                  if owner.startswith("macanderson") and not looks_like_test(name, did_s):
+                      keep[did_s] = row
+                  else:
+                      removed.append(did_s)
+              print(f"{owner}: had={len(devices)} remove={len(removed)} keep={len(keep)}")
+              tbl.put_item(
+                  Item={
+                      "key": key,
+                      "user_id": owner,
+                      "name": "devices",
+                      "data": {"devices": keep},
+                      "updated_at": int(time.time()),
+                  }
+              )
+          print("Purge OK")
+          PY
+
+          echo "Login (ci-e2e) + device-code + QR pair create + APK download QR..."
+          # Dedicated CI user so smoke devices never land on Mac/admin
           TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
             -H 'Content-Type: application/json' \
-            -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+            -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -sfS "$API_URL/api/auth/me" -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json
-          python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d"
+          python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d; assert 'ci-e2e' in (d.get('email') or '')"
           # Legacy device-code (still supported)
           curl -sfS -X POST "$API_URL/api/auth/device/code" \
             -H 'Content-Type: application/json' \
             -d '{"device_name":"smoke-device","platform":"android"}' | tee /tmp/dcode.json
           python3 -c "import json; d=json.load(open('/tmp/dcode.json')); assert d.get('user_code') and d.get('device_code'), d"
-          # Cognito-tied QR pairing (primary APK path)
+          # Short-code QR pairing (primary APK path)
           curl -sfS -X POST "$API_URL/api/auth/pair/create" \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
             -d '{"device_name":"smoke-phone","platform":"android"}' | tee /tmp/pair.json
-          python3 -c "import json; d=json.load(open('/tmp/pair.json')); assert d.get('token') and d.get('pairing_url') and d.get('qr_code'), d"
+          python3 -c "import json; d=json.load(open('/tmp/pair.json')); assert d.get('token') and d.get('code') and d.get('pairing_url') and d.get('qr_code'); assert '/p/' in (d.get('short_link') or d.get('https_link') or ''), d; assert 6 <= len(d['code']) <= 8, d"
           curl -sfS -X POST "$API_URL/api/auth/pair/claim" \
             -H 'Content-Type: application/json' \
-            -d "{\"token\":\"$(python3 -c "import json; print(json.load(open('/tmp/pair.json'))['token'])")\",\"device_name\":\"smoke-phone\"}" | tee /tmp/claim.json
+            -d "{\"token\":\"$(python3 -c "import json; print(json.load(open('/tmp/pair.json'))['code'])")\",\"device_name\":\"smoke-phone\",\"device_id\":\"device_ci_smoke\"}" | tee /tmp/claim.json
           python3 -c "import json; d=json.load(open('/tmp/claim.json')); assert d.get('session_token') and d.get('device_id'), d"
+          # Cleanup — never leave CI devices on the account
+          DID=$(python3 -c "import json; print(json.load(open('/tmp/claim.json'))['device_id'])")
+          curl -sfS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
+          # Assert ci-e2e list empty after revoke
+          curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
+          python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); assert d==[] or len(d)==0, d"
           # /health alias
           curl -sfS "$API_URL/health" | tee /tmp/health_alias.json
           python3 -c "import json; d=json.load(open('/tmp/health_alias.json')); assert d.get('status')=='ok', d"
           curl -sfS "$API_URL/api/releases/latest" | tee /tmp/apk.json
           python3 -c "import json; d=json.load(open('/tmp/apk.json')); assert d.get('apk_url') and d.get('qr_code'), d"
+          echo "Cloud-only short-code claim (no LAN, ≤2s dead-LAN timeout)..."
+          python3 scripts/verify_prod_cloud_only_pair.py "$API_URL"
           echo "Smoke OK"
 
       - name: Summary

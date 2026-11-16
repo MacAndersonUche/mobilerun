@@ -48,63 +48,144 @@ grep -q "ai.mobilerun.selfhosted" "$ARTIFACTS_DIR/a11y.txt"
 echo "== Backend health =="
 curl -sfS "$HOST_BACKEND/api/health" | tee "$ARTIFACTS_DIR/backend_health.json"
 
-echo "== Start backend login + pair =="
+echo "== Start backend login (ci-e2e) + short-code pair =="
 export ALLOW_UNAUTHENTICATED=true
 TOKEN=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/login" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" || true)
+  -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" || true)
+# Fallback to admin only if ci-e2e unavailable (older local backends)
+if [[ -z "$TOKEN" ]]; then
+  TOKEN=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" || true)
+fi
 export E2E_TOKEN="${TOKEN:-}"
 
-PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/devices/pair" \
+# Emulator → host backend via adb reverse (more reliable than 10.0.2.2 on CI)
+adb reverse tcp:8000 tcp:8000 || true
+EMU_HTTP="${EMU_BACKEND_URL:-http://127.0.0.1:8000}"
+EMU_WS="${EMU_BACKEND_WS:-ws://127.0.0.1:8000/api/devices/connect}"
+# Keep BACKEND_URL for any later steps that still expect the gateway form
+export BACKEND_URL="$EMU_HTTP"
+
+PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"device_name":"emulator","platform":"android"}' || curl -sfS -X POST "$HOST_BACKEND/api/devices/pair" \
+  -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"device_name":"emulator","platform":"android"}')
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
-TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 WS_HINT=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('websocket_url') or d.get('backend_url') or '')")
-# Dual endpoints: LAN via emulator gateway 10.0.2.2; unreachable TEST-NET cloud to exercise fallback preference for LAN
-LAN_WS="ws://10.0.2.2:8000/api/devices/connect"
-# shellcheck disable=SC2034
-CLOUD_WS_BAD="ws://203.0.113.1:9/api/devices/connect"
-PAIR_URL="mobilerun://pair?token=${TOKEN_PAIR}&backend=${BACKEND_URL}&ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}&cloud=http://203.0.113.1:9&cloud_ws=${CLOUD_WS_BAD}"
+# Prove the code claims on the host before involving the APK
+curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/claim" \
+  -H 'Content-Type: application/json' \
+  -d "{\"token\":\"${TOKEN_PAIR}\",\"device_name\":\"host-preclaim\",\"device_id\":\"device_host_preclaim\"}" \
+  | tee "$ARTIFACTS_DIR/host_preclaim.json" || true
+# Token is single-use — create a fresh code for the APK after the host sanity claim
+if [[ -f "$ARTIFACTS_DIR/host_preclaim.json" ]] && grep -q session_token "$ARTIFACTS_DIR/host_preclaim.json"; then
+  curl -sfS -X DELETE "$HOST_BACKEND/api/devices/device_host_preclaim" \
+    -H "Authorization: Bearer ${TOKEN}" || true
+  PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d '{"device_name":"emulator","platform":"android"}')
+  echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
+  TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
+fi
+# URL-encode query values — raw "http://" inside -d breaks adb/intent parsing.
+PAIR_URL=$(CODE="$TOKEN_PAIR" EMU_HTTP="$EMU_HTTP" EMU_WS="$EMU_WS" python3 - <<'PY'
+from urllib.parse import urlencode
+import os
+q = urlencode({
+    "c": os.environ["CODE"],
+    "cloud": os.environ["EMU_HTTP"],
+    "cloud_ws": os.environ["EMU_WS"],
+    "lan": os.environ["EMU_HTTP"],
+    "lan_ws": os.environ["EMU_WS"],
+})
+print("mobilerun://pair?" + q)
+PY
+)
+echo "PAIR_URL=$PAIR_URL" | tee -a "$ARTIFACTS_DIR/apk_paths.txt"
 
-echo "== Deep-link pair (LAN preferred, bad cloud fallback) =="
-adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || \
-  adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL"
-sleep 5
+echo "== Deep-link pair with short code c= (LAN via adb reverse) =="
+adb logcat -c || true
+# Quote the whole am command for the device shell — unquoted & in -d splits argv
+# (was: "ai.mobilerun.selfhosted/.MainActivity: inaccessible or not found" / exit 127)
+adb shell "am start -a android.intent.action.VIEW -d '$PAIR_URL'" || true
+sleep 12
+adb logcat -d 2>/dev/null | grep -iE 'BackendClient|pair claim|claim via|Claim failed|WebSocket' | tee "$ARTIFACTS_DIR/pair_logcat.txt" | tail -50 || true
 adb exec-out screencap -p > "$ARTIFACTS_DIR/01_paired.png" || true
 echo "pair_ws=$WS_HINT" >> "$ARTIFACTS_DIR/apk_paths.txt"
 echo "pair_url_dual=1" >> "$ARTIFACTS_DIR/apk_paths.txt"
+echo "pair_code=${TOKEN_PAIR}" >> "$ARTIFACTS_DIR/apk_paths.txt"
 
-echo "== Assert device route LAN (wireless, no USB control channel) =="
+echo "== Assert device online after short-code pair =="
 python3 - <<'PY'
 import json, os, time, urllib.request
 host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
 artifacts = os.environ.get("ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+token = os.environ.get("E2E_TOKEN") or ""
 route = None
 latency = None
-for _ in range(20):
+device_id = None
+connected = False
+for _ in range(30):
     try:
-        with urllib.request.urlopen(host + "/api/devices") as r:
+        req = urllib.request.Request(host + "/api/devices")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req) as r:
             devices = json.load(r)
         open(os.path.join(artifacts, "devices.json"), "w").write(json.dumps(devices, indent=2, default=str))
         if devices:
             d = devices[0]
+            device_id = d.get("device_id") or d.get("id")
             route = d.get("route") or d.get("connection_type")
             latency = d.get("latency_ms")
-            if d.get("connected"):
+            connected = bool(d.get("connected") or d.get("online") or d.get("status") == "online")
+            if connected or device_id:
                 break
     except Exception as e:
         open(os.path.join(artifacts, "devices_err.txt"), "a").write(str(e) + "\n")
     time.sleep(1)
-print("route", route, "latency_ms", latency)
-# Soft assert: if device registered, route should be lan/discovered/wifi (not requiring USB)
+print("device_id", device_id, "route", route, "latency_ms", latency, "connected", connected)
+assert device_id, "short-code pair did not register a device"
+# Soft assert: if device registered, route should be lan/discovered/wifi/cloud (not requiring USB)
 if route:
     assert str(route).lower() in ("lan", "discovered", "wifi", "cloud"), route
-open(os.path.join(artifacts, "connection_route.txt"), "w").write(f"{route}\n{latency}\n")
+open(os.path.join(artifacts, "connection_route.txt"), "w").write(f"{route}\n{latency}\n{device_id}\n")
+open(os.path.join(artifacts, "paired_device_id.txt"), "w").write(str(device_id))
 PY
+
+echo "== Remove device (API) — mirrors Devices row Remove button =="
+DID=$(cat "$ARTIFACTS_DIR/paired_device_id.txt")
+curl -sfS -X DELETE "$HOST_BACKEND/api/devices/$DID" \
+  -H "Authorization: Bearer ${E2E_TOKEN}" | tee "$ARTIFACTS_DIR/remove_device.json"
+# Re-create pair for remaining e2e flows that need a live device
+PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
+  -H "Authorization: Bearer ${E2E_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"device_name":"emulator","platform":"android"}')
+echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair_recreate.json"
+TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
+PAIR_URL=$(CODE="$TOKEN_PAIR" EMU_HTTP="$EMU_HTTP" EMU_WS="$EMU_WS" python3 - <<'PY'
+from urllib.parse import urlencode
+import os
+q = urlencode({
+    "c": os.environ["CODE"],
+    "cloud": os.environ["EMU_HTTP"],
+    "cloud_ws": os.environ["EMU_WS"],
+    "lan": os.environ["EMU_HTTP"],
+    "lan_ws": os.environ["EMU_WS"],
+})
+print("mobilerun://pair?" + q)
+PY
+)
+adb shell "am start -a android.intent.action.VIEW -d '$PAIR_URL'" || true
+sleep 8
 
 echo "== Fallback probe (unit-level already covers select_endpoint; health usb_required=false) =="
 curl -sfS "$HOST_BACKEND/api/health" | tee "$ARTIFACTS_DIR/health_connectivity.json"
@@ -985,6 +1066,70 @@ if [[ -n "${CLOUD_API_URL:-}" ]]; then
   curl -sfS "$CLOUD_API_URL/api/health" | tee "$ARTIFACTS_DIR/cloud_health.json" || true
 fi
 
+echo "== Prod cloud-only short-code claim (no LAN — Mac's real-phone path) =="
+PROD_API="${PROD_API_URL:-https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com}"
+# Wipe prefs so stale lan_* cannot divert claim; keep the APK installed
+adb shell pm clear ai.mobilerun.selfhosted || true
+adb shell settings put secure enabled_accessibility_services "$A11Y" || true
+adb shell settings put secure accessibility_enabled 1 || true
+PROD_TOKEN=$(curl -sfS -X POST "$PROD_API/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+PROD_PAIR=$(curl -sfS -X POST "$PROD_API/api/auth/pair/create" \
+  -H "Authorization: Bearer ${PROD_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"device_name":"emu-cloud-only","platform":"android"}')
+echo "$PROD_PAIR" | tee "$ARTIFACTS_DIR/prod_cloud_pair.json"
+PROD_CODE=$(echo "$PROD_PAIR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
+# Code alone — same as typing in-app; baked DEFAULT_CLOUD_HTTP, zero LAN params
+CLOUD_ONLY_URL=$(CODE="$PROD_CODE" python3 - <<'PY'
+from urllib.parse import urlencode
+import os
+print("mobilerun://pair?" + urlencode({"c": os.environ["CODE"]}))
+PY
+)
+adb logcat -c || true
+adb shell "am start -a android.intent.action.VIEW -d '$CLOUD_ONLY_URL'" || true
+# Wait until the device appears on the prod ci-e2e account
+python3 - <<PY
+import json, os, time, urllib.request
+prod = os.environ.get("PROD_API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
+token = """$PROD_TOKEN"""
+code = """$PROD_CODE"""
+artifacts = os.environ["ARTIFACTS_DIR"]
+device_id = None
+for i in range(40):
+    req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
+    devices = json.load(urllib.request.urlopen(req))
+    open(os.path.join(artifacts, "prod_cloud_devices.json"), "w").write(
+        json.dumps(devices, indent=2, default=str)
+    )
+    for d in devices or []:
+        name = str(d.get("name") or d.get("device_name") or "")
+        if "emu-cloud" in name.lower() or d.get("device_id"):
+            device_id = d.get("device_id") or d.get("id")
+            break
+    if device_id:
+        break
+    time.sleep(2)
+assert device_id, f"cloud-only short-code {code} did not register on prod"
+open(os.path.join(artifacts, "prod_cloud_device_id.txt"), "w").write(device_id)
+print("prod_cloud_only_device", device_id)
+# Remove device (mirrors Devices Remove button)
+req = urllib.request.Request(
+    prod + f"/api/devices/{device_id}",
+    method="DELETE",
+    headers={"Authorization": f"Bearer {token}"},
+)
+print("prod_remove", json.load(urllib.request.urlopen(req)))
+req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
+left = json.load(urllib.request.urlopen(req))
+assert left == [] or len(left) == 0, left
+open(os.path.join(artifacts, "prod_cloud_only_ok.txt"), "w").write(f"{code}\n{device_id}\n")
+print("PROD_CLOUD_ONLY_OK", code)
+PY
+adb exec-out screencap -p > "$ARTIFACTS_DIR/09_prod_cloud_only.png" || true
+
 echo "== Screenrecord + final screenshots =="
 timeout 8 adb shell screenrecord --time-limit 6 /sdcard/e2e.mp4 || true
 adb pull /sdcard/e2e.mp4 "$ARTIFACTS_DIR/e2e.mp4" 2>/dev/null || true
@@ -1008,6 +1153,7 @@ check("install_apk", "apk_paths.txt")
 check("a11y_enabled", "a11y.txt")
 check("pair_lan", "01_paired.png")
 check("connection_route", "connection_route.txt")
+check("prod_cloud_only_pair", "prod_cloud_only_ok.txt")
 check("open_settings", "02_settings.png")
 check("type_text", "03_typed.png")
 check("swipe_scroll", "04_swiped.png")
