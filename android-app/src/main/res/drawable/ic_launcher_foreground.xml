@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- phone body -->
+    <path
+        android:fillColor="#18181B"
+        android:pathData="M42,26h24c3.3,0 6,2.7 6,6v44c0,3.3 -2.7,6 -6,6H42c-3.3,0 -6,-2.7 -6,-6V32c0,-3.3 2.7,-6 6,-6z"/>
+    <!-- blue rim as slightly larger rounded rect behind — drawn as stroke-like outline path -->
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M42,24h24c4.4,0 8,3.6 8,8v44c0,4.4 -3.6,8 -8,8H42c-4.4,0 -8,-3.6 -8,-8V32c0,-4.4 3.6,-8 8,-8z M42,26.6c-3,0 -5.4,2.4 -5.4,5.4v44c0,3 2.4,5.4 5.4,5.4h24c3,0 5.4,-2.4 5.4,-5.4V32c0,-3 -2.4,-5.4 -5.4,-5.4H42z"
+        android:fillType="evenOdd"/>
+    <!-- speaker bar -->
+    <path
+        android:fillColor="#52525B"
+        android:pathData="M48,30.5h12c0.8,0 1.5,0.7 1.5,1.5v0.2c0,0.8 -0.7,1.5 -1.5,1.5H48c-0.8,0 -1.5,-0.7 -1.5,-1.5v-0.2c0,-0.8 0.7,-1.5 1.5,-1.5z"/>
+    <!-- play triangle -->
+    <path
+        android:fillColor="#3B82F6"
+        android:pathData="M49.5,42 L63,54 L49.5,66 Z"/>
+    <!-- spark -->
+    <path
+        android:fillColor="#60A5FA"
+        android:pathData="M70,38 L72.2,43 L77.5,44 L72.2,45 L70,50 L67.8,45 L62.5,44 L67.8,43 Z"/>
+    <!-- home indicator -->
+    <path
+        android:fillColor="#52525B"
+        android:pathData="M52,74.5h4c0.8,0 1.5,0.7 1.5,1.5 0,0.8 -0.7,1.5 -1.5,1.5h-4c-0.8,0 -1.5,-0.7 -1.5,-1.5 0,-0.8 0.7,-1.5 1.5,-1.5z"/>
+</vector>

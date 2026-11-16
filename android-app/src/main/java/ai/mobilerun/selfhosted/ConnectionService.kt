@@ -88,7 +88,7 @@ class ConnectionService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MobileRun connected")
             .setContentText("Keeping the wireless executor online")
-            .setSmallIcon(android.R.drawable.ic_menu_share)
+            .setSmallIcon(R.drawable.ic_stat_mobilerun)
             .setContentIntent(open)
             .setOngoing(true)
             .build()
