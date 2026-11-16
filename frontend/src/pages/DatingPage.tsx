@@ -123,12 +123,23 @@ export default function DatingPage() {
       version_code: string;
       total_llm_calls: number;
       last_discovered_at?: string | null;
+      max_layout_variants?: number;
       roles: {
         role: string;
         source: string;
         llm_calls: number;
         discovered_at: string;
+        variant_count?: number;
         nav_path?: { kind?: string; direction?: string; count?: number }[];
+        variants?: {
+          id?: string;
+          label?: string;
+          hits?: number;
+          misses?: number;
+          success_rate?: number;
+          source?: string;
+          selector?: { resource_id?: string; text?: string; hint?: string };
+        }[];
       }[];
     }[]
   >([]);
@@ -741,9 +752,10 @@ export default function DatingPage() {
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="text-lg font-semibold">Selector cache</h3>
         <p className="text-xs text-mute">
-          Dating/social navigation uses accessibility selectors (no LLM). Off-screen
-          targets are found via bounded scroll explore; selector + nav path are
-          cached per app version. Failures escalate to Needs you.
+          Multiple layout variants per app version (default up to{' '}
+          {selectorApps[0]?.max_layout_variants ?? 4}, min 2). Tried by success
+          rate — no LLM when any variant matches. Off-screen targets use scroll
+          explore; failures escalate to Needs you.
         </p>
         {selectorApps.length === 0 ? (
           <p className="text-sm text-mute">No cached apps yet.</p>
@@ -751,7 +763,7 @@ export default function DatingPage() {
           selectorApps.map((app) => (
             <div
               key={`${app.package_name}@${app.version_code}`}
-              className="rounded-xl border border-line bg-canvas-elev p-3 text-sm space-y-1"
+              className="rounded-xl border border-line bg-canvas-elev p-3 text-sm space-y-2"
             >
               <div className="flex flex-wrap justify-between gap-2">
                 <span className="font-medium">
@@ -759,22 +771,33 @@ export default function DatingPage() {
                   <span className="text-mute">v{app.version_code}</span>
                 </span>
                 <span className="text-mute">
-                  LLM calls: {app.total_llm_calls} · last{' '}
+                  LLM calls: {app.total_llm_calls} · cap{' '}
+                  {app.max_layout_variants ?? 4} variants · last{' '}
                   {app.last_discovered_at
                     ? new Date(app.last_discovered_at).toLocaleString()
                     : '—'}
                 </span>
               </div>
-              <ul className="text-xs text-mute grid sm:grid-cols-2 gap-1">
+              <ul className="text-xs text-mute space-y-2">
                 {(app.roles || []).map((r) => (
-                  <li key={r.role}>
-                    {r.role}: {r.source} (llm {r.llm_calls}
-                    {(r.nav_path || []).length
-                      ? `; nav ${r.nav_path!
-                          .map((s) => s.direction || s.kind || '?')
-                          .join('→')}`
-                      : ''}
-                    )
+                  <li key={r.role} className="space-y-1">
+                    <div>
+                      {r.role}: {r.source} · {r.variant_count ?? 1} variant
+                      {(r.variant_count ?? 1) === 1 ? '' : 's'} (llm {r.llm_calls})
+                    </div>
+                    {(r.variants || []).length > 0 ? (
+                      <ul className="pl-3 space-y-0.5 border-l border-line">
+                        {r.variants!.map((v, i) => (
+                          <li key={v.id || i}>
+                            {v.label || v.selector?.resource_id?.split('/').pop() || v.id || `variant ${i + 1}`}
+                            : hits {v.hits ?? 0} / misses {v.misses ?? 0}
+                            {typeof v.success_rate === 'number'
+                              ? ` (${Math.round(v.success_rate * 100)}%)`
+                              : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </li>
                 ))}
               </ul>

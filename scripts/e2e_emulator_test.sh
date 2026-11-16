@@ -245,6 +245,146 @@ st = get("/api/selectors/status?package_name=ai.mobilerun.mockdating&version_cod
 print("selector cache v2 ok", r1.get("source"), r2.get("cache_hit"))
 PY
 
+echo "== Selector multi-variant: 3 alternating MockDating layouts =="
+adb shell am force-stop ai.mobilerun.mockdating || true
+for LV in v1 v2 v3; do
+  adb shell am start -n ai.mobilerun.mockdating/.MainActivity --es layout_variant "$LV"
+  sleep 1.5
+  adb exec-out screencap -p > "$ARTIFACTS_DIR/multi_${LV}.png" || true
+  adb shell uiautomator dump /sdcard/multi_${LV}.xml 2>/dev/null || true
+  adb pull /sdcard/multi_${LV}.xml "$ARTIFACTS_DIR/multi_${LV}_ui.xml" 2>/dev/null || true
+done
+python3 - <<'PY'
+import json, os, re, urllib.request
+from pathlib import Path
+host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
+artifacts = Path(os.environ["ARTIFACTS_DIR"])
+token = os.environ.get("E2E_TOKEN", "")
+headers = {"Content-Type": "application/json"}
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+
+def post(path, body):
+    req = urllib.request.Request(
+        host + path, data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+def get(path):
+    req = urllib.request.Request(host + path, headers=headers)
+    return json.loads(urllib.request.urlopen(req, timeout=20).read())
+
+def tree_from_xml(path: Path, fallback_nodes):
+    nodes = []
+    blob = path.read_text(errors="ignore") if path.exists() else ""
+    for m in re.finditer(
+        r'resource-id="([^"]*)"[^>]*?(?:text="([^"]*)")?[^>]*?(?:content-desc="([^"]*)")?',
+        blob,
+    ):
+        rid, text, desc = m.group(1), m.group(2) or "", m.group(3) or ""
+        if not rid and not text and not desc:
+            continue
+        hint = ""
+        if "messageInput" in rid:
+            hint = "Type a message"
+        elif "chatComposer" in rid:
+            hint = "Write something"
+        elif "msgBox" in rid:
+            hint = "Say hi"
+        nodes.append({
+            "resourceId": rid,
+            "text": text,
+            "contentDescription": desc,
+            "hint": hint,
+            "className": "android.widget.EditText" if any(
+                x in rid for x in ("Input", "Composer", "msgBox")
+            ) else "",
+            "clickable": True,
+            "editable": any(x in rid for x in ("Input", "Composer", "msgBox")),
+            "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+        })
+    return {"children": nodes or fallback_nodes}
+
+FALLBACKS = {
+    "v1": [{
+        "resourceId": "ai.mobilerun.mockdating:id/messageInput",
+        "hint": "Type a message",
+        "className": "android.widget.EditText",
+        "editable": True,
+        "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+    }],
+    "v2": [{
+        "resourceId": "ai.mobilerun.mockdating:id/chatComposer",
+        "hint": "Write something",
+        "className": "android.widget.EditText",
+        "editable": True,
+        "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+    }],
+    "v3": [{
+        "resourceId": "ai.mobilerun.mockdating:id/msgBox",
+        "hint": "Say hi",
+        "className": "android.widget.EditText",
+        "editable": True,
+        "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+    }],
+}
+ver = "multi"
+# Clear prior cache for this version so the three layouts seed as variants
+try:
+    req = urllib.request.Request(
+        host + "/api/selectors/invalidate?package_name=ai.mobilerun.mockdating&version_code=" + ver,
+        data=b"{}",
+        headers=headers,
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=20).read()
+except Exception:
+    pass
+
+results = []
+for lv in ("v1", "v2", "v3"):
+    tree = tree_from_xml(artifacts / f"multi_{lv}_ui.xml", FALLBACKS[lv])
+    r = post("/api/selectors/resolve", {
+        "role": "message_input",
+        "package_name": "ai.mobilerun.mockdating",
+        "version_code": ver,
+        "tree": tree,
+        "allow_llm": True,
+    })
+    assert r.get("found") is True, (lv, r)
+    assert r.get("used_llm") is False, (lv, r)
+    assert r.get("llm_callable_invocations", 0) == 0, (lv, r)
+    results.append({"layout": lv, "source": r.get("source"), "cache_hit": r.get("cache_hit"),
+                    "variant_id": r.get("variant_id")})
+
+# Alternating chats — all cache hits, no LLM
+alt = []
+for lv in ("v2", "v3", "v1", "v3", "v2"):
+    tree = tree_from_xml(artifacts / f"multi_{lv}_ui.xml", FALLBACKS[lv])
+    r = post("/api/selectors/resolve", {
+        "role": "message_input",
+        "package_name": "ai.mobilerun.mockdating",
+        "version_code": ver,
+        "tree": tree,
+        "allow_llm": True,
+    })
+    assert r.get("cache_hit") is True, (lv, r)
+    assert r.get("used_llm") is False, r
+    assert r.get("llm_callable_invocations", 0) == 0, r
+    alt.append({"layout": lv, "variant_id": r.get("variant_id"), "cache_hit": True})
+
+st = get("/api/selectors/status?package_name=ai.mobilerun.mockdating&version_code=" + ver)
+role = next(
+    (x for x in (st.get("apps") or [{}])[0].get("roles") or [] if x.get("role") == "message_input"),
+    {},
+)
+assert role.get("variant_count", 0) >= 3, role
+assert all("hits" in v for v in role.get("variants") or []), role
+out = {"seed": results, "alternating": alt, "status_role": role}
+(artifacts / "selector_multi_variant.json").write_text(json.dumps(out, indent=2))
+print("selector multi-variant ok", role.get("variant_count"), [v.get("hits") for v in role.get("variants") or []])
+PY
+
 echo "== Selector explore: off-screen in each scroll direction =="
 # API explore_sim covers cache+nav_path; device swipes prove MockDating reveal
 python3 - <<'PY'
@@ -871,6 +1011,7 @@ check("swipe_scroll", "04_swiped.png")
 check("mock_dating", "05_mock_dating.png")
 check("selector_v2", "selector_v2_resolve.json")
 check("selector_status", "selector_status.json")
+check("selector_multi_variant", "selector_multi_variant.json")
 check("selector_explore_scroll", "selector_explore_scroll.json")
 check("selector_explore_device", "scroll_device_reveals.txt")
 check("safety_verify_pause", "safety_pause.json")

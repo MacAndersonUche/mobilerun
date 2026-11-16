@@ -6,6 +6,10 @@ from mobilerun.selectors.models import (
     SelectorSpec,
     CachedEntry,
     CacheStatus,
+    LayoutVariant,
+    DEFAULT_MAX_LAYOUT_VARIANTS,
+    MIN_LAYOUT_VARIANTS,
+    clamp_max_variants,
 )
 from mobilerun.selectors.match import find_by_selector, flatten_nodes
 from mobilerun.selectors.cache import SelectorCache
@@ -25,6 +29,10 @@ __all__ = [
     "SelectorMatch",
     "CachedEntry",
     "CacheStatus",
+    "LayoutVariant",
+    "DEFAULT_MAX_LAYOUT_VARIANTS",
+    "MIN_LAYOUT_VARIANTS",
+    "clamp_max_variants",
     "find_by_selector",
     "flatten_nodes",
     "SelectorCache",

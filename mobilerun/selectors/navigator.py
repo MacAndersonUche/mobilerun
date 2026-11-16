@@ -1,10 +1,10 @@
 """High-level selector resolution for dating/social navigation.
 
 Order:
-1. Cached selector for package + version_code (no LLM); replay nav_path if set
+1. Try cached layout variants (success-rate order) — no LLM; replay nav_path
 2. Heuristic phrase / generic fallback (no LLM)
-3. Bounded scroll exploration (up/down/left/right) — no LLM; cache path
-4. ONE LLM discovery → derive selector → verify → persist
+3. Bounded scroll exploration (up/down/left/right) — no LLM; add variant
+4. ONE LLM discovery → derive selector → verify → add variant (evict if over cap)
 5. If rediscovery exceeds cap → Needs-you escalate (never spam LLM)
 """
 
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from mobilerun.selectors.cache import SelectorCache
@@ -53,6 +52,8 @@ class ResolveResult:
     reason: str = ""
     selector: Optional[SelectorSpec] = None
     nav_path: List[Dict[str, Any]] = field(default_factory=list)
+    variant_id: Optional[str] = None
+    variants_tried: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -69,6 +70,8 @@ class ResolveResult:
             "selector": self.selector.to_dict() if self.selector else None,
             "center": self.match.center if self.match else None,
             "nav_path": list(self.nav_path or []),
+            "variant_id": self.variant_id,
+            "variants_tried": self.variants_tried,
         }
 
 
@@ -79,9 +82,19 @@ class SelectorNavigator:
         *,
         max_rediscovery: int = 3,
         max_scrolls_per_direction: int = 4,
+        max_layout_variants: Optional[int] = None,
         push_needs_you: Optional[Callable[..., str]] = None,
     ):
-        self.cache = cache or SelectorCache(max_rediscovery=max_rediscovery)
+        if cache is None:
+            cache = SelectorCache(
+                max_rediscovery=max_rediscovery,
+                max_layout_variants=max_layout_variants,
+            )
+        elif max_layout_variants is not None:
+            from mobilerun.selectors.models import clamp_max_variants
+
+            cache.max_layout_variants = clamp_max_variants(max_layout_variants)
+        self.cache = cache
         self.max_rediscovery = max_rediscovery
         self.max_scrolls_per_direction = max_scrolls_per_direction
         self.push_needs_you = push_needs_you
@@ -106,44 +119,62 @@ class SelectorNavigator:
         version_code = str(version_code or "0")
         get_tree = get_tree or (lambda: tree)
 
-        # 1) Cache hit (optionally replay nav_path first)
         entry = self.cache.get(package_name, version_code, role)
-        if entry and not entry.selector.is_empty():
-            if entry.nav_path and perform_scroll:
-                try:
-                    steps = [NavStep.from_dict(s) for s in entry.nav_path]
-                    replay_nav_path(
-                        steps,
-                        perform_scroll=perform_scroll,
-                        perform_tap_tab=perform_tap_tab,
+        variants_tried = 0
+
+        # 1) Try all cached layout variants in success-rate order (no LLM)
+        if entry and entry.variants:
+            for variant in entry.ordered_variants():
+                if variant.selector.is_empty():
+                    continue
+                variants_tried += 1
+                cur_tree = tree
+                if variant.nav_path and perform_scroll:
+                    try:
+                        steps = [NavStep.from_dict(s) for s in variant.nav_path]
+                        replay_nav_path(
+                            steps,
+                            perform_scroll=perform_scroll,
+                            perform_tap_tab=perform_tap_tab,
+                        )
+                        cur_tree = get_tree()
+                    except Exception:
+                        log.debug("nav_path replay failed", exc_info=True)
+                match = find_by_selector(cur_tree, variant.selector)
+                if match:
+                    self.cache.mark_variant_success(
+                        package_name, version_code, role, variant.id
                     )
-                    tree = get_tree()
-                except Exception:
-                    log.debug("nav_path replay failed", exc_info=True)
-            match = find_by_selector(tree, entry.selector)
-            if match:
-                self.cache.mark_success(package_name, version_code, role)
-                return ResolveResult(
-                    found=True,
-                    role=role,
-                    package_name=package_name,
-                    version_code=version_code,
-                    match=match,
-                    used_llm=False,
-                    llm_calls=0,
-                    cache_hit=True,
-                    source="cache",
-                    selector=entry.selector,
-                    nav_path=list(entry.nav_path or []),
+                    return ResolveResult(
+                        found=True,
+                        role=role,
+                        package_name=package_name,
+                        version_code=version_code,
+                        match=match,
+                        used_llm=False,
+                        llm_calls=0,
+                        cache_hit=True,
+                        source="cache",
+                        selector=variant.selector,
+                        nav_path=list(variant.nav_path or []),
+                        variant_id=variant.id,
+                        variants_tried=variants_tried,
+                    )
+                self.cache.mark_variant_miss(
+                    package_name, version_code, role, variant.id
                 )
-            entry = self.cache.mark_failure(package_name, version_code, role)
+
+            # All variants missed — try discovery next; only burn rediscovery
+            # budget if discovery also fails (so explore/LLM still get a chance).
             log.info(
-                "cached selector miss role=%s pkg=%s ver=%s attempts=%s",
+                "all layout variants missed role=%s pkg=%s ver=%s tried=%s attempts=%s",
                 role,
                 package_name,
                 version_code,
+                variants_tried,
                 entry.rediscovery_attempts,
             )
+            entry = self.cache.get(package_name, version_code, role) or entry
         else:
             entry = entry or CachedEntry(
                 role=role,
@@ -166,6 +197,7 @@ class SelectorNavigator:
                 needs_you=True,
                 reason=reason,
                 source="escalated",
+                variants_tried=variants_tried,
             )
 
         # 2) Heuristic bootstrap (still no LLM)
@@ -173,14 +205,14 @@ class SelectorNavigator:
         if heur:
             spec = derive_selector_from_node(heur.node)
             verified = verify_selector(tree, spec) or heur
-            self._persist(
-                package_name,
-                version_code,
-                role,
-                spec,
+            _, variant, _ = self.cache.add_variant(
+                package_name=package_name,
+                version_code=version_code,
+                role=role,
+                selector=spec,
                 source="heuristic",
                 llm_calls=0,
-                attempts=entry.rediscovery_attempts,
+                rediscovery_attempts=entry.rediscovery_attempts,
             )
             return ResolveResult(
                 found=True,
@@ -193,16 +225,19 @@ class SelectorNavigator:
                 cache_hit=False,
                 source="heuristic",
                 selector=spec,
+                variant_id=variant.id,
+                variants_tried=variants_tried,
             )
 
-        # 3) Bounded scroll exploration (no LLM) when we have a candidate spec
-        #    or a known default selector to hunt for off-screen
+        # 3) Bounded scroll exploration (no LLM)
         hunt_spec = candidate_spec
         if hunt_spec is None or hunt_spec.is_empty():
             from mobilerun.selectors.models import DEFAULT_SELECTORS, GENERIC_FALLBACKS
 
             hunt_spec = (
-                (DEFAULT_SELECTORS.get(f"{package_name}@{version_code}") or {}).get(role)
+                (DEFAULT_SELECTORS.get(f"{package_name}@{version_code}") or {}).get(
+                    role
+                )
                 or (DEFAULT_SELECTORS.get(package_name) or {}).get(role)
                 or GENERIC_FALLBACKS.get(role)
             )
@@ -222,15 +257,15 @@ class SelectorNavigator:
             if explored.found and explored.match:
                 spec = derive_selector_from_node(explored.match.node)
                 nav = [s.to_dict() for s in explored.nav_path]
-                self._persist(
-                    package_name,
-                    version_code,
-                    role,
-                    spec,
+                _, variant, _ = self.cache.add_variant(
+                    package_name=package_name,
+                    version_code=version_code,
+                    role=role,
+                    selector=spec,
                     source="explore",
-                    llm_calls=0,
-                    attempts=entry.rediscovery_attempts,
                     nav_path=nav,
+                    llm_calls=0,
+                    rediscovery_attempts=entry.rediscovery_attempts,
                 )
                 return ResolveResult(
                     found=True,
@@ -244,10 +279,13 @@ class SelectorNavigator:
                     source="explore",
                     selector=spec,
                     nav_path=nav,
+                    variant_id=variant.id,
+                    variants_tried=variants_tried,
                 )
 
         # 4) ONE LLM discovery
         if not allow_llm or llm_callable is None:
+            self.cache.mark_failure(package_name, version_code, role)
             return ResolveResult(
                 found=False,
                 role=role,
@@ -255,6 +293,7 @@ class SelectorNavigator:
                 version_code=version_code,
                 reason="selector not found and LLM discovery disabled",
                 source="miss",
+                variants_tried=variants_tried,
             )
 
         self.cache.record_llm_call(package_name, version_code)
@@ -280,6 +319,7 @@ class SelectorNavigator:
                     needs_you=True,
                     reason=reason,
                     source="llm",
+                    variants_tried=variants_tried,
                 )
             return ResolveResult(
                 found=False,
@@ -290,9 +330,9 @@ class SelectorNavigator:
                 llm_calls=1,
                 reason="LLM discovery returned no selector",
                 source="llm",
+                variants_tried=variants_tried,
             )
 
-        # After LLM derives a selector, explore if still not visible
         verified = verify_selector(tree, spec)
         nav: List[Dict[str, Any]] = []
         if not verified and explore and perform_scroll is not None:
@@ -319,17 +359,18 @@ class SelectorNavigator:
                 reason="LLM selector failed verification",
                 source="llm",
                 selector=spec,
+                variants_tried=variants_tried,
             )
 
-        self._persist(
-            package_name,
-            version_code,
-            role,
-            spec,
+        _, variant, _ = self.cache.add_variant(
+            package_name=package_name,
+            version_code=version_code,
+            role=role,
+            selector=spec,
             source="llm",
-            llm_calls=1,
-            attempts=entry.rediscovery_attempts,
             nav_path=nav,
+            llm_calls=1,
+            rediscovery_attempts=entry.rediscovery_attempts,
         )
         return ResolveResult(
             found=True,
@@ -343,33 +384,9 @@ class SelectorNavigator:
             source="llm",
             selector=spec,
             nav_path=nav,
+            variant_id=variant.id,
+            variants_tried=variants_tried,
         )
-
-    def _persist(
-        self,
-        package_name: str,
-        version_code: str,
-        role: str,
-        spec: SelectorSpec,
-        *,
-        source: str,
-        llm_calls: int,
-        attempts: int,
-        nav_path: Optional[List[Dict[str, Any]]] = None,
-    ) -> None:
-        entry = CachedEntry(
-            role=role,
-            selector=spec,
-            package_name=package_name,
-            version_code=version_code,
-            discovered_at=datetime.now().isoformat(),
-            llm_calls=llm_calls,
-            rediscovery_attempts=attempts,
-            last_success_at=datetime.now().isoformat(),
-            source=source,
-            nav_path=list(nav_path or []),
-        )
-        self.cache.put(entry)
 
     def _escalate(self, package_name: str, role: str, reason: str) -> None:
         if not self.push_needs_you:

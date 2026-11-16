@@ -17,10 +17,9 @@ import kotlin.math.abs
  * Layout variants (intent extra layout_variant):
  * - default / v1: messageInput, btnSend, btnLike, btnPass, profileName
  * - v2: chatComposer, btnSendMessage, btnHeart, btnNope, nameLabel
- *   (different resource-ids → selector cache miss / rediscovery E2E)
+ * - v3: msgBox, btnPost, btnYes, btnSkip, displayName (third chat-bar layout)
  * - scroll_down / scroll_up / scroll_left / scroll_right:
- *   message input + Send (or matches list) start GONE; human-like swipe
- *   in the named direction reveals them (selector explore E2E).
+ *   message input + Send (or matches list) start GONE; swipe reveals them
  *
  * Verification overlay: --ez show_verification true
  */
@@ -47,39 +46,57 @@ class MainActivity : AppCompatActivity() {
             "scroll_right" -> "right"
             else -> null
         }
-        if (layoutVariant == "v2") {
-            setContentView(R.layout.activity_main_v2)
-        } else {
-            setContentView(R.layout.activity_main)
+        when (layoutVariant) {
+            "v2" -> setContentView(R.layout.activity_main_v2)
+            "v3" -> setContentView(R.layout.activity_main_v3)
+            else -> setContentView(R.layout.activity_main)
         }
 
-        val isV2 = layoutVariant == "v2"
         val name = findViewById<TextView>(
-            if (isV2) R.id.nameLabel else R.id.profileName
+            when (layoutVariant) {
+                "v2" -> R.id.nameLabel
+                "v3" -> R.id.displayName
+                else -> R.id.profileName
+            }
         )
         val bio = findViewById<TextView>(R.id.profileBio)
         val stats = findViewById<TextView>(R.id.stats)
         val chat = findViewById<TextView>(R.id.chatLog)
         val input = findViewById<EditText>(
-            if (isV2) R.id.chatComposer else R.id.messageInput
+            when (layoutVariant) {
+                "v2" -> R.id.chatComposer
+                "v3" -> R.id.msgBox
+                else -> R.id.messageInput
+            }
         )
         val mainContent = findViewById<LinearLayout>(R.id.mainContent)
         val verifyPanel = findViewById<LinearLayout>(R.id.verifyPanel)
         val verifyTitle = findViewById<TextView>(R.id.verifyTitle)
         val verifyBody = findViewById<TextView>(R.id.verifyBody)
         val btnPass = findViewById<Button>(
-            if (isV2) R.id.btnNope else R.id.btnPass
+            when (layoutVariant) {
+                "v2" -> R.id.btnNope
+                "v3" -> R.id.btnSkip
+                else -> R.id.btnPass
+            }
         )
         val btnLike = findViewById<Button>(
-            if (isV2) R.id.btnHeart else R.id.btnLike
+            when (layoutVariant) {
+                "v2" -> R.id.btnHeart
+                "v3" -> R.id.btnYes
+                else -> R.id.btnLike
+            }
         )
         val btnSend = findViewById<Button>(
-            if (isV2) R.id.btnSendMessage else R.id.btnSend
+            when (layoutVariant) {
+                "v2" -> R.id.btnSendMessage
+                "v3" -> R.id.btnPost
+                else -> R.id.btnSend
+            }
         )
 
         title = "MockDating ($layoutVariant)"
 
-        // Off-screen explore variants: hide composer/send (and expose a matches list stub)
         val matchesList = findViewById<TextView>(R.id.matchesList)
         if (scrollRevealDirection != null) {
             input.visibility = View.GONE
@@ -87,7 +104,6 @@ class MainActivity : AppCompatActivity() {
             matchesList?.visibility = View.GONE
             matchesList?.contentDescription = "Matches list"
             bio.text = "Swipe $scrollRevealDirection to reveal composer / matches [$layoutVariant]"
-            // Ensure matches list view exists for scroll_left (matches off-screen)
             if (layoutVariant == "scroll_left" || layoutVariant == "scroll_right") {
                 matchesList?.text = "Matches (hidden until swipe $scrollRevealDirection)"
             }
@@ -107,7 +123,8 @@ class MainActivity : AppCompatActivity() {
             if (scrollRevealDirection == null) {
                 bio.text = "Profile #${idx + 1} — coffee, dogs, and bad jokes. [$layoutVariant]"
             }
-            stats.text = "Swipes: $swipes | Openers: $openers | Replies: $replies | Scrolls: $scrollsTowardReveal"
+            stats.text =
+                "Swipes: $swipes | Openers: $openers | Replies: $replies | Scrolls: $scrollsTowardReveal"
         }
 
         fun showVerification(show: Boolean) {
@@ -161,7 +178,6 @@ class MainActivity : AppCompatActivity() {
             showVerification(false)
         }
 
-        // Human-like swipe → reveal off-screen targets for explore E2E
         if (scrollRevealDirection != null) {
             val detector = GestureDetector(
                 this,
@@ -178,7 +194,7 @@ class MainActivity : AppCompatActivity() {
                         val dx = e2.x - e1.x
                         val dy = e2.y - e1.y
                         val detected = when {
-                            abs(dy) > abs(dx) && dy < -80 -> "down" // finger up → content down
+                            abs(dy) > abs(dx) && dy < -80 -> "down"
                             abs(dy) > abs(dx) && dy > 80 -> "up"
                             abs(dx) > abs(dy) && dx < -80 -> "right"
                             abs(dx) > abs(dy) && dx > 80 -> "left"

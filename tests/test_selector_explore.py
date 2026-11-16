@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -16,28 +17,29 @@ from mobilerun.selectors.explore import (
 from mobilerun.selectors.models import ElementRole, SelectorSpec
 from mobilerun.selectors.navigator import SelectorNavigator
 
-PKG = "ai.mobilerun.mockdating"
+# Non-seeded package so explore tests don't collide with DEFAULT_SELECTORS
+PKG = "ai.mobilerun.mockdating.explore"
 
-HIDDEN = {"children": [{"resourceId": "ai.mobilerun.mockdating:id/profileName", "text": "Alex"}]}
+HIDDEN = {"children": [{"resourceId": f"{PKG}:id/profileName", "text": "Alex"}]}
 
 REVEALED_INPUT = {
     "children": [
-        {"resourceId": "ai.mobilerun.mockdating:id/profileName", "text": "Alex"},
+        {"resourceId": f"{PKG}:id/profileName", "text": "Alex"},
         {
-            "resourceId": "ai.mobilerun.mockdating:id/messageInput",
+            "resourceId": f"{PKG}:id/messageInput",
             "hint": "Type a message",
             "className": "android.widget.EditText",
             "editable": True,
             "boundsInScreen": {"left": 40, "top": 800, "right": 1000, "bottom": 920},
         },
         {
-            "resourceId": "ai.mobilerun.mockdating:id/btnSend",
+            "resourceId": f"{PKG}:id/btnSend",
             "text": "Send",
             "className": "android.widget.Button",
             "clickable": True,
         },
         {
-            "resourceId": "ai.mobilerun.mockdating:id/matchesList",
+            "resourceId": f"{PKG}:id/matchesList",
             "contentDescription": "Matches list",
             "text": "Matches · Alex, Jordan, Sam",
         },
@@ -45,12 +47,12 @@ REVEALED_INPUT = {
 }
 
 SPEC_INPUT = SelectorSpec(
-    resource_id="ai.mobilerun.mockdating:id/messageInput",
+    resource_id=f"{PKG}:id/messageInput",
     hint="Type a message",
 )
-SPEC_SEND = SelectorSpec(resource_id="ai.mobilerun.mockdating:id/btnSend", text="Send")
+SPEC_SEND = SelectorSpec(resource_id=f"{PKG}:id/btnSend", text="Send")
 SPEC_MATCHES = SelectorSpec(
-    resource_id="ai.mobilerun.mockdating:id/matchesList",
+    resource_id=f"{PKG}:id/matchesList",
     content_desc="Matches list",
 )
 
@@ -128,8 +130,10 @@ def test_human_scroll_gesture_jitter():
 
 def test_navigator_explore_caches_nav_path_and_replays(cache: SelectorCache):
     nav = SelectorNavigator(cache=cache, max_scrolls_per_direction=4)
-    state = {"tree": HIDDEN, "n": 0}
+    state = {"tree": copy.deepcopy(HIDDEN), "n": 0}
     llm_calls = []
+    pkg = f"{PKG}.navpath"
+    ver = "1"
 
     def get_tree():
         return state["tree"]
@@ -138,42 +142,46 @@ def test_navigator_explore_caches_nav_path_and_replays(cache: SelectorCache):
         if step.direction == "down":
             state["n"] += 1
             if state["n"] >= 2:
-                state["tree"] = REVEALED_INPUT
+                state["tree"] = copy.deepcopy(REVEALED_INPUT)
 
     def llm(**kwargs):
         llm_calls.append(kwargs)
         return {}
 
+    # Ensure no seeded / leftover entry
+    cache.invalidate(pkg, ver)
+
     r1 = nav.resolve(
         role=ElementRole.MESSAGE_INPUT.value,
-        package_name=PKG,
-        version_code="scroll_down",
-        tree=HIDDEN,
+        package_name=pkg,
+        version_code=ver,
+        tree=state["tree"],
         llm_callable=llm,
         get_tree=get_tree,
         perform_scroll=perform_scroll,
         explore=True,
+        candidate_spec=SPEC_INPUT,
     )
-    assert r1.found is True
-    assert r1.source == "explore"
+    assert r1.found is True, r1
+    assert r1.source == "explore", r1
     assert r1.used_llm is False
     assert llm_calls == []
     assert r1.nav_path
     assert all(s.get("direction") == "down" for s in r1.nav_path)
 
-    entry = cache.get(PKG, "scroll_down", ElementRole.MESSAGE_INPUT.value)
+    entry = cache.get(pkg, ver, ElementRole.MESSAGE_INPUT.value)
     assert entry is not None
     assert entry.nav_path
     assert entry.source == "explore"
 
     # Replay: reset tree to hidden; cache hit must replay path then match
-    state["tree"] = HIDDEN
+    state["tree"] = copy.deepcopy(HIDDEN)
     state["n"] = 0
     r2 = nav.resolve(
         role=ElementRole.MESSAGE_INPUT.value,
-        package_name=PKG,
-        version_code="scroll_down",
-        tree=HIDDEN,
+        package_name=pkg,
+        version_code=ver,
+        tree=state["tree"],
         llm_callable=llm,
         get_tree=get_tree,
         perform_scroll=perform_scroll,
@@ -182,7 +190,7 @@ def test_navigator_explore_caches_nav_path_and_replays(cache: SelectorCache):
     assert r2.cache_hit is True
     assert r2.used_llm is False
     assert llm_calls == []
-    assert state["tree"] is REVEALED_INPUT
+    assert state["n"] >= 2
 
 
 @pytest.mark.parametrize(
@@ -194,9 +202,14 @@ def test_navigator_explore_caches_nav_path_and_replays(cache: SelectorCache):
         ("right", ElementRole.MESSAGE_INPUT.value, SPEC_INPUT),
     ],
 )
-def test_navigator_each_direction_offscreen(cache: SelectorCache, direction, role, spec):
+def test_navigator_each_direction_offscreen(
+    cache: SelectorCache, direction, role, spec
+):
     nav = SelectorNavigator(cache=cache, max_scrolls_per_direction=3)
-    state = {"tree": HIDDEN, "n": 0}
+    state = {"tree": copy.deepcopy(HIDDEN), "n": 0}
+    pkg = f"{PKG}.dir.{direction}"
+    ver = "1"
+    cache.invalidate(pkg, ver)
 
     def get_tree():
         return state["tree"]
@@ -205,20 +218,21 @@ def test_navigator_each_direction_offscreen(cache: SelectorCache, direction, rol
         if step.direction == direction:
             state["n"] += 1
             if state["n"] >= 1:
-                state["tree"] = REVEALED_INPUT
+                state["tree"] = copy.deepcopy(REVEALED_INPUT)
 
     r = nav.resolve(
         role=role,
-        package_name=PKG,
-        version_code=f"scroll_{direction}",
-        tree=HIDDEN,
+        package_name=pkg,
+        version_code=ver,
+        tree=state["tree"],
         allow_llm=False,
         get_tree=get_tree,
         perform_scroll=perform_scroll,
         candidate_spec=spec,
     )
     assert r.found is True, r
-    assert r.source == "explore"
+    assert r.used_llm is False
+    assert r.source == "explore", r
     assert r.nav_path
     assert r.nav_path[0]["direction"] == direction
 
@@ -258,7 +272,11 @@ def test_api_explore_sim(monkeypatch, tmp_path):
         role = (
             ElementRole.MATCHES_LIST.value
             if direction == "left"
-            else ElementRole.MESSAGE_INPUT.value
+            else (
+                ElementRole.SEND_BUTTON.value
+                if direction == "up"
+                else ElementRole.MESSAGE_INPUT.value
+            )
         )
         r = c.post(
             "/api/selectors/resolve",

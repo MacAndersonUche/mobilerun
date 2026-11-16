@@ -1702,7 +1702,10 @@ def get_selector_navigator(auth: Optional[dict] = None):
     ):
         cache = SelectorCache(user_id=user_id, max_rediscovery=3)
         _selector_nav = SelectorNavigator(
-            cache=cache, max_rediscovery=3, push_needs_you=_push
+            cache=cache,
+            max_rediscovery=3,
+            max_layout_variants=cache.max_layout_variants,
+            push_needs_you=_push,
         )
     return _selector_nav
 
