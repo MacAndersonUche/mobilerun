@@ -241,7 +241,7 @@ export default function SettingsPage() {
             </div>
             <p className="text-xs text-gray-500 mt-2">
               After install: Accessibility (+ Android 13 restricted settings) →
-              notifications → screen capture → battery unrestricted → Sign in &amp;
+              notifications → screen capture → battery unrestricted → Sign in and
               link phone
             </p>
           </section>

@@ -79,7 +79,7 @@ export default function DevicesPage() {
         </div>
         <p className="text-sm text-mute">
           Scan to download the latest GitHub release APK. After install, open
-          MobileRun → complete permissions → Sign in &amp; link phone (same
+          MobileRun → complete permissions → Sign in and link phone (same
           account as this UI).
         </p>
         {apkQr ? (
