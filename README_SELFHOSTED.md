@@ -170,19 +170,16 @@ Visit `http://localhost:3000`.
 
 **Note:** If AWS secrets aren't set, the deploy workflow skips cleanly (CI stays green).
 
-## ⚡ Performance Improvements
+## ⚡ Performance Optimizations
 
-This fork includes several performance optimizations:
+This fork includes performance optimization infrastructure:
 
 - **Parallel State Fetching:** Screenshot and UI tree captured simultaneously
 - **Smart Caching:** Reduces redundant screenshot/tree fetches with TTL-based cache
-- **Profiling Infrastructure:** Built-in performance metrics for agent loops
+- **Profiling Infrastructure:** Built-in performance metrics for measuring agent loop latency
 - **Streamlined LLM Calls:** Only Gemini/Claude/OpenAI supported, reducing overhead
 
-Measured improvements (preliminary):
-- ~30% faster state capture
-- ~40% reduction in redundant operations
-- Per-step latency improved from ~2.5s to ~1.7s (mocked tests)
+These optimizations are designed to reduce per-step latency. Benchmarking against baseline will be available after full integration testing.
 
 ## 🛠️ Development
 

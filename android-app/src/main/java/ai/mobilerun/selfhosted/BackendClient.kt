@@ -103,20 +103,30 @@ class BackendClient(private val context: Context) {
             val type = message["type"] as? String
             
             when (type) {
+                "command" -> {
+                    // Handle device control commands
+                    handleCommand(message)
+                }
                 "run_task" -> {
                     val instruction = message["instruction"] as? String ?: "Unknown"
                     _taskFlow.value = "Running: $instruction"
                     
-                    // TODO: Execute task using accessibility service
-                    // For now, just acknowledge
                     scope.launch {
-                        // Simulate task execution
-                        kotlinx.coroutines.delay(2000)
-                        sendTaskUpdate(
-                            message["task_id"] as? String ?: "",
-                            "completed",
-                            "Task simulated"
-                        )
+                        try {
+                            // Execute task via mobilerun backend
+                            // The backend will send individual commands which we handle above
+                            sendTaskUpdate(
+                                message["task_id"] as? String ?: "",
+                                "running",
+                                "Task started"
+                            )
+                        } catch (e: Exception) {
+                            sendTaskUpdate(
+                                message["task_id"] as? String ?: "",
+                                "failed",
+                                "Error: ${e.message}"
+                            )
+                        }
                     }
                 }
                 "heartbeat_ack" -> {
@@ -126,6 +136,77 @@ class BackendClient(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to handle message", e)
         }
+    }
+    
+    private fun handleCommand(message: Map<*, *>) {
+        val command = message["command"] as? String ?: return
+        val requestId = message["request_id"] as? String ?: return
+        val params = message["params"] as? Map<*, *>
+        
+        scope.launch {
+            try {
+                val a11yService = MobilerunAccessibilityService.instance
+                    ?: throw Exception("Accessibility service not connected")
+                
+                val result = when (command) {
+                    "tap" -> {
+                        val x = (params?.get("x") as? Number)?.toInt() ?: 0
+                        val y = (params?.get("y") as? Number)?.toInt() ?: 0
+                        a11yService.tapAsync(x, y)
+                        "OK"
+                    }
+                    "swipe" -> {
+                        val x1 = (params?.get("x1") as? Number)?.toInt() ?: 0
+                        val y1 = (params?.get("y1") as? Number)?.toInt() ?: 0
+                        val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
+                        val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
+                        val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
+                        a11yService.swipeAsync(x1, y1, x2, y2, duration)
+                        "OK"
+                    }
+                    "press_button" -> {
+                        val button = params?.get("button") as? String
+                        when (button) {
+                            "back" -> a11yService.pressBack()
+                            "home" -> a11yService.pressHome()
+                            "recents" -> a11yService.pressRecents()
+                            else -> false
+                        }
+                        "OK"
+                    }
+                    "get_ui_tree" -> {
+                        a11yService.getUITree()
+                    }
+                    "screenshot" -> {
+                        // Screenshot requires MediaProjection API which is complex
+                        // For now, return empty
+                        ""
+                    }
+                    else -> {
+                        throw Exception("Unknown command: $command")
+                    }
+                }
+                
+                sendCommandResponse(requestId, result, null)
+            } catch (e: Exception) {
+                sendCommandResponse(requestId, null, e.message ?: "Unknown error")
+            }
+        }
+    }
+    
+    private fun sendCommandResponse(requestId: String, result: Any?, error: String?) {
+        val response = mutableMapOf<String, Any?>(
+            "type" to "response",
+            "request_id" to requestId
+        )
+        
+        if (error != null) {
+            response["error"] = error
+        } else {
+            response["result"] = result
+        }
+        
+        webSocket?.send(gson.toJson(response))
     }
 
     private fun sendTaskUpdate(taskId: String, status: String, result: String) {
