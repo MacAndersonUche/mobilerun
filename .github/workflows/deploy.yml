@@ -1,0 +1,208 @@
+name: Deploy Backend to AWS
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+    paths:
+      - 'backend/**'
+      - 'infra/**'
+      - 'mobilerun/connectivity/**'
+      - 'mobilerun/dating/**'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'infra/**'
+      - 'mobilerun/connectivity/**'
+      - 'mobilerun/dating/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (branch/SHA). Leave empty for current branch/main.'
+        required: false
+        default: ''
+      skip_smoke:
+        description: 'Skip post-deploy smoke tests'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mobilerun-aws-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Secrets presence: empty-string compare is unreliable; attempt deploy and fail clearly
+    outputs:
+      api_url: ${{ steps.outs.outputs.api_url }}
+      ws_url: ${{ steps.outs.outputs.ws_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Require AWS secrets
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "::error::AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY not set"
+            exit 1
+          fi
+          if [ -z "$JWT_SECRET" ]; then
+            echo "::warning::JWT_SECRET empty — stack will use placeholder (set secret for prod)"
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: npm ci
+
+      - name: Build CDK
+        working-directory: infra
+        run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+
+      - name: CDK Bootstrap
+        working-directory: infra
+        run: npx cdk bootstrap aws://$(aws sts get-caller-identity --query Account --output text)/eu-west-2 || true
+
+      - name: Build Lambda asset (binary wheels)
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lambda-asset
+          mkdir -p /tmp/lambda-asset
+          python3 -m pip install -r backend/requirements.txt -t /tmp/lambda-asset
+          # Package layout: /var/task/backend/*.py + /var/task/mobilerun/...
+          mkdir -p /tmp/lambda-asset/backend \
+            /tmp/lambda-asset/mobilerun/dating \
+            /tmp/lambda-asset/mobilerun/connectivity \
+            /tmp/lambda-asset/mobilerun/server
+          cp backend/*.py /tmp/lambda-asset/backend/
+          printf '' > /tmp/lambda-asset/backend/__init__.py
+          printf '' > /tmp/lambda-asset/mobilerun/__init__.py
+          cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/
+          printf '' > /tmp/lambda-asset/mobilerun/dating/__init__.py
+          cp mobilerun/connectivity/*.py /tmp/lambda-asset/mobilerun/connectivity/
+          # Stub package init so importlib.metadata.version("mobilerun") is not required in Lambda
+          printf '%s\n' '__version__ = "0.0.0"' > /tmp/lambda-asset/mobilerun/__init__.py
+          printf '' > /tmp/lambda-asset/mobilerun/connectivity/__init__.py
+          # mdns helper only (avoid server/__init__ importing local serve)
+          if [ -f mobilerun/server/mdns.py ]; then
+            printf '' > /tmp/lambda-asset/mobilerun/server/__init__.py
+            cp mobilerun/server/mdns.py /tmp/lambda-asset/mobilerun/server/
+          fi
+          # Verify imports from a clean cwd so checkout mobilerun/ is not preferred
+          (cd /tmp && PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; from mobilerun.connectivity.endpoints import build_pairing_url; print('imports ok', handler, w, s)")
+          ls /tmp/lambda-asset/backend | head
+
+      - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)
+        working-directory: infra
+        run: |
+          npx cdk deploy MobilerunStack --require-approval never --outputs-file cdk-outputs.json
+          cat cdk-outputs.json
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LAMBDA_ASSET_DIR: /tmp/lambda-asset
+          SKIP_BUNDLING: '1'
+
+      - name: Parse outputs
+        id: outs
+        working-directory: infra
+        run: |
+          API_URL=$(python3 -c "import json;d=json.load(open('cdk-outputs.json'));k=list(d)[0];print(d[k].get('ApiUrl',''))")
+          WS_URL=$(python3 -c "import json;d=json.load(open('cdk-outputs.json'));k=list(d)[0];print(d[k].get('WebSocketUrl',''))")
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "ws_url=$WS_URL" >> "$GITHUB_OUTPUT"
+          echo "API_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "WS_URL=$WS_URL" >> "$GITHUB_ENV"
+          echo "::notice title=API Deployed::HTTP=$API_URL WS=$WS_URL"
+
+      - name: Point Lambda BACKEND_URL at HTTP API
+        run: |
+          set -euo pipefail
+          for fn in $(aws lambda list-functions --query "Functions[?contains(FunctionName,'HttpFunction') || contains(FunctionName,'Mobilerun')].FunctionName" --output text); do
+            echo "Updating $fn BACKEND_URL"
+            # Wait out in-progress updates from overlapping deploys
+            aws lambda wait function-updated --function-name "$fn" || true
+            CFG=$(aws lambda get-function-configuration --function-name "$fn" --query 'Environment.Variables' --output json)
+            echo "$CFG" | python3 -c "import json,sys,os; d=json.load(sys.stdin) or {}; d['BACKEND_URL']=os.environ['API_URL']; d['API_URL']=os.environ['API_URL']; print(json.dumps({'Variables':d}))" > /tmp/env.json
+            aws lambda update-function-configuration --function-name "$fn" --environment file:///tmp/env.json >/dev/null || true
+            aws lambda wait function-updated --function-name "$fn" || true
+          done
+
+      - name: Smoke test
+        if: ${{ github.event.inputs.skip_smoke != 'true' }}
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          echo "Health..."
+          curl -sfS "$API_URL/api/health" | tee /tmp/health.json
+          python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', d"
+
+          echo "Auth rejection (no token)..."
+          code=$(curl -s -o /tmp/unauth.json -w '%{http_code}' "$API_URL/api/devices")
+          echo "HTTP $code"
+          test "$code" = "401" -o "$code" = "403"
+
+          echo "Login + device-code + APK download QR..."
+          # Default admin/admin unless ADMIN_PASSWORD overridden in Lambda env
+          TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -sfS "$API_URL/api/auth/me" -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json
+          python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d"
+          curl -sfS -X POST "$API_URL/api/auth/device/code" \
+            -H 'Content-Type: application/json' \
+            -d '{"device_name":"smoke-device","platform":"android"}' | tee /tmp/dcode.json
+          python3 -c "import json; d=json.load(open('/tmp/dcode.json')); assert d.get('user_code') and d.get('device_code'), d"
+          curl -sfS "$API_URL/api/releases/latest" | tee /tmp/apk.json
+          python3 -c "import json; d=json.load(open('/tmp/apk.json')); assert d.get('apk_url') and d.get('qr_code'), d"
+          echo "Smoke OK"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Backend deployed (eu-west-2, near-zero cost)"
+            echo ""
+            echo "- **HTTP API:** \`$API_URL\`"
+            echo "- **WebSocket API:** \`$WS_URL\`"
+            echo "- Lambda + HTTP API + WebSocket API + on-demand DynamoDB + S3 (7d)"
+            echo "- EventBridge 1-min ticks for step-driven dating/agent jobs"
+            echo "- EC2 off · no NAT/ALB/RDS · \$5 budget alert"
+            echo "- **Est. cost:** \$0–1/mo light use (free tier); alert at \$5"
+            echo ""
+            echo "Set Netlify env \`VITE_API_URL\` / \`VITE_BACKEND_URL\` to the HTTP API URL."
+          } >> "$GITHUB_STEP_SUMMARY"

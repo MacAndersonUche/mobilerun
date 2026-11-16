@@ -1,0 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  /* Mac UI-reference tokens (cloud.mobilerun.ai phone recording) */
+  --bg: #0a0a0a;
+  --bg-elev: #121212;
+  --card: #1c1c1e;
+  --card-elev: #27272a;
+  --border: #3f3f46;
+  --accent: #3b82f6;
+  --ok: #4ade80;
+  --ok-bg: #14532d;
+  --mute: #c4c4cc;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: #fff;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@layer components {
+  .mr-card {
+    @apply rounded-2xl border border-line bg-surface p-4;
+  }
+  .mr-card-elev {
+    @apply rounded-2xl border border-line bg-surface-elev p-4;
+  }
+  .mr-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition disabled:opacity-40;
+  }
+  .mr-btn-primary {
+    @apply mr-btn bg-accent text-white hover:bg-accent-soft;
+  }
+  .mr-btn-ghost {
+    @apply mr-btn bg-surface-elev text-white hover:bg-line/40;
+  }
+  .mr-btn-danger {
+    @apply mr-btn bg-red-950 text-red-300 hover:bg-red-900;
+  }
+  .mr-input {
+    @apply w-full rounded-xl border border-line bg-canvas-elev px-3 py-2.5 text-sm text-white placeholder:text-mute focus:outline-none focus:ring-2 focus:ring-accent/50;
+  }
+  .mr-badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+  .mr-badge-ok {
+    @apply mr-badge bg-ok-bg text-ok;
+  }
+  .mr-page {
+    @apply mx-auto w-full max-w-content px-4 pb-28 pt-4 md:pb-8;
+  }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

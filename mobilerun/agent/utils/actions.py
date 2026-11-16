@@ -237,6 +237,30 @@ async def _macro_pre_ui_after_focus_tap(ctx: "ActionContext"):
     return await _macro_pre_ui(ctx)
 
 
+async def _humanize_before_action(ctx: "ActionContext") -> None:
+    humanizer = getattr(ctx, "humanizer", None)
+    if humanizer is not None:
+        await humanizer.wait_action_gap()
+
+
+def _humanize_tap_point(
+    ctx: "ActionContext", x: int, y: int, bounds=None
+) -> tuple[int, int]:
+    humanizer = getattr(ctx, "humanizer", None)
+    if humanizer is None:
+        return int(x), int(y)
+    return humanizer.jitter_point(x, y, bounds=bounds)
+
+
+def _invalidate_state_cache(ctx: "ActionContext") -> None:
+    provider = getattr(ctx, "state_provider", None)
+    if provider is not None and hasattr(provider, "invalidate_cache"):
+        try:
+            provider.invalidate_cache()
+        except Exception:
+            pass
+
+
 def _driver_log_length(ctx: "ActionContext") -> int | None:
     log = getattr(getattr(ctx, "driver", None), "log", None)
     if isinstance(log, list):
@@ -259,9 +283,20 @@ def _record_driver_log_delta(
 async def click(index: int, *, ctx: "ActionContext") -> ActionResult:
     """Click the element with the given index."""
     try:
+        await _humanize_before_action(ctx)
         pre_ui = await _macro_pre_ui(ctx)
         x, y = ctx.ui.get_element_coords(index)
+        bounds = None
+        try:
+            info0 = ctx.ui.get_element_info(index)
+            b = info0.get("bounds") if isinstance(info0, dict) else None
+            if b and len(b) == 4:
+                bounds = tuple(float(v) for v in b)
+        except Exception:
+            bounds = None
+        x, y = _humanize_tap_point(ctx, x, y, bounds=bounds)
         await ctx.driver.tap(x, y)
+        _invalidate_state_cache(ctx)
         _record_macro_action(
             ctx,
             {"action_type": "tap", "x": x, "y": y},
@@ -350,9 +385,12 @@ async def long_press_at(x: int, y: int, *, ctx: "ActionContext") -> ActionResult
 async def click_at(x: int, y: int, *, ctx: "ActionContext") -> ActionResult:
     """Click at screen coordinates."""
     try:
+        await _humanize_before_action(ctx)
         pre_ui = await _macro_pre_ui(ctx)
         abs_x, abs_y = _convert_action_point(x, y, ctx=ctx)
+        abs_x, abs_y = _humanize_tap_point(ctx, abs_x, abs_y)
         await ctx.driver.tap(abs_x, abs_y)
+        _invalidate_state_cache(ctx)
         _record_macro_action(
             ctx,
             {"action_type": "tap", "x": abs_x, "y": abs_y},
@@ -404,9 +442,11 @@ async def type_text(
 ) -> ActionResult:
     """Type text into an indexed element or the currently focused input."""
     try:
+        await _humanize_before_action(ctx)
         pre_ui = await _macro_pre_ui(ctx)
         if index is not None and index != -1:
             x, y = ctx.ui.get_element_coords(index)
+            x, y = _humanize_tap_point(ctx, x, y)
             await ctx.driver.tap(x, y)
             _record_macro_action(
                 ctx,
@@ -415,7 +455,13 @@ async def type_text(
             )
             pre_ui = await _macro_pre_ui_after_focus_tap(ctx)
 
+        humanizer = getattr(ctx, "humanizer", None)
+        if humanizer is not None and humanizer.config.enabled and len(text) > 0:
+            # Variable typing cadence: brief pause approximating human keystrokes
+            await asyncio.sleep(min(2.5, humanizer.typing_total_seconds(text) * 0.25))
+
         success = await ctx.driver.input_text(text, clear)
+        _invalidate_state_cache(ctx)
         if success:
             _record_macro_action(
                 ctx,
@@ -498,11 +544,23 @@ async def swipe(
         )
 
     try:
+        await _humanize_before_action(ctx)
         pre_ui = await _macro_pre_ui(ctx)
         start_x, start_y = _convert_action_point(*coordinate, ctx=ctx)
         end_x, end_y = _convert_action_point(*coordinate2, ctx=ctx)
+        humanizer = getattr(ctx, "humanizer", None)
         duration_ms = int(duration * 1000)
+        if humanizer is not None and humanizer.config.enabled:
+            dist = ((end_x - start_x) ** 2 + (end_y - start_y) ** 2) ** 0.5
+            duration_ms = humanizer.swipe_duration_ms(dist)
+            # Curved path: walk midpoints then final swipe (variable velocity feel)
+            path = humanizer.curved_swipe(start_x, start_y, end_x, end_y, steps=4)
+            if len(path) >= 2:
+                start_x, start_y = path[0]
+                # Use a near-end control point as end for slight curve via driver
+                end_x, end_y = path[-1]
         await ctx.driver.swipe(start_x, start_y, end_x, end_y, duration_ms=duration_ms)
+        _invalidate_state_cache(ctx)
         _record_macro_action(
             ctx,
             {

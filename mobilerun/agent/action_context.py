@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from mobilerun.agent.droid.state import MobileAgentState
     from mobilerun.credential_manager import CredentialManager
     from mobilerun.macro.recorder import MacroRecorder
+    from mobilerun.agent.humanizer import Humanizer
     from mobilerun.tools.ui.provider import StateProvider
     from mobilerun.tools.ui.state import UIState
 
@@ -31,6 +32,7 @@ class ActionContext:
         credential_manager: "Optional[CredentialManager]" = None,
         streaming: bool = False,
         macro_recorder: "Optional[MacroRecorder]" = None,
+        humanizer: "Optional[Humanizer]" = None,
     ) -> None:
         self.driver = driver
         self.ui = ui  # refreshed each step before tool execution
@@ -40,3 +42,4 @@ class ActionContext:
         self.credential_manager = credential_manager
         self.streaming = streaming
         self.macro_recorder = macro_recorder
+        self.humanizer = humanizer

@@ -1,0 +1,24 @@
+# Site settings (also set in Netlify UI):
+# - base directory: frontend
+# - publish: dist (relative to base → frontend/dist)
+# - NODE_VERSION: 20
+[build]
+  base = "frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build.environment]
+  NODE_VERSION = "20"
+  # Cloud backend (eu-west-2). Override in Netlify UI if the API URL changes.
+  VITE_API_URL = "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
+  VITE_BACKEND_URL = "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
+  VITE_WS_URL = "wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod"
+  # Cognito (set real values in Netlify UI for Hosted UI + Google):
+  # VITE_COGNITO_DOMAIN = your-prefix.auth.eu-west-2.amazoncognito.com
+  # VITE_COGNITO_CLIENT_ID = ...
+  # VITE_COGNITO_REDIRECT_URI = https://<site>/auth/callback

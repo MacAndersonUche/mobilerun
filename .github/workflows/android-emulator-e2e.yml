@@ -1,0 +1,129 @@
+name: Android Emulator E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/**]
+    paths:
+      - 'android-app/**'
+      - 'android-mock-dating/**'
+      - 'backend/**'
+      - 'scripts/e2e_emulator_test.sh'
+      - '.github/workflows/android-emulator-e2e.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android-app/**'
+      - 'android-mock-dating/**'
+      - 'backend/**'
+      - 'scripts/e2e_emulator_test.sh'
+      - '.github/workflows/android-emulator-e2e.yml'
+
+jobs:
+  emulator-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger
+          sudo apt-get update -y
+          sudo apt-get install -y qemu-kvm libvirt-daemon-system || true
+          ls -l /dev/kvm || echo "WARN: /dev/kvm missing"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        run: |
+          pip install -r backend/requirements.txt fastapi uvicorn python-jose qrcode pillow websockets
+          pip install -e ".[dev]" || pip install pytest pytest-asyncio
+
+      - name: Android SDK env (preinstalled on ubuntu runner)
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools" >> "$GITHUB_PATH"
+          yes | ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager --licenses || \
+          yes | ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager --licenses || true
+          ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" || \
+          ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Build Mobilerun APK
+        working-directory: android-app
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=1.0.${{ github.run_number }}
+          find build -name '*.apk' -print
+
+      - name: Build MockDating APK
+        working-directory: android-mock-dating
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          find . -name '*.apk' -print
+
+      - name: Start backend (ALLOW_UNAUTHENTICATED)
+        env:
+          ALLOW_UNAUTHENTICATED: 'true'
+          JWT_SECRET: e2e-test-secret
+          PORT: '8000'
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          nohup python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          for i in $(seq 1 40); do
+            curl -sfS http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+          curl -sfS http://127.0.0.1:8000/api/health
+
+      # android-emulator-runner executes each script line as a separate `sh -c`,
+      # so shell exports do not persist. Pass everything via step env + one bash call.
+      - name: Run emulator + e2e script
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/e2e-artifacts
+          BACKEND_URL: http://10.0.2.2:8000
+          HOST_BACKEND_URL: http://127.0.0.1:8000
+          CLOUD_API_URL: https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
+          ALLOW_UNAUTHENTICATED: 'true'
+          JWT_SECRET: e2e-test-secret
+          PYTHONPATH: ${{ github.workspace }}
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: Nexus 6
+          channel: stable
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: bash scripts/e2e_emulator_test.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-e2e-${{ github.run_id }}
+          path: |
+            e2e-artifacts/
+            /tmp/backend.log
+          if-no-files-found: warn
+
+      - name: Stop backend
+        if: always()
+        run: kill $(cat /tmp/backend.pid) 2>/dev/null || true

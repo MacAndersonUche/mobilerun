@@ -149,6 +149,8 @@ async def run_command(
     save_trajectory: str | None = None,
     ios: bool = False,
     temperature: float | None = None,
+    interaction_mode: str | None = None,
+    speed_preset: str | None = None,
     **kwargs,
 ) -> bool:
     """Run a command on your Android device using natural language.
@@ -219,6 +221,10 @@ async def run_command(
             config.agent.reasoning = reasoning
         if stream is not None:
             config.agent.streaming = stream
+        if interaction_mode is not None:
+            config.agent.interaction_mode = interaction_mode
+        if speed_preset is not None:
+            config.agent.speed_preset = speed_preset
 
         # Device overrides
         if device is not None:
@@ -267,6 +273,10 @@ async def run_command(
             "planning with reasoning" if config.agent.reasoning else "direct execution"
         )
         logger.info(f"🤖 Agent mode: {mode}")
+        logger.info(
+            f"🎛️  Interaction: {config.agent.interaction_mode} · "
+            f"speed={config.agent.speed_preset}"
+        )
         logger.info(
             f"👁️  Vision settings: Manager={config.agent.manager.vision}, "
             f"Executor={config.agent.executor.vision}, FastAgent={config.agent.fast_agent.vision}"
@@ -565,6 +575,19 @@ except Exception:
     default=None,
 )
 @click.option("--ios", is_flag=True, default=False, help="Run on iOS device")
+@click.option(
+    "--mode",
+    type=click.Choice(["normal", "dating", "social"]),
+    default=None,
+    help="Agent mode: normal, dating, or social",
+)
+@click.option(
+    "--speed",
+    "speed_preset",
+    type=click.Choice(["fast", "balanced", "careful"]),
+    default=None,
+    help="Humanizer pacing preset (default: balanced)",
+)
 @coro
 async def run(
     command: str,
@@ -588,6 +611,8 @@ async def run(
     device_id: str | None,
     save_trajectory: str | None,
     ios: bool,
+    mode: str | None,
+    speed_preset: str | None,
 ):
     """Run a command on your mobile device using natural language."""
 
@@ -613,6 +638,8 @@ async def run(
         temperature=temperature,
         save_trajectory=save_trajectory,
         ios=ios,
+        interaction_mode=mode,
+        speed_preset=speed_preset,
     )
 
     # Exit with appropriate code
@@ -1115,7 +1142,7 @@ async def doctor(device: str | None, debug: bool | None):
     "--provider",
     type=str,
     default=None,
-    help="Provider family (gemini, openai, anthropic, XAI, ollama, openai_like, minimax, zai).",
+    help="Provider family (gemini, openai, anthropic, xai).",
 )
 @click.option(
     "--auth-mode",
@@ -1456,6 +1483,10 @@ async def test(
         )
         logger.info(f"🤖 Agent mode: {mode}")
         logger.info(
+            f"🎛️  Interaction: {config.agent.interaction_mode} · "
+            f"speed={config.agent.speed_preset}"
+        )
+        logger.info(
             f"👁️  Vision settings: Manager={config.agent.manager.vision}, "
             f"Executor={config.agent.executor.vision}, FastAgent={config.agent.fast_agent.vision}"
         )
@@ -1507,6 +1538,252 @@ async def test(
             import traceback
 
             logger.debug(traceback.format_exc())
+
+
+# === Self-Hosted Control Center Commands ===
+
+
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", default=8000, help="Port to bind to")
+@click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
+@click.option(
+    "--allow-unauthenticated", is_flag=True, help="Disable JWT auth (local use only)"
+)
+def serve(host: str, port: int, no_browser: bool, allow_unauthenticated: bool):
+    """
+    Start the Mobilerun control center.
+
+    This starts the backend server and serves the web UI locally.
+    Your phone pairs to this PC over WiFi.
+
+    \b
+    Quick Start:
+        1. Run: mobilerun serve
+        2. Scan the QR code with your phone
+        3. Type tasks in the UI or use: mobilerun run "your task"
+    """
+    from mobilerun.server.serve import serve_command
+
+    # Call the serve implementation
+    ctx = click.get_current_context()
+    ctx.invoke(
+        serve_command,
+        host=host,
+        port=port,
+        no_browser=no_browser,
+        allow_unauthenticated=allow_unauthenticated,
+    )
+
+
+@cli.command()
+@click.option("--start", is_flag=True, help="Start dating mode")
+@click.option("--stop", is_flag=True, help="Stop dating mode")
+@click.option("--status", is_flag=True, help="Show dating mode status")
+@click.option("--stats", is_flag=True, help="Show dating statistics")
+@click.option("--backend", default="http://localhost:8000", help="Backend URL")
+def dating(start: bool, stop: bool, status: bool, stats: bool, backend: str):
+    """
+    Control dating mode automation.
+
+    Dating mode automates swiping, reading messages, and replying on dating apps
+    with human-like behavior and LLM-generated responses.
+
+    \b
+    Examples:
+        mobilerun dating --start
+        mobilerun dating --stop
+        mobilerun dating --status
+        mobilerun dating --stats
+    """
+    import requests
+
+    try:
+        if start:
+            console.print("[blue]🚀 Starting dating mode...[/]")
+            response = requests.post(f"{backend}/api/dating/start")
+            response.raise_for_status()
+            console.print("[green]✓ Dating mode started![/]")
+
+        elif stop:
+            console.print("[blue]⏹️  Stopping dating mode...[/]")
+            response = requests.post(f"{backend}/api/dating/stop")
+            response.raise_for_status()
+            console.print("[green]✓ Dating mode stopped![/]")
+
+        elif stats:
+            console.print("[blue]📊 Fetching dating statistics...[/]")
+            response = requests.get(f"{backend}/api/dating/stats")
+            response.raise_for_status()
+            data = response.json()
+
+            console.print(f"\n[bold]Total Sessions:[/] {data['total_sessions']}")
+            console.print(f"[bold]Runtime:[/] {data['total_runtime_minutes']} minutes")
+            console.print(f"\n[bold]Today:[/]")
+            console.print(f"  Swipes: {data['today']['swipes']}")
+            console.print(f"  Messages: {data['today']['messages']}")
+
+            console.print(f"\n[bold]Per-App Stats:[/]")
+            for app in data["apps"]:
+                console.print(f"\n[cyan]{app['name']}[/] ({app['package']})")
+                console.print(
+                    f"  Today: {app['today']['swipes']} swipes, {app['today']['messages']} messages"
+                )
+                console.print(
+                    f"  Total: {app['total']['swipes']} swipes, {app['total']['messages']} messages"
+                )
+                console.print(
+                    f"  Inbox: {app['inbox']['unread']} unread, {app['inbox']['new_matches']} new matches"
+                )
+
+        else:
+            console.print("[blue]📊 Dating mode status...[/]")
+            response = requests.get(f"{backend}/api/dating/status")
+            response.raise_for_status()
+            state = response.json()
+
+            if state["running"]:
+                status_text = "[green]Running[/]"
+                if state["paused"]:
+                    status_text = "[yellow]Paused[/]"
+            else:
+                status_text = "[dim]Stopped[/]"
+
+            console.print(f"Status: {status_text}")
+            if state["current_app"]:
+                console.print(f"Current app: {state['current_app']}")
+
+            response = requests.get(f"{backend}/api/dating/review-queue")
+            response.raise_for_status()
+            queue = response.json()
+            console.print(f"Review queue: {len(queue['messages'])} messages")
+
+    except requests.exceptions.ConnectionError:
+        console.print(f"[red]❌ Cannot connect to backend at {backend}[/]")
+        console.print("\n[yellow]Start the backend first:[/] mobilerun serve")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]❌ Error:[/] {e}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("instruction")
+@click.option(
+    "--device-id", help="Device ID to run on (uses first connected if omitted)"
+)
+@click.option("--max-steps", default=15, help="Maximum steps for the agent")
+@click.option("--reasoning", is_flag=True, help="Enable reasoning/thinking mode")
+@click.option("--vision", is_flag=True, default=True, help="Enable vision mode")
+@click.option("--backend", default="http://localhost:8000", help="Backend URL")
+def run(
+    instruction: str,
+    device_id: str,
+    max_steps: int,
+    reasoning: bool,
+    vision: bool,
+    backend: str,
+):
+    """
+    Run a task on your phone from the terminal.
+
+    The task will execute via the backend and show up in the UI history.
+
+    \b
+    Examples:
+        mobilerun run "open WhatsApp"
+        mobilerun run "search for pizza places nearby" --reasoning
+        mobilerun run "take a screenshot and send it" --device-id phone-123
+    """
+    import requests
+
+    console.print(f"[blue]📱 Running:[/] {instruction}")
+    console.print(f"[dim]Backend: {backend}[/]")
+
+    try:
+        # Get connected devices
+        response = requests.get(f"{backend}/api/devices")
+        response.raise_for_status()
+        devices = response.json()
+
+        if not devices:
+            console.print("[red]❌ No devices connected![/]")
+            console.print(
+                "\n[yellow]Make sure:[/]\n"
+                "  1. Backend is running (mobilerun serve)\n"
+                "  2. Your phone app is connected\n"
+                "  3. Accessibility service is enabled"
+            )
+            sys.exit(1)
+
+        # Select device
+        if device_id:
+            device = next((d for d in devices if d["device_id"] == device_id), None)
+            if not device:
+                console.print(f"[red]❌ Device {device_id} not found![/]")
+                console.print(
+                    f"\nAvailable devices: {[d['device_id'] for d in devices]}"
+                )
+                sys.exit(1)
+        else:
+            device = devices[0]
+            device_id = device["device_id"]
+
+        console.print(f"[green]✓ Using device:[/] {device['name']} ({device_id})")
+
+        # Submit task
+        task_data = {
+            "device_id": device_id,
+            "instruction": instruction,
+            "max_steps": max_steps,
+            "reasoning": reasoning,
+            "vision": vision,
+        }
+
+        response = requests.post(f"{backend}/api/tasks", json=task_data)
+        response.raise_for_status()
+        task = response.json()
+
+        task_id = task["task_id"]
+        console.print(f"[green]✓ Task started:[/] {task_id}")
+        console.print(f"\n[dim]View in UI: {backend}/#/tasks/{task_id}[/]\n")
+
+        # Poll for completion
+        import time
+
+        with console.status("[blue]Running...[/]") as status:
+            while True:
+                response = requests.get(f"{backend}/api/tasks/{task_id}")
+                response.raise_for_status()
+                task_status = response.json()
+
+                status.update(f"[blue]{task_status['status'].title()}...[/]")
+
+                if task_status["status"] in ["completed", "failed"]:
+                    break
+
+                time.sleep(2)
+
+        # Show result
+        if task_status["status"] == "completed":
+            console.print(f"[green]✓ Completed successfully![/]")
+            if task_status.get("result"):
+                console.print(f"\n[dim]Result: {task_status['result']}[/]")
+        else:
+            console.print(
+                f"[red]❌ Failed:[/] {task_status.get('error', 'Unknown error')}"
+            )
+            sys.exit(1)
+
+    except requests.exceptions.ConnectionError:
+        console.print(f"[red]❌ Cannot connect to backend at {backend}[/]")
+        console.print("\n[yellow]Start the backend first:[/] mobilerun serve")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]❌ Error:[/] {e}")
+        if "--debug" in sys.argv:
+            raise
+        sys.exit(1)
 
 
 if __name__ == "__main__":

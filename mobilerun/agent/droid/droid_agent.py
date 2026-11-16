@@ -845,7 +845,24 @@ class MobileAgent(Workflow):
         self.registry = registry
         self.standard_tool_names = standard_tool_names
 
-        # ── 4. Create ActionContext ────────────────────────────────────
+        # ── 4. Humanizer + optional state cache (fewer LLM/vision trips) ─
+        from mobilerun.agent.humanizer import Humanizer, HumanizerConfig
+        from mobilerun.agent.optimized_state_provider import CachedStateProvider
+
+        humanizer_cfg = HumanizerConfig.from_preset(
+            getattr(self.config.agent, "speed_preset", "balanced"),
+            getattr(self.config.agent, "interaction_mode", "normal"),
+        )
+        self.humanizer = Humanizer(config=humanizer_cfg)
+        # Wrap provider so tree can be reused when screenshots aren't required
+        if not isinstance(self.state_provider, CachedStateProvider):
+            self.state_provider = CachedStateProvider(
+                self.state_provider,
+                cache_ttl_seconds=self.humanizer.cache_ttl(),
+                screenshot_cache_ttl=max(0.15, self.humanizer.cache_ttl() * 0.7),
+            )
+
+        # ── 5. Create ActionContext ────────────────────────────────────
         self.action_ctx = ActionContext(
             driver=driver,
             ui=None,  # populated each step by state_provider
@@ -855,6 +872,7 @@ class MobileAgent(Workflow):
             credential_manager=self.credential_manager,
             streaming=self.config.agent.streaming,
             macro_recorder=self.macro_recorder,
+            humanizer=self.humanizer,
         )
 
         # ── 5. Wire up sub-agents ─────────────────────────────────────

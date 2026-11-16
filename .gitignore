@@ -1,45 +1,95 @@
-dist/
-build/
-# Python bytecode files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-trajectories/
-*.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+!infra/lib/
+!frontend/src/lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+ENV/
+env/
 
-test.py
-test.ipynb
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+dist/
+.cache/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# AWS CDK (scoped — do NOT ignore frontend JS / Vite ambient .d.ts)
+cdk.out/
+infra/**/*.js
+infra/**/*.d.ts
+!infra/**/jest.config.js
+!frontend/**/*.js
+!frontend/src/**/*.d.ts
+
+# Android
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
+android-app/build/
+android-app/.gradle/
+# Keep committed debug keystore
+!android-app/debug.keystore
+
+# APK outputs (except for releases)
+*.apk
+*.aab
+!app/release/*.apk
+
+# Testing
+.pytest_cache/
+coverage/
+htmlcov/
+.coverage
+*.cover
+
+# Logs
 *.log
+logs/
 
-messages_log.json
-
-.idea
-.vscode
-.vscode-test
-.vscode-test-*
-.idea/*
-.vscode/*
-patch_apis.py
-.git
-.arize-phoenix
-
-todo.txt
-
-config.yaml
-
-credentials.yaml
-**/credentials.yaml
-!**/credentials_example.yaml
-
-.*/
-!.gitignore
-!.github/
-
-backend/
-frontend/
-
-reddit_python_posts.json
-
-test/
-# agent-test-flows generated run reports
-agent-test-flows/reports/
+# Temp files
+tmp/
+temp/
+*.tmp
+frontend/playwright-report/
+frontend/test-results/

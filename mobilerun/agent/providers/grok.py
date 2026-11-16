@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 
-# grok-4.7 on the public API does not emit mobilerun's XML tool calls; the
-# Grok Build proxy serves a build that does.
-GROK_API_DEFAULT_MODEL = "grok-4.6"
+# Default matches current xAI docs flagship (https://docs.x.ai/docs/models).
+# Model id is always configurable via LLM_MODEL / profile / UI.
+# Note: some agent XML tool-call paths behave better on grok-4.6; keep it listed.
+GROK_API_DEFAULT_MODEL = "grok-4.7"
 GROK_OAUTH_DEFAULT_MODEL = "grok-4.7"
-GROK_API_MODELS = (GROK_API_DEFAULT_MODEL,)
+GROK_API_MODELS = (GROK_API_DEFAULT_MODEL, "grok-4.6")
 GROK_OAUTH_MODELS = (GROK_OAUTH_DEFAULT_MODEL, "grok-4.6")
 # No longer offered, but still accepted so saved OAuth profiles load.
 GROK_OAUTH_LEGACY_MODELS = ("grok-4.5",)
