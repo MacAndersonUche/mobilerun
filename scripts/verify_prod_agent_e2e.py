@@ -47,9 +47,7 @@ def req(
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    r = urllib.request.Request(
-        API + path, data=data, headers=headers, method=method
-    )
+    r = urllib.request.Request(API + path, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(r, timeout=timeout) as resp:
             raw = resp.read().decode()
@@ -171,7 +169,12 @@ def main() -> int:
         # Wait for any online device owned by ci-e2e
         dev = wait_device(token, timeout_s=120)
         device_id = str(dev.get("device_id"))
-        print("paired_device", device_id, "route", dev.get("route") or dev.get("connection_type"))
+        print(
+            "paired_device",
+            device_id,
+            "route",
+            dev.get("route") or dev.get("connection_type"),
+        )
     else:
         dev = wait_device(token, want=device_id, timeout_s=60)
         print("device_online", device_id)
