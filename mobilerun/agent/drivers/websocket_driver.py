@@ -12,7 +12,7 @@ logger = logging.getLogger("mobilerun.websocket_driver")
 class WebSocketDeviceDriver:
     """
     Device driver that communicates with Android app over WebSocket.
-    
+
     Implements the same interface as AndroidDriver but sends commands
     over WebSocket instead of ADB.
     """
@@ -35,7 +35,10 @@ class WebSocketDeviceDriver:
             logger.warning(f"Error closing websocket: {e}")
 
     async def _send_command(
-        self, command: str, params: Optional[Dict[str, Any]] = None, timeout: float = 30.0
+        self,
+        command: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: float = 30.0,
     ) -> Any:
         """Send a command and wait for response."""
         self._request_id += 1
@@ -104,7 +107,8 @@ class WebSocketDeviceDriver:
     ) -> None:
         """Swipe gesture."""
         await self._send_command(
-            "swipe", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": duration_ms}
+            "swipe",
+            {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": duration_ms},
         )
 
     async def input_text(self, text: str, clear: bool = False) -> bool:
@@ -123,7 +127,9 @@ class WebSocketDeviceDriver:
 
     async def get_apps(self, include_system: bool = False) -> List[Dict[str, str]]:
         """Get list of installed apps."""
-        result = await self._send_command("get_apps", {"include_system": include_system})
+        result = await self._send_command(
+            "get_apps", {"include_system": include_system}
+        )
         return result if isinstance(result, list) else []
 
     async def get_device_info(self) -> Dict[str, str]:
