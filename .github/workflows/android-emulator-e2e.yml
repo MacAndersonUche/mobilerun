@@ -1,0 +1,119 @@
+name: Android Emulator E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/**]
+    paths:
+      - 'android-app/**'
+      - 'android-mock-dating/**'
+      - 'backend/**'
+      - 'scripts/e2e_emulator_test.sh'
+      - '.github/workflows/android-emulator-e2e.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android-app/**'
+      - 'android-mock-dating/**'
+      - 'backend/**'
+      - 'scripts/e2e_emulator_test.sh'
+      - '.github/workflows/android-emulator-e2e.yml'
+
+jobs:
+  emulator-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger
+          sudo apt-get update -y
+          sudo apt-get install -y qemu-kvm libvirt-daemon-system || true
+          ls -l /dev/kvm || echo "WARN: /dev/kvm missing"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        run: |
+          pip install -r backend/requirements.txt fastapi uvicorn python-jose qrcode pillow
+          pip install -e ".[dev]" || pip install pytest pytest-asyncio
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Mobilerun APK
+        working-directory: android-app
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=1.0.${{ github.run_number }}
+          find build -name '*.apk' -print
+
+      - name: Build MockDating APK
+        working-directory: android-mock-dating
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          find . -name '*.apk' -print
+
+      - name: Start backend (ALLOW_UNAUTHENTICATED)
+        env:
+          ALLOW_UNAUTHENTICATED: 'true'
+          JWT_SECRET: e2e-test-secret
+          PORT: '8000'
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          nohup python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          for i in $(seq 1 30); do
+            curl -sfS http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+          curl -sfS http://127.0.0.1:8000/api/health
+
+      - name: Run emulator + e2e script
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            export ARTIFACTS_DIR="${{ github.workspace }}/e2e-artifacts"
+            mkdir -p "$ARTIFACTS_DIR"
+            export MOBILERUN_APK=$(find android-app/build -name '*release*.apk' | head -1)
+            export MOCK_APK=$(find android-mock-dating -name '*debug*.apk' | head -1)
+            export BACKEND_URL=http://10.0.2.2:8000
+            export HOST_BACKEND_URL=http://127.0.0.1:8000
+            chmod +x scripts/e2e_emulator_test.sh
+            scripts/e2e_emulator_test.sh
+            cp /tmp/backend.log "$ARTIFACTS_DIR/" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-e2e-${{ github.run_id }}
+          path: |
+            e2e-artifacts/
+            /tmp/backend.log
+          if-no-files-found: warn
+
+      - name: Stop backend
+        if: always()
+        run: kill $(cat /tmp/backend.pid) 2>/dev/null || true

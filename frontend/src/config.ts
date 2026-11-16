@@ -1,13 +1,16 @@
 /**
  * Runtime configuration for backend URL.
- * 
+ *
  * Priority:
  * 1. localStorage setting (user-configured in UI)
- * 2. VITE_BACKEND_URL environment variable
+ * 2. VITE_API_URL (Netlify / cloud) or VITE_BACKEND_URL
  * 3. Default to localhost for development
  */
 
-const DEFAULT_BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const DEFAULT_BACKEND_URL =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_BACKEND_URL ||
+  'http://localhost:8000';
 
 export const getBackendUrl = (): string => {
   const stored = localStorage.getItem('mobilerun_backend_url');

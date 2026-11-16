@@ -200,31 +200,69 @@ async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
     return devices
 
 
+@app.get("/api/health")
+async def health():
+    """Public health check (no auth)."""
+    return {
+        "status": "ok",
+        "service": "mobilerun",
+        "step_driven": os.environ.get("STEP_DRIVEN", "false"),
+        "use_aws_storage": os.environ.get("USE_AWS_STORAGE", "false"),
+        "websocket_api": os.environ.get("WEBSOCKET_API_ENDPOINT", ""),
+    }
+
+
 @app.post("/api/devices/pair")
 async def initiate_pairing(
     request: PairingRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """
     Initiate device pairing. Returns QR code with backend URL and token.
+    Cloud: QR points phone at WebSocket API; REST URL is the HTTP API.
     """
     token = secrets.token_urlsafe(32)
 
-    # Get backend URL from environment or construct from request
-    backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000")
+    backend_url = os.environ.get("BACKEND_URL") or os.environ.get(
+        "API_URL", "http://localhost:8000"
+    )
+    ws_url = (
+        os.environ.get("WEBSOCKET_API_ENDPOINT")
+        or backend_url.replace("http", "ws").rstrip("/") + "/api/devices/connect"
+    )
 
+    expires_at = datetime.now().timestamp() + 600
     pairing_data = {
         "token": token,
         "device_name": request.device_name,
+        "device_id": request.device_name,
         "platform": request.platform,
-        "created_at": datetime.now(),
-        "expires_at": datetime.now().timestamp() + 600,  # 10 minutes
+        "created_at": datetime.now().isoformat(),
+        "expires_at": expires_at,
         "backend_url": backend_url,
+        "websocket_url": ws_url,
     }
 
     pairing_tokens[token] = pairing_data
 
-    # Generate pairing URL with backend URL
-    pairing_url = f"mobilerun://pair?token={token}&backend={backend_url}"
+    # Persist for Lambda (memory does not survive across invocations)
+    try:
+        from storage import save_pairing_token
+
+        save_pairing_token(
+            token,
+            {
+                "device_name": request.device_name,
+                "device_id": request.device_name,
+                "platform": request.platform,
+                "expires_at": expires_at,
+                "backend_url": backend_url,
+            },
+        )
+    except Exception as e:
+        logger.warning("Could not persist pairing token: %s", e)
+
+    # Phone deep link: token + HTTP backend + WS endpoint for cloud
+    pairing_url = f"mobilerun://pair?token={token}&backend={backend_url}&ws={ws_url}"
 
     qr = qrcode.QRCode(
         version=1,
@@ -246,6 +284,7 @@ async def initiate_pairing(
         "qr_code": qr_base64,
         "pairing_url": pairing_url,
         "backend_url": backend_url,
+        "websocket_url": ws_url,
         "expires_in": 600,
     }
 
@@ -581,23 +620,82 @@ async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)
 
 
 @app.post("/api/dating/start")
-async def start_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Start dating mode."""
+async def start_dating_mode(
+    auth: Optional[dict] = Depends(optional_verify_token),
+    device_id: str = "default",
+    dry_run: bool = False,
+):
+    """
+    Start dating mode as a step-driven cloud job (EventBridge ticks).
+    Safe for Lambda — does not hold a long loop in one invocation.
+    """
     if dating_mode_state["running"]:
         raise HTTPException(status_code=400, detail="Dating mode already running")
 
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
 
-    return {"status": "started", "state": dating_mode_state}
+    job_id = f"dating_{secrets.token_hex(8)}"
+    dating_mode_state["job_id"] = job_id
+    job = {
+        "job_id": job_id,
+        "kind": "dating",
+        "status": "running",
+        "device_id": device_id,
+        "dry_run": dry_run,
+        "created_at": int(datetime.now().timestamp()),
+        "next_run_at": int(datetime.now().timestamp()),
+        "caps": {
+            "opener_target": secrets.randbelow(51) + 50,  # 50-100
+            "global_message_max": secrets.randbelow(401) + 100,  # 100-500
+            "swipe_cap": 50,
+            "reply_cap": 50,
+        },
+        "state": {
+            "openers_sent": 0,
+            "replies_sent": 0,
+            "swipes_done": 0,
+            "steps": 0,
+        },
+        "ttl": int(datetime.now().timestamp()) + 7 * 86400,
+    }
+    try:
+        from storage import put_job
+
+        put_job(job)
+        # Kick first step immediately if step worker ARN available
+        step_arn = os.environ.get("STEP_WORKER_ARN")
+        if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
+            import boto3
+
+            boto3.client("lambda").invoke(
+                FunctionName=step_arn,
+                InvocationType="Event",
+                Payload=json.dumps({"job_id": job_id}).encode(),
+            )
+    except Exception as e:
+        logger.warning("Could not persist dating job (local mode ok): %s", e)
+
+    return {"status": "started", "state": dating_mode_state, "job": job}
 
 
 @app.post("/api/dating/stop")
 async def stop_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Stop dating mode."""
+    """Stop dating mode / mark cloud job completed."""
     dating_mode_state["running"] = False
     dating_mode_state["paused"] = False
     dating_mode_state["current_app"] = None
+    job_id = dating_mode_state.pop("job_id", None)
+    if job_id:
+        try:
+            from storage import get_job, put_job
+
+            job = get_job(job_id)
+            if job:
+                job["status"] = "stopped"
+                put_job(job)
+        except Exception as e:
+            logger.warning("Could not stop job: %s", e)
 
     return {"status": "stopped", "state": dating_mode_state}
 

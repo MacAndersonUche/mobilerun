@@ -2,90 +2,145 @@ name: Deploy Backend to AWS
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
       - 'backend/**'
       - 'infra/**'
       - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (branch/SHA). Leave empty for current branch/main.'
+        required: false
+        default: ''
+      skip_smoke:
+        description: 'Skip post-deploy smoke tests'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Skip if AWS secrets aren't configured
-    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
-    
-    permissions:
-      contents: read
-      id-token: write
-    
+    # Secrets presence: empty-string compare is unreliable; attempt deploy and fail clearly
+    outputs:
+      api_url: ${{ steps.outs.outputs.api_url }}
+      ws_url: ${{ steps.outs.outputs.ws_url }}
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Require AWS secrets
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "::error::AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY not set"
+            exit 1
+          fi
+          if [ -z "$JWT_SECRET" ]; then
+            echo "::warning::JWT_SECRET empty — stack will use placeholder (set secret for prod)"
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install CDK dependencies
-        run: |
-          cd infra
-          npm ci
-      
+        working-directory: infra
+        run: npm ci
+
       - name: Build CDK
-        run: |
-          cd infra
-          npm run build
-      
+        working-directory: infra
+        run: npm run build
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-west-2
-      
+
       - name: CDK Bootstrap
+        working-directory: infra
+        run: npx cdk bootstrap aws://$(aws sts get-caller-identity --query Account --output text)/eu-west-2 || true
+
+      - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)
+        working-directory: infra
         run: |
-          cd infra
-          npx cdk bootstrap || true
-      
-      - name: CDK Deploy
-        run: |
-          cd infra
-          # Deploy with Lambda backend (default, near-zero cost)
-          # EC2 is opt-in only: add -c enableEC2=true to enable (costs ~$8/month)
-          npx cdk deploy --require-approval never
+          npx cdk deploy MobilerunStack --require-approval never --outputs-file cdk-outputs.json
+          cat cdk-outputs.json
         env:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || '' }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || '' }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || '' }}
-      
-      - name: Get API URL
-        id: api_url
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Allow Docker bundling on the runner
+          SKIP_BUNDLING: ''
+
+      - name: Parse outputs
+        id: outs
+        working-directory: infra
         run: |
-          cd infra
-          API_URL=$(npx cdk deploy --require-approval never --outputs-file outputs.json 2>&1 | grep -o 'https://[^"]*' | head -1)
-          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
-          echo "::notice title=API Deployed::Backend API URL: $API_URL"
-      
+          API_URL=$(python3 -c "import json;d=json.load(open('cdk-outputs.json'));k=list(d)[0];print(d[k].get('ApiUrl',''))")
+          WS_URL=$(python3 -c "import json;d=json.load(open('cdk-outputs.json'));k=list(d)[0];print(d[k].get('WebSocketUrl',''))")
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "ws_url=$WS_URL" >> "$GITHUB_OUTPUT"
+          echo "API_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "WS_URL=$WS_URL" >> "$GITHUB_ENV"
+          echo "::notice title=API Deployed::HTTP=$API_URL WS=$WS_URL"
+
+      - name: Smoke test
+        if: ${{ github.event.inputs.skip_smoke != 'true' }}
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          echo "Health..."
+          curl -sfS "$API_URL/api/health" | tee /tmp/health.json
+          python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', d"
+
+          echo "Auth rejection (no token)..."
+          code=$(curl -s -o /tmp/unauth.json -w '%{http_code}' "$API_URL/api/devices")
+          echo "HTTP $code"
+          test "$code" = "401" -o "$code" = "403"
+
+          echo "Login + pairing..."
+          # Default admin/admin unless ADMIN_PASSWORD overridden in Lambda env
+          TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -sfS -X POST "$API_URL/api/devices/pair" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"device_name":"smoke-device","platform":"android"}' | tee /tmp/pair.json
+          python3 -c "import json; d=json.load(open('/tmp/pair.json')); assert d.get('token') and d.get('websocket_url') or d.get('backend_url'), d"
+          echo "Smoke OK"
+
       - name: Summary
         run: |
-          echo "## ✅ Backend Deployed to AWS (Near-Zero Cost)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Region:** eu-west-2" >> $GITHUB_STEP_SUMMARY
-          echo "**Backend:** Lambda (pay-per-use)" >> $GITHUB_STEP_SUMMARY
-          echo "**API URL:** ${{ steps.api_url.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Cost-Optimized Stack:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Lambda (free tier: 1M requests/month)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ DynamoDB on-demand (free tier: 25GB, 25 WCU/RCU)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ S3 with 7-day expiration (free tier: 5GB)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ API Gateway (free tier: 1M calls/month)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Budget alert at \$5/month to macandersonuche@yahoo.com" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ CloudWatch logs: 7-day retention" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Expected monthly cost:** \$0-1 for light use (within free tier)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "⚠️ **Lambda limitation:** 15-minute timeout per task" >> $GITHUB_STEP_SUMMARY
-          echo "For longer tasks, use local PC: \`mobilerun serve\`" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Backend deployed (eu-west-2, near-zero cost)"
+            echo ""
+            echo "- **HTTP API:** \`$API_URL\`"
+            echo "- **WebSocket API:** \`$WS_URL\`"
+            echo "- Lambda + HTTP API + WebSocket API + on-demand DynamoDB + S3 (7d)"
+            echo "- EventBridge 1-min ticks for step-driven dating/agent jobs"
+            echo "- EC2 off · no NAT/ALB/RDS · \$5 budget alert"
+            echo "- **Est. cost:** \$0–1/mo light use (free tier); alert at \$5"
+            echo ""
+            echo "Set Netlify env \`VITE_API_URL\` / \`VITE_BACKEND_URL\` to the HTTP API URL."
+          } >> "$GITHUB_STEP_SUMMARY"
