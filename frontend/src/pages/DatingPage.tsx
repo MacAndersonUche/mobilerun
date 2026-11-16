@@ -103,6 +103,20 @@ export default function DatingPage() {
   const [apps, setApps] = useState<AppStats[]>([]);
   const [configApps, setConfigApps] = useState<AppConfig[]>([]);
   const [persona, setPersona] = useState('');
+  const [replyPersona, setReplyPersona] = useState('');
+  const [inviteDaysMin, setInviteDaysMin] = useState(3);
+  const [inviteDaysMax, setInviteDaysMax] = useState(7);
+  const [homeLocation, setHomeLocation] = useState('Stoke-on-Trent');
+  const [radiusMiles, setRadiusMiles] = useState(50);
+  const [inviteEnabled, setInviteEnabled] = useState(true);
+  const [handoffEnabled, setHandoffEnabled] = useState(true);
+  const [calendarOnHandoff, setCalendarOnHandoff] = useState(true);
+  const [dateFlowStats, setDateFlowStats] = useState<{
+    chats_active: number;
+    invites_sent: number;
+    dates_booked: number;
+    by_app?: Record<string, { chats_active: number; invites_sent: number; dates_booked: number }>;
+  } | null>(null);
   const [reviewBeforeSend, setReviewBeforeSend] = useState(true);
   const [reviewQueue, setReviewQueue] = useState<ReviewMessage[]>([]);
   const [globalMin, setGlobalMin] = useState(100);
@@ -176,6 +190,18 @@ export default function DatingPage() {
       setTodayMessages(statsRes.data.today?.messages || 0);
       setConfigApps(configRes.data.apps || []);
       setPersona(configRes.data.persona_prompt || '');
+      const df = configRes.data.date_flow || {};
+      setReplyPersona(
+        df.reply_persona_prompt || configRes.data.reply_persona_prompt || ''
+      );
+      setInviteDaysMin(df.invite_days_min ?? 3);
+      setInviteDaysMax(df.invite_days_max ?? 7);
+      setHomeLocation(df.home_location || 'Stoke-on-Trent');
+      setRadiusMiles(df.radius_miles ?? 50);
+      setInviteEnabled(df.invite_enabled ?? true);
+      setHandoffEnabled(df.handoff_enabled ?? true);
+      setCalendarOnHandoff(df.calendar_on_handoff ?? true);
+      setDateFlowStats(configRes.data.date_flow_stats || null);
       setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
       setGlobalMax(configRes.data.max_total_messages_per_day ?? 500);
@@ -248,6 +274,14 @@ export default function DatingPage() {
           speed_preset: speed,
           opener_mode: openerMode,
           per_app_opener_mode: perApp,
+          reply_persona_prompt: replyPersona,
+          invite_days_min: inviteDaysMin,
+          invite_days_max: inviteDaysMax,
+          home_location: homeLocation,
+          radius_miles: radiusMiles,
+          invite_enabled: inviteEnabled,
+          handoff_enabled: handoffEnabled,
+          calendar_on_handoff: calendarOnHandoff,
         },
         { headers: authHeaders() }
       );
@@ -623,11 +657,11 @@ export default function DatingPage() {
           Review before send (sequential queue)
         </label>
         <label className="block text-sm">
-          Persona / style prompt (replies + AI openers)
+          Persona / style prompt (AI openers)
           <textarea
             value={persona}
             onChange={(e) => setPersona(e.target.value)}
-            rows={6}
+            rows={4}
             className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 font-mono text-sm"
           />
         </label>
@@ -637,6 +671,115 @@ export default function DatingPage() {
           className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
         >
           Save config
+        </button>
+      </div>
+
+      {/* Reply persona + date flow */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
+        <h3 className="text-lg font-semibold">Reply persona & date flow</h3>
+        <p className="text-xs text-mute">
+          AI replies to existing chats. After a warm chat window, one polite
+          public-place invite — never stay-over / his home. Agreeing a day or
+          asking logistics hands off to you (Needs-you).
+        </p>
+        {dateFlowStats ? (
+          <div className="flex flex-wrap gap-4 text-sm">
+            <span>Chats active: {dateFlowStats.chats_active}</span>
+            <span>Invites sent: {dateFlowStats.invites_sent}</span>
+            <span>Dates booked: {dateFlowStats.dates_booked}</span>
+          </div>
+        ) : null}
+        <label className="block text-sm">
+          Conversation style (replies)
+          <textarea
+            value={replyPersona}
+            onChange={(e) => setReplyPersona(e.target.value)}
+            rows={5}
+            aria-label="Reply persona prompt"
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 font-mono text-sm"
+          />
+        </label>
+        <div className="grid sm:grid-cols-2 gap-3 text-sm">
+          <label>
+            Invite after (min days)
+            <input
+              type="number"
+              min={1}
+              value={inviteDaysMin}
+              onChange={(e) => setInviteDaysMin(Number(e.target.value) || 1)}
+              aria-label="Invite days minimum"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label>
+            Invite after (max days)
+            <input
+              type="number"
+              min={1}
+              value={inviteDaysMax}
+              onChange={(e) => setInviteDaysMax(Number(e.target.value) || 1)}
+              aria-label="Invite days maximum"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label>
+            Home location
+            <input
+              value={homeLocation}
+              onChange={(e) => setHomeLocation(e.target.value)}
+              aria-label="Home location"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label>
+            Radius (miles)
+            <input
+              type="number"
+              min={1}
+              value={radiusMiles}
+              onChange={(e) => setRadiusMiles(Number(e.target.value) || 1)}
+              aria-label="Distance radius miles"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={inviteEnabled}
+              onChange={(e) => setInviteEnabled(e.target.checked)}
+            />
+            Date invites enabled
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={handoffEnabled}
+              onChange={(e) => setHandoffEnabled(e.target.checked)}
+            />
+            Handoff on agree / logistics
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={calendarOnHandoff}
+              onChange={(e) => setCalendarOnHandoff(e.target.checked)}
+            />
+            Calendar entry on booked date
+          </label>
+        </div>
+        <p className="text-xs text-mute">
+          Beyond {radiusMiles} mi → suggest meeting in {homeLocation} (public).
+          Within radius → mutually convenient public place. Never suggest
+          staying over.
+        </p>
+        <button
+          onClick={saveConfig}
+          disabled={loading}
+          className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
+        >
+          Save reply & date flow
         </button>
       </div>
 

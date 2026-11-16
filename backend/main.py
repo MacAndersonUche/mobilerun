@@ -940,6 +940,7 @@ dating_mode_state = {
     "speed_preset": "balanced",
     "opener_mode": "templates",  # templates | ai
     "opener_library": None,
+    "date_flow": None,
 }
 
 social_mode_state = {
@@ -1009,6 +1010,39 @@ class DatingModeConfig(BaseModel):
     opener_mode: str = "templates"  # templates | ai
     # package_name -> templates | ai
     per_app_opener_mode: Optional[Dict[str, str]] = None
+    # Reply persona + date flow
+    reply_persona_prompt: Optional[str] = None
+    invite_days_min: Optional[int] = None
+    invite_days_max: Optional[int] = None
+    home_location: Optional[str] = None
+    radius_miles: Optional[float] = None
+    invite_enabled: Optional[bool] = None
+    handoff_enabled: Optional[bool] = None
+    calendar_on_handoff: Optional[bool] = None
+    date_flow_per_app: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+class DateFlowEvaluateRequest(BaseModel):
+    match_id: str
+    package_name: str = ""
+    inbound: str = ""
+    distance_miles: Optional[float] = None
+    her_name: str = ""
+    is_opener: bool = False
+    # Test hook: force chat age in days
+    days_chatting: Optional[float] = None
+    her_message_count: Optional[int] = None
+
+
+class ComposeOpenerRequest(BaseModel):
+    match_id: str
+    package_name: str = ""
+    profile_name: str = ""
+    is_opener: bool = True
+    inbound_preview: str = ""
+    local_hour: Optional[int] = None
+    local_minute: Optional[int] = None
+    distance_miles: Optional[float] = None
 
 
 class OpenerTemplateBody(BaseModel):
@@ -1022,16 +1056,6 @@ class OpenerLibraryUpdate(BaseModel):
     opener_mode: Optional[str] = None
     per_app_mode: Optional[Dict[str, str]] = None
     templates: Optional[List[OpenerTemplateBody]] = None
-
-
-class ComposeOpenerRequest(BaseModel):
-    match_id: str
-    package_name: str = ""
-    profile_name: str = ""
-    is_opener: bool = True
-    inbound_preview: str = ""
-    local_hour: Optional[int] = None
-    local_minute: Optional[int] = None
 
 
 class AgentModeConfig(BaseModel):
@@ -1406,6 +1430,81 @@ def _save_opener_library(lib, auth: Optional[dict] = None) -> None:
     save_user_setting(user_id, "dating_openers", data)
 
 
+_date_flow_mgr = None
+
+
+def _load_date_flow(auth: Optional[dict] = None):
+    """Load DateFlowManager (config from settings + persisted chat state)."""
+    global _date_flow_mgr
+    from pathlib import Path as _Path
+
+    from mobilerun.dating.date_flow import (
+        DateFlowConfig,
+        DateFlowManager,
+        default_persist_path,
+    )
+
+    user_id = _dating_user_id(auth)
+    stored = None
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        stored = get_user_setting(user_id, "dating_date_flow")
+    except Exception:
+        logger.exception("load dating_date_flow failed")
+    mem = dating_mode_state.get("date_flow")
+    raw = mem or stored or {}
+    cfg = DateFlowConfig.from_dict(
+        raw.get("config") if isinstance(raw, dict) and "config" in raw else raw
+    )
+
+    def _push(**kwargs) -> str:
+        q = get_needs_you_queue()
+        item = q.add(
+            source="dating",
+            app_name=str(kwargs.get("app") or "dating"),
+            package_name=str(kwargs.get("app") or ""),
+            conversation_id=str((kwargs.get("meta") or {}).get("match_id") or ""),
+            contact_name="",
+            inbound_preview="",
+            draft_reply="",
+            reasons=[str(kwargs.get("kind") or "date_handoff")],
+            meta=dict(kwargs.get("meta") or {}),
+        )
+        return item.id
+
+    persist = default_persist_path()
+    if os.environ.get("MOBILERUN_DATA"):
+        persist = _Path(os.environ["MOBILERUN_DATA"]) / "dating_date_flow.json"
+    if _date_flow_mgr is None or getattr(_date_flow_mgr, "_user_id", None) != user_id:
+        _date_flow_mgr = DateFlowManager(
+            config=cfg, persist_path=persist, push_needs_you=_push
+        )
+        _date_flow_mgr._user_id = user_id  # type: ignore[attr-defined]
+    else:
+        _date_flow_mgr.config = cfg
+        _date_flow_mgr.push_needs_you = _push
+    return _date_flow_mgr
+
+
+def _save_date_flow(mgr, auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    data = {
+        "config": mgr.config.to_dict(),
+        "stats": mgr.stats_summary(),
+    }
+    dating_mode_state["date_flow"] = data
+    save_user_setting(user_id, "dating_date_flow", data)
+    mgr._persist()
+
+
 @app.get("/api/dating/config")
 async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode configuration."""
@@ -1413,6 +1512,7 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
 
     config = ConfigModel()
     lib, _ = _load_opener_library(auth)
+    df = _load_date_flow(auth)
     opener_mode = (
         dating_mode_state.get("opener_mode")
         or lib.opener_mode
@@ -1444,6 +1544,8 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
         or dating_mode_state.get("speed_preset", "balanced"),
         "opener_mode": opener_mode,
         "per_app_opener_mode": lib.per_app_mode,
+        "date_flow": df.config.to_dict(),
+        "date_flow_stats": df.stats_summary(),
     }
 
 
@@ -1474,7 +1576,32 @@ async def update_dating_config(
                 cleaned[k] = vv
         lib.per_app_mode = cleaned
     _save_opener_library(lib, auth)
-    payload = config.dict() if hasattr(config, "dict") else config.model_dump()
+
+    # Reply persona + date flow
+    from mobilerun.dating.date_flow import DateFlowConfig
+
+    mgr = _load_date_flow(auth)
+    cur = mgr.config.to_dict()
+    dump = config.dict() if hasattr(config, "dict") else config.model_dump()
+    for key in (
+        "reply_persona_prompt",
+        "invite_days_min",
+        "invite_days_max",
+        "home_location",
+        "radius_miles",
+        "invite_enabled",
+        "handoff_enabled",
+        "calendar_on_handoff",
+    ):
+        if dump.get(key) is not None:
+            cur[key] = dump[key]
+    if dump.get("date_flow_per_app") is not None:
+        cur["per_app"] = dump["date_flow_per_app"]
+    mgr.config = DateFlowConfig.from_dict(cur)
+    _save_date_flow(mgr, auth)
+
+    payload = dump
+    payload["date_flow"] = mgr.config.to_dict()
     return {"status": "success", "config": payload}
 
 
@@ -1601,10 +1728,9 @@ async def delete_opener_template(
 async def compose_dating_message_api(
     body: ComposeOpenerRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Compose opener (template or AI) or reply (always AI when callable provided)."""
+    """Compose opener (template or AI) or reply (AI + date-flow / handoff)."""
     from datetime import datetime as _dt
 
-    from mobilerun.dating.openers import compose_dating_message
     from mobilerun.dating.persona import PersonaManager
 
     # Honour safety pause — never send while blocked
@@ -1626,6 +1752,7 @@ async def compose_dating_message_api(
         )
 
     lib, _ = _load_opener_library(auth)
+    mgr = _load_date_flow(auth)
     now = None
     if body.local_hour is not None:
         now = _dt.now().replace(
@@ -1643,28 +1770,100 @@ async def compose_dating_message_api(
             return f"[AI opener for {kwargs.get('profile_name') or 'match'}]"
         return f"[AI reply to: {(kwargs.get('inbound_preview') or '')[:40]}]"
 
+    persona = PersonaManager(
+        opener_library=lib,
+        ai_callable=ai_callable,
+        date_flow=mgr,
+        reply_persona_prompt=mgr.config.for_app(body.package_name).reply_persona_prompt,
+    )
     try:
-        result = compose_dating_message(
+        result = persona.compose(
             is_opener=body.is_opener,
-            lib=lib,
             match_id=body.match_id,
             package_name=body.package_name,
-            profile_name=body.profile_name or None,
-            now=now,
-            ai_callable=ai_callable,
+            profile_name=body.profile_name or "",
             inbound_preview=body.inbound_preview,
+            now=now,
+            distance_miles=body.distance_miles,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Persist rotation / used_by_match when templates used
     if result.get("source") == "template":
         _save_opener_library(lib, auth)
+    _save_date_flow(mgr, auth)
 
     return {
         **result,
         "ai_calls": ai_calls["n"],
         "opener_mode": lib.mode_for_app(body.package_name),
+        "date_flow_stats": mgr.stats_summary(),
+    }
+
+
+@app.get("/api/dating/date-flow")
+async def get_date_flow(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Reply persona + date-invite settings and stats."""
+    mgr = _load_date_flow(auth)
+    return {"config": mgr.config.to_dict(), "stats": mgr.stats_summary()}
+
+
+@app.post("/api/dating/date-flow")
+async def update_date_flow(
+    body: Dict[str, Any], auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Update global / per-app reply persona + date-flow settings."""
+    from mobilerun.dating.date_flow import DateFlowConfig
+
+    mgr = _load_date_flow(auth)
+    cur = mgr.config.to_dict()
+    incoming = body.get("config") if isinstance(body.get("config"), dict) else body
+    for k, v in (incoming or {}).items():
+        if k in cur and v is not None:
+            cur[k] = v
+    if "per_app" in (incoming or {}) and incoming["per_app"] is not None:
+        cur["per_app"] = incoming["per_app"]
+    mgr.config = DateFlowConfig.from_dict(cur)
+    _save_date_flow(mgr, auth)
+    return {
+        "status": "success",
+        "config": mgr.config.to_dict(),
+        "stats": mgr.stats_summary(),
+    }
+
+
+@app.post("/api/dating/date-flow/evaluate")
+async def evaluate_date_flow(
+    body: DateFlowEvaluateRequest,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Evaluate invite timing / radius / handoff for a chat turn (testable)."""
+    from datetime import datetime as _dt
+    from datetime import timedelta
+
+    mgr = _load_date_flow(auth)
+    chat = mgr.get_chat(body.match_id, body.package_name)
+    if body.days_chatting is not None:
+        chat.chat_started_at = (
+            _dt.now() - timedelta(days=float(body.days_chatting))
+        ).isoformat()
+    if body.her_message_count is not None:
+        chat.her_message_count = max(0, int(body.her_message_count) - 1)
+    decision = mgr.evaluate_turn(
+        match_id=body.match_id,
+        package_name=body.package_name,
+        inbound=body.inbound,
+        distance_miles=body.distance_miles,
+        her_name=body.her_name,
+        is_opener=body.is_opener,
+    )
+    _save_date_flow(mgr, auth)
+    return {
+        **decision.to_dict(),
+        "stats": mgr.stats_summary(),
+        "invite_threshold_days": mgr.invite_threshold_for(
+            body.match_id, body.package_name
+        ),
     }
 
 

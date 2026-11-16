@@ -1,0 +1,305 @@
+"""Reply persona + date-flow: timing, radius, no stay-over, handoff stops AI."""
+
+from __future__ import annotations
+
+import random
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from mobilerun.dating.date_flow import (
+    DateFlowConfig,
+    DateFlowManager,
+    build_invite_text,
+    contains_stay_over_wording,
+    conversation_is_engaged,
+    is_beyond_radius,
+    pick_invite_day_threshold,
+    strip_stay_over_wording,
+)
+from mobilerun.dating.persona import PersonaManager
+
+
+def test_invite_day_threshold_in_window():
+    cfg = DateFlowConfig(invite_days_min=3, invite_days_max=7)
+    rng = random.Random(0)
+    vals = {pick_invite_day_threshold(cfg, rng=rng) for _ in range(40)}
+    assert min(vals) >= 3
+    assert max(vals) <= 7
+    assert vals  # non-empty
+
+
+def test_radius_logic_stoke_vs_near():
+    cfg = DateFlowConfig(home_location="Stoke-on-Trent", radius_miles=50)
+    assert is_beyond_radius(80, 50) is True
+    assert is_beyond_radius(20, 50) is False
+    assert is_beyond_radius(None, 50) is False
+
+    far = build_invite_text(cfg, distance_miles=80, her_name="Sam")
+    near = build_invite_text(cfg, distance_miles=10, her_name="Sam")
+    assert "Stoke-on-Trent" in far
+    assert "convenient" in near.lower()
+    assert "Stoke-on-Trent" not in near
+    assert not contains_stay_over_wording(far)
+    assert not contains_stay_over_wording(near)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "Want to stay over at my place?",
+        "Come to my house tonight",
+        "You can sleep over",
+        "Netflix and chill at my flat",
+        "Spend the night at my apartment",
+    ],
+)
+def test_no_stay_over_wording(bad):
+    assert contains_stay_over_wording(bad)
+    cleaned = strip_stay_over_wording(bad)
+    assert not contains_stay_over_wording(cleaned)
+    assert "public" in cleaned.lower() or "coffee" in cleaned.lower()
+    invite = build_invite_text(DateFlowConfig(), distance_miles=12)
+    assert not contains_stay_over_wording(invite)
+    assert "my place" not in invite.lower()
+    assert "stay over" not in invite.lower()
+
+
+def test_invite_only_after_days_and_engaged(tmp_path: Path):
+    mgr = DateFlowManager(
+        DateFlowConfig(invite_days_min=3, invite_days_max=3),
+        persist_path=tmp_path / "df.json",
+        rng=random.Random(1),
+    )
+    chat = mgr.get_chat("m1", "co.hinge.app")
+    # Too early + not engaged
+    chat.chat_started_at = datetime.now().isoformat()
+    d0 = mgr.evaluate_turn(
+        match_id="m1",
+        package_name="co.hinge.app",
+        inbound="hey",
+    )
+    # evaluate increments her_message_count; force low engagement
+    assert d0.should_invite is False
+
+    # Age the chat past threshold and add engagement
+    chat = mgr.get_chat("m1", "co.hinge.app")
+    chat.chat_started_at = (datetime.now() - timedelta(days=4)).isoformat()
+    chat.her_message_count = 3
+    d1 = mgr.evaluate_turn(
+        match_id="m1",
+        package_name="co.hinge.app",
+        inbound="haha yeah what about you?",
+    )
+    assert d1.should_invite is True
+    assert d1.invite_text
+    assert not contains_stay_over_wording(d1.invite_text)
+
+    # Second invite blocked (no repeated pushing)
+    d2 = mgr.evaluate_turn(
+        match_id="m1",
+        package_name="co.hinge.app",
+        inbound="nice",
+    )
+    assert d2.should_invite is False
+
+
+def test_handoff_stops_ai_on_agree(tmp_path: Path):
+    needs = []
+    mgr = DateFlowManager(
+        DateFlowConfig(invite_days_min=1, invite_days_max=1),
+        persist_path=tmp_path / "df.json",
+        rng=random.Random(0),
+        push_needs_you=lambda **kw: needs.append(kw) or "ny1",
+    )
+    chat = mgr.get_chat("m2", "com.bumble.app")
+    chat.chat_started_at = (datetime.now() - timedelta(days=5)).isoformat()
+    chat.her_message_count = 5
+    chat.invite_sent = True
+    chat.engaged = True
+
+    d = mgr.evaluate_turn(
+        match_id="m2",
+        package_name="com.bumble.app",
+        inbound="Yes Saturday 7pm at the café works for me!",
+        her_name="Alex",
+    )
+    assert d.stop_ai is True
+    assert d.needs_you is True
+    assert d.needs_you_kind == "date_handoff"
+    assert chat.ai_replies_stopped is True
+    assert chat.date_booked is True
+    assert needs
+
+    # PersonaManager must not produce AI reply
+    pm = PersonaManager(
+        date_flow=mgr,
+        ai_callable=lambda **k: (_ for _ in ()).throw(AssertionError("LLM called")),
+    )
+    out = pm.compose_reply(
+        match_id="m2",
+        package_name="com.bumble.app",
+        inbound_preview="looking forward to it",
+        profile_name="Alex",
+    )
+    assert out.get("stop_ai") is True
+    assert out.get("source") == "handoff"
+    assert out.get("text") == ""
+
+
+def test_handoff_on_discomfort(tmp_path: Path):
+    mgr = DateFlowManager(
+        DateFlowConfig(),
+        persist_path=tmp_path / "df.json",
+    )
+    d = mgr.evaluate_turn(
+        match_id="m3",
+        package_name="com.badoo.mobile",
+        inbound="This is weird, leave me alone",
+    )
+    assert d.stop_ai is True
+    assert d.needs_you_kind == "discomfort"
+
+
+def test_decline_invite_no_repeat(tmp_path: Path):
+    mgr = DateFlowManager(
+        DateFlowConfig(invite_days_min=1, invite_days_max=1),
+        persist_path=tmp_path / "df.json",
+        rng=random.Random(2),
+    )
+    chat = mgr.get_chat("m4", "co.hinge.app")
+    chat.chat_started_at = (datetime.now() - timedelta(days=5)).isoformat()
+    chat.her_message_count = 4
+    chat.invite_sent = True
+    d = mgr.evaluate_turn(
+        match_id="m4",
+        package_name="co.hinge.app",
+        inbound="No thanks, rather not",
+    )
+    assert d.stop_ai is True
+    assert chat.invite_declined is True
+
+
+def test_persona_injects_invite_without_llm(tmp_path: Path):
+    mgr = DateFlowManager(
+        DateFlowConfig(invite_days_min=3, invite_days_max=3, radius_miles=50),
+        persist_path=tmp_path / "df.json",
+        rng=random.Random(3),
+    )
+    chat = mgr.get_chat("m5", "co.hinge.app")
+    chat.chat_started_at = (datetime.now() - timedelta(days=5)).isoformat()
+    chat.her_message_count = 4
+
+    calls = []
+
+    def ai(**kwargs):
+        calls.append(kwargs)
+        return "should not run for invite"
+
+    pm = PersonaManager(date_flow=mgr, ai_callable=ai)
+    out = pm.compose_reply(
+        match_id="m5",
+        package_name="co.hinge.app",
+        inbound_preview="haha tell me more about that?",
+        profile_name="Riley",
+        distance_miles=90,
+    )
+    assert out["source"] == "date_invite"
+    assert "Stoke-on-Trent" in out["text"]
+    assert calls == []
+    assert not contains_stay_over_wording(out["text"])
+
+
+def test_conversation_engaged_heuristic():
+    assert conversation_is_engaged(her_message_count=1, last_inbound="hi") is False
+    assert (
+        conversation_is_engaged(
+            her_message_count=3, last_inbound="haha yeah what about you?"
+        )
+        is True
+    )
+
+
+def test_api_date_flow(monkeypatch, tmp_path):
+    import importlib
+
+    monkeypatch.setenv("ALLOW_UNAUTHENTICATED", "true")
+    monkeypatch.setenv("MOBILERUN_DATA", str(tmp_path))
+    monkeypatch.setenv("USE_AWS_STORAGE", "false")
+    monkeypatch.delenv("COGNITO_USER_POOL_ID", raising=False)
+
+    import backend.main as main_mod
+
+    importlib.reload(main_mod)
+    main_mod._date_flow_mgr = None
+    from fastapi.testclient import TestClient
+
+    c = TestClient(main_mod.app)
+
+    r = c.get("/api/dating/date-flow")
+    assert r.status_code == 200
+    cfg = r.json()["config"]
+    assert cfg["home_location"] == "Stoke-on-Trent"
+    assert cfg["radius_miles"] == 50
+    assert cfg["invite_days_min"] == 3
+
+    r2 = c.post(
+        "/api/dating/date-flow",
+        json={
+            "reply_persona_prompt": "Warm and curious.",
+            "invite_days_min": 4,
+            "invite_days_max": 6,
+            "radius_miles": 40,
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["config"]["invite_days_min"] == 4
+    assert "Warm" in r2.json()["config"]["reply_persona_prompt"]
+
+    # Far match past timing → invite mentions Stoke
+    ev = c.post(
+        "/api/dating/date-flow/evaluate",
+        json={
+            "match_id": "api1",
+            "package_name": "co.hinge.app",
+            "inbound": "haha sounds interesting, what about you?",
+            "distance_miles": 100,
+            "her_name": "Jordan",
+            "days_chatting": 10,
+            "her_message_count": 5,
+        },
+    )
+    assert ev.status_code == 200, ev.text
+    body = ev.json()
+    assert body["should_invite"] is True
+    assert "Stoke-on-Trent" in body["invite_text"]
+    assert not contains_stay_over_wording(body["invite_text"])
+
+    # Agree → handoff
+    ev2 = c.post(
+        "/api/dating/date-flow/evaluate",
+        json={
+            "match_id": "api1",
+            "package_name": "co.hinge.app",
+            "inbound": "Yes Friday 6pm at the café works!",
+            "her_name": "Jordan",
+        },
+    )
+    assert ev2.json()["stop_ai"] is True
+    assert ev2.json()["needs_you"] is True
+
+    # Compose reply must stop AI
+    comp = c.post(
+        "/api/dating/compose",
+        json={
+            "match_id": "api1",
+            "package_name": "co.hinge.app",
+            "profile_name": "Jordan",
+            "is_opener": False,
+            "inbound_preview": "see you then",
+        },
+    )
+    assert comp.status_code == 200
+    assert comp.json().get("stop_ai") is True
+    assert comp.json().get("source") == "handoff"
