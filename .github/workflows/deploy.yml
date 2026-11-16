@@ -89,12 +89,16 @@ jobs:
           rm -rf /tmp/lambda-asset
           mkdir -p /tmp/lambda-asset
           python3 -m pip install -r backend/requirements.txt -t /tmp/lambda-asset
-          cp backend/*.py /tmp/lambda-asset/
-          # Include dating package for imports used by API
-          mkdir -p /tmp/lambda-asset/mobilerun/dating
-          cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/ || true
+          # Package layout: /var/task/backend/*.py + /var/task/mobilerun/...
+          mkdir -p /tmp/lambda-asset/backend /tmp/lambda-asset/mobilerun/dating
+          cp backend/*.py /tmp/lambda-asset/backend/
+          printf '' > /tmp/lambda-asset/backend/__init__.py
           printf '' > /tmp/lambda-asset/mobilerun/__init__.py
-          ls /tmp/lambda-asset | head
+          cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/
+          printf '' > /tmp/lambda-asset/mobilerun/dating/__init__.py
+          # Verify imports
+          PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; print('imports ok', handler, w, s)"
+          ls /tmp/lambda-asset/backend | head
 
       - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)
         working-directory: infra

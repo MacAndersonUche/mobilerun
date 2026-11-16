@@ -238,9 +238,10 @@ export class MobilerunStack extends cdk.Stack {
     const code = this.lambdaCode();
 
     // HTTP Lambda (REST via HTTP API)
+    // Handlers live under the backend/ package in the asset zip
     const httpFn = new lambda.Function(this, 'HttpFunction', {
       runtime: lambda.Runtime.PYTHON_3_11,
-      handler: 'main.handler',
+      handler: 'backend.main.handler',
       code,
       timeout: cdk.Duration.seconds(29), // HTTP API max ~30s
       memorySize: 512,
@@ -251,7 +252,7 @@ export class MobilerunStack extends cdk.Stack {
     // WebSocket Lambda ($connect / $disconnect / $default)
     const wsFn = new lambda.Function(this, 'WebSocketFunction', {
       runtime: lambda.Runtime.PYTHON_3_11,
-      handler: 'ws_handler.handler',
+      handler: 'backend.ws_handler.handler',
       code,
       timeout: cdk.Duration.seconds(29),
       memorySize: 256,
@@ -262,7 +263,7 @@ export class MobilerunStack extends cdk.Stack {
     // Step worker — one dating/agent step per invocation (no 15-min long loop)
     const stepFn = new lambda.Function(this, 'StepWorkerFunction', {
       runtime: lambda.Runtime.PYTHON_3_11,
-      handler: 'step_worker.handler',
+      handler: 'backend.step_worker.handler',
       code,
       timeout: cdk.Duration.minutes(2),
       memorySize: 512,

@@ -15,12 +15,20 @@ from typing import Any, Dict
 
 import boto3
 
-from storage import (
-    delete_connection,
-    delete_pairing_token,
-    get_pairing_token,
-    save_connection,
-)
+try:
+    from storage import (
+        delete_connection,
+        delete_pairing_token,
+        get_pairing_token,
+        save_connection,
+    )
+except ImportError:  # Lambda package layout: backend.*
+    from backend.storage import (  # type: ignore
+        delete_connection,
+        delete_pairing_token,
+        get_pairing_token,
+        save_connection,
+    )
 
 logger = logging.getLogger("mobilerun.ws")
 logger.setLevel(logging.INFO)

@@ -20,7 +20,15 @@ import time
 from decimal import Decimal
 from typing import Any, Dict
 
-from storage import get_device_connections, get_job, list_due_jobs, put_job
+try:
+    from storage import get_device_connections, get_job, list_due_jobs, put_job
+except ImportError:
+    from backend.storage import (  # type: ignore
+        get_device_connections,
+        get_job,
+        list_due_jobs,
+        put_job,
+    )
 
 logger = logging.getLogger("mobilerun.step")
 logger.setLevel(logging.INFO)

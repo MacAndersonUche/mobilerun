@@ -9,6 +9,7 @@ MOCK_APK="${MOCK_APK:-}"
 A11Y="ai.mobilerun.selfhosted/ai.mobilerun.selfhosted.MobilerunAccessibilityService"
 
 mkdir -p "$ARTIFACTS_DIR"
+adb start-server || true
 adb wait-for-device
 adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
 sleep 3
