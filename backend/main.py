@@ -484,6 +484,158 @@ async def get_latest_release():
     }
 
 
+# === Dating Mode API ===
+
+dating_mode_state = {
+    "running": False,
+    "paused": False,
+    "current_app": None,
+    "review_queue": [],
+}
+
+
+class DatingModeConfig(BaseModel):
+    """Dating mode configuration."""
+
+    enabled_apps: List[str]
+    round_robin: bool = True
+    review_before_send: bool = True
+    persona_prompt: str = ""
+    active_hours_start: str = "09:00"
+    active_hours_end: str = "23:00"
+
+
+class DatingMessage(BaseModel):
+    """Dating message for review."""
+
+    id: str
+    app_name: str
+    package_name: str
+    conversation_id: str
+    profile_name: str
+    message: str
+    is_opener: bool = False
+
+
+@app.get("/api/dating/config")
+async def get_dating_config():
+    """Get dating mode configuration."""
+    from mobilerun.dating.config import DatingModeConfig as ConfigModel
+
+    config = ConfigModel()
+    return {
+        "apps": [
+            {
+                "name": app.name,
+                "package_name": app.package_name,
+                "enabled": app.enabled,
+                "daily_swipe_cap": app.daily_swipe_cap,
+                "daily_message_cap": app.daily_message_cap,
+            }
+            for app in config.apps
+        ],
+        "round_robin": config.round_robin,
+        "review_before_send": config.review_before_send,
+        "persona_prompt": config.persona_prompt,
+        "active_hours_start": config.active_hours_start.isoformat(),
+        "active_hours_end": config.active_hours_end.isoformat(),
+    }
+
+
+@app.post("/api/dating/config")
+async def update_dating_config(config: DatingModeConfig):
+    """Update dating mode configuration."""
+    return {"status": "success", "config": config.dict()}
+
+
+@app.get("/api/dating/stats")
+async def get_dating_stats():
+    """Get dating mode statistics."""
+    from mobilerun.dating.stats import DatingStats
+
+    stats_file = Path.home() / ".mobilerun" / "dating_stats.json"
+    stats = DatingStats.load(stats_file)
+
+    return stats.get_summary()
+
+
+@app.post("/api/dating/start")
+async def start_dating_mode():
+    """Start dating mode."""
+    if dating_mode_state["running"]:
+        raise HTTPException(status_code=400, detail="Dating mode already running")
+
+    dating_mode_state["running"] = True
+    dating_mode_state["paused"] = False
+
+    return {"status": "started", "state": dating_mode_state}
+
+
+@app.post("/api/dating/stop")
+async def stop_dating_mode():
+    """Stop dating mode."""
+    dating_mode_state["running"] = False
+    dating_mode_state["paused"] = False
+    dating_mode_state["current_app"] = None
+
+    return {"status": "stopped", "state": dating_mode_state}
+
+
+@app.post("/api/dating/pause")
+async def pause_dating_mode():
+    """Pause dating mode."""
+    if not dating_mode_state["running"]:
+        raise HTTPException(status_code=400, detail="Dating mode not running")
+
+    dating_mode_state["paused"] = not dating_mode_state["paused"]
+
+    return {
+        "status": "paused" if dating_mode_state["paused"] else "resumed",
+        "state": dating_mode_state,
+    }
+
+
+@app.get("/api/dating/status")
+async def get_dating_status():
+    """Get dating mode status."""
+    return dating_mode_state
+
+
+@app.get("/api/dating/review-queue")
+async def get_review_queue():
+    """Get messages in review queue."""
+    return {"messages": dating_mode_state["review_queue"]}
+
+
+@app.post("/api/dating/review/{message_id}/approve")
+async def approve_message(message_id: str):
+    """Approve a message for sending."""
+    dating_mode_state["review_queue"] = [
+        msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
+    ]
+    return {"status": "approved", "message_id": message_id}
+
+
+@app.post("/api/dating/review/{message_id}/reject")
+async def reject_message(message_id: str):
+    """Reject a message."""
+    dating_mode_state["review_queue"] = [
+        msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
+    ]
+    return {"status": "rejected", "message_id": message_id}
+
+
+@app.post("/api/dating/review/{message_id}/edit")
+async def edit_message(message_id: str, message: DatingMessage):
+    """Edit a message in review queue."""
+    for i, msg in enumerate(dating_mode_state["review_queue"]):
+        if msg["id"] == message_id:
+            dating_mode_state["review_queue"][i] = message.dict()
+            return {"status": "updated", "message": message.dict()}
+
+    raise HTTPException(status_code=404, detail="Message not found")
+
+
 # Lambda handler (for AWS deployment)
 try:
     from mangum import Mangum

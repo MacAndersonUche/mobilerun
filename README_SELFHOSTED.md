@@ -671,6 +671,61 @@ mobilerun serve --log-level debug
 2. Device connected (check UI Devices page)
 3. Backend URL correct (`--backend http://localhost:8000`)
 
+## 💕 Dating Mode
+
+**Automated dating app workflow** targeting Mac's phone "MobileRun" folder apps:
+
+**Supported Apps (default):**
+- ✅ Taimi, Bumble, Yubo, Badoo, BLK, Hily, Hinge
+- ⚙️ Facebook, Snapchat, Instagram (off by default)
+
+**Features:**
+- 📱 Swipe/like with per-app daily caps and rules
+- 💬 Read inboxes and reply in bulk with LLM (Mac's persona/tone)
+- ✉️ Send opening messages to new matches
+- 📊 Per-app stats: unread messages, matches, swipes, replies
+- 🤖 Human-like behavior: randomized delays, natural swipe curves with jitter, active hours schedule, session breaks
+- 🔄 Round-robin or single-app mode; start/stop/pause from UI or CLI
+
+**Usage:**
+
+```bash
+# From CLI
+mobilerun dating --start         # Start dating automation
+mobilerun dating --stop          # Stop
+mobilerun dating --status        # Check status
+mobilerun dating --stats         # View per-app statistics
+
+# From UI
+# Navigate to "Dating" page:
+# - Configure app list, daily caps, persona prompt
+# - Enable/disable review-before-send
+# - Set active hours schedule
+# - View live stats dashboard
+# - Review & approve/edit queued messages
+```
+
+**Configuration:**
+- Editable persona/style prompt in UI (default: Mac's confident, witty, casual tone)
+- Daily swipe/message caps per app (default: 50 swipes, 20 messages)
+- Active hours (default: 9 AM - 11 PM)
+- Session limits: max swipes per session (15), break timers (5-15 min)
+- Review mode: optional approval queue before sending messages
+
+**Stats Tracked:**
+- Daily/total swipes, likes, messages, replies per app
+- Unread message count, new matches
+- Session count, runtime minutes
+- Last active timestamp per app
+
+**Safety:**
+- Global daily caps (300 swipes, 100 messages total)
+- Human-like timing: Bézier curves, jitter, variable delays (800-3000ms swipes, 50-150ms typing)
+- Session breaks and active-hour enforcement
+- Review queue prevents unintended sends
+
+---
+
 ## 📊 Current Status
 
 **✅ Fully Implemented & Verified:**
@@ -678,17 +733,19 @@ mobilerun serve --log-level debug
 - Frontend UI (all pages functional)
 - Android app with Accessibility Service
 - WebSocket device driver
-- CLI commands (`serve`, `run`)
+- CLI commands (`serve`, `run`, `dating`)
 - QR code pairing flow
 - CI/CD (APK build, tests, linting)
 - Cross-platform scripts
 - Netlify deployment config
 - AWS CDK infrastructure
+- Dating Mode engine, scheduler, stats, API & CLI
 
 **⚠️ Requires Physical Device Testing:**
 - End-to-end task execution on real phone
 - Screenshot capture via MediaProjection API
 - Full agent loop with wireless device
+- Dating Mode live execution (app navigation, inbox reading, LLM replies)
 - Performance benchmarking
 
 **📝 Documentation:**
@@ -696,6 +753,7 @@ mobilerun serve --log-level debug
 - Usage: Complete
 - Troubleshooting: Complete
 - Architecture: Complete
+- Dating Mode: Complete
 
 ## 🤝 Contributing
 
