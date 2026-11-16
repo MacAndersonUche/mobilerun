@@ -270,7 +270,18 @@ async def device_websocket(websocket: WebSocket):
             return
 
         pairing_data = pairing_tokens[token]
+
+        # Check token expiration (10 minutes)
+        if datetime.now().timestamp() > pairing_data["expires_at"]:
+            await websocket.send_json({"error": "Token expired"})
+            await websocket.close()
+            del pairing_tokens[token]  # Clean up expired token
+            return
+
         device_id = data.get("device_id") or f"device_{secrets.token_hex(8)}"
+
+        # Consume token (one-time use)
+        del pairing_tokens[token]
 
         # Register device
         connected_devices[device_id] = {
@@ -518,7 +529,7 @@ class DatingMessage(BaseModel):
 
 
 @app.get("/api/dating/config")
-async def get_dating_config():
+async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode configuration."""
     from mobilerun.dating.config import DatingModeConfig as ConfigModel
 
@@ -543,13 +554,15 @@ async def get_dating_config():
 
 
 @app.post("/api/dating/config")
-async def update_dating_config(config: DatingModeConfig):
+async def update_dating_config(
+    config: DatingModeConfig, auth: Optional[dict] = Depends(optional_verify_token)
+):
     """Update dating mode configuration."""
     return {"status": "success", "config": config.dict()}
 
 
 @app.get("/api/dating/stats")
-async def get_dating_stats():
+async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode statistics."""
     from mobilerun.dating.stats import DatingStats
 
@@ -560,7 +573,7 @@ async def get_dating_stats():
 
 
 @app.post("/api/dating/start")
-async def start_dating_mode():
+async def start_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     """Start dating mode."""
     if dating_mode_state["running"]:
         raise HTTPException(status_code=400, detail="Dating mode already running")
@@ -572,7 +585,7 @@ async def start_dating_mode():
 
 
 @app.post("/api/dating/stop")
-async def stop_dating_mode():
+async def stop_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     """Stop dating mode."""
     dating_mode_state["running"] = False
     dating_mode_state["paused"] = False
@@ -582,7 +595,7 @@ async def stop_dating_mode():
 
 
 @app.post("/api/dating/pause")
-async def pause_dating_mode():
+async def pause_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     """Pause dating mode."""
     if not dating_mode_state["running"]:
         raise HTTPException(status_code=400, detail="Dating mode not running")
@@ -596,19 +609,21 @@ async def pause_dating_mode():
 
 
 @app.get("/api/dating/status")
-async def get_dating_status():
+async def get_dating_status(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode status."""
     return dating_mode_state
 
 
 @app.get("/api/dating/review-queue")
-async def get_review_queue():
+async def get_review_queue(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get messages in review queue."""
     return {"messages": dating_mode_state["review_queue"]}
 
 
 @app.post("/api/dating/review/{message_id}/approve")
-async def approve_message(message_id: str):
+async def approve_message(
+    message_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
     """Approve a message for sending."""
     dating_mode_state["review_queue"] = [
         msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
@@ -617,7 +632,9 @@ async def approve_message(message_id: str):
 
 
 @app.post("/api/dating/review/{message_id}/reject")
-async def reject_message(message_id: str):
+async def reject_message(
+    message_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
     """Reject a message."""
     dating_mode_state["review_queue"] = [
         msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
@@ -626,7 +643,11 @@ async def reject_message(message_id: str):
 
 
 @app.post("/api/dating/review/{message_id}/edit")
-async def edit_message(message_id: str, message: DatingMessage):
+async def edit_message(
+    message_id: str,
+    message: DatingMessage,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
     """Edit a message in review queue."""
     for i, msg in enumerate(dating_mode_state["review_queue"]):
         if msg["id"] == message_id:
