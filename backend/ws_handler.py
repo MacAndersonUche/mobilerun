@@ -4,6 +4,7 @@ API Gateway WebSocket Lambda handler.
 Routes: $connect, $disconnect, $default
 Phone and UI clients share the same WS API.
 Frames are relayed device→UI without storage (cost/bandwidth).
+Device register/heartbeat persist ownership into SETTINGS so HTTP list_devices works.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional
 
 import boto3
 
@@ -23,6 +24,7 @@ try:
         get_device_connections,
         get_pairing_token,
         save_connection,
+        save_device_session,
     )
 except ImportError:  # Lambda package layout: backend.*
     from backend.storage import (  # type: ignore
@@ -31,6 +33,15 @@ except ImportError:  # Lambda package layout: backend.*
         get_device_connections,
         get_pairing_token,
         save_connection,
+        save_device_session,
+    )
+
+try:
+    from device_registry import resolve_owner_from_message, upsert_from_ws
+except ImportError:
+    from backend.device_registry import (  # type: ignore
+        resolve_owner_from_message,
+        upsert_from_ws,
     )
 
 logger = logging.getLogger("mobilerun.ws")
@@ -88,6 +99,95 @@ def _send_to_device(client, device_id: str, payload: Dict[str, Any]) -> int:
     return sent
 
 
+def _persist_device(
+    body: Dict[str, Any], connection_id: str
+) -> tuple[str, Optional[str]]:
+    """Auth register/heartbeat and return (device_id, owner). Never log tokens."""
+    owner, device_id, sess = resolve_owner_from_message(body)
+    # Heartbeats often omit session_token — recover owner from prior $connect/register
+    if not owner:
+        try:
+            from storage import get_connection
+        except ImportError:
+            from backend.storage import get_connection  # type: ignore
+
+        prev = get_connection(connection_id) or {}
+        owner = (prev.get("owner") or "").lower() or None
+        if not device_id and prev.get("device_id"):
+            device_id = str(prev["device_id"])
+        if not sess.get("name") and prev.get("name"):
+            sess = {**sess, "name": prev.get("name"), "platform": prev.get("platform")}
+    # Pairing owner hint (one-shot token path)
+    if not owner and body.get("owner_hint"):
+        owner = str(body["owner_hint"]).lower()
+
+    device_id = device_id or str(body.get("device_id") or f"pending_{connection_id}")
+    role = body.get("role") or "device"
+    name = body.get("device_name") or body.get("name") or sess.get("name") or device_id
+    platform = body.get("platform") or sess.get("platform") or "android"
+    route = body.get("route")
+    latency = body.get("latency_ms")
+    perms = body.get("permissions")
+    if not isinstance(perms, dict):
+        # permission_status messages flatten fields onto the body
+        if (
+            body.get("type") in ("permissions", "permission_status")
+            or body.get("accessibility") is not None
+        ):
+            perms = {
+                k: body.get(k)
+                for k in (
+                    "accessibility",
+                    "notifications",
+                    "media_projection",
+                    "battery_unrestricted",
+                    "overlay",
+                    "query_packages",
+                    "foreground_service",
+                )
+                if k in body
+            } or None
+        else:
+            perms = None
+
+    save_connection(
+        connection_id,
+        str(device_id),
+        {
+            "platform": platform,
+            "last_type": body.get("type") or body.get("action"),
+            "role": role,
+            "authed": bool(owner) or role == "ui",
+            "owner": owner or "",
+            "name": name,
+        },
+    )
+    if owner and role != "ui":
+        upsert_from_ws(
+            owner=owner,
+            device_id=str(device_id),
+            name=str(name),
+            platform=str(platform),
+            route=str(route) if route else None,
+            latency_ms=float(latency) if latency is not None else None,
+            permissions=perms,
+            connection_type=str(route or "websocket"),
+        )
+        # Keep session durable if phone sent one
+        st = body.get("session_token")
+        if st:
+            save_device_session(
+                str(st),
+                {
+                    "device_id": device_id,
+                    "name": name,
+                    "platform": platform,
+                    "owner": owner,
+                },
+            )
+    return str(device_id), owner
+
+
 def handler(event: Dict[str, Any], context: Any):
     route = event.get("requestContext", {}).get("routeKey")
     connection_id = event.get("requestContext", {}).get("connectionId")
@@ -98,6 +198,7 @@ def handler(event: Dict[str, Any], context: Any):
         token = qs.get("token")
         role = qs.get("role", "device")
         device_id = qs.get("device_id") or f"pending_{connection_id}"
+        owner = None
         if token:
             pairing = get_pairing_token(token)
             if pairing:
@@ -105,6 +206,7 @@ def handler(event: Dict[str, Any], context: Any):
                 if time.time() > expires:
                     return _ok({"error": "token expired"}, 401)
                 device_id = pairing.get("device_id") or device_id
+                owner = pairing.get("owner")
                 delete_pairing_token(token)
         save_connection(
             connection_id,
@@ -113,6 +215,7 @@ def handler(event: Dict[str, Any], context: Any):
                 "platform": qs.get("platform", "android"),
                 "authed": bool(token) or role == "ui",
                 "role": role,
+                "owner": owner or "",
             },
         )
         return _ok()
@@ -141,7 +244,34 @@ def handler(event: Dict[str, Any], context: Any):
                 delete_pairing_token(token)
                 return _ok({"error": "token expired"}, 401)
             device_id = device_id or pairing.get("device_name") or connection_id
+            if pairing.get("owner"):
+                body = {**body, "owner_hint": pairing.get("owner")}
             delete_pairing_token(token)
+
+    # Register / heartbeat / permissions / connection_status → persist ownership
+    if msg_type in (
+        "register",
+        "heartbeat",
+        "connection_status",
+        "permissions",
+        "permission_status",
+    ):
+        device_id, owner = _persist_device(body, connection_id)
+        try:
+            _post(
+                client,
+                connection_id,
+                {
+                    "status": "connected",
+                    "device_id": device_id,
+                    "type": "ack" if msg_type == "register" else "heartbeat_ack",
+                    "echo_type": msg_type,
+                    "owner": owner,
+                },
+            )
+        except Exception as e:
+            logger.warning("post_to_connection failed: %s", e)
+        return _ok({"received": True, "device_id": device_id})
 
     if connection_id and device_id:
         save_connection(
@@ -162,7 +292,7 @@ def handler(event: Dict[str, Any], context: Any):
             str(device_id),
             {"role": "ui", "platform": "web", "authed": True},
         )
-        _send_to_device(
+        sent = _send_to_device(
             client,
             str(device_id),
             {
@@ -176,12 +306,16 @@ def handler(event: Dict[str, Any], context: Any):
         _post(
             client,
             connection_id,
-            {"type": "subscribed", "device_id": device_id, "state": {}},
+            {
+                "type": "subscribed",
+                "device_id": device_id,
+                "state": {},
+                "device_sockets": sent,
+            },
         )
-        return _ok({"subscribed": True})
+        return _ok({"subscribed": True, "device_sockets": sent})
 
     if msg_type == "unsubscribe" and device_id:
-        # If no other UI clients, stop stream
         uis = [
             c for c in get_device_connections(str(device_id)) if c.get("role") == "ui"
         ]
@@ -211,7 +345,6 @@ def handler(event: Dict[str, Any], context: Any):
                 "data": data,
             },
         )
-        # No ack body with frame (bandwidth); silent ok
         return _ok({"relayed": relayed})
 
     if msg_type == "agent_event" and device_id:
@@ -246,7 +379,7 @@ def handler(event: Dict[str, Any], context: Any):
         _send_to_device(client, str(device_id), body)
         return _ok({"sent": True})
 
-    # Default ack for pairing / heartbeat / register
+    # Default ack
     try:
         _post(
             client,

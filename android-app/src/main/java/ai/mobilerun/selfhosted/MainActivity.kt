@@ -55,6 +55,12 @@ class MainActivity : ComponentActivity() {
         backendClient.onStreamPermissionNeeded = { fps, quality ->
             pendingFps = fps
             pendingQuality = quality
+            // If capture is already running (consent persisted for this process), reuse it
+            if (ScreenCaptureService.isStreaming()) {
+                ScreenCaptureService.updateParams(fps, quality)
+                backendClient.reportPermissions(true)
+                return@onStreamPermissionNeeded
+            }
             val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             projectionLauncher.launch(mgr.createScreenCaptureIntent())
         }

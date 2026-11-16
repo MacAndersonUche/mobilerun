@@ -190,3 +190,134 @@ def get_user_setting(user_id: str, name: str) -> Optional[Dict[str, Any]]:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+# --- Device registry + sessions (survive Lambda cold starts) ---
+
+
+def _settings_put(key: str, data: Dict[str, Any]) -> bool:
+    import json
+    from pathlib import Path
+
+    table = _table("SETTINGS_TABLE")
+    if table is not None:
+        table.put_item(
+            Item={
+                "key": key,
+                "data": data,
+                "updated_at": int(time.time()),
+                "ttl": int(time.time()) + int(data.get("_ttl_seconds") or 86400 * 30),
+            }
+        )
+        return True
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    root.mkdir(parents=True, exist_ok=True)
+    safe = key.replace(":", "_").replace("/", "_")
+    (root / f"{safe}.json").write_text(json.dumps({"key": key, "data": data}, indent=2))
+    return True
+
+
+def _settings_get(key: str) -> Optional[Dict[str, Any]]:
+    import json
+    from pathlib import Path
+
+    table = _table("SETTINGS_TABLE")
+    if table is not None:
+        resp = table.get_item(Key={"key": key})
+        item = resp.get("Item")
+        if not item:
+            return None
+        data = item.get("data")
+        return data if isinstance(data, dict) else None
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    safe = key.replace(":", "_").replace("/", "_")
+    path = root / f"{safe}.json"
+    if not path.exists():
+        return None
+    try:
+        blob = json.loads(path.read_text())
+        data = blob.get("data") if isinstance(blob, dict) else None
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def save_device_session(session_token: str, meta: Dict[str, Any]) -> None:
+    payload = dict(meta or {})
+    payload["_ttl_seconds"] = 86400 * 90
+    _settings_put(f"session:{session_token}", payload)
+
+
+def get_device_session(session_token: str) -> Optional[Dict[str, Any]]:
+    return _settings_get(f"session:{session_token}")
+
+
+def upsert_owned_device(owner: str, device: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist a device under the owning account (email/sub)."""
+    owner_key = (owner or "").strip().lower()
+    if not owner_key:
+        raise ValueError("owner required")
+    device_id = str(device.get("device_id") or "").strip()
+    if not device_id:
+        raise ValueError("device_id required")
+    blob = get_user_setting(owner_key, "devices") or {"devices": {}}
+    devices = dict(blob.get("devices") or {})
+    prev = dict(devices.get(device_id) or {})
+    prev.update({k: v for k, v in device.items() if v is not None})
+    prev["device_id"] = device_id
+    prev["owner"] = owner_key
+    prev["updated_at"] = int(time.time())
+    devices[device_id] = prev
+    save_user_setting(owner_key, "devices", {"devices": devices})
+    return prev
+
+
+def list_owned_devices(owner: str) -> List[Dict[str, Any]]:
+    owner_key = (owner or "").strip().lower()
+    if not owner_key:
+        return []
+    blob = get_user_setting(owner_key, "devices") or {}
+    return list((blob.get("devices") or {}).values())
+
+
+def device_is_ws_connected(device_id: str) -> bool:
+    """True if Dynamo connections table has a non-UI socket for this device."""
+    try:
+        conns = get_device_connections(device_id)
+    except Exception:
+        return False
+    for c in conns:
+        if c.get("role") != "ui":
+            return True
+    return False
+
+
+# --- Device-code linking (survive Lambda cold starts) ---
+
+
+def save_device_link_code(key: str, meta: Dict[str, Any]) -> None:
+    payload = dict(meta or {})
+    payload["_ttl_seconds"] = max(
+        60,
+        int(float(payload.get("expires_at") or time.time() + 600) - time.time()) + 60,
+    )
+    _settings_put(f"devicelink:{key}", payload)
+
+
+def get_device_link_code(key: str) -> Optional[Dict[str, Any]]:
+    return _settings_get(f"devicelink:{key}")
+
+
+def delete_device_link_code(key: str) -> None:
+    table = _table("SETTINGS_TABLE")
+    if table is not None:
+        table.delete_item(Key={"key": f"devicelink:{key}"})
+        return
+    import json
+    from pathlib import Path
+
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    safe = f"devicelink_{key}".replace(":", "_").replace("/", "_")
+    path = root / f"{safe}.json"
+    if path.exists():
+        path.unlink()

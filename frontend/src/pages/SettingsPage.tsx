@@ -66,7 +66,13 @@ export default function SettingsPage() {
     setSaving(true);
 
     try {
-      setBackendUrl(backendUrl);
+      try {
+        setBackendUrl(backendUrl);
+      } catch (err) {
+        alert(err instanceof Error ? err.message : String(err));
+        setSaving(false);
+        return;
+      }
       if (authToken) {
         setAuthToken(authToken);
       }

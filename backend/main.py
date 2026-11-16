@@ -226,11 +226,52 @@ class DeviceCodePoll(BaseModel):
     device_code: str
 
 
+def _load_device_link(key: str) -> Optional[Dict[str, Any]]:
+    meta = device_link_codes.get(key)
+    if meta:
+        return meta
+    try:
+        from storage import get_device_link_code
+    except ImportError:
+        from backend.storage import get_device_link_code  # type: ignore
+
+    meta = get_device_link_code(key)
+    if meta:
+        device_link_codes[key] = meta
+        # Keep both indexes warm in this instance
+        uc = meta.get("user_code")
+        dc = meta.get("device_code")
+        if uc:
+            device_link_codes[str(uc).upper()] = meta
+        if dc:
+            device_link_codes[f"dc:{dc}"] = meta
+    return meta
+
+
+def _persist_device_link(meta: Dict[str, Any]) -> None:
+    user_code = str(meta.get("user_code") or "").upper()
+    device_code = meta.get("device_code")
+    if user_code:
+        device_link_codes[user_code] = meta
+    if device_code:
+        device_link_codes[f"dc:{device_code}"] = meta
+    try:
+        from storage import save_device_link_code
+    except ImportError:
+        from backend.storage import save_device_link_code  # type: ignore
+
+    if user_code:
+        save_device_link_code(user_code, meta)
+    if device_code:
+        save_device_link_code(f"dc:{device_code}", meta)
+
+
 @app.post("/api/auth/device/code")
 async def start_device_code(body: DeviceCodeStart):
     """
     APK starts a device-code link. Shows user_code; user approves on the web UI
     while signed in with the same Cognito (or local) account.
+    Persisted to SETTINGS so Lambda cold starts / multi-instance share the code.
     """
     user_code = secrets.token_hex(3).upper()  # 6 hex chars
     device_code = secrets.token_urlsafe(24)
@@ -247,9 +288,7 @@ async def start_device_code(body: DeviceCodeStart):
         "session_token": None,
         "device_id": None,
     }
-    device_link_codes[user_code] = meta
-    # Index by device_code too
-    device_link_codes[f"dc:{device_code}"] = meta
+    _persist_device_link(meta)
     ui = os.environ.get("FRONTEND_URL") or os.environ.get("NETLIFY_URL") or ""
     return {
         "user_code": user_code,
@@ -269,8 +308,8 @@ async def approve_device_code(
     if auth is None:
         raise HTTPException(status_code=401, detail="Sign in to approve a device")
     code = body.user_code.strip().upper()
-    meta = device_link_codes.get(code)
-    if not meta or datetime.now().timestamp() > meta["expires_at"]:
+    meta = _load_device_link(code)
+    if not meta or datetime.now().timestamp() > float(meta.get("expires_at") or 0):
         raise HTTPException(status_code=400, detail="Invalid or expired code")
     owner = _owner_key(auth)
     device_id = f"device_{secrets.token_hex(8)}"
@@ -283,31 +322,44 @@ async def approve_device_code(
     meta["access_token"] = access
     meta["session_token"] = session_token
     meta["device_id"] = device_id
-    device_sessions[session_token] = {
+    _persist_device_link(meta)
+    sess_meta = {
         "device_id": device_id,
         "name": meta["device_name"],
         "platform": meta["platform"],
         "owner": owner,
         "created_at": datetime.now().isoformat(),
     }
-    # Pre-register device row so it appears in UI immediately
-    connected_devices[device_id] = {
+    device_sessions[session_token] = sess_meta
+    try:
+        from storage import save_device_session, upsert_owned_device
+    except ImportError:
+        from backend.storage import save_device_session, upsert_owned_device  # type: ignore
+
+    save_device_session(session_token, sess_meta)
+    # Pre-register device row so it appears in UI immediately (memory + Dynamo)
+    row = {
         "device_id": device_id,
         "name": meta["device_name"],
         "platform": meta["platform"],
         "connected": False,
         "connection_type": "pending",
         "owner": owner,
-        "last_seen": datetime.now(),
+        "last_seen": datetime.now().isoformat(),
     }
+    connected_devices[device_id] = {**row, "last_seen": datetime.now()}
+    try:
+        upsert_owned_device(owner or "", row)
+    except Exception:
+        logger.exception("persist owned device failed")
     return {"ok": True, "device_id": device_id, "owner": owner}
 
 
 @app.post("/api/auth/device/token")
 async def poll_device_code(body: DeviceCodePoll):
     """APK polls until the user approves the code on the web UI."""
-    meta = device_link_codes.get(f"dc:{body.device_code}")
-    if not meta or datetime.now().timestamp() > meta["expires_at"]:
+    meta = _load_device_link(f"dc:{body.device_code}")
+    if not meta or datetime.now().timestamp() > float(meta.get("expires_at") or 0):
         raise HTTPException(status_code=400, detail="expired_token")
     if not meta.get("approved"):
         raise HTTPException(status_code=400, detail="authorization_pending")
@@ -339,19 +391,32 @@ async def root():
 
 @app.get("/api/devices", response_model=List[DeviceInfo])
 async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
-    """List devices owned by the signed-in account."""
+    """List devices owned by the signed-in account (memory + Dynamo registry)."""
+    try:
+        from device_registry import merge_device_lists
+    except ImportError:
+        from backend.device_registry import merge_device_lists  # type: ignore
+
+    owner = _owner_key(auth)
+    merged = merge_device_lists(connected_devices, owner)
     devices = []
-    for device_id, device_data in connected_devices.items():
+    for device_data in merged:
         if not _device_visible_to(device_data, auth):
             continue
+        last_seen = device_data.get("last_seen") or datetime.now()
+        if isinstance(last_seen, str):
+            try:
+                last_seen = datetime.fromisoformat(last_seen.replace("Z", ""))
+            except ValueError:
+                last_seen = datetime.now()
         devices.append(
             DeviceInfo(
-                device_id=device_id,
-                name=device_data["name"],
-                platform=device_data["platform"],
-                connected=device_data.get("connected", False),
-                connection_type=device_data.get("connection_type", "unknown"),
-                last_seen=device_data.get("last_seen", datetime.now()),
+                device_id=str(device_data.get("device_id")),
+                name=str(device_data.get("name") or device_data.get("device_id")),
+                platform=str(device_data.get("platform") or "android"),
+                connected=bool(device_data.get("connected", False)),
+                connection_type=str(device_data.get("connection_type") or "unknown"),
+                last_seen=last_seen,
                 route=device_data.get("route"),
                 latency_ms=device_data.get("latency_ms"),
                 permissions=device_data.get("permissions"),
@@ -360,9 +425,7 @@ async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
     return devices
 
 
-@app.get("/api/health")
-async def health():
-    """Public health check (no auth)."""
+def _health_payload() -> dict:
     return {
         "status": "ok",
         "service": "mobilerun",
@@ -372,6 +435,13 @@ async def health():
         "mdns_service": "_mobilerun._tcp",
         "usb_required": False,
     }
+
+
+@app.get("/health")
+@app.get("/api/health")
+async def health():
+    """Public health check (no auth). `/health` alias for probes / APK."""
+    return _health_payload()
 
 
 def _lan_endpoints(port: Optional[int] = None) -> tuple[str, str]:
@@ -529,6 +599,25 @@ async def device_websocket(websocket: WebSocket):
                 "platform": sess.get("platform", "android"),
                 "owner": owner,
             }
+        elif session_token:
+            try:
+                from storage import get_device_session
+            except ImportError:
+                from backend.storage import get_device_session  # type: ignore
+
+            sess = get_device_session(str(session_token)) or {}
+            if not sess.get("device_id"):
+                await websocket.send_json({"error": "Invalid or expired session"})
+                await websocket.close()
+                return
+            device_id = sess["device_id"]
+            owner = sess.get("owner")
+            device_sessions[session_token] = sess
+            pairing_data = {
+                "device_name": sess.get("name") or device_id,
+                "platform": sess.get("platform", "android"),
+                "owner": owner,
+            }
         elif auth_token:
             # Same Cognito/local account as the web UI → auto-register device
             try:
@@ -577,6 +666,7 @@ async def device_websocket(websocket: WebSocket):
             return
 
         conn_type = route if route in ("lan", "cloud", "discovered") else "wifi"
+        owner_final = owner or pairing_data.get("owner")
         connected_devices[device_id] = {
             "device_id": device_id,
             "name": pairing_data["device_name"],
@@ -585,9 +675,41 @@ async def device_websocket(websocket: WebSocket):
             "connection_type": conn_type,
             "route": conn_type,
             "latency_ms": latency_ms,
-            "owner": owner or pairing_data.get("owner"),
+            "owner": owner_final,
             "last_seen": datetime.now(),
         }
+        if owner_final:
+            try:
+                from storage import save_device_session, upsert_owned_device
+            except ImportError:
+                from backend.storage import (  # type: ignore
+                    save_device_session,
+                    upsert_owned_device,
+                )
+
+            if session_token:
+                save_device_session(
+                    session_token,
+                    {
+                        "device_id": device_id,
+                        "name": pairing_data["device_name"],
+                        "platform": pairing_data["platform"],
+                        "owner": owner_final,
+                    },
+                )
+            upsert_owned_device(
+                owner_final,
+                {
+                    "device_id": device_id,
+                    "name": pairing_data["device_name"],
+                    "platform": pairing_data["platform"],
+                    "connected": True,
+                    "connection_type": conn_type,
+                    "route": conn_type,
+                    "latency_ms": latency_ms,
+                    "last_seen": datetime.now().isoformat(),
+                },
+            )
 
         device_websockets[device_id] = websocket
 
@@ -654,6 +776,28 @@ async def handle_device_message(device_id: str, message: dict):
                     "server_ts": int(datetime.now().timestamp() * 1000),
                 }
             )
+        # Refresh durable registry so HTTP list_devices stays accurate
+        dev = connected_devices.get(device_id) or {}
+        owner = (dev.get("owner") or "").lower()
+        if owner:
+            try:
+                from storage import upsert_owned_device
+            except ImportError:
+                from backend.storage import upsert_owned_device  # type: ignore
+
+            upsert_owned_device(
+                owner,
+                {
+                    "device_id": device_id,
+                    "name": dev.get("name") or device_id,
+                    "platform": dev.get("platform") or "android",
+                    "connected": True,
+                    "connection_type": dev.get("connection_type") or "websocket",
+                    "route": dev.get("route"),
+                    "latency_ms": dev.get("latency_ms"),
+                    "last_seen": datetime.now().isoformat(),
+                },
+            )
 
     elif msg_type == "connection_status":
         # Phone reports active route + measured RTT
@@ -692,6 +836,24 @@ async def handle_device_message(device_id: str, message: dict):
         perms = {k: message.get(k) for k in keys if k in message}
         dev = connected_devices.setdefault(device_id, {})
         dev["permissions"] = perms
+        owner = (dev.get("owner") or "").lower()
+        if owner:
+            try:
+                from storage import upsert_owned_device
+            except ImportError:
+                from backend.storage import upsert_owned_device  # type: ignore
+
+            upsert_owned_device(
+                owner,
+                {
+                    "device_id": device_id,
+                    "name": dev.get("name") or device_id,
+                    "platform": dev.get("platform") or "android",
+                    "connected": True,
+                    "permissions": perms,
+                    "last_seen": datetime.now().isoformat(),
+                },
+            )
         await broadcast_to_ui(
             device_id,
             {
