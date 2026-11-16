@@ -370,7 +370,13 @@ class BackendClient(private val context: Context) {
         prefs().getString("last_pair_error", null)?.takeIf { it.isNotBlank() }
 
     private fun claimPairingToken(token: String) {
-        val httpBase = (cloudHttp ?: DEFAULT_CLOUD_HTTP).trimEnd('/')
+        // Prefer LAN/emulator gateway when present — deep links may also include a
+        // unreachable "cloud" probe host that must not be used for the HTTP claim.
+        val bases = linkedSetOf<String>()
+        lanHttp?.trimEnd('/')?.takeIf { it.isNotBlank() }?.let { bases.add(it) }
+        cloudHttp?.trimEnd('/')?.takeIf { it.isNotBlank() }?.let { bases.add(it) }
+        bases.add(DEFAULT_CLOUD_HTTP.trimEnd('/'))
+
         val body = gson.toJson(
             mapOf(
                 "token" to token,
@@ -379,60 +385,75 @@ class BackendClient(private val context: Context) {
                 "device_id" to deviceId,
             ),
         ).toRequestBody("application/json".toMediaType())
-        val req = Request.Builder()
-            .url("$httpBase/api/auth/pair/claim")
-            .post(body)
-            .build()
-        client.newCall(req).execute().use { resp ->
-            val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) {
-                val detail = try {
+
+        var lastErr: Exception? = null
+        var map: Map<String, Any?>? = null
+        var usedBase: String? = null
+        for (httpBase in bases) {
+            try {
+                val req = Request.Builder()
+                    .url("$httpBase/api/auth/pair/claim")
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val detail = try {
+                            @Suppress("UNCHECKED_CAST")
+                            (gson.fromJson(text, Map::class.java) as? Map<String, Any?>)?.get("detail")
+                        } catch (_: Exception) {
+                            null
+                        }
+                        error("Claim failed (${resp.code}): ${detail ?: text.ifBlank { resp.message }}")
+                    }
                     @Suppress("UNCHECKED_CAST")
-                    (gson.fromJson(text, Map::class.java) as? Map<String, Any?>)?.get("detail")
-                } catch (_: Exception) {
-                    null
+                    map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
+                    usedBase = httpBase
                 }
-                error("Claim failed (${resp.code}): ${detail ?: text.ifBlank { resp.message }}")
+                break
+            } catch (e: Exception) {
+                Log.w(tag, "claim via $httpBase failed: ${e.message}")
+                lastErr = e
             }
-            @Suppress("UNCHECKED_CAST")
-            val map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
-            val session = map["session_token"] as? String ?: error("no session_token in claim response")
-            val did = map["device_id"] as? String
-            val owner = map["owner"] as? String
-            // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
-            // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
-            val localOverride =
-                httpBase.contains("10.0.2.2") ||
-                    httpBase.contains("127.0.0.1") ||
-                    httpBase.contains("localhost")
-            if (!localOverride) {
-                (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
-                (map["cloud_ws"] as? String)?.let { cloudWs = it }
-            }
-            (map["access_token"] as? String)?.let { authToken = it }
-            // Always fall back to baked prod endpoints after claim
-            if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
-            if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
-            sessionToken = session
-            pairingToken = null
-            if (did != null) deviceId = did
-            secure().edit()
-                .putString("session_token", session)
-                .putString("device_id", deviceId)
-                .putString("owner", owner)
-                .apply()
-            prefs().edit()
-                .remove("pairing_token")
-                .remove("session_token")
-                .putString("cloud_http", cloudHttp)
-                .putString("cloud_ws", cloudWs)
-                .putString("user_email", owner)
-                .putString("last_pair_error", "")
-                .apply()
-            _pairedFlow.value = true
-            _pairErrorFlow.value = null
-            _statusFlow.value = "Paired · connecting…"
         }
+        val claimed = map ?: throw (lastErr ?: IllegalStateException("Claim failed"))
+        val httpBase = usedBase ?: DEFAULT_CLOUD_HTTP
+        val session = claimed["session_token"] as? String ?: error("no session_token in claim response")
+        val did = claimed["device_id"] as? String
+        val owner = claimed["owner"] as? String
+        // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
+        // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
+        val localOverride =
+            httpBase.contains("10.0.2.2") ||
+                httpBase.contains("127.0.0.1") ||
+                httpBase.contains("localhost")
+        if (!localOverride) {
+            (claimed["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
+            (claimed["cloud_ws"] as? String)?.let { cloudWs = it }
+        }
+        (claimed["access_token"] as? String)?.let { authToken = it }
+        // Always fall back to baked prod endpoints after claim
+        if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
+        if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
+        sessionToken = session
+        pairingToken = null
+        if (did != null) deviceId = did
+        secure().edit()
+            .putString("session_token", session)
+            .putString("device_id", deviceId)
+            .putString("owner", owner)
+            .apply()
+        prefs().edit()
+            .remove("pairing_token")
+            .remove("session_token")
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .putString("user_email", owner)
+            .putString("last_pair_error", "")
+            .apply()
+        _pairedFlow.value = true
+        _pairErrorFlow.value = null
+        _statusFlow.value = "Paired · connecting…"
     }
 
     /** Paste / type the short pairing code from Devices (no QR). */

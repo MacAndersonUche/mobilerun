@@ -71,17 +71,16 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 WS_HINT=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('websocket_url') or d.get('backend_url') or '')")
-# Dual endpoints: LAN via emulator gateway 10.0.2.2; unreachable TEST-NET cloud to exercise fallback preference for LAN
+# Claim + WS must hit the emulator gateway. Do not put an unreachable TEST-NET host
+# in cloud= — claim uses HTTP and would fail before LAN fallback.
 LAN_WS="ws://10.0.2.2:8000/api/devices/connect"
-# shellcheck disable=SC2034
-CLOUD_WS_BAD="ws://203.0.113.1:9/api/devices/connect"
-# Short code path (c=) — same as typing the code in-app; cloud baked into APK for prod
-PAIR_URL="mobilerun://pair?c=${TOKEN_PAIR}&backend=${BACKEND_URL}&ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}&cloud=http://203.0.113.1:9&cloud_ws=${CLOUD_WS_BAD}"
+# Short code path (c=) — same as typing the code in-app
+PAIR_URL="mobilerun://pair?c=${TOKEN_PAIR}&cloud=${BACKEND_URL}&cloud_ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}"
 
 echo "== Deep-link pair with short code c= (LAN preferred) =="
 adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || \
   adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL"
-sleep 5
+sleep 8
 adb exec-out screencap -p > "$ARTIFACTS_DIR/01_paired.png" || true
 echo "pair_ws=$WS_HINT" >> "$ARTIFACTS_DIR/apk_paths.txt"
 echo "pair_url_dual=1" >> "$ARTIFACTS_DIR/apk_paths.txt"
@@ -136,9 +135,9 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
   -d '{"device_name":"emulator","platform":"android"}')
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair_recreate.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
-PAIR_URL="mobilerun://pair?c=${TOKEN_PAIR}&backend=${BACKEND_URL}&ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}&cloud=http://203.0.113.1:9&cloud_ws=${CLOUD_WS_BAD}"
+PAIR_URL="mobilerun://pair?c=${TOKEN_PAIR}&cloud=${BACKEND_URL}&cloud_ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}"
 adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || true
-sleep 5
+sleep 8
 
 echo "== Fallback probe (unit-level already covers select_endpoint; health usb_required=false) =="
 curl -sfS "$HOST_BACKEND/api/health" | tee "$ARTIFACTS_DIR/health_connectivity.json"
