@@ -920,6 +920,80 @@ class BackendClient(private val context: Context) {
     }
 
     /**
+     * Launch a UI activity from the FGS/WebSocket path. Android 14+ blocks
+     * background starts (BAL); try move-to-front, ActivityOptions BAL allow,
+     * then a full-screen notification trampoline.
+     */
+    private fun startUiActivity(intent: Intent): Boolean {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.appTasks.firstOrNull()?.moveToFront()
+        } catch (_: Exception) {
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                val opts = android.app.ActivityOptions.makeBasic()
+                opts.setPendingIntentCreatorBackgroundActivityStartMode(
+                    android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                )
+                val pi = android.app.PendingIntent.getActivity(
+                    context,
+                    (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+                    intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_IMMUTABLE,
+                )
+                pi.send(context, 0, null, null, null, null, opts.toBundle())
+                return true
+            }
+            context.startActivity(intent)
+            return true
+        } catch (e: Exception) {
+            Log.w(tag, "startUiActivity direct failed: ${e.message}")
+        }
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            try {
+                val pi = android.app.PendingIntent.getActivity(
+                    context,
+                    9101,
+                    intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_IMMUTABLE,
+                )
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                    as android.app.NotificationManager
+                val channelId = "task_launch"
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    nm.createNotificationChannel(
+                        android.app.NotificationChannel(
+                            channelId,
+                            "Task launch",
+                            android.app.NotificationManager.IMPORTANCE_HIGH,
+                        ),
+                    )
+                }
+                val notif = android.app.Notification.Builder(context, channelId)
+                    .setContentTitle("MobileRun")
+                    .setContentText("Opening requested screen…")
+                    .setSmallIcon(R.drawable.ic_stat_mobilerun)
+                    .setContentIntent(pi)
+                    .setFullScreenIntent(pi, true)
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(9101, notif)
+                true
+            } catch (e2: Exception) {
+                Log.e(tag, "startUiActivity failed", e2)
+                false
+            }
+        }
+    }
+
+    /**
      * Execute common chat instructions without a full LLM agent loop.
      * "open settings" / "settings" → system Settings; other open X → try launch.
      */
@@ -930,21 +1004,18 @@ class BackendClient(private val context: Context) {
             when {
                 lower.contains("setting") -> {
                     val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                    "OK · opened Settings"
+                    if (startUiActivity(intent)) "OK · opened Settings"
+                    else "Failed: could not launch Settings (background activity blocked)"
                 }
                 lower.contains("wifi") || lower.contains("wi-fi") -> {
                     val intent = Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                    "OK · opened Wi‑Fi settings"
+                    if (startUiActivity(intent)) "OK · opened Wi‑Fi settings"
+                    else "Failed: could not launch Wi‑Fi settings"
                 }
                 lower.contains("bluetooth") -> {
                     val intent = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                    "OK · opened Bluetooth settings"
+                    if (startUiActivity(intent)) "OK · opened Bluetooth settings"
+                    else "Failed: could not launch Bluetooth settings"
                 }
                 lower.startsWith("open ") || lower.startsWith("launch ") -> {
                     val app = text.substringAfter(' ').trim()
@@ -952,23 +1023,21 @@ class BackendClient(private val context: Context) {
                     val launch = pm.getLaunchIntentForPackage(app)
                         ?: pm.getLaunchIntentForPackage(guessPackage(app))
                     if (launch != null) {
-                        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(launch)
-                        "OK · launched $app"
+                        if (startUiActivity(launch)) "OK · launched $app"
+                        else "Failed: could not launch $app"
                     } else {
-                        // Fall back to Settings if we can't resolve the app name
                         val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(intent)
-                        "OK · could not resolve '$app'; opened Settings instead"
+                        if (startUiActivity(intent)) {
+                            "OK · could not resolve '$app'; opened Settings instead"
+                        } else {
+                            "Failed: could not resolve '$app'"
+                        }
                     }
                 }
                 else -> {
-                    // Default: open Settings so chat always does something visible
                     val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                    "OK · opened Settings for: $text"
+                    if (startUiActivity(intent)) "OK · opened Settings for: $text"
+                    else "Failed: could not launch Settings for: $text"
                 }
             }
         } catch (e: Exception) {
