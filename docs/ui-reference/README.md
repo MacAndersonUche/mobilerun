@@ -1,28 +1,46 @@
-# UI reference captures (public sources)
+# UI reference
 
-Playwright captures used to align MobileRun by MacAI with the public Mobilerun look **without logging into the cloud dashboard**.
+## Mac phone recording (primary)
 
-## Sources
+Mac recorded **cloud.mobilerun.ai** on his phone (frames every ~2s). Those frames are the design source of truth for the hosted UI rebuild (dark mode, Home / Agent chat / Settings sheet / Account sheet).
+
+**Status:** Binary frames were not present in this agent run’s attachments. Design was rebuilt from the written screen spec in the task. When frames are available, drop them here as:
+
+```
+docs/ui-reference/mac-phone/frame-000.png
+docs/ui-reference/mac-phone/frame-002.png
+…
+```
+
+See `MAC-PHONE-SPEC.md` for the extracted layout contract used for the rebuild.
+
+## Public captures (secondary)
+
+Earlier Playwright captures of public surfaces (no cloud dashboard login):
 
 | File prefix | Source |
 |-------------|--------|
 | `desktop/mobile-01-mobilerun-ai-*` | https://mobilerun.ai |
 | `desktop/mobile-02-cloud-mobilerun*` | https://cloud.mobilerun.ai (login / landing) |
-| `desktop-docs-*` | https://docs.mobilerun.ai (Mintlify docs) |
+| `desktop-docs-*` | https://docs.mobilerun.ai |
 | `desktop/mobile-08-github-*` | https://github.com/droidrun/mobilerun |
-| `asset-09`…`asset-21`, stream/phone assets | Docs examples (live phone stream, phone wall, drive-the-phone) |
-| `asset-og-*` | Marketing OG image |
+| `asset-*` | Docs examples (live stream, phone wall) |
 
-## Design notes extracted
+## Design tokens (hosted UI)
 
-- **Cloud login:** split layout — form column + dark graphic panel; stacked OAuth buttons; Inter-like sans.
-- **Marketing site:** spacious SaaS layout, blue accent CTAs, phone-in-hero compositions.
-- **Embed / live stream docs:** dark panel tokens (`#0e0e11` bg, `#212124` muted/border), device panel `aspect-ratio: 9 / 19.5`, `border-radius: 24px`.
-- **Phone wall examples:** labeled device frames in a grid with Android soft-keys under the screen.
+| Token | Value |
+|-------|-------|
+| Background | `#0A0A0A` / `#121212` |
+| Cards | `#1C1C1E` / `#27272A` |
+| Borders | `#3F3F46` |
+| Accent | `#3B82F6` |
+| Success | text `#4ADE80` on `#14532D` |
+| Muted text | `#A1A1AA` |
+| Font | Inter |
 
-Our product UI keeps **MobileRun by MacAI** naming/logo (no copied brand marks) and a blue accent instead of third-party orange.
+Product name / logo: **MobileRun by MacAI** (no third-party marks).
 
-## Re-capture
+## Re-capture public sources
 
 ```bash
 cd frontend && node scripts/capture-ui-reference.mjs

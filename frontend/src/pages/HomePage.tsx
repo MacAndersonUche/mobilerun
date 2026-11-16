@@ -4,6 +4,8 @@ import axios from 'axios';
 import { Plus, Smartphone, Activity, ChevronRight } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
 import { Badge, Card, EmptyState, LoadingBlock } from '../components/ui';
+import { PixelAvatar } from '../components/PixelAvatar';
+import AccountSheet from '../components/AccountSheet';
 import { useAuth } from '../auth';
 
 type Device = {
@@ -15,9 +17,9 @@ type Device = {
 };
 
 const AGENTS = [
-  { id: 'mac', name: 'Mac', color: 'bg-blue-500', focus: 'Everyday phone tasks' },
-  { id: 'dating', name: 'Dating', color: 'bg-rose-500', focus: 'Openers & replies' },
-  { id: 'social', name: 'Social', color: 'bg-emerald-500', focus: 'Chats & unread' },
+  { id: 'mac', name: 'Mac', color: '#3B82F6', focus: 'Everyday phone tasks', to: '/chat' },
+  { id: 'dating', name: 'Dating', color: '#F43F5E', focus: 'Openers & replies', to: '/dating' },
+  { id: 'social', name: 'Social', color: '#22C55E', focus: 'Chats & unread', to: '/social' },
 ];
 
 export default function HomePage() {
@@ -25,6 +27,7 @@ export default function HomePage() {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [badge, setBadge] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -41,7 +44,7 @@ export default function HomePage() {
         setDevices(d.data || []);
         setBadge(ny.data.badge || 0);
         setError(null);
-      } catch (e: unknown) {
+      } catch {
         if (!alive) return;
         setDevices([]);
         setError('Could not reach backend');
@@ -57,6 +60,9 @@ export default function HomePage() {
 
   const online = devices?.filter((d) => d.connected).length ?? 0;
   const offline = (devices?.length ?? 0) - online;
+  const started =
+    1 + (devices && devices.length > 0 ? 1 : 0) + (badge > 0 || offline === 0 ? 0 : 0);
+  const progress = Math.min(3, Math.max(1, started + (devices?.length ? 1 : 0)));
 
   return (
     <div className="mr-page space-y-5">
@@ -65,18 +71,20 @@ export default function HomePage() {
           <h1 className="text-2xl font-semibold tracking-tight">Your agents</h1>
           <p className="text-sm text-mute">MobileRun by MacAI</p>
         </div>
-        <Link
-          to="/account"
+        <button
+          type="button"
+          onClick={() => setAccountOpen(true)}
           className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-sm font-semibold"
           title="Account"
+          aria-label="Open account"
         >
           {(email || 'M').slice(0, 1).toUpperCase()}
-        </Link>
+        </button>
       </header>
 
-      <Card className="border-accent/30 bg-accent/10">
+      <Card className="border-accent/40 bg-accent/10">
         <p className="text-sm font-medium text-blue-200">
-          Getting started · {Math.min(3, (devices?.length ? 1 : 0) + 1 + (badge ? 1 : 0))} of 3
+          Getting started · {progress} of 3
         </p>
         <p className="mt-1 text-sm text-mute">
           Sign in, link a phone, then ask an agent to run a task.
@@ -84,24 +92,14 @@ export default function HomePage() {
       </Card>
 
       <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-mute">Agents</h2>
-          <Link to="/chat" className="text-xs text-accent">
-            Open chat
-          </Link>
-        </div>
         <div className="no-scrollbar flex gap-3 overflow-x-auto pb-1">
           {AGENTS.map((a) => (
             <Link
               key={a.id}
-              to={a.id === 'mac' ? '/chat' : a.id === 'dating' ? '/dating' : '/social'}
-              className="min-w-[112px] rounded-2xl border border-line bg-surface p-3"
+              to={a.to}
+              className="min-w-[104px] rounded-2xl border border-line bg-surface p-3"
             >
-              <div
-                className={`mb-3 flex h-12 w-12 items-center justify-center rounded-2xl ${a.color} text-lg font-bold`}
-              >
-                {a.name.slice(0, 1)}
-              </div>
+              <PixelAvatar name={a.name} color={a.color} size={48} className="mb-3" />
               <p className="text-sm font-medium">{a.name}</p>
               <p className="text-[11px] text-mute">{a.focus}</p>
             </Link>
@@ -112,15 +110,13 @@ export default function HomePage() {
             title="New agent soon"
           >
             <Plus className="mx-auto mb-3" />
-            <span className="text-sm">New</span>
+            <span className="text-sm">+ New</span>
           </button>
         </div>
       </section>
 
       <Card>
-        <p className="text-xs font-medium uppercase tracking-wide text-mute">
-          Coming up
-        </p>
+        <p className="text-xs font-medium uppercase tracking-wide text-mute">Coming up</p>
         <p className="mt-2 text-sm text-mute">
           No routine planned yet — Build one with{' '}
           <Link to="/chat" className="text-accent">
@@ -136,7 +132,7 @@ export default function HomePage() {
             <Smartphone size={18} className="text-accent" />
             <h2 className="font-medium">Devices</h2>
           </div>
-          <Link to="/devices" className="text-sm text-accent flex items-center gap-1">
+          <Link to="/devices" className="flex items-center gap-1 text-sm text-accent">
             Manage <ChevronRight size={14} />
           </Link>
         </div>
@@ -155,17 +151,17 @@ export default function HomePage() {
             }
           />
         ) : (
-          <div className="flex gap-4 text-sm">
+          <div className="flex flex-wrap gap-4 text-sm">
             <div>
-              <span className="mr-1 inline-block h-2 w-2 rounded-full bg-ok" />
+              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-ok" />
               Online {online}
             </div>
             <div>
-              <span className="mr-1 inline-block h-2 w-2 rounded-full bg-mute" />
+              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-mute" />
               Busy 0
             </div>
             <div>
-              <span className="mr-1 inline-block h-2 w-2 rounded-full bg-red-500" />
+              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-red-500" />
               Offline {offline}
             </div>
           </div>
@@ -178,14 +174,27 @@ export default function HomePage() {
             <Activity className="text-amber-300" size={20} />
             <div>
               <p className="font-medium">Needs you</p>
-              <p className="text-sm text-mute">
-                Escalated Social & Dating drafts
-              </p>
+              <p className="text-sm text-mute">Escalated Social & Dating drafts</p>
             </div>
           </div>
           {badge > 0 ? <Badge tone="warn">{badge}</Badge> : <Badge>0</Badge>}
         </Card>
       </Link>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Link to="/dating" className="block">
+          <Card>
+            <p className="font-medium">Dating</p>
+            <p className="text-sm text-mute">Openers, replies, dry-run stats</p>
+          </Card>
+        </Link>
+        <Link to="/social" className="block">
+          <Card>
+            <p className="font-medium">Social</p>
+            <p className="text-sm text-mute">Unread chats & signatures</p>
+          </Card>
+        </Link>
+      </div>
 
       <Link to="/history" className="block">
         <Card>
@@ -193,6 +202,8 @@ export default function HomePage() {
           <p className="text-sm text-mute">Every run and chat of your agents</p>
         </Card>
       </Link>
+
+      <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
     </div>
   );
 }

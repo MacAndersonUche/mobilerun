@@ -1,4 +1,11 @@
-import { BrowserRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom';
+import {
+  BrowserRouter,
+  NavLink,
+  Route,
+  Routes,
+  Navigate,
+  useLocation,
+} from 'react-router-dom';
 import {
   Home,
   MessageSquare,
@@ -28,6 +35,7 @@ import { cn } from './lib/cn';
 
 function Shell() {
   const { token } = useAuth();
+  const location = useLocation();
   // Cognito redirect must render without a token
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/auth/')) {
     return (
@@ -38,6 +46,8 @@ function Shell() {
     );
   }
   if (!token) return <LoginPage />;
+
+  const hideMobileNav = location.pathname === '/chat';
 
   const tabs = [
     { to: '/', icon: Home, label: 'Home', end: true },
@@ -104,27 +114,29 @@ function Shell() {
         </main>
       </div>
 
-      {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden">
-        <div className="mx-auto flex max-w-content justify-around px-1 pb-[env(safe-area-inset-bottom)]">
-          {tabs.map((t) => (
-            <NavLink
-              key={t.to}
-              to={t.to}
-              end={'end' in t ? t.end : false}
-              className={({ isActive }) =>
-                cn(
-                  'flex flex-1 flex-col items-center gap-1 py-2 text-[10px]',
-                  isActive ? 'text-accent' : 'text-mute'
-                )
-              }
-            >
-              <t.icon size={20} />
-              {t.label}
-            </NavLink>
-          ))}
-        </div>
-      </nav>
+      {/* Mobile bottom nav — hidden on chat so sticky Ask input owns the bottom */}
+      {!hideMobileNav && (
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden">
+          <div className="mx-auto flex max-w-content justify-around px-1 pb-[env(safe-area-inset-bottom)]">
+            {tabs.map((t) => (
+              <NavLink
+                key={t.to}
+                to={t.to}
+                end={'end' in t ? t.end : false}
+                className={({ isActive }) =>
+                  cn(
+                    'flex flex-1 flex-col items-center gap-1 py-2 text-[10px]',
+                    isActive ? 'text-accent' : 'text-mute'
+                  )
+                }
+              >
+                <t.icon size={20} />
+                {t.label}
+              </NavLink>
+            ))}
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

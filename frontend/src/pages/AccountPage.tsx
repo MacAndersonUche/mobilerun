@@ -52,10 +52,14 @@ export default function AccountPage() {
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-lg font-semibold">
           {(email || 'M').slice(0, 1).toUpperCase()}
         </div>
-        <div>
-          <p className="font-medium">{email || 'Mac'}</p>
-          <p className="text-xs text-mute">Owner · self-hosted</p>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">{email || 'Mac'}</p>
+          <p className="text-xs text-mute">
+            <span className="mr-badge bg-accent/20 text-accent">Owner</span>
+            <span className="ml-2 break-all">{email || 'self-hosted'}</span>
+          </p>
         </div>
+        <span className="text-sm text-mute">Edit</span>
       </Card>
 
       <Card className="space-y-3">
@@ -88,7 +92,7 @@ export default function AccountPage() {
         </Button>
       </Card>
 
-      <Card className="divide-y divide-line text-sm">
+      <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">
         {[
           ['Workspace', '/settings'],
           ['Notifications', '/needs-you'],
@@ -97,13 +101,13 @@ export default function AccountPage() {
           ['Usage', '/history'],
           ['Connect AI tools', '/settings'],
         ].map(([label, to]) => (
-          <Link key={label} to={to} className="block py-3 hover:text-accent">
+          <Link key={label} to={to} className="block px-4 py-3 hover:text-accent">
             {label}
           </Link>
         ))}
       </Card>
 
-      <Card className="text-sm text-mute space-y-2">
+      <Card className="space-y-2 text-sm text-mute">
         <p>Backend: {getBackendUrl()}</p>
         <p>Help & support · macandersonuche@yahoo.com</p>
         <button
@@ -119,7 +123,7 @@ export default function AccountPage() {
         Log out
       </Button>
 
-      <p className="text-center text-xs text-mute pt-2">MobileRun by MacAI</p>
+      <p className="pt-2 text-center text-xs text-mute">MobileRun by MacAI</p>
     </div>
   );
 }

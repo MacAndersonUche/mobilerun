@@ -88,18 +88,15 @@ export default function NeedsYouPage() {
       </div>
 
       {items.length === 0 ? (
-        <div className="bg-surface border border-line rounded-lg p-8 text-center text-mute">
+        <div className="mr-card text-center text-mute">
           Nothing waiting. Auto-send handles the rest (with humanizer pacing).
         </div>
       ) : (
         items.map((item) => (
-          <div
-            key={item.id}
-            className="bg-surface border border-line rounded-lg p-4 space-y-3"
-          >
+          <div key={item.id} className="mr-card space-y-3">
             <div className="flex justify-between text-sm">
               <span>
-                <span className="uppercase text-xs tracking-wide text-amber-300 mr-2">
+                <span className="mr-2 text-xs uppercase tracking-wide text-amber-300">
                   {item.source}
                 </span>
                 {item.app_name} · {item.contact_name}
@@ -112,7 +109,7 @@ export default function NeedsYouPage() {
               Reasons: {(item.reasons || []).join(', ') || '—'}
             </p>
             {item.inbound_preview && (
-              <p className="text-sm text-mute bg-canvas-elev rounded p-2">
+              <p className="rounded-xl bg-canvas-elev p-2 text-sm text-mute">
                 Inbound: {item.inbound_preview}
               </p>
             )}
@@ -120,9 +117,9 @@ export default function NeedsYouPage() {
               id={`ny-${item.id}`}
               defaultValue={item.draft_reply}
               rows={3}
-              className="w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
+              className="mr-input"
             />
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 disabled={loading}
                 onClick={() => {
@@ -131,7 +128,7 @@ export default function NeedsYouPage() {
                   ) as HTMLTextAreaElement;
                   act(item.id, 'approve', el?.value);
                 }}
-                className="px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded text-sm"
+                className="mr-btn bg-ok-bg text-ok"
               >
                 Approve & send
               </button>
@@ -143,14 +140,14 @@ export default function NeedsYouPage() {
                   ) as HTMLTextAreaElement;
                   act(item.id, 'edit', el?.value);
                 }}
-                className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded text-sm"
+                className="mr-btn-primary"
               >
                 Save edit
               </button>
               <button
                 disabled={loading}
                 onClick={() => act(item.id, 'reject')}
-                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+                className="mr-btn-ghost"
               >
                 Reject
               </button>
