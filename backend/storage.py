@@ -135,3 +135,58 @@ def list_due_jobs(
         Limit=limit,
     )
     return resp.get("Items", [])
+
+
+# --- Per-user settings (dating openers library, etc.) ---
+
+
+def save_user_setting(user_id: str, name: str, data: Dict[str, Any]) -> bool:
+    """Persist a per-user blob to SETTINGS_TABLE (or local JSON when offline)."""
+    import json
+    from pathlib import Path
+
+    key = f"user:{user_id}:{name}"
+    table = _table("SETTINGS_TABLE")
+    if table is not None:
+        table.put_item(
+            Item={
+                "key": key,
+                "user_id": user_id,
+                "name": name,
+                "data": data,
+                "updated_at": int(time.time()),
+            }
+        )
+        return True
+
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{name}_{user_id.replace('/', '_')}.json"
+    path.write_text(json.dumps({"key": key, "data": data}, indent=2))
+    return True
+
+
+def get_user_setting(user_id: str, name: str) -> Optional[Dict[str, Any]]:
+    import json
+    from pathlib import Path
+
+    key = f"user:{user_id}:{name}"
+    table = _table("SETTINGS_TABLE")
+    if table is not None:
+        resp = table.get_item(Key={"key": key})
+        item = resp.get("Item")
+        if not item:
+            return None
+        data = item.get("data")
+        return data if isinstance(data, dict) else None
+
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    path = root / f"{name}_{user_id.replace('/', '_')}.json"
+    if not path.exists():
+        return None
+    try:
+        blob = json.loads(path.read_text())
+        data = blob.get("data") if isinstance(blob, dict) else None
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None

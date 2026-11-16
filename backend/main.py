@@ -11,6 +11,7 @@ import logging
 import os
 import secrets
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -938,6 +939,9 @@ dating_mode_state = {
     "current_app": None,
     "review_queue": [],
     "speed_preset": "balanced",
+    "opener_mode": "templates",  # templates | ai
+    "opener_library": None,
+    "date_flow": None,
 }
 
 social_mode_state = {
@@ -952,6 +956,27 @@ social_mode_state = {
 agent_mode_state = {
     "mode": "normal",  # normal | dating | social
     "speed_preset": "balanced",  # fast | balanced | careful
+}
+
+# Humanizer knobs (UI-configurable; presets remain Fast/Balanced/Careful)
+humanizer_state: Dict[str, Any] = {
+    "enabled": True,
+    "delay_sigma": 0.55,
+    "tap_jitter_frac": 0.22,
+    "swipe_curve_amp": 0.14,
+    "session_start_jitter_min": 0,
+    "session_start_jitter_max": 45,
+    "session_end_early_min": 0,
+    "session_end_early_max": 35,
+    "shuffle_apps": True,
+    "shuffle_conversations": True,
+    "micro_pause_chance": None,
+    "long_break_chance": None,
+    "idle_chance": None,
+    "action_delay_min": None,
+    "action_delay_max": None,
+    "message_gap_min": None,
+    "message_gap_max": None,
 }
 
 _needs_you_queue = None
@@ -983,11 +1008,107 @@ class DatingModeConfig(BaseModel):
     max_total_messages_per_day: int = 500
     sequential_messaging: bool = True
     speed_preset: str = "balanced"
+    opener_mode: str = "templates"  # templates | ai
+    # package_name -> templates | ai
+    per_app_opener_mode: Optional[Dict[str, str]] = None
+    # Reply persona + date flow
+    reply_persona_prompt: Optional[str] = None
+    invite_days_min: Optional[int] = None
+    invite_days_max: Optional[int] = None
+    home_location: Optional[str] = None
+    radius_miles: Optional[float] = None
+    invite_enabled: Optional[bool] = None
+    handoff_enabled: Optional[bool] = None
+    calendar_on_handoff: Optional[bool] = None
+    contact_ask_enabled: Optional[bool] = None
+    contact_ask_text: Optional[str] = None
+    contact_ask_order: Optional[List[str]] = None
+    contact_ask_whatsapp_text: Optional[str] = None
+    contact_ask_snapchat_text: Optional[str] = None
+    date_flow_per_app: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+class DateFlowEvaluateRequest(BaseModel):
+    match_id: str
+    package_name: str = ""
+    inbound: str = ""
+    distance_miles: Optional[float] = None
+    her_name: str = ""
+    is_opener: bool = False
+    # Test hook: force chat age in days
+    days_chatting: Optional[float] = None
+    her_message_count: Optional[int] = None
+
+
+class ComposeOpenerRequest(BaseModel):
+    match_id: str
+    package_name: str = ""
+    profile_name: str = ""
+    is_opener: bool = True
+    inbound_preview: str = ""
+    local_hour: Optional[int] = None
+    local_minute: Optional[int] = None
+    distance_miles: Optional[float] = None
+
+
+class OpenerTemplateBody(BaseModel):
+    id: Optional[str] = None
+    text: str
+    bucket: str = "any"
+    enabled: bool = True
+
+
+class OpenerLibraryUpdate(BaseModel):
+    opener_mode: Optional[str] = None
+    per_app_mode: Optional[Dict[str, str]] = None
+    templates: Optional[List[OpenerTemplateBody]] = None
 
 
 class AgentModeConfig(BaseModel):
     mode: str = "normal"
     speed_preset: str = "balanced"
+
+
+class HumanizerUpdate(BaseModel):
+    """Optional overrides on top of Fast/Balanced/Careful presets."""
+
+    enabled: Optional[bool] = None
+    delay_sigma: Optional[float] = None
+    tap_jitter_frac: Optional[float] = None
+    swipe_curve_amp: Optional[float] = None
+    session_start_jitter_min: Optional[int] = None
+    session_start_jitter_max: Optional[int] = None
+    session_end_early_min: Optional[int] = None
+    session_end_early_max: Optional[int] = None
+    shuffle_apps: Optional[bool] = None
+    shuffle_conversations: Optional[bool] = None
+    micro_pause_chance: Optional[float] = None
+    long_break_chance: Optional[float] = None
+    idle_chance: Optional[float] = None
+    action_delay_min: Optional[float] = None
+    action_delay_max: Optional[float] = None
+    message_gap_min: Optional[float] = None
+    message_gap_max: Optional[float] = None
+    speed_preset: Optional[str] = None
+
+
+class SafetyCheckRequest(BaseModel):
+    """Screen observation for safety auto-pause (never solves prompts)."""
+
+    app: str = "MockDating"
+    screen_text: str = ""
+    ui_texts: Optional[List[str]] = None
+    ui_tree: Optional[Any] = None
+    llm_check: bool = False
+    force_pause_all: bool = False
+    screenshot_b64: Optional[str] = None
+    package_name: str = ""
+    device_id: Optional[str] = None
+
+
+class SafetyResumeRequest(BaseModel):
+    app: Optional[str] = None
+    resume_all: bool = False
 
 
 class DatingMessage(BaseModel):
@@ -1068,12 +1189,361 @@ async def set_agent_mode(
     return {"status": "ok", **agent_mode_state}
 
 
+@app.get("/api/humanizer")
+async def get_humanizer(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Humanizer preset bands + UI-configurable knobs."""
+    from mobilerun.agent.humanizer import HumanizerConfig, describe_presets
+
+    preset = agent_mode_state.get("speed_preset", "balanced")
+    mode = agent_mode_state.get("mode", "normal")
+    cfg = HumanizerConfig.from_dict(
+        {
+            **{k: v for k, v in humanizer_state.items() if v is not None},
+            "preset": preset,
+            "mode": mode,
+        }
+    )
+    return {
+        "speed_preset": preset,
+        "mode": mode,
+        "config": cfg.to_public_dict(),
+        "overrides": humanizer_state,
+        "presets": describe_presets(),
+        "notes": (
+            "Delays are log-normal / non-uniform with micro-pauses and rare long "
+            "breaks. No fixed intervals. Caps and Fast/Balanced/Careful still apply."
+        ),
+    }
+
+
+@app.post("/api/humanizer")
+async def update_humanizer(
+    body: HumanizerUpdate, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Update humanizer knobs from UI. Presets stay Fast/Balanced/Careful."""
+    data = body.dict(exclude_unset=True)
+    speed = data.pop("speed_preset", None)
+    if speed is not None:
+        speed = str(speed).lower()
+        if speed not in ("fast", "balanced", "careful"):
+            raise HTTPException(
+                status_code=400, detail="speed_preset must be fast|balanced|careful"
+            )
+        agent_mode_state["speed_preset"] = speed
+        dating_mode_state["speed_preset"] = speed
+        social_mode_state["speed_preset"] = speed
+    for k, v in data.items():
+        if k in humanizer_state:
+            humanizer_state[k] = v
+    return await get_humanizer(auth=auth)
+
+
+@app.get("/api/safety/status")
+async def safety_status(auth: Optional[dict] = Depends(optional_verify_token)):
+    from mobilerun.safety.runtime import get_safety_state
+
+    st = get_safety_state().to_dict()
+    st["dating_paused"] = bool(dating_mode_state.get("paused"))
+    st["social_paused"] = bool(social_mode_state.get("paused"))
+    return st
+
+
+@app.post("/api/safety/check")
+async def safety_check(
+    body: SafetyCheckRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """
+    Detect on-screen warnings / verification / captcha / rate-limit / ban /
+    login / selfie prompts. On hit: pause that app's loop (optionally all),
+    screenshot, Needs-you + notify. Never solves or bypasses the prompt.
+    """
+    from mobilerun.safety.runtime import check_screen_and_pause
+
+    q = get_needs_you_queue()
+    screenshot_bytes = None
+    if body.screenshot_b64:
+        try:
+            screenshot_bytes = base64.b64decode(body.screenshot_b64)
+        except Exception:
+            screenshot_bytes = None
+
+    def _pause_dating() -> None:
+        dating_mode_state["paused"] = True
+        dating_mode_state["running"] = dating_mode_state.get("running", False)
+        dating_mode_state["current_app"] = body.app
+
+    def _pause_social() -> None:
+        social_mode_state["paused"] = True
+        social_mode_state["current_app"] = body.app
+
+    def _push_needs_you(**kwargs) -> str:
+        item = q.add(
+            source="safety",
+            app_name=kwargs.get("app") or body.app,
+            package_name=body.package_name or "",
+            conversation_id="safety",
+            contact_name="Safety pause",
+            inbound_preview=kwargs.get("body") or kwargs.get("reason") or "",
+            draft_reply="",
+            reasons=[kwargs.get("category") or "safety_pause", "needs_resume"],
+            confidence=float((kwargs.get("meta") or {}).get("confidence") or 0.9),
+            meta={
+                "kind": "safety_pause",
+                "category": kwargs.get("category"),
+                "screenshot_path": kwargs.get("screenshot_path"),
+                **(kwargs.get("meta") or {}),
+            },
+        )
+        return item.id
+
+    notified_payload: Dict[str, Any] = {}
+
+    def _notify(**kwargs) -> None:
+        notified_payload.update(kwargs)
+        # Best-effort APK push + UI broadcast (sync wrappers)
+        title = kwargs.get("title") or f"Needs you · {body.app}"
+        nbody = kwargs.get("body") or ""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(
+                    _broadcast_safety_notify(
+                        body.device_id, title, nbody, kwargs.get("needs_you_id")
+                    )
+                )
+        except Exception:
+            logger.exception("safety notify schedule failed")
+
+    result = check_screen_and_pause(
+        app=body.app,
+        screen_text=body.screen_text,
+        ui_texts=body.ui_texts,
+        ui_tree=body.ui_tree,
+        llm_check=body.llm_check,
+        force_pause_all=body.force_pause_all,
+        push_needs_you=_push_needs_you,
+        notify=_notify,
+        screenshot_bytes=screenshot_bytes,
+        pause_mode_callbacks={
+            "dating": _pause_dating,
+            "social": _pause_social,
+        },
+    )
+    return {
+        **result.to_dict(),
+        "badge": q.pending_count(),
+        "dating_paused": dating_mode_state.get("paused"),
+        "social_paused": social_mode_state.get("paused"),
+        "notify": notified_payload or None,
+    }
+
+
+async def _broadcast_safety_notify(
+    device_id: Optional[str], title: str, body: str, needs_you_id: Optional[str]
+) -> None:
+    payload = {
+        "type": "push_notification",
+        "title": title,
+        "body": body,
+        "kind": "safety_pause",
+        "needs_you_id": needs_you_id,
+    }
+    ui_payload = {
+        "type": "needs_you",
+        "kind": "safety_pause",
+        "badge": get_needs_you_queue().pending_count(),
+        "title": title,
+        "body": body,
+        "needs_you_id": needs_you_id,
+    }
+    # Fan out to UI websockets
+    dead = []
+    for ws in list(websocket_clients):
+        try:
+            await ws.send_json(ui_payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        try:
+            websocket_clients.remove(ws)
+        except ValueError:
+            pass
+    if device_id and device_id in device_websockets:
+        try:
+            await device_websockets[device_id].send_json(payload)
+        except Exception:
+            logger.warning("device notify failed for %s", device_id)
+
+
+@app.post("/api/safety/resume")
+async def safety_resume(
+    body: SafetyResumeRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Resume only when Mac taps Resume — never auto-resume after a safety pause."""
+    from mobilerun.safety.runtime import resume_safety
+
+    st = resume_safety(app=body.app, resume_all=body.resume_all or not body.app)
+    if st.pause_all is False and not st.paused_apps:
+        dating_mode_state["paused"] = False
+        social_mode_state["paused"] = False
+    elif body.app and body.app not in st.paused_apps and not st.pause_all:
+        # App-level resume: clear mode pause if nothing else blocked
+        dating_mode_state["paused"] = False
+        social_mode_state["paused"] = False
+    return {
+        "status": "resumed",
+        "safety": st.to_dict(),
+        "dating_paused": dating_mode_state.get("paused"),
+        "social_paused": social_mode_state.get("paused"),
+    }
+
+
+def _dating_user_id(auth: Optional[dict]) -> str:
+    return _owner_key(auth) or "local"
+
+
+def _load_opener_library(auth: Optional[dict] = None):
+    from mobilerun.dating.openers import load_default_library, merge_with_defaults
+
+    user_id = _dating_user_id(auth)
+    user_data = None
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+
+    try:
+        user_data = get_user_setting(user_id, "dating_openers")
+    except Exception:
+        logger.exception("load dating_openers failed")
+    # Prefer in-memory overrides from this process
+    mem = dating_mode_state.get("opener_library")
+    if isinstance(mem, dict) and mem.get("templates"):
+        user_data = mem
+    return merge_with_defaults(user_data), user_id
+
+
+def _save_opener_library(lib, auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    data = lib.to_dict()
+    dating_mode_state["opener_library"] = data
+    dating_mode_state["opener_mode"] = lib.opener_mode
+    save_user_setting(user_id, "dating_openers", data)
+
+
+_date_flow_mgr = None
+
+
+def _load_date_flow(auth: Optional[dict] = None):
+    """Load DateFlowManager (config from settings + persisted chat state)."""
+    global _date_flow_mgr
+    from pathlib import Path as _Path
+
+    from mobilerun.dating.date_flow import (
+        DateFlowConfig,
+        DateFlowManager,
+        default_persist_path,
+    )
+
+    user_id = _dating_user_id(auth)
+    stored = None
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        stored = get_user_setting(user_id, "dating_date_flow")
+    except Exception:
+        logger.exception("load dating_date_flow failed")
+    mem = dating_mode_state.get("date_flow")
+    raw = mem or stored or {}
+    cfg = DateFlowConfig.from_dict(
+        raw.get("config") if isinstance(raw, dict) and "config" in raw else raw
+    )
+
+    def _push(**kwargs) -> str:
+        q = get_needs_you_queue()
+        item = q.add(
+            source="dating",
+            app_name=str(kwargs.get("app") or "dating"),
+            package_name=str(kwargs.get("app") or ""),
+            conversation_id=str((kwargs.get("meta") or {}).get("match_id") or ""),
+            contact_name="",
+            inbound_preview="",
+            draft_reply="",
+            reasons=[str(kwargs.get("kind") or "date_handoff")],
+            meta=dict(kwargs.get("meta") or {}),
+        )
+        return item.id
+
+    from mobilerun.dating.matches import MatchStore
+
+    match_store = MatchStore(user_id)
+
+    def _upsert_match(**kwargs):
+        return match_store.upsert_from_date_flow(**kwargs)
+
+    persist = default_persist_path()
+    if os.environ.get("MOBILERUN_DATA"):
+        persist = _Path(os.environ["MOBILERUN_DATA"]) / "dating_date_flow.json"
+    if _date_flow_mgr is None or getattr(_date_flow_mgr, "_user_id", None) != user_id:
+        _date_flow_mgr = DateFlowManager(
+            config=cfg,
+            persist_path=persist,
+            push_needs_you=_push,
+            on_match_upsert=_upsert_match,
+        )
+        _date_flow_mgr._user_id = user_id  # type: ignore[attr-defined]
+        _date_flow_mgr._match_store = match_store  # type: ignore[attr-defined]
+    else:
+        _date_flow_mgr.config = cfg
+        _date_flow_mgr.push_needs_you = _push
+        _date_flow_mgr.on_match_upsert = _upsert_match
+        _date_flow_mgr._match_store = match_store  # type: ignore[attr-defined]
+    return _date_flow_mgr
+
+
+def _load_match_store(auth: Optional[dict] = None):
+    """Private per-user Matches DB (DynamoDB / local). Auth-scoped only."""
+    from mobilerun.dating.matches import MatchStore
+
+    return MatchStore(_dating_user_id(auth))
+
+
+def _save_date_flow(mgr, auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    data = {
+        "config": mgr.config.to_dict(),
+        "stats": mgr.stats_summary(),
+    }
+    dating_mode_state["date_flow"] = data
+    save_user_setting(user_id, "dating_date_flow", data)
+    mgr._persist()
+
+
 @app.get("/api/dating/config")
 async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode configuration."""
     from mobilerun.dating.config import DatingModeConfig as ConfigModel
 
     config = ConfigModel()
+    lib, _ = _load_opener_library(auth)
+    df = _load_date_flow(auth)
+    opener_mode = (
+        dating_mode_state.get("opener_mode")
+        or lib.opener_mode
+        or getattr(config, "opener_mode", "templates")
+    )
     return {
         "apps": [
             {
@@ -1084,6 +1554,7 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
                 "daily_reply_cap": app.daily_reply_cap,
                 "daily_opener_target_min": app.daily_opener_target_min,
                 "daily_opener_target_max": app.daily_opener_target_max,
+                "opener_mode": lib.per_app_mode.get(app.package_name) or opener_mode,
             }
             for app in config.apps
         ],
@@ -1097,6 +1568,10 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
         "max_total_messages_per_day": config.max_total_messages_per_day,
         "speed_preset": getattr(config, "speed_preset", None)
         or dating_mode_state.get("speed_preset", "balanced"),
+        "opener_mode": opener_mode,
+        "per_app_opener_mode": lib.per_app_mode,
+        "date_flow": df.config.to_dict(),
+        "date_flow_stats": df.stats_summary(),
     }
 
 
@@ -1113,7 +1588,599 @@ async def update_dating_config(
     dating_mode_state["speed_preset"] = speed
     agent_mode_state["speed_preset"] = speed
     agent_mode_state["mode"] = "dating"
-    return {"status": "success", "config": config.dict()}
+    mode = (config.opener_mode or "templates").lower()
+    if mode not in ("templates", "ai"):
+        raise HTTPException(status_code=400, detail="opener_mode must be templates|ai")
+    dating_mode_state["opener_mode"] = mode
+    lib, _ = _load_opener_library(auth)
+    lib.opener_mode = mode
+    if config.per_app_opener_mode is not None:
+        cleaned = {}
+        for k, v in config.per_app_opener_mode.items():
+            vv = str(v).lower()
+            if vv in ("templates", "ai"):
+                cleaned[k] = vv
+        lib.per_app_mode = cleaned
+    _save_opener_library(lib, auth)
+
+    # Reply persona + date flow
+    from mobilerun.dating.date_flow import DateFlowConfig
+
+    mgr = _load_date_flow(auth)
+    cur = mgr.config.to_dict()
+    dump = config.dict() if hasattr(config, "dict") else config.model_dump()
+    for key in (
+        "reply_persona_prompt",
+        "invite_days_min",
+        "invite_days_max",
+        "home_location",
+        "radius_miles",
+        "invite_enabled",
+        "handoff_enabled",
+        "calendar_on_handoff",
+        "contact_ask_enabled",
+        "contact_ask_text",
+        "contact_ask_order",
+        "contact_ask_whatsapp_text",
+        "contact_ask_snapchat_text",
+    ):
+        if dump.get(key) is not None:
+            cur[key] = dump[key]
+    if dump.get("date_flow_per_app") is not None:
+        cur["per_app"] = dump["date_flow_per_app"]
+    mgr.config = DateFlowConfig.from_dict(cur)
+    _save_date_flow(mgr, auth)
+
+    payload = dump
+    payload["date_flow"] = mgr.config.to_dict()
+    return {"status": "success", "config": payload}
+
+
+@app.get("/api/dating/openers")
+async def get_dating_openers(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Template opener library (file defaults + per-user DynamoDB/local overrides)."""
+    from mobilerun.dating.openers import (
+        bucket_for_local_time,
+        summarize_buckets,
+        validate_active_bounds,
+    )
+
+    lib, user_id = _load_opener_library(auth)
+    ok, msg = validate_active_bounds(lib)
+    return {
+        "user_id": user_id,
+        "library": lib.to_dict(),
+        "bucket_now": bucket_for_local_time(),
+        "bucket_counts": summarize_buckets(lib),
+        "active_ok": ok,
+        "active_message": msg,
+        "min_active": lib.min_active,
+        "max_active": lib.max_active,
+    }
+
+
+@app.post("/api/dating/openers")
+async def update_dating_openers(
+    body: OpenerLibraryUpdate, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Replace/update opener library (add/edit/enable via full templates list)."""
+    import secrets as _secrets
+
+    from mobilerun.dating.openers import (
+        OpenerTemplate,
+        validate_active_bounds,
+    )
+
+    lib, _ = _load_opener_library(auth)
+    if body.opener_mode is not None:
+        mode = body.opener_mode.lower()
+        if mode not in ("templates", "ai"):
+            raise HTTPException(
+                status_code=400, detail="opener_mode must be templates|ai"
+            )
+        lib.opener_mode = mode
+        dating_mode_state["opener_mode"] = mode
+    if body.per_app_mode is not None:
+        cleaned = {}
+        for k, v in body.per_app_mode.items():
+            vv = str(v).lower()
+            if vv in ("templates", "ai"):
+                cleaned[k] = vv
+        lib.per_app_mode = cleaned
+    if body.templates is not None:
+        new_tmpls = []
+        for t in body.templates:
+            tid = (t.id or "").strip() or f"t_{_secrets.token_hex(3)}"
+            text = (t.text or "").strip()
+            if not text:
+                continue
+            new_tmpls.append(
+                OpenerTemplate(
+                    id=tid,
+                    text=text,
+                    bucket=(t.bucket or "any").lower(),
+                    enabled=bool(t.enabled),
+                )
+            )
+        lib.templates = new_tmpls
+    ok, msg = validate_active_bounds(lib)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _save_opener_library(lib, auth)
+    return {"status": "ok", "library": lib.to_dict(), "active_ok": ok}
+
+
+@app.post("/api/dating/openers/template")
+async def upsert_opener_template(
+    body: OpenerTemplateBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Add or edit a single template."""
+    import secrets as _secrets
+
+    from mobilerun.dating.openers import OpenerTemplate, validate_active_bounds
+
+    lib, _ = _load_opener_library(auth)
+    tid = (body.id or "").strip() or f"t_{_secrets.token_hex(3)}"
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    lib.set_template(
+        OpenerTemplate(
+            id=tid,
+            text=text,
+            bucket=(body.bucket or "any").lower(),
+            enabled=bool(body.enabled),
+        )
+    )
+    ok, msg = validate_active_bounds(lib)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _save_opener_library(lib, auth)
+    return {"status": "ok", "id": tid, "library": lib.to_dict()}
+
+
+@app.delete("/api/dating/openers/template/{template_id}")
+async def delete_opener_template(
+    template_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    from mobilerun.dating.openers import validate_active_bounds
+
+    lib, _ = _load_opener_library(auth)
+    if not lib.delete_template(template_id):
+        raise HTTPException(status_code=404, detail="template not found")
+    ok, msg = validate_active_bounds(lib)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _save_opener_library(lib, auth)
+    return {"status": "deleted", "id": template_id, "library": lib.to_dict()}
+
+
+@app.post("/api/dating/compose")
+async def compose_dating_message_api(
+    body: ComposeOpenerRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Compose opener (template or AI) or reply (AI + date-flow / handoff)."""
+    from datetime import datetime as _dt
+
+    from mobilerun.dating.persona import PersonaManager
+
+    # Honour safety pause — never send while blocked
+    try:
+        from mobilerun.safety.runtime import get_safety_state
+
+        if get_safety_state().is_paused(body.package_name or None):
+            raise HTTPException(
+                status_code=409, detail="Safety pause active — resume in UI first"
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    if dating_mode_state.get("paused"):
+        raise HTTPException(
+            status_code=409, detail="Dating mode paused — resume before composing"
+        )
+
+    lib, _ = _load_opener_library(auth)
+    mgr = _load_date_flow(auth)
+    now = None
+    if body.local_hour is not None:
+        now = _dt.now().replace(
+            hour=int(body.local_hour) % 24,
+            minute=int(body.local_minute or 0) % 60,
+            second=0,
+            microsecond=0,
+        )
+
+    ai_calls = {"n": 0}
+
+    def ai_callable(**kwargs):
+        ai_calls["n"] += 1
+        if kwargs.get("is_opener"):
+            return f"[AI opener for {kwargs.get('profile_name') or 'match'}]"
+        return f"[AI reply to: {(kwargs.get('inbound_preview') or '')[:40]}]"
+
+    persona = PersonaManager(
+        opener_library=lib,
+        ai_callable=ai_callable,
+        date_flow=mgr,
+        reply_persona_prompt=mgr.config.for_app(body.package_name).reply_persona_prompt,
+    )
+    try:
+        result = persona.compose(
+            is_opener=body.is_opener,
+            match_id=body.match_id,
+            package_name=body.package_name,
+            profile_name=body.profile_name or "",
+            inbound_preview=body.inbound_preview,
+            now=now,
+            distance_miles=body.distance_miles,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if result.get("source") == "template":
+        _save_opener_library(lib, auth)
+    _save_date_flow(mgr, auth)
+
+    return {
+        **result,
+        "ai_calls": ai_calls["n"],
+        "opener_mode": lib.mode_for_app(body.package_name),
+        "date_flow_stats": mgr.stats_summary(),
+    }
+
+
+@app.get("/api/dating/date-flow")
+async def get_date_flow(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Reply persona + date-invite settings and stats."""
+    mgr = _load_date_flow(auth)
+    return {"config": mgr.config.to_dict(), "stats": mgr.stats_summary()}
+
+
+@app.post("/api/dating/date-flow")
+async def update_date_flow(
+    body: Dict[str, Any], auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Update global / per-app reply persona + date-flow settings."""
+    from mobilerun.dating.date_flow import DateFlowConfig
+
+    mgr = _load_date_flow(auth)
+    cur = mgr.config.to_dict()
+    incoming = body.get("config") if isinstance(body.get("config"), dict) else body
+    for k, v in (incoming or {}).items():
+        if k in cur and v is not None:
+            cur[k] = v
+    if "per_app" in (incoming or {}) and incoming["per_app"] is not None:
+        cur["per_app"] = incoming["per_app"]
+    mgr.config = DateFlowConfig.from_dict(cur)
+    _save_date_flow(mgr, auth)
+    return {
+        "status": "success",
+        "config": mgr.config.to_dict(),
+        "stats": mgr.stats_summary(),
+    }
+
+
+@app.post("/api/dating/date-flow/evaluate")
+async def evaluate_date_flow(
+    body: DateFlowEvaluateRequest,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Evaluate invite timing / radius / handoff for a chat turn (testable)."""
+    from datetime import datetime as _dt
+    from datetime import timedelta
+
+    mgr = _load_date_flow(auth)
+    chat = mgr.get_chat(body.match_id, body.package_name)
+    if body.days_chatting is not None:
+        chat.chat_started_at = (
+            _dt.now() - timedelta(days=float(body.days_chatting))
+        ).isoformat()
+    if body.her_message_count is not None:
+        chat.her_message_count = max(0, int(body.her_message_count) - 1)
+    decision = mgr.evaluate_turn(
+        match_id=body.match_id,
+        package_name=body.package_name,
+        inbound=body.inbound,
+        distance_miles=body.distance_miles,
+        her_name=body.her_name,
+        is_opener=body.is_opener,
+    )
+    _save_date_flow(mgr, auth)
+    return {
+        **decision.to_dict(),
+        "stats": mgr.stats_summary(),
+        "invite_threshold_days": mgr.invite_threshold_for(
+            body.match_id, body.package_name
+        ),
+    }
+
+
+class MatchUpsertBody(BaseModel):
+    match_id: Optional[str] = None
+    name: str = ""
+    app: str = ""
+    package_name: str = ""
+    date_agreed: str = ""
+    distance_miles: Optional[float] = None
+    whatsapp: str = ""
+    snapchat: str = ""
+    status: str = "chatting"
+    notes: str = ""
+
+
+class MatchPatchBody(BaseModel):
+    name: Optional[str] = None
+    app: Optional[str] = None
+    package_name: Optional[str] = None
+    date_agreed: Optional[str] = None
+    distance_miles: Optional[float] = None
+    whatsapp: Optional[str] = None
+    snapchat: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/dating/matches")
+async def list_dating_matches(
+    q: str = "",
+    sort: str = "updated_at",
+    order: str = "desc",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Private Matches DB for the authenticated user only."""
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    store = _load_match_store(auth)
+    rows = [m.to_dict() for m in store.list(q=q, sort=sort, order=order)]
+    return {"matches": rows, "count": len(rows), "user_id": _dating_user_id(auth)}
+
+
+@app.post("/api/dating/matches")
+async def create_dating_match(
+    body: MatchUpsertBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    from mobilerun.dating.matches import MatchRecord
+
+    store = _load_match_store(auth)
+    dump = body.dict() if hasattr(body, "dict") else body.model_dump()
+    if not dump.get("match_id"):
+        dump["match_id"] = str(uuid.uuid4())
+    dump["user_id"] = _dating_user_id(auth)
+    rec = store.upsert(MatchRecord.from_dict(dump))
+    return {"status": "success", "match": rec.to_dict()}
+
+
+@app.put("/api/dating/matches/{match_id}")
+async def update_dating_match(
+    match_id: str,
+    body: MatchPatchBody,
+    package_name: str = "",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    store = _load_match_store(auth)
+    dump = (
+        body.dict(exclude_unset=True)
+        if hasattr(body, "dict")
+        else body.model_dump(exclude_unset=True)
+    )
+    rec = store.update(match_id, dump, package_name=package_name)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return {"status": "success", "match": rec.to_dict()}
+
+
+@app.delete("/api/dating/matches/{match_id}")
+async def delete_dating_match(
+    match_id: str,
+    package_name: str = "",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    store = _load_match_store(auth)
+    ok = store.delete(match_id, package_name=package_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return {"status": "success"}
+
+
+@app.get("/api/dating/matches/export.csv")
+async def export_dating_matches_csv(
+    q: str = "",
+    sort: str = "updated_at",
+    order: str = "desc",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    from fastapi.responses import PlainTextResponse
+
+    store = _load_match_store(auth)
+    csv_text = store.export_csv(q=q, sort=sort, order=order)
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="matches.csv"',
+        },
+    )
+
+
+# === Selector discovery + cache (dating/social nav, a11y-first) ===
+
+_selector_nav = None
+
+
+def get_selector_navigator(auth: Optional[dict] = None):
+    global _selector_nav
+    from mobilerun.selectors.cache import SelectorCache
+    from mobilerun.selectors.navigator import SelectorNavigator
+
+    user_id = _dating_user_id(auth)
+
+    def _push(**kwargs) -> str:
+        q = get_needs_you_queue()
+        item = q.add(
+            source="safety",
+            app_name=kwargs.get("app") or "unknown",
+            package_name=kwargs.get("app") or "",
+            conversation_id="selector",
+            contact_name="Selector rediscovery",
+            inbound_preview=kwargs.get("body") or kwargs.get("reason") or "",
+            draft_reply="",
+            reasons=["selector_discovery", "needs_resume"],
+            confidence=0.9,
+            meta=kwargs.get("meta") or {"kind": kwargs.get("kind")},
+        )
+        return item.id
+
+    if (
+        _selector_nav is None
+        or getattr(_selector_nav.cache, "user_id", None) != user_id
+    ):
+        cache = SelectorCache(user_id=user_id, max_rediscovery=3)
+        _selector_nav = SelectorNavigator(
+            cache=cache,
+            max_rediscovery=3,
+            max_layout_variants=cache.max_layout_variants,
+            push_needs_you=_push,
+        )
+    return _selector_nav
+
+
+class SelectorResolveRequest(BaseModel):
+    role: str
+    package_name: str
+    version_code: str = "1"
+    tree: Any = None
+    screenshot_b64: Optional[str] = None
+    allow_llm: bool = True
+    # Test hook: inline LLM JSON response (avoids real model in CI)
+    llm_stub: Optional[Dict[str, Any]] = None
+    # E2E/CI: simulate bounded scroll exploration without a device gesture loop.
+    # initial_tree lacks the target; revealed_tree contains it after N scrolls
+    # in reveal_direction (down|up|left|right).
+    explore_sim: Optional[Dict[str, Any]] = None
+
+
+@app.get("/api/selectors/status")
+async def selectors_status(
+    package_name: Optional[str] = None,
+    version_code: str = "1",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Cache status per app: last discovered, version, LLM calls used."""
+    nav = get_selector_navigator(auth)
+    if package_name:
+        return {"apps": [nav.cache.status(package_name, version_code).to_dict()]}
+    return {"apps": [s.to_dict() for s in nav.cache.list_packages()]}
+
+
+@app.post("/api/selectors/resolve")
+async def selectors_resolve(
+    body: SelectorResolveRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """
+    Resolve a dating/social nav role via cached a11y selector (no LLM),
+    falling back ONCE to LLM discovery when missing/broken.
+    Supports explore_sim for scroll-off-screen rediscovery tests.
+    """
+    nav = get_selector_navigator(auth)
+    llm_calls_box = {"n": 0}
+
+    def llm_callable(**kwargs):
+        llm_calls_box["n"] += 1
+        if body.llm_stub is not None:
+            return body.llm_stub
+        # Soft default for tests without stub: refuse (caller may supply stub)
+        return {}
+
+    get_tree = None
+    perform_scroll = None
+    perform_tap_tab = None
+    tree = body.tree or []
+    if body.explore_sim:
+        sim = body.explore_sim
+        initial = sim.get("initial_tree") or tree or {"children": []}
+        revealed = sim.get("revealed_tree") or tree or initial
+        reveal_dir = str(sim.get("reveal_direction") or "down")
+        reveal_after = int(sim.get("reveal_after") or 2)
+        tap_reveal = sim.get("tap_tab")  # optional tab text that reveals
+        state = {"tree": initial, "counts": {}}
+
+        def get_tree():
+            return state["tree"]
+
+        def perform_scroll(step):
+            d = getattr(step, "direction", None) or "down"
+            state["counts"][d] = int(state["counts"].get(d) or 0) + 1
+            if d == reveal_dir and state["counts"][d] >= reveal_after:
+                state["tree"] = revealed
+
+        def perform_tap_tab(tab: str):
+            if tap_reveal and tab == tap_reveal:
+                state["tree"] = revealed
+
+        tree = initial
+
+    result = nav.resolve(
+        role=body.role,
+        package_name=body.package_name,
+        version_code=body.version_code,
+        tree=tree,
+        screenshot_b64=body.screenshot_b64,
+        llm_callable=llm_callable if body.allow_llm else None,
+        allow_llm=body.allow_llm,
+        get_tree=get_tree,
+        perform_scroll=perform_scroll,
+        perform_tap_tab=perform_tap_tab,
+        explore=True,
+    )
+    st = nav.cache.status(body.package_name, body.version_code)
+    return {
+        **result.to_dict(),
+        "status": st.to_dict(),
+        "llm_callable_invocations": llm_calls_box["n"],
+    }
+
+
+@app.post("/api/selectors/invalidate")
+async def selectors_invalidate(
+    package_name: str,
+    version_code: str = "1",
+    role: Optional[str] = None,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    nav = get_selector_navigator(auth)
+    nav.cache.invalidate(package_name, version_code, role=role)
+    return {
+        "status": "invalidated",
+        "package_name": package_name,
+        "version_code": version_code,
+        "role": role,
+    }
 
 
 @app.get("/api/dating/stats")

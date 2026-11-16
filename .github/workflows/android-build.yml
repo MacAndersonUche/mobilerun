@@ -145,3 +145,79 @@ jobs:
           name: apk-qr-code
           path: apk-download-qr.png
           retention-days: 90
+
+  # Prerelease APK + QR for feature branches (after green build) — does not touch main/latest
+  publish-apk-prerelease:
+    needs: android-build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/cursor/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilerun-apk
+          path: ./apk
+
+      - name: Rename APK
+        run: mv apk/*.apk apk/mobilerun.apk
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install qrcode package
+        run: npm install qrcode
+
+      - name: Generate QR code
+        run: |
+          # Point QR at the prerelease tag URL
+          export APK_RELEASE_TAG="apk-preview-${{ github.run_number }}"
+          node scripts/generate-apk-qr.mjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          APK_RELEASE_TAG: apk-preview-${{ github.run_number }}
+
+      - name: Create prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="apk-preview-${{ github.run_number }}"
+          REPO="${{ github.repository }}"
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          gh release create "$TAG" \
+            --prerelease \
+            --title "APK Preview ${{ github.run_number }} ($BRANCH)" \
+            --notes "**Mobilerun APK preview (prerelease)**
+
+          Branch: \`$BRANCH\`
+          Commit: ${{ github.sha }}
+
+          ![Download QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)
+
+          - [mobilerun.apk](https://github.com/$REPO/releases/download/$TAG/mobilerun.apk)
+          - [Workflow](https://github.com/$REPO/actions/runs/${{ github.run_id }})
+
+          Safety + humanizer preview — not marked latest." \
+            apk/mobilerun.apk \
+            apk-download-qr.png
+
+      - name: Upload QR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-preview-qr
+          path: apk-download-qr.png
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          TAG="apk-preview-${{ github.run_number }}"
+          REPO="${{ github.repository }}"
+          echo "## APK prerelease" >> $GITHUB_STEP_SUMMARY
+          echo "- [mobilerun.apk](https://github.com/$REPO/releases/download/$TAG/mobilerun.apk)" >> $GITHUB_STEP_SUMMARY
+          echo "- [QR](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)" >> $GITHUB_STEP_SUMMARY

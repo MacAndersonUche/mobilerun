@@ -4,8 +4,9 @@ Step-driven worker for dating/agent jobs.
 EventBridge invokes this every minute. Each invocation:
 1. Loads due jobs from DynamoDB
 2. Executes ONE step (e.g. one swipe or one sequential message)
-3. Schedules next_run_at with human-like gap
+3. Schedules next_run_at with human-like (log-normal) gap — never fixed
 4. Never holds a long loop inside a single Lambda
+5. Honours safety auto-pause (skips work until Mac resumes)
 
 This avoids Lambda's 15-minute hard limit for dating mode.
 """
@@ -75,12 +76,121 @@ def _send_to_device(device_id: str, payload: Dict[str, Any]) -> bool:
     return ok
 
 
+def _humanizer_for_job(job: Dict[str, Any]):
+    from mobilerun.agent.humanizer import AgentMode, Humanizer, HumanizerConfig
+
+    speed = (
+        job.get("speed_preset")
+        or job.get("state", {}).get("speed_preset")
+        or "balanced"
+    )
+    cfg_data = job.get("humanizer") or {}
+    if isinstance(cfg_data, dict) and cfg_data:
+        cfg = HumanizerConfig.from_dict({**cfg_data, "preset": speed, "mode": "dating"})
+    else:
+        cfg = HumanizerConfig.from_preset(speed, AgentMode.DATING)
+    seed = job.get("job_id") or str(time.time())
+    rng = random.Random(f"{seed}:{job.get('state', {}).get('steps', 0)}")
+    return Humanizer(config=cfg, _rng=rng)
+
+
+def _compose_for_step(
+    job: Dict[str, Any],
+    state: Dict[str, Any],
+    *,
+    action: str,
+    rng,
+) -> Dict[str, Any]:
+    """Compose opener via templates (no LLM) or reply via AI stub/callable."""
+    try:
+        from mobilerun.dating.openers import (
+            compose_dating_message,
+            merge_with_defaults,
+        )
+    except Exception:
+        logger.exception("opener library import failed")
+        return {}
+
+    raw_lib = job.get("opener_library") or state.get("opener_library")
+    lib = merge_with_defaults(raw_lib if isinstance(raw_lib, dict) else None)
+    # Honour job-level / global opener mode
+    mode = (
+        job.get("opener_mode")
+        or state.get("opener_mode")
+        or lib.opener_mode
+        or "templates"
+    )
+    lib.opener_mode = str(mode).lower()
+    package = (
+        state.get("current_app")
+        or job.get("current_app")
+        or (state.get("app_order") or [""])[0]
+        or ""
+    )
+    match_id = state.get("current_match_id") or f"match_{state.get('steps', 0)}"
+    profile = state.get("current_profile_name") or ""
+
+    ai_calls = {"n": 0}
+
+    def ai_callable(**kwargs):
+        ai_calls["n"] += 1
+        custom = job.get("ai_callable_result")
+        if custom:
+            return custom
+        if kwargs.get("is_opener"):
+            return f"[AI opener]"
+        return f"[AI reply]"
+
+    try:
+        result = compose_dating_message(
+            is_opener=(action == "opener"),
+            lib=lib,
+            match_id=str(match_id),
+            package_name=str(package),
+            profile_name=profile or None,
+            rng=rng,
+            ai_callable=ai_callable,
+            inbound_preview=state.get("inbound_preview") or "",
+        )
+        result["ai_calls"] = ai_calls["n"]
+        # Persist rotation state back onto job for subsequent ticks
+        state["opener_library"] = lib.to_dict()
+        job["opener_library"] = lib.to_dict()
+        return result
+    except Exception:
+        logger.exception("compose for step failed action=%s", action)
+        return {}
+
+
+def _safety_blocked(job: Dict[str, Any]) -> bool:
+    """Skip work while safety pause is active for this job's app / all."""
+    if job.get("safety_paused"):
+        return True
+    try:
+        from mobilerun.safety.runtime import get_safety_state
+
+        st = get_safety_state()
+        app = job.get("current_app") or job.get("state", {}).get("current_app")
+        return st.is_paused(app)
+    except Exception:
+        return False
+
+
 def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     """Execute one dating step and update job counters."""
     job = _to_plain(job)
     state = job.setdefault("state", {})
     caps = job.get("caps", {})
     device_id = job.get("device_id", "")
+
+    if _safety_blocked(job):
+        job["status"] = "paused"
+        state["last_action"] = "safety_pause"
+        job["state"] = state
+        job["next_run_at"] = int(time.time()) + 60
+        job["updated_at"] = int(time.time())
+        logger.warning("dating step skipped — safety pause job=%s", job.get("job_id"))
+        return job
 
     openers = int(state.get("openers_sent", 0))
     replies = int(state.get("replies_sent", 0))
@@ -96,25 +206,55 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["completed_at"] = int(time.time())
         return job
 
+    humanizer = _humanizer_for_job(job)
+
     # Prefer openers until target, then replies — always sequential (one per tick)
+    # Randomise action choice slightly when both swipe and reply are eligible
     if openers < opener_target:
         action = "opener"
         state["openers_sent"] = openers + 1
-        gap = random.randint(30, 180)
-    elif swipes < swipe_cap and random.random() < 0.3:
+        gap = humanizer.sample_message_gap_seconds()
+    elif swipes < swipe_cap and humanizer._rng.random() < 0.3:
         action = "swipe"
         state["swipes_done"] = swipes + 1
-        gap = random.randint(2, 8)
+        gap = humanizer.sample_swipe_step_gap_seconds()
     else:
         action = "reply"
         state["replies_sent"] = replies + 1
-        gap = random.randint(30, 180)
+        gap = humanizer.sample_message_gap_seconds()
 
+    gap_i = max(1, int(round(gap)))
     state["last_action"] = action
+    state["last_gap_s"] = gap_i
     state["steps"] = int(state.get("steps", 0)) + 1
+    # Shuffle next app hint when multiple apps configured
+    apps = job.get("apps") or state.get("apps") or []
+    if apps:
+        ordered = humanizer.ordered_apps(apps)
+        state["app_order"] = list(ordered)
+        state["current_app"] = ordered[0] if ordered else state.get("current_app")
+
+    # Compose opener from templates (no LLM) or leave reply to AI path
+    composed: Dict[str, Any] = {}
+    if action in ("opener", "reply"):
+        composed = _compose_for_step(job, state, action=action, rng=humanizer._rng)
+        if composed:
+            state["last_message"] = composed.get("text")
+            state["last_message_source"] = composed.get("source")
+            state["last_template_id"] = composed.get("template_id")
+            state["last_used_llm"] = bool(composed.get("used_llm"))
+
     job["state"] = state
-    job["next_run_at"] = int(time.time()) + gap
+    job["next_run_at"] = int(time.time()) + gap_i
     job["updated_at"] = int(time.time())
+
+    params: Dict[str, Any] = {"dry_run": job.get("dry_run", False)}
+    if composed:
+        params["message"] = composed.get("text")
+        params["source"] = composed.get("source")
+        params["used_llm"] = composed.get("used_llm")
+        if composed.get("template_id"):
+            params["template_id"] = composed["template_id"]
 
     _send_to_device(
         device_id,
@@ -122,17 +262,18 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
             "type": "command",
             "command": action,
             "job_id": job.get("job_id"),
-            "params": {"dry_run": job.get("dry_run", False)},
+            "params": params,
         },
     )
     logger.info(
-        "dating step job=%s action=%s openers=%s replies=%s swipes=%s next=%s",
+        "dating step job=%s action=%s openers=%s replies=%s swipes=%s next=%s gap=%s",
         job.get("job_id"),
         action,
         state.get("openers_sent"),
         state.get("replies_sent"),
         state.get("swipes_done"),
         job["next_run_at"],
+        gap_i,
     )
     return job
 
@@ -141,6 +282,14 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     """Execute one agent task step."""
     job = _to_plain(job)
     state = job.setdefault("state", {})
+    if _safety_blocked(job):
+        job["status"] = "paused"
+        state["last_action"] = "safety_pause"
+        job["state"] = state
+        job["next_run_at"] = int(time.time()) + 60
+        job["updated_at"] = int(time.time())
+        return job
+
     step = int(state.get("steps", 0))
     max_steps = int(job.get("max_steps", 15))
     if step >= max_steps:
@@ -148,10 +297,18 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["completed_at"] = int(time.time())
         return job
 
+    humanizer = _humanizer_for_job(job)
+    # Normal-mode agent steps use action gaps
+    from mobilerun.agent.humanizer import AgentMode
+
+    humanizer.config = humanizer.config.with_overrides(mode=AgentMode.NORMAL)
+    gap = max(1, int(round(humanizer.sample_step_gap_seconds(kind="action"))))
+
     state["steps"] = step + 1
     state["last_action"] = f"agent_step_{step + 1}"
+    state["last_gap_s"] = gap
     job["state"] = state
-    job["next_run_at"] = int(time.time()) + random.randint(3, 10)
+    job["next_run_at"] = int(time.time()) + gap
     job["updated_at"] = int(time.time())
     _send_to_device(
         job.get("device_id", ""),

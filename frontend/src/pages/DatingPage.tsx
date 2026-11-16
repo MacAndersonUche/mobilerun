@@ -58,6 +58,16 @@ interface AppConfig {
   daily_swipe_cap: number;
   daily_opener_target_min?: number;
   daily_opener_target_max?: number;
+  opener_mode?: OpenerMode;
+}
+
+type OpenerMode = 'templates' | 'ai';
+
+interface OpenerTemplate {
+  id: string;
+  text: string;
+  bucket: 'morning' | 'afternoon' | 'evening' | 'any' | string;
+  enabled: boolean;
 }
 
 function ProgressBar({
@@ -93,6 +103,31 @@ export default function DatingPage() {
   const [apps, setApps] = useState<AppStats[]>([]);
   const [configApps, setConfigApps] = useState<AppConfig[]>([]);
   const [persona, setPersona] = useState('');
+  const [replyPersona, setReplyPersona] = useState('');
+  const [inviteDaysMin, setInviteDaysMin] = useState(3);
+  const [inviteDaysMax, setInviteDaysMax] = useState(7);
+  const [homeLocation, setHomeLocation] = useState('Stoke-on-Trent');
+  const [radiusMiles, setRadiusMiles] = useState(50);
+  const [inviteEnabled, setInviteEnabled] = useState(true);
+  const [handoffEnabled, setHandoffEnabled] = useState(true);
+  const [calendarOnHandoff, setCalendarOnHandoff] = useState(true);
+  const [contactAskEnabled, setContactAskEnabled] = useState(true);
+  const [contactAskOrder, setContactAskOrder] = useState<string[]>([
+    'whatsapp',
+    'snapchat',
+  ]);
+  const [contactAskWhatsappText, setContactAskWhatsappText] = useState(
+    'Would it be easier to chat on WhatsApp? Totally optional — no pressure either way.'
+  );
+  const [contactAskSnapchatText, setContactAskSnapchatText] = useState(
+    'No worries — would Snapchat be easier instead? Totally optional, only if you like.'
+  );
+  const [dateFlowStats, setDateFlowStats] = useState<{
+    chats_active: number;
+    invites_sent: number;
+    dates_booked: number;
+    by_app?: Record<string, { chats_active: number; invites_sent: number; dates_booked: number }>;
+  } | null>(null);
   const [reviewBeforeSend, setReviewBeforeSend] = useState(true);
   const [reviewQueue, setReviewQueue] = useState<ReviewMessage[]>([]);
   const [globalMin, setGlobalMin] = useState(100);
@@ -101,6 +136,38 @@ export default function DatingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
+  const [openerMode, setOpenerMode] = useState<OpenerMode>('templates');
+  const [templates, setTemplates] = useState<OpenerTemplate[]>([]);
+  const [bucketNow, setBucketNow] = useState('morning');
+  const [bucketCounts, setBucketCounts] = useState<Record<string, number>>({});
+  const [newTemplateText, setNewTemplateText] = useState('');
+  const [newTemplateBucket, setNewTemplateBucket] = useState('any');
+  const [selectorApps, setSelectorApps] = useState<
+    {
+      package_name: string;
+      version_code: string;
+      total_llm_calls: number;
+      last_discovered_at?: string | null;
+      max_layout_variants?: number;
+      roles: {
+        role: string;
+        source: string;
+        llm_calls: number;
+        discovered_at: string;
+        variant_count?: number;
+        nav_path?: { kind?: string; direction?: string; count?: number }[];
+        variants?: {
+          id?: string;
+          label?: string;
+          hits?: number;
+          misses?: number;
+          success_rate?: number;
+          source?: string;
+          selector?: { resource_id?: string; text?: string; hint?: string };
+        }[];
+      }[];
+    }[]
+  >([]);
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -108,32 +175,73 @@ export default function DatingPage() {
 
   const loadAll = async () => {
     try {
-      const [statusRes, statsRes, configRes, queueRes] = await Promise.all([
-        axios.get(`${getBackendUrl()}/api/dating/status`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/stats`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/config`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/review-queue`, {
-          headers: authHeaders(),
-        }),
-      ]);
+      const [statusRes, statsRes, configRes, queueRes, openersRes, selRes] =
+        await Promise.all([
+          axios.get(`${getBackendUrl()}/api/dating/status`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/stats`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/config`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/review-queue`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/openers`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/selectors/status`, {
+            headers: authHeaders(),
+          }),
+        ]);
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
       setConfigApps(configRes.data.apps || []);
       setPersona(configRes.data.persona_prompt || '');
+      const df = configRes.data.date_flow || {};
+      setReplyPersona(
+        df.reply_persona_prompt || configRes.data.reply_persona_prompt || ''
+      );
+      setInviteDaysMin(df.invite_days_min ?? 3);
+      setInviteDaysMax(df.invite_days_max ?? 7);
+      setHomeLocation(df.home_location || 'Stoke-on-Trent');
+      setRadiusMiles(df.radius_miles ?? 50);
+      setInviteEnabled(df.invite_enabled ?? true);
+      setHandoffEnabled(df.handoff_enabled ?? true);
+      setCalendarOnHandoff(df.calendar_on_handoff ?? true);
+      setContactAskEnabled(df.contact_ask_enabled ?? true);
+      if (Array.isArray(df.contact_ask_order) && df.contact_ask_order.length) {
+        setContactAskOrder(df.contact_ask_order);
+      }
+      if (df.contact_ask_whatsapp_text || df.contact_ask_text) {
+        setContactAskWhatsappText(
+          df.contact_ask_whatsapp_text || df.contact_ask_text
+        );
+      }
+      if (df.contact_ask_snapchat_text) {
+        setContactAskSnapchatText(df.contact_ask_snapchat_text);
+      }
+      setDateFlowStats(configRes.data.date_flow_stats || null);
       setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
       setGlobalMax(configRes.data.max_total_messages_per_day ?? 500);
       if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
         setSpeed(configRes.data.speed_preset);
       }
+      if (
+        configRes.data.opener_mode === 'templates' ||
+        configRes.data.opener_mode === 'ai'
+      ) {
+        setOpenerMode(configRes.data.opener_mode);
+      }
       setReviewQueue(queueRes.data.messages || []);
+      setTemplates(openersRes.data.library?.templates || []);
+      setBucketNow(openersRes.data.bucket_now || 'morning');
+      setBucketCounts(openersRes.data.bucket_counts || {});
+      setSelectorApps(selRes.data.apps || []);
       setError(null);
     } catch (e: unknown) {
       console.error(e);
@@ -167,6 +275,12 @@ export default function DatingPage() {
   const saveConfig = async () => {
     setLoading(true);
     try {
+      const perApp: Record<string, OpenerMode> = {};
+      configApps.forEach((a) => {
+        if (a.opener_mode === 'templates' || a.opener_mode === 'ai') {
+          perApp[a.package_name] = a.opener_mode;
+        }
+      });
       await axios.post(
         `${getBackendUrl()}/api/dating/config`,
         {
@@ -181,6 +295,21 @@ export default function DatingPage() {
           min_total_messages_per_day: globalMin,
           max_total_messages_per_day: globalMax,
           speed_preset: speed,
+          opener_mode: openerMode,
+          per_app_opener_mode: perApp,
+          reply_persona_prompt: replyPersona,
+          invite_days_min: inviteDaysMin,
+          invite_days_max: inviteDaysMax,
+          home_location: homeLocation,
+          radius_miles: radiusMiles,
+          invite_enabled: inviteEnabled,
+          handoff_enabled: handoffEnabled,
+          calendar_on_handoff: calendarOnHandoff,
+          contact_ask_enabled: contactAskEnabled,
+          contact_ask_order: contactAskOrder,
+          contact_ask_whatsapp_text: contactAskWhatsappText,
+          contact_ask_snapchat_text: contactAskSnapchatText,
+          contact_ask_text: contactAskWhatsappText,
         },
         { headers: authHeaders() }
       );
@@ -196,6 +325,58 @@ export default function DatingPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const enabledCount = templates.filter((t) => t.enabled).length;
+
+  const saveTemplates = async (next: OpenerTemplate[]) => {
+    const enabled = next.filter((t) => t.enabled).length;
+    if (enabled < 2 || enabled > 50) {
+      alert('Keep 2–50 templates enabled');
+      return;
+    }
+    setLoading(true);
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/openers`,
+        {
+          opener_mode: openerMode,
+          templates: next,
+        },
+        { headers: authHeaders() }
+      );
+      setTemplates(next);
+      await loadAll();
+    } catch (e: unknown) {
+      console.error(e);
+      alert('Failed to save opener library');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addTemplate = async () => {
+    const text = newTemplateText.trim();
+    if (!text) return;
+    const next = [
+      ...templates,
+      {
+        id: `t_${Date.now().toString(36)}`,
+        text,
+        bucket: newTemplateBucket,
+        enabled: true,
+      },
+    ];
+    await saveTemplates(next);
+    setNewTemplateText('');
+  };
+
+  const setAppOpenerMode = (packageName: string, mode: OpenerMode) => {
+    setConfigApps((prev) =>
+      prev.map((a) =>
+        a.package_name === packageName ? { ...a, opener_mode: mode } : a
+      )
+    );
   };
 
   const onSpeedChange = async (next: Speed) => {
@@ -408,22 +589,91 @@ export default function DatingPage() {
         ))}
       </div>
 
+      {/* Global opener mode */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-lg font-semibold">Openers</h3>
+          <span className="text-xs text-mute">
+            Bucket now: {bucketNow} · enabled {enabledCount}/50
+          </span>
+        </div>
+        <p className="text-sm text-mute">
+          Templates save tokens on first-contact messages. Replies always use AI.
+          Respects caps, humanizer timing, and safety auto-pause.
+        </p>
+        <div className="flex overflow-hidden rounded-xl border border-line max-w-md">
+          <button
+            type="button"
+            className={`flex-1 px-3 py-2 text-sm ${
+              openerMode === 'templates' ? 'bg-rose-600' : 'bg-canvas-elev'
+            }`}
+            onClick={() => setOpenerMode('templates')}
+          >
+            Templates
+          </button>
+          <button
+            type="button"
+            className={`flex-1 px-3 py-2 text-sm ${
+              openerMode === 'ai' ? 'bg-rose-600' : 'bg-canvas-elev'
+            }`}
+            onClick={() => setOpenerMode('ai')}
+          >
+            AI
+          </button>
+        </div>
+        <div className="text-xs text-mute flex flex-wrap gap-3">
+          {Object.entries(bucketCounts).map(([b, n]) => (
+            <span key={b}>
+              {b}: {n}
+            </span>
+          ))}
+        </div>
+      </div>
+
       {/* App toggles + persona */}
       <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
         <h3 className="text-lg font-semibold">Apps & Persona</h3>
-        <div className="flex flex-wrap gap-2">
+        <div className="space-y-2">
           {configApps.map((app) => (
-            <button
+            <div
               key={app.package_name}
-              onClick={() => toggleApp(app.package_name)}
-              className={`px-3 py-1 rounded text-sm border ${
-                app.enabled
-                  ? 'bg-rose-900/50 border-rose-600 text-rose-200'
-                  : 'bg-canvas-elev border-line text-mute'
-              }`}
+              className="flex flex-wrap items-center gap-2 justify-between rounded-xl border border-line bg-canvas-elev px-3 py-2"
             >
-              {app.name}
-            </button>
+              <button
+                onClick={() => toggleApp(app.package_name)}
+                className={`px-3 py-1 rounded text-sm border ${
+                  app.enabled
+                    ? 'bg-rose-900/50 border-rose-600 text-rose-200'
+                    : 'bg-surface border-line text-mute'
+                }`}
+              >
+                {app.name}
+              </button>
+              <div className="flex overflow-hidden rounded-lg border border-line text-xs">
+                <button
+                  type="button"
+                  className={`px-2 py-1 ${
+                    (app.opener_mode || openerMode) === 'templates'
+                      ? 'bg-rose-700'
+                      : 'bg-surface'
+                  }`}
+                  onClick={() => setAppOpenerMode(app.package_name, 'templates')}
+                >
+                  Templates
+                </button>
+                <button
+                  type="button"
+                  className={`px-2 py-1 ${
+                    (app.opener_mode || openerMode) === 'ai'
+                      ? 'bg-rose-700'
+                      : 'bg-surface'
+                  }`}
+                  onClick={() => setAppOpenerMode(app.package_name, 'ai')}
+                >
+                  AI
+                </button>
+              </div>
+            </div>
           ))}
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -435,11 +685,11 @@ export default function DatingPage() {
           Review before send (sequential queue)
         </label>
         <label className="block text-sm">
-          Persona / style prompt
+          Persona / style prompt (AI openers)
           <textarea
             value={persona}
             onChange={(e) => setPersona(e.target.value)}
-            rows={6}
+            rows={4}
             className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 font-mono text-sm"
           />
         </label>
@@ -450,6 +700,341 @@ export default function DatingPage() {
         >
           Save config
         </button>
+      </div>
+
+      {/* Reply persona + date flow */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
+        <h3 className="text-lg font-semibold">Reply persona & date flow</h3>
+        <p className="text-xs text-mute">
+          AI replies to existing chats. After a warm chat window, one polite
+          public-place invite — never stay-over / his home. After she agrees a
+          date, ask WhatsApp first (then Snapchat if she declines). Then
+          Needs-you handoff. Never auto-message WhatsApp/Snap — you continue
+          personally.
+        </p>
+        {dateFlowStats ? (
+          <div className="flex flex-wrap gap-4 text-sm">
+            <span>Chats active: {dateFlowStats.chats_active}</span>
+            <span>Invites sent: {dateFlowStats.invites_sent}</span>
+            <span>Dates booked: {dateFlowStats.dates_booked}</span>
+          </div>
+        ) : null}
+        <label className="block text-sm">
+          Conversation style (replies)
+          <textarea
+            value={replyPersona}
+            onChange={(e) => setReplyPersona(e.target.value)}
+            rows={5}
+            aria-label="Reply persona prompt"
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 font-mono text-sm"
+          />
+        </label>
+        <div className="grid sm:grid-cols-2 gap-3 text-sm">
+          <label>
+            Invite after (min days)
+            <input
+              type="number"
+              min={1}
+              value={inviteDaysMin}
+              onChange={(e) => setInviteDaysMin(Number(e.target.value) || 1)}
+              aria-label="Invite days minimum"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label>
+            Invite after (max days)
+            <input
+              type="number"
+              min={1}
+              value={inviteDaysMax}
+              onChange={(e) => setInviteDaysMax(Number(e.target.value) || 1)}
+              aria-label="Invite days maximum"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label>
+            Home location
+            <input
+              value={homeLocation}
+              onChange={(e) => setHomeLocation(e.target.value)}
+              aria-label="Home location"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label>
+            Radius (miles)
+            <input
+              type="number"
+              min={1}
+              value={radiusMiles}
+              onChange={(e) => setRadiusMiles(Number(e.target.value) || 1)}
+              aria-label="Distance radius miles"
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={inviteEnabled}
+              onChange={(e) => setInviteEnabled(e.target.checked)}
+            />
+            Date invites enabled
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={handoffEnabled}
+              onChange={(e) => setHandoffEnabled(e.target.checked)}
+            />
+            Handoff on agree / logistics
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={calendarOnHandoff}
+              onChange={(e) => setCalendarOnHandoff(e.target.checked)}
+            />
+            Calendar entry on booked date
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={contactAskEnabled}
+              onChange={(e) => setContactAskEnabled(e.target.checked)}
+              aria-label="Contact ask enabled"
+            />
+            Contact asks after date agree (WhatsApp → Snap)
+          </label>
+        </div>
+        <label className="block text-sm">
+          Ask order
+          <select
+            value={contactAskOrder.join(',')}
+            disabled={!contactAskEnabled}
+            aria-label="Contact ask order"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === 'snapchat,whatsapp') {
+                setContactAskOrder(['snapchat', 'whatsapp']);
+              } else if (v === 'whatsapp') {
+                setContactAskOrder(['whatsapp']);
+              } else if (v === 'snapchat') {
+                setContactAskOrder(['snapchat']);
+              } else {
+                setContactAskOrder(['whatsapp', 'snapchat']);
+              }
+            }}
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
+          >
+            <option value="whatsapp,snapchat">WhatsApp first, then Snapchat</option>
+            <option value="snapchat,whatsapp">Snapchat first, then WhatsApp</option>
+            <option value="whatsapp">WhatsApp only</option>
+            <option value="snapchat">Snapchat only</option>
+          </select>
+        </label>
+        <label className="block text-sm">
+          WhatsApp ask wording
+          <textarea
+            value={contactAskWhatsappText}
+            onChange={(e) => setContactAskWhatsappText(e.target.value)}
+            rows={2}
+            disabled={!contactAskEnabled}
+            aria-label="WhatsApp ask wording"
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
+          />
+        </label>
+        <label className="block text-sm">
+          Snapchat ask wording
+          <textarea
+            value={contactAskSnapchatText}
+            onChange={(e) => setContactAskSnapchatText(e.target.value)}
+            rows={2}
+            disabled={!contactAskEnabled}
+            aria-label="Snapchat ask wording"
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
+          />
+        </label>
+        <p className="text-xs text-mute">
+          Beyond {radiusMiles} mi → suggest meeting in {homeLocation} (public).
+          Within radius → mutually convenient public place. Never suggest
+          staying over. Decline first channel → ask second once; decline again or
+          ignore → hand off. Saved contacts appear on Matches.
+        </p>
+        <button
+          onClick={saveConfig}
+          disabled={loading}
+          className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
+        >
+          Save reply & date flow
+        </button>
+      </div>
+
+      {/* Template library editor */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
+        <h3 className="text-lg font-semibold">
+          Opener library ({enabledCount} active)
+        </h3>
+        <p className="text-xs text-mute">
+          Pick 2–50 active. Morning / afternoon / evening buckets + time-neutral.
+          Optional {'{name}'} only when the match name is known.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            value={newTemplateText}
+            onChange={(e) => setNewTemplateText(e.target.value)}
+            placeholder="New opener text"
+            className="flex-1 bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
+          />
+          <select
+            value={newTemplateBucket}
+            onChange={(e) => setNewTemplateBucket(e.target.value)}
+            aria-label="New opener bucket"
+            className="bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
+          >
+            <option value="morning">morning</option>
+            <option value="afternoon">afternoon</option>
+            <option value="evening">evening</option>
+            <option value="any">any</option>
+          </select>
+          <button
+            type="button"
+            onClick={addTemplate}
+            disabled={loading || !newTemplateText.trim()}
+            className="px-3 py-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-50 rounded text-sm"
+          >
+            Add
+          </button>
+        </div>
+        <div className="max-h-80 overflow-y-auto space-y-2">
+          {templates.map((t, idx) => (
+            <div
+              key={t.id}
+              className="flex flex-col gap-2 rounded-xl border border-line bg-canvas-elev p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2 text-xs text-mute">
+                <span className="font-mono">{t.id}</span>
+                <select
+                  value={t.bucket}
+                  onChange={(e) => {
+                    const next = templates.map((x, i) =>
+                      i === idx ? { ...x, bucket: e.target.value } : x
+                    );
+                    setTemplates(next);
+                  }}
+                  aria-label={`Bucket for opener ${t.id}`}
+                  className="bg-surface border border-line rounded px-2 py-1"
+                >
+                  <option value="morning">morning</option>
+                  <option value="afternoon">afternoon</option>
+                  <option value="evening">evening</option>
+                  <option value="any">any</option>
+                </select>
+                <label className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={t.enabled}
+                    onChange={(e) => {
+                      const next = templates.map((x, i) =>
+                        i === idx ? { ...x, enabled: e.target.checked } : x
+                      );
+                      setTemplates(next);
+                    }}
+                  />
+                  enabled
+                </label>
+                <button
+                  type="button"
+                  className="ml-auto text-red-300 hover:text-red-200"
+                  onClick={() => {
+                    const next = templates.filter((_, i) => i !== idx);
+                    void saveTemplates(next);
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+              <textarea
+                value={t.text}
+                rows={2}
+                onChange={(e) => {
+                  const next = templates.map((x, i) =>
+                    i === idx ? { ...x, text: e.target.value } : x
+                  );
+                  setTemplates(next);
+                }}
+                className="w-full bg-surface border border-line rounded px-3 py-2 text-sm"
+              />
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => saveTemplates(templates)}
+          className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
+        >
+          Save library
+        </button>
+      </div>
+
+      {/* Selector cache status */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <h3 className="text-lg font-semibold">Selector cache</h3>
+        <p className="text-xs text-mute">
+          Multiple layout variants per app version (default up to{' '}
+          {selectorApps[0]?.max_layout_variants ?? 4}, min 2). Tried by success
+          rate — no LLM when any variant matches. Off-screen targets use scroll
+          explore; failures escalate to Needs you.
+        </p>
+        {selectorApps.length === 0 ? (
+          <p className="text-sm text-mute">No cached apps yet.</p>
+        ) : (
+          selectorApps.map((app) => (
+            <div
+              key={`${app.package_name}@${app.version_code}`}
+              className="rounded-xl border border-line bg-canvas-elev p-3 text-sm space-y-2"
+            >
+              <div className="flex flex-wrap justify-between gap-2">
+                <span className="font-medium">
+                  {app.package_name}{' '}
+                  <span className="text-mute">v{app.version_code}</span>
+                </span>
+                <span className="text-mute">
+                  LLM calls: {app.total_llm_calls} · cap{' '}
+                  {app.max_layout_variants ?? 4} variants · last{' '}
+                  {app.last_discovered_at
+                    ? new Date(app.last_discovered_at).toLocaleString()
+                    : '—'}
+                </span>
+              </div>
+              <ul className="text-xs text-mute space-y-2">
+                {(app.roles || []).map((r) => (
+                  <li key={r.role} className="space-y-1">
+                    <div>
+                      {r.role}: {r.source} · {r.variant_count ?? 1} variant
+                      {(r.variant_count ?? 1) === 1 ? '' : 's'} (llm {r.llm_calls})
+                    </div>
+                    {(r.variants || []).length > 0 ? (
+                      <ul className="pl-3 space-y-0.5 border-l border-line">
+                        {r.variants!.map((v, i) => (
+                          <li key={v.id || i}>
+                            {v.label || v.selector?.resource_id?.split('/').pop() || v.id || `variant ${i + 1}`}
+                            : hits {v.hits ?? 0} / misses {v.misses ?? 0}
+                            {typeof v.success_rate === 'number'
+                              ? ` (${Math.round(v.success_rate * 100)}%)`
+                              : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Review queue */}

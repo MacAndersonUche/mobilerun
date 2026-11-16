@@ -7,7 +7,7 @@ import QRCode from 'qrcode';
 
 const repo = process.env.GITHUB_REPOSITORY;
 const runNumber = process.env.GITHUB_RUN_NUMBER;
-const tag = `apk-${runNumber}`;
+const tag = process.env.APK_RELEASE_TAG || `apk-${runNumber}`;
 const url = `https://github.com/${repo}/releases/download/${tag}/mobilerun.apk`;
 
 console.log(`Generating QR code for: ${url}`);

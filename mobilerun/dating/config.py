@@ -35,6 +35,9 @@ class AppProfile:
     session_break_min_sec: int = 300  # 5 minutes
     session_break_max_sec: int = 900  # 15 minutes
 
+    # First-contact openers: "templates" | "ai" | None (inherit global)
+    opener_mode: Optional[str] = None
+
 
 # Default app profiles (Mac's dating folder)
 DEFAULT_APPS = [
@@ -111,10 +114,13 @@ class DatingModeConfig:
     randomize_order: bool = True
     sequential_messaging: bool = True  # Process one conversation at a time
 
+    # First-contact openers: Templates (no LLM) | AI
+    opener_mode: str = "templates"  # templates | ai
+
     # Mode
     round_robin: bool = True  # vs "one app at a time"
 
-    # Persona
+    # Persona (legacy / AI openers)
     persona_prompt: str = """You are Mac, a confident and witty person looking for genuine connections.
 Keep messages:
 - Short and casual (2-3 sentences max)
@@ -130,6 +136,20 @@ Avoid:
 - Long paragraphs
 - Being too forward
 - Copy-paste vibes"""
+
+    # Reply persona + date flow (AI replies to existing chats)
+    reply_persona_prompt: str = (
+        "You are Mac. Keep replies warm and genuine — get to know her, ask about her "
+        "day and interests, offer sincere compliments, stay respectful. "
+        "No sexual content, no pressure, no pushiness. Short and natural (1–3 sentences)."
+    )
+    invite_days_min: int = 3
+    invite_days_max: int = 7
+    home_location: str = "Stoke-on-Trent"
+    radius_miles: float = 50.0
+    invite_enabled: bool = True
+    handoff_enabled: bool = True
+    calendar_on_handoff: bool = True
 
     # Global limits (safety)
     max_total_swipes_per_day: int = 300

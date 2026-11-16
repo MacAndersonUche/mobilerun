@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime, date
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional  # noqa: F401 — Optional used by record_date_flow
 from collections import defaultdict
 
 
@@ -27,6 +27,11 @@ class AppStats:
     total_openers: int = 0
     total_replies: int = 0
     total_matches: int = 0
+
+    # Date-flow
+    chats_active: int = 0
+    invites_sent: int = 0
+    dates_booked: int = 0
 
     # Current state
     unread_messages: int = 0
@@ -178,6 +183,25 @@ class DatingStats:
         stats = self.get_or_create_app_stats(app_name, package_name)
         stats.daily_opener_target = target
 
+    def record_date_flow(
+        self,
+        package_name: str,
+        app_name: str,
+        *,
+        chats_active: Optional[int] = None,
+        invite_sent: bool = False,
+        date_booked: bool = False,
+    ):
+        """Update date-flow counters for an app."""
+        stats = self.get_or_create_app_stats(app_name, package_name)
+        if chats_active is not None:
+            stats.chats_active = max(0, int(chats_active))
+        if invite_sent:
+            stats.invites_sent += 1
+        if date_booked:
+            stats.dates_booked += 1
+        stats.last_active = datetime.now().isoformat()
+
     def get_summary(self) -> Dict:
         """Get summary of all stats."""
         return {
@@ -209,6 +233,11 @@ class DatingStats:
                         "replies": stats.total_replies,
                         "messages": stats.total_openers + stats.total_replies,
                         "matches": stats.total_matches,
+                    },
+                    "date_flow": {
+                        "chats_active": stats.chats_active,
+                        "invites_sent": stats.invites_sent,
+                        "dates_booked": stats.dates_booked,
                     },
                     "inbox": {
                         "unread": stats.unread_messages,

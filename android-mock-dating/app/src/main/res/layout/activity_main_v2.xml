@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Layout variant v2: different resource-ids for selector rediscovery E2E -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:id="@+id/mainContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/nameLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Alex"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/profileBio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Coffee, dogs, and bad jokes."
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/stats"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Swipes: 0 | Openers: 0 | Replies: 0"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/matchesList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:contentDescription="Matches list"
+            android:text="Matches"
+            android:textSize="16sp"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnNope"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Pass" />
+
+            <Button
+                android:id="@+id/btnHeart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Like" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/chatComposer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:hint="Write something"
+            android:inputType="textMultiLine"
+            android:minLines="2" />
+
+        <Button
+            android:id="@+id/btnSendMessage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Send"
+            android:contentDescription="Send message" />
+
+        <Button
+            android:id="@+id/btnShowVerify"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Simulate verification"
+            android:contentDescription="Simulate verification prompt" />
+
+        <TextView
+            android:id="@+id/chatLog"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="16dp"
+            android:layout_weight="1"
+            android:text="Chat:\n"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/verifyPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF1A1A1E"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/verifyTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="Verify your identity"
+            android:textColor="#FFFFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:contentDescription="Verify your identity" />
+
+        <TextView
+            android:id="@+id/verifyBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:text="We noticed unusual activity. Take a selfie for photo verification."
+            android:textColor="#FFDDDDDD"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/btnDismissVerify"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="I handled this (human)"
+            android:contentDescription="Dismiss verification after human handled it" />
+    </LinearLayout>
+</FrameLayout>
