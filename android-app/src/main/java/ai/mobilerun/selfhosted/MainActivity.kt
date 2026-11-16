@@ -217,11 +217,30 @@ fun MainScreen(
                         ) {
                             Text(if (pairBusy) "Pairing…" else "Scan QR to pair")
                         }
+                        var pasteCode by remember { mutableStateOf("") }
+                        OutlinedTextField(
+                            value = pasteCode,
+                            onValueChange = { pasteCode = it },
+                            label = { Text("Or paste pairing code") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            enabled = !pairBusy,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                pairError = null
+                                backendClient.pairWithCode(pasteCode)
+                            },
+                            enabled = !pairBusy && pasteCode.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Connect with code")
+                        }
                         Text(
                             "Pairing status: " + when {
                                 pairBusy -> "exchanging code…"
                                 pairError != null -> "failed"
-                                else -> "waiting for scan"
+                                else -> "waiting for scan / code"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -410,6 +410,27 @@ class BackendClient(private val context: Context) {
         }
     }
 
+    /** Paste / type the short pairing token from the Devices page (no QR). */
+    fun pairWithCode(rawCode: String) {
+        val raw = rawCode.trim().trim('"')
+        if (raw.contains("://") || raw.contains("/pair?")) {
+            pairFromUri(Uri.parse(raw))
+            return
+        }
+        var token = raw.removePrefix("token=")
+        if (token.contains("token=")) {
+            token = token.substringAfter("token=")
+        }
+        token = token.substringBefore('&').substringBefore('#').trim()
+        if (token.isBlank()) {
+            val msg = "Paste the pairing code from Devices (or the full link)"
+            _pairErrorFlow.value = msg
+            prefs().edit().putString("last_pair_error", msg).apply()
+            return
+        }
+        pairFromUri(Uri.parse("mobilerun://pair?token=${Uri.encode(token)}"))
+    }
+
     /** @deprecated use pairFromUri */
     fun pair(backendUrl: String, token: String, wsUrl: String? = null) {
         pairFromUri(
