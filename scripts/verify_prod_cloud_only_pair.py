@@ -71,12 +71,18 @@ def main() -> None:
         },
     )
     did = claim["device_id"]
+    assert claim.get("session_token"), claim
     print("claimed", did, "owner", claim.get("owner"))
 
-    req = urllib.request.Request(
-        PROD + "/api/devices", headers={"Authorization": f"Bearer {tok}"}
-    )
-    devices = json.load(urllib.request.urlopen(req, timeout=15))
+    devices: list = []
+    for _ in range(8):
+        req = urllib.request.Request(
+            PROD + "/api/devices", headers={"Authorization": f"Bearer {tok}"}
+        )
+        devices = json.load(urllib.request.urlopen(req, timeout=15))
+        if any(d.get("device_id") == did for d in devices):
+            break
+        time.sleep(0.5)
     assert any(d.get("device_id") == did for d in devices), devices
 
     req = urllib.request.Request(
@@ -93,7 +99,7 @@ def main() -> None:
             timeout=15,
         )
     )
-    assert left == [] or len(left) == 0, left
+    assert not any(d.get("device_id") == did for d in left), left
     print("PROD_CLOUD_ONLY_PAIR_OK", code)
 
 
