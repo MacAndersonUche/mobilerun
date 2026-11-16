@@ -107,7 +107,11 @@ def test_chat_run_task_errors_when_device_offline(client):
     assert res.status_code == 200
     body = res.json()
     assert body["intent"] == "run_task"
-    assert body.get("error") or "Error" in body["reply"] or "offline" in body["reply"].lower()
+    assert (
+        body.get("error")
+        or "Error" in body["reply"]
+        or "offline" in body["reply"].lower()
+    )
     assert "Queued task" not in body["reply"]
 
 

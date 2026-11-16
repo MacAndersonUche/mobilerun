@@ -1309,44 +1309,66 @@ async def submit_task(
 async def get_task_status(
     task_id: str, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Get status of a specific task (memory + durable Dynamo job)."""
-    if task_id in active_runs:
-        return TaskStatus(**active_runs[task_id])
-
-    for run in run_history:
-        if run["task_id"] == task_id:
-            return TaskStatus(**run)
-
+    """Get status of a specific task (durable Dynamo job preferred over memory)."""
     try:
         from storage import get_job
     except ImportError:
         from backend.storage import get_job  # type: ignore
 
-    job = get_job(task_id)
+    job = None
+    try:
+        job = get_job(task_id)
+    except Exception:
+        job = None
+
+    mem = active_runs.get(task_id)
+    if not mem:
+        for run in run_history:
+            if run["task_id"] == task_id:
+                mem = run
+                break
+
+    # Prefer durable job when present so WS task_update progress is visible
+    # across HTTP Lambda instances (in-memory active_runs stays stale).
     if job:
         started = job.get("created_at") or job.get("started_at")
         if isinstance(started, (int, float)):
             started_at = datetime.fromtimestamp(float(started))
+        elif mem and mem.get("started_at"):
+            started_at = mem["started_at"]
         else:
             started_at = datetime.now()
         completed = job.get("completed_at")
         completed_at = (
             datetime.fromtimestamp(float(completed))
             if isinstance(completed, (int, float))
-            else None
+            else (mem or {}).get("completed_at")
         )
+        status = str(job.get("status") or (mem or {}).get("status") or "pending")
+        result = job.get("result") or (job.get("state") or {}).get("last_action")
+        if mem:
+            mem["status"] = status
+            if result is not None:
+                mem["result"] = result
+            if completed_at is not None:
+                mem["completed_at"] = completed_at
         return TaskStatus(
             task_id=task_id,
-            device_id=str(job.get("device_id") or ""),
-            instruction=str(job.get("instruction") or ""),
-            status=str(job.get("status") or "pending"),
+            device_id=str(job.get("device_id") or (mem or {}).get("device_id") or ""),
+            instruction=str(
+                job.get("instruction") or (mem or {}).get("instruction") or ""
+            ),
+            status=status,
             current_step=int((job.get("state") or {}).get("steps") or 0),
-            max_steps=int(job.get("max_steps") or 15),
-            result=job.get("result") or (job.get("state") or {}).get("last_action"),
-            error=job.get("error"),
+            max_steps=int(job.get("max_steps") or (mem or {}).get("max_steps") or 15),
+            result=result if result is not None else (mem or {}).get("result"),
+            error=job.get("error") or (mem or {}).get("error"),
             started_at=started_at,
             completed_at=completed_at,
         )
+
+    if mem:
+        return TaskStatus(**mem)
 
     raise HTTPException(status_code=404, detail="Task not found")
 

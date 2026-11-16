@@ -282,14 +282,19 @@ export default function ChatPage() {
         </div>
 
         <div className="space-y-2 rounded-2xl border border-line bg-surface px-3 py-2.5">
-          <label className="block text-xs font-medium uppercase tracking-wide text-mute">
+          <label
+            htmlFor="chat-device-picker"
+            className="block text-xs font-medium uppercase tracking-wide text-mute"
+          >
             Target device
           </label>
           <select
+            id="chat-device-picker"
             data-testid="chat-device-picker"
             className="mr-input text-sm"
             value={deviceId}
             onChange={(e) => setDeviceId(e.target.value)}
+            aria-label="Target device"
           >
             {devices.length === 0 && (
               <option value="">No phones linked</option>
