@@ -1,38 +1,10 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
 import { useAuth } from '../auth';
-import { Button, Card, ErrorBanner, Input } from '../components/ui';
-import { getAuthToken, getBackendUrl } from '../config';
+import { Button, Card } from '../components/ui';
+import { getBackendUrl } from '../config';
 
 export default function AccountPage() {
   const { email, logout } = useAuth();
-  const [userCode, setUserCode] = useState('');
-  const [linkMsg, setLinkMsg] = useState<string | null>(null);
-  const [linkErr, setLinkErr] = useState<string | null>(null);
-  const [linking, setLinking] = useState(false);
-
-  const approvePhone = async () => {
-    setLinking(true);
-    setLinkErr(null);
-    setLinkMsg(null);
-    try {
-      const res = await axios.post(
-        `${getBackendUrl()}/api/auth/device/approve`,
-        { user_code: userCode.trim().toUpperCase() },
-        { headers: { Authorization: `Bearer ${getAuthToken()}` } }
-      );
-      setLinkMsg(`Phone linked · ${res.data.device_id}`);
-      setUserCode('');
-    } catch (e: unknown) {
-      const msg = axios.isAxiosError(e)
-        ? String(e.response?.data?.detail || e.message)
-        : 'Approve failed';
-      setLinkErr(msg);
-    } finally {
-      setLinking(false);
-    }
-  };
 
   return (
     <div className="mr-page space-y-4">
@@ -59,37 +31,19 @@ export default function AccountPage() {
             <span className="ml-2 break-all">{email || 'self-hosted'}</span>
           </p>
         </div>
-        <span className="text-sm text-mute">Edit</span>
       </Card>
 
       <Card className="space-y-3">
         <div>
           <h2 className="font-medium">Link a phone</h2>
           <p className="text-sm text-mute">
-            Open the APK, tap Sign in and link phone, then type the 6-character
-            code here. Same Cognito account auto-links the executor. QR is only
-            for downloading the APK from Devices / Settings.
+            Open Devices → Connect phone and scan the QR with the MobileRun APK
+            (or copy the link). No device code or in-app sign-in.
           </p>
         </div>
-        {linkErr && <ErrorBanner message={linkErr} />}
-        {linkMsg && <p className="text-sm text-ok">{linkMsg}</p>}
-        <label className="block text-sm text-mute">
-          Device code
-          <Input
-            className="mt-1 uppercase tracking-widest"
-            value={userCode}
-            onChange={(e) => setUserCode(e.target.value.toUpperCase())}
-            placeholder="A1B2C3"
-            maxLength={8}
-          />
-        </label>
-        <Button
-          className="w-full"
-          disabled={linking || userCode.trim().length < 4}
-          onClick={approvePhone}
-        >
-          {linking ? 'Linking…' : 'Approve phone'}
-        </Button>
+        <Link to="/devices" className="mr-btn-primary inline-block text-sm">
+          Open Devices
+        </Link>
       </Card>
 
       <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">

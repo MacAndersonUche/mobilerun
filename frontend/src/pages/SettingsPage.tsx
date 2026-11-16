@@ -238,7 +238,7 @@ export default function SettingsPage() {
             <p className="mb-4 text-sm text-mute">
               QR is download-only — scan to install the latest GitHub release APK.
               Then open the app, finish the permissions checklist, and sign in with
-              the same Cognito account as this UI (no pairing QR).
+              this UI. Pair via Devices → Connect phone QR (no in-app login).
             </p>
             <div className="inline-block rounded-lg bg-white p-4">
               <img

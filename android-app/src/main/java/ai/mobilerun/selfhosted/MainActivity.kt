@@ -19,11 +19,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var backendClient: BackendClient
-    private lateinit var cognitoAuth: CognitoAuth
     private var pendingFps: Int = 3
     private var pendingQuality: Int = 45
     private var mediaProjectionGranted = false
@@ -47,15 +45,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val qrLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val data = result.data?.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            backendClient.pairFromUri(data)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         backendClient = BackendClient(this)
-        cognitoAuth = CognitoAuth(this)
         backendClient.onStreamPermissionNeeded = { fps, quality ->
             pendingFps = fps
             pendingQuality = quality
-            // If capture is already running (consent persisted for this process), reuse it
             if (ScreenCaptureService.isStreaming()) {
                 ScreenCaptureService.updateParams(fps, quality)
                 backendClient.reportPermissions(true)
@@ -72,7 +77,6 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     activity = this,
                     backendClient = backendClient,
-                    cognitoAuth = cognitoAuth,
                     mediaProjectionGranted = mediaProjectionGranted,
                     onRequestNotifications = {
                         if (Build.VERSION.SDK_INT >= 33) {
@@ -84,6 +88,9 @@ class MainActivity : ComponentActivity() {
                         pendingQuality = 45
                         val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                         projectionLauncher.launch(mgr.createScreenCaptureIntent())
+                    },
+                    onScanQr = {
+                        qrLauncher.launch(Intent(this, QrScanActivity::class.java))
                     },
                     onPermissionsChanged = {
                         backendClient.reportPermissions(mediaProjectionGranted)
@@ -106,10 +113,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleDeepLink(uri: Uri) {
-        // Legacy deep link ignored for pairing — Cognito login links the device.
-        // Keep no-op so old QR links don't crash.
-        if (uri.scheme == "mobilerun" && uri.host == "pair") {
-            // no pairing via QR
+        val isPair = (uri.scheme == "mobilerun" && uri.host == "pair") ||
+            (uri.path?.contains("pair") == true && uri.getQueryParameter("token") != null)
+        if (isPair && uri.getQueryParameter("token") != null) {
+            backendClient.pairFromUri(uri)
         }
     }
 }
@@ -118,28 +125,25 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     activity: ComponentActivity,
     backendClient: BackendClient,
-    cognitoAuth: CognitoAuth,
     mediaProjectionGranted: Boolean,
     onRequestNotifications: () -> Unit,
     onRequestLiveView: () -> Unit,
+    onScanQr: () -> Unit,
     onPermissionsChanged: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     var connectionStatus by remember { mutableStateOf("Disconnected") }
     var routeStatus by remember { mutableStateOf("Route: —") }
     var lastTask by remember { mutableStateOf("No tasks yet") }
     var streamStatus by remember { mutableStateOf("idle") }
-    var userCode by remember { mutableStateOf<String?>(null) }
-    var linkStatus by remember { mutableStateOf(cognitoAuth.savedEmail() ?: "Not signed in") }
-    var busy by remember { mutableStateOf(false) }
+    var paired by remember { mutableStateOf(backendClient.isPaired()) }
+    var pairBusy by remember { mutableStateOf(false) }
+    var pairError by remember { mutableStateOf<String?>(null) }
+    var showAdvanced by remember { mutableStateOf(false) }
+    var advancedUrl by remember {
+        mutableStateOf(backendClient.defaultBackendHttp() ?: BuildConfig.DEFAULT_CLOUD_HTTP)
+    }
     var snap by remember {
         mutableStateOf(PermissionStatus.snapshot(activity, mediaProjectionGranted))
-    }
-    var backendUrl by remember {
-        mutableStateOf(
-            backendClient.defaultBackendHttp()
-                ?: "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com",
-        )
     }
 
     fun refreshPerms() {
@@ -159,6 +163,9 @@ fun MainScreen(
     LaunchedEffect(Unit) {
         backendClient.streamFlow.collect { streamStatus = it }
     }
+    LaunchedEffect(Unit) {
+        backendClient.pairedFlow.collect { paired = it }
+    }
     LaunchedEffect(mediaProjectionGranted) { refreshPerms() }
 
     Surface(
@@ -175,144 +182,158 @@ fun MainScreen(
         ) {
             Text(text = "MobileRun", style = MaterialTheme.typography.headlineLarge)
             Text(
-                text = "Executor APK · wireless · MacAI",
+                text = "Executor · wireless · MacAI",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            StatusCard("Account", linkStatus, cognitoAuth.savedEmail() != null)
-            StatusCard("Status", connectionStatus, connectionStatus.contains("Connected"))
-            StatusCard("Active route", routeStatus, routeStatus.contains("LAN") || routeStatus.contains("DISCOVERED") || routeStatus.contains("CLOUD"))
-            StatusCard("Last Task", lastTask, true)
-            StatusCard("Live stream", streamStatus, streamStatus == "streaming")
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("Permissions checklist", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Required so the hosted UI can drive this phone. Re-checked every time you return.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    if (PermissionStatus.restrictedSettingsNeeded(activity)) {
-                        AssistCard(
-                            title = "Android 13+ · Allow restricted settings",
-                            body = "Because this APK is sideloaded: Settings → Apps → MobileRun → ⋮ (top right) → Allow restricted settings. Then enable Accessibility.",
-                            actionLabel = "Open app settings",
-                            onClick = {
-                                PermissionStatus.openAppDetails(activity)
-                                refreshPerms()
-                            },
-                        )
-                    }
-
-                    PermRow("Accessibility service", snap.accessibility) {
-                        PermissionStatus.openAccessibilitySettings(activity)
-                        refreshPerms()
-                    }
-                    PermRow("Notifications", snap.notifications, onClick = {
-                        onRequestNotifications()
-                        refreshPerms()
-                    })
-                    PermRow("Screen capture (live view)", snap.mediaProjection || mediaProjectionGranted) {
-                        onRequestLiveView()
-                    }
-                    PermRow("Battery unrestricted", snap.batteryOptimization) {
-                        PermissionStatus.openBatterySettings(activity)
-                        refreshPerms()
-                    }
-                    PermRow("Draw over other apps", snap.overlay) {
-                        PermissionStatus.openOverlaySettings(activity)
-                        refreshPerms()
-                    }
-                    PermRow("Query installed packages", snap.queryPackages) {
-                        // Install-time permission; open details for awareness
-                        PermissionStatus.openAppDetails(activity)
-                    }
-                    PermRow("Foreground connection", snap.foregroundService) {
-                        ConnectionService.start(activity)
-                        refreshPerms()
-                    }
-
-                    TextButton(onClick = { refreshPerms() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Re-check permissions")
-                    }
-                }
-            }
-
-            if (userCode != null) {
+            if (!paired) {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            "Enter this code on the hosted UI → Account → Link a phone",
-                            style = MaterialTheme.typography.bodySmall,
+                            "Scan the QR on ${BuildConfig.PAIR_UI_HINT}",
+                            style = MaterialTheme.typography.titleMedium,
                             textAlign = TextAlign.Center,
                         )
-                        Text(text = userCode!!, style = MaterialTheme.typography.headlineMedium)
-                        Text(linkStatus, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Sign in on the web UI → Devices → Connect phone, then scan that QR here (or open the link after install). No backend URL or password in the app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                        Button(
+                            onClick = {
+                                pairError = null
+                                onScanQr()
+                            },
+                            enabled = !pairBusy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (pairBusy) "Pairing…" else "Scan QR to pair")
+                        }
+                        if (pairError != null) {
+                            Text(
+                                pairError!!,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            } else {
+                StatusCard("Status", connectionStatus, connectionStatus.contains("Connected"))
+                StatusCard(
+                    "Active route",
+                    routeStatus,
+                    routeStatus.contains("LAN") || routeStatus.contains("DISCOVERED") || routeStatus.contains("CLOUD"),
+                )
+                StatusCard("Last Task", lastTask, true)
+                StatusCard("Live stream", streamStatus, streamStatus == "streaming")
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("Permissions checklist", style = MaterialTheme.typography.titleMedium)
+                        if (PermissionStatus.restrictedSettingsNeeded(activity)) {
+                            AssistCard(
+                                title = "Android 13+ · Allow restricted settings",
+                                body = "Settings → Apps → MobileRun → ⋮ → Allow restricted settings. Then enable Accessibility.",
+                                actionLabel = "Open app settings",
+                                onClick = {
+                                    PermissionStatus.openAppDetails(activity)
+                                    refreshPerms()
+                                },
+                            )
+                        }
+                        PermRow("Accessibility service", snap.accessibility) {
+                            PermissionStatus.openAccessibilitySettings(activity)
+                            refreshPerms()
+                        }
+                        PermRow("Notifications", snap.notifications, onClick = {
+                            onRequestNotifications()
+                            refreshPerms()
+                        })
+                        PermRow("Screen capture (live view)", snap.mediaProjection || mediaProjectionGranted) {
+                            onRequestLiveView()
+                        }
+                        PermRow("Battery unrestricted", snap.batteryOptimization) {
+                            PermissionStatus.openBatterySettings(activity)
+                            refreshPerms()
+                        }
+                        PermRow("Draw over other apps", snap.overlay) {
+                            PermissionStatus.openOverlaySettings(activity)
+                            refreshPerms()
+                        }
+                        PermRow("Foreground connection", snap.foregroundService) {
+                            ConnectionService.start(activity)
+                            refreshPerms()
+                        }
+                        TextButton(onClick = { refreshPerms() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Re-check permissions")
+                        }
                     }
                 }
             }
 
-            OutlinedTextField(
-                value = backendUrl,
-                onValueChange = { backendUrl = it },
-                label = { Text("Backend URL") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-
-            Button(
-                onClick = {
-                    busy = true
-                    scope.launch {
-                        try {
-                            val started = cognitoAuth.startDeviceCode(backendUrl.trim())
-                            userCode = started.user_code
-                            linkStatus = "Approve ${started.user_code} on Account"
-                            val tok = cognitoAuth.pollDeviceCode(
-                                backendUrl.trim(),
-                                started.device_code,
-                                started.interval,
-                            ) { linkStatus = it }
-                            tok.access_token?.let { backendClient.setAuthToken(it, backendUrl.trim()) }
-                            tok.session_token?.let {
-                                backendClient.setSessionFromDeviceCode(it, tok.device_id, tok.owner)
+            TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                Text(if (showAdvanced) "Hide advanced" else "Advanced")
+            }
+            if (showAdvanced) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Backend override (optional)", style = MaterialTheme.typography.titleSmall)
+                        OutlinedTextField(
+                            value = advancedUrl,
+                            onValueChange = { advancedUrl = it },
+                            label = { Text("HTTP API URL") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        Button(
+                            onClick = {
+                                backendClient.setCloudEndpoints(advancedUrl.trim(), null)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Save override")
+                        }
+                        if (paired) {
+                            TextButton(
+                                onClick = {
+                                    backendClient.unpair()
+                                    paired = false
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Unpair this phone")
                             }
-                            ConnectionService.start(activity)
-                            backendClient.reportPermissions(mediaProjectionGranted)
-                            linkStatus = tok.owner ?: "Linked"
-                            userCode = null
-                        } catch (e: Exception) {
-                            linkStatus = "Link failed: ${e.message}"
-                        } finally {
-                            busy = false
-                            refreshPerms()
                         }
                     }
-                },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (busy) "Waiting…" else "Sign in & link phone")
+                }
             }
 
-            Text(
-                text = "Same Cognito account as the hosted UI. QR codes are only for downloading this APK.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
             Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+
+    // Observe pair failures from client
+    LaunchedEffect(Unit) {
+        backendClient.pairErrorFlow.collect {
+            pairError = it
+            pairBusy = false
+        }
+    }
+    LaunchedEffect(Unit) {
+        backendClient.pairBusyFlow.collect { pairBusy = it }
     }
 }
 

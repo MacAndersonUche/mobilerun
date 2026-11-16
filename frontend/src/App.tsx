@@ -33,16 +33,22 @@ import SocialPage from './pages/SocialPage';
 import NeedsYouPage from './pages/NeedsYouPage';
 import MatchesPage from './pages/MatchesPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
+import PairPage from './pages/PairPage';
 import { cn } from './lib/cn';
 
 function Shell() {
   const { token } = useAuth();
   const location = useLocation();
-  // Cognito redirect must render without a token
-  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/auth/')) {
+  // Cognito redirect + HTTPS pairing landing must render without a token
+  if (
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/auth/') ||
+      window.location.pathname.startsWith('/pair'))
+  ) {
     return (
       <Routes>
         <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <Route path="/pair" element={<PairPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
@@ -113,6 +119,7 @@ function Shell() {
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/account" element={<AccountPage />} />
+            <Route path="/pair" element={<PairPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

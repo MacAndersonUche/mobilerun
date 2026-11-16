@@ -25,34 +25,72 @@ def _table(name_env: str):
     return _dynamodb.Table(table_name)
 
 
-# --- Pairing tokens (settings table with key prefix) ---
+# --- Pairing tokens (hashed at rest; never store plaintext token) ---
+
+
+def hash_secret(token: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def save_pairing_token(token: str, data: Dict[str, Any]) -> None:
-    table = _table("SETTINGS_TABLE")
-    if table is None:
-        return
-    item = {
-        "key": f"pairing:{token}",
-        **{k: v for k, v in data.items() if k != "key"},
-        "ttl": int(data.get("expires_at", time.time() + 600)),
-    }
-    table.put_item(Item=item)
+    """Persist pairing payload keyed by sha256(token). Plaintext token is never stored."""
+    payload = {k: v for k, v in (data or {}).items() if k not in ("key", "token")}
+    payload["_ttl_seconds"] = max(
+        60,
+        int(float(payload.get("expires_at") or time.time() + 600) - time.time()) + 30,
+    )
+    _settings_put(f"pairing:{hash_secret(token)}", payload)
 
 
 def get_pairing_token(token: str) -> Optional[Dict[str, Any]]:
-    table = _table("SETTINGS_TABLE")
-    if table is None:
-        return None
-    resp = table.get_item(Key={"key": f"pairing:{token}"})
-    return resp.get("Item")
+    return _settings_get(f"pairing:{hash_secret(token)}")
 
 
 def delete_pairing_token(token: str) -> None:
+    key = f"pairing:{hash_secret(token)}"
     table = _table("SETTINGS_TABLE")
-    if table is None:
+    if table is not None:
+        table.delete_item(Key={"key": key})
         return
-    table.delete_item(Key={"key": f"pairing:{token}"})
+    import json
+    from pathlib import Path
+
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    safe = key.replace(":", "_").replace("/", "_")
+    path = root / f"{safe}.json"
+    if path.exists():
+        path.unlink()
+
+
+def revoke_device_session(session_token: str) -> None:
+    """Invalidate a long-lived device credential."""
+    key = f"session:{session_token}"
+    table = _table("SETTINGS_TABLE")
+    if table is not None:
+        table.delete_item(Key={"key": key})
+        return
+    from pathlib import Path
+
+    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
+    safe = key.replace(":", "_").replace("/", "_")
+    path = root / f"{safe}.json"
+    if path.exists():
+        path.unlink()
+
+
+def remove_owned_device(owner: str, device_id: str) -> bool:
+    owner_key = (owner or "").strip().lower()
+    if not owner_key or not device_id:
+        return False
+    blob = get_user_setting(owner_key, "devices") or {"devices": {}}
+    devices = dict(blob.get("devices") or {})
+    if device_id not in devices:
+        return False
+    devices.pop(device_id, None)
+    save_user_setting(owner_key, "devices", {"devices": devices})
+    return True
 
 
 # --- WebSocket connections ---
