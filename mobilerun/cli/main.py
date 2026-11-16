@@ -1573,54 +1573,60 @@ def dating(start: bool, stop: bool, status: bool, stats: bool, backend: str):
             response = requests.post(f"{backend}/api/dating/start")
             response.raise_for_status()
             console.print("[green]✓ Dating mode started![/]")
-        
+
         elif stop:
             console.print("[blue]⏹️  Stopping dating mode...[/]")
             response = requests.post(f"{backend}/api/dating/stop")
             response.raise_for_status()
             console.print("[green]✓ Dating mode stopped![/]")
-        
+
         elif stats:
             console.print("[blue]📊 Fetching dating statistics...[/]")
             response = requests.get(f"{backend}/api/dating/stats")
             response.raise_for_status()
             data = response.json()
-            
+
             console.print(f"\n[bold]Total Sessions:[/] {data['total_sessions']}")
             console.print(f"[bold]Runtime:[/] {data['total_runtime_minutes']} minutes")
             console.print(f"\n[bold]Today:[/]")
             console.print(f"  Swipes: {data['today']['swipes']}")
             console.print(f"  Messages: {data['today']['messages']}")
-            
+
             console.print(f"\n[bold]Per-App Stats:[/]")
-            for app in data['apps']:
+            for app in data["apps"]:
                 console.print(f"\n[cyan]{app['name']}[/] ({app['package']})")
-                console.print(f"  Today: {app['today']['swipes']} swipes, {app['today']['messages']} messages")
-                console.print(f"  Total: {app['total']['swipes']} swipes, {app['total']['messages']} messages")
-                console.print(f"  Inbox: {app['inbox']['unread']} unread, {app['inbox']['new_matches']} new matches")
-        
+                console.print(
+                    f"  Today: {app['today']['swipes']} swipes, {app['today']['messages']} messages"
+                )
+                console.print(
+                    f"  Total: {app['total']['swipes']} swipes, {app['total']['messages']} messages"
+                )
+                console.print(
+                    f"  Inbox: {app['inbox']['unread']} unread, {app['inbox']['new_matches']} new matches"
+                )
+
         else:
             console.print("[blue]📊 Dating mode status...[/]")
             response = requests.get(f"{backend}/api/dating/status")
             response.raise_for_status()
             state = response.json()
-            
-            if state['running']:
+
+            if state["running"]:
                 status_text = "[green]Running[/]"
-                if state['paused']:
+                if state["paused"]:
                     status_text = "[yellow]Paused[/]"
             else:
                 status_text = "[dim]Stopped[/]"
-            
+
             console.print(f"Status: {status_text}")
-            if state['current_app']:
+            if state["current_app"]:
                 console.print(f"Current app: {state['current_app']}")
-            
+
             response = requests.get(f"{backend}/api/dating/review-queue")
             response.raise_for_status()
             queue = response.json()
             console.print(f"Review queue: {len(queue['messages'])} messages")
-    
+
     except requests.exceptions.ConnectionError:
         console.print(f"[red]❌ Cannot connect to backend at {backend}[/]")
         console.print("\n[yellow]Start the backend first:[/] mobilerun serve")
