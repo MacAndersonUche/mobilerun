@@ -177,6 +177,74 @@ jobs:
           echo "HTTP $code"
           test "$code" = "401" -o "$code" = "403"
 
+          echo "Purge test/CI devices from Mac + admin Dynamo lists (keep real devices only if any)..."
+          pip install -q boto3
+          python3 <<'PY'
+          import time
+          import boto3
+
+          table_name = "mobilerun-settings"
+          tbl = boto3.resource("dynamodb").Table(table_name)
+          owners = [
+              "macandersonuche@yahoo.com",
+              "admin@local",
+              "admin",
+              "ci-e2e@local",
+              "ci-e2e",
+          ]
+
+          def looks_like_test(name: str, did: str) -> bool:
+              blob = f"{name} {did}".lower()
+              return any(
+                  t in blob
+                  for t in (
+                      "smoke",
+                      "emu",
+                      "emulator",
+                      "ci-",
+                      "ci_",
+                      "test",
+                      "pixel_ci",
+                      "device_ci",
+                      "github",
+                      "runner",
+                      "verify-phone",
+                      "smoke-phone",
+                  )
+              )
+
+          for owner in owners:
+              key = f"user:{owner}:devices"
+              item = tbl.get_item(Key={"key": key}).get("Item") or {}
+              data = item.get("data") or {}
+              devices = dict(data.get("devices") or {})
+              if not devices:
+                  print(f"{owner}: empty")
+                  continue
+              keep = {}
+              removed = []
+              for did, row in devices.items():
+                  row = dict(row or {})
+                  name = str(row.get("name") or row.get("device_name") or "")
+                  did_s = str(did)
+                  # Mac Cognito: keep real phones; admin/ci: clear all
+                  if owner.startswith("macanderson") and not looks_like_test(name, did_s):
+                      keep[did_s] = row
+                  else:
+                      removed.append(did_s)
+              print(f"{owner}: had={len(devices)} remove={len(removed)} keep={len(keep)}")
+              tbl.put_item(
+                  Item={
+                      "key": key,
+                      "user_id": owner,
+                      "name": "devices",
+                      "data": {"devices": keep},
+                      "updated_at": int(time.time()),
+                  }
+              )
+          print("Purge OK")
+          PY
+
           echo "Login (ci-e2e) + device-code + QR pair create + APK download QR..."
           # Dedicated CI user so smoke devices never land on Mac/admin
           TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
@@ -202,6 +270,9 @@ jobs:
           # Cleanup — never leave CI devices on the account
           DID=$(python3 -c "import json; print(json.load(open('/tmp/claim.json'))['device_id'])")
           curl -sfS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
+          # Assert ci-e2e list empty after revoke
+          curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
+          python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); assert d==[] or len(d)==0, d"
           # /health alias
           curl -sfS "$API_URL/health" | tee /tmp/health_alias.json
           python3 -c "import json; d=json.load(open('/tmp/health_alias.json')); assert d.get('status')=='ok', d"
