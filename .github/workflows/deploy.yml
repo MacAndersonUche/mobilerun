@@ -151,18 +151,9 @@ jobs:
             printf '' > /tmp/lambda-asset/mobilerun/server/__init__.py
             cp mobilerun/server/mdns.py /tmp/lambda-asset/mobilerun/server/
           fi
-          # Verify imports from a clean cwd so checkout mobilerun/ is not preferred
-          (cd /tmp && PYTHONPATH=/tmp/lambda-asset python3 -c "
-from backend.main import handler
-from backend.ws_handler import handler as w
-from backend.step_worker import handler as s
-from mobilerun.connectivity.endpoints import build_pairing_url
-from mobilerun.agent.humanizer import describe_presets
-from mobilerun.needs_you.queue import NeedsYouQueue
-from mobilerun.selectors.cache import SelectorCache
-from mobilerun.safety.runtime import get_safety_state
-print('imports ok', handler, w, s, describe_presets)
-")
+          # Verify imports from a clean cwd so checkout mobilerun/ is not preferred.
+          # Single-line -c keeps the run:| YAML block valid (no column-0 lines).
+          (cd /tmp && PYTHONPATH=/tmp/lambda-asset python3 -c 'from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; from mobilerun.connectivity.endpoints import build_pairing_url; from mobilerun.agent.humanizer import describe_presets; from mobilerun.needs_you.queue import NeedsYouQueue; from mobilerun.selectors.cache import SelectorCache; from mobilerun.safety.runtime import get_safety_state; print("imports ok", handler, w, s, describe_presets)')
           ls /tmp/lambda-asset/backend | head
           ls /tmp/lambda-asset/mobilerun | head
 

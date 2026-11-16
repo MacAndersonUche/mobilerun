@@ -202,13 +202,15 @@ export default function DatingPage() {
           headers: authHeaders(),
         }),
       ]);
-      const queueData = await soft<{ messages?: unknown[] }>(
+      const queueData = await soft<{ messages?: ReviewMessage[] }>(
         '/api/dating/review-queue',
         { messages: [] }
       );
-      const selData = await soft<{ apps?: unknown[] }>('/api/selectors/status', {
-        apps: [],
-      });
+      type SelectorApp = (typeof selectorApps)[number];
+      const selData = await soft<{ apps?: SelectorApp[] }>(
+        '/api/selectors/status',
+        { apps: [] }
+      );
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
