@@ -3,6 +3,7 @@
 
 Simulates claim order: optional dead LAN (≤2s timeout) → baked prod API → Remove.
 """
+
 from __future__ import annotations
 
 import json
@@ -11,8 +12,10 @@ import time
 import urllib.error
 import urllib.request
 
-PROD = sys.argv[1] if len(sys.argv) > 1 else (
-    "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
+PROD = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else ("https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
 )
 DEAD_LAN = "http://203.0.113.1:9"
 

@@ -38,11 +38,18 @@ class BackendClient(private val context: Context) {
         .readTimeout(0, TimeUnit.SECONDS)
         .build()
 
-    /** Short-timeout client for pairing claim — fail LAN fast, fall back to AWS. */
-    private val claimClient = OkHttpClient.Builder()
+    /** LAN/emulator claim — fail fast (≤2s connect) so mobile-data phones reach AWS quickly. */
+    private val claimLanClient = OkHttpClient.Builder()
         .connectTimeout(2, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
-        .callTimeout(3, TimeUnit.SECONDS)
+        .callTimeout(4, TimeUnit.SECONDS)
+        .build()
+
+    /** AWS / execute-api claim — normal timeouts for mobile data. */
+    private val claimCloudClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
         .build()
 
     private val gson = Gson()
@@ -406,7 +413,11 @@ class BackendClient(private val context: Context) {
     private fun claimHttpBases(): List<String> {
         val out = linkedSetOf<String>()
         lanHttp?.trimEnd('/')?.takeIf { it.isNotBlank() && isLocalClaimBase(it) }?.let { out.add(it) }
-        cloudHttp?.trimEnd('/')?.takeIf { it.isNotBlank() && isCloudClaimBase(it) }?.let { out.add(it) }
+        cloudHttp?.trimEnd('/')?.takeIf { it.isNotBlank() }?.let { c ->
+            if (isLocalClaimBase(c) || isCloudClaimBase(c)) out.add(c)
+        }
+        // Always end on baked AWS so mobile-data / code-only pairing works when
+        // LAN is absent or times out in ≤2s.
         out.add(DEFAULT_CLOUD_HTTP.trimEnd('/'))
         return out.toList()
     }
@@ -429,12 +440,13 @@ class BackendClient(private val context: Context) {
         var usedBase: String? = null
         for (httpBase in bases) {
             val t0 = System.nanoTime()
+            val http = if (isLocalClaimBase(httpBase)) claimLanClient else claimCloudClient
             try {
                 val req = Request.Builder()
                     .url("$httpBase/api/auth/pair/claim")
                     .post(body)
                     .build()
-                claimClient.newCall(req).execute().use { resp ->
+                http.newCall(req).execute().use { resp ->
                     val text = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
                         val detail = try {

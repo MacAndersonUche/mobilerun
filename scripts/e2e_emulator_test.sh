@@ -71,16 +71,30 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 WS_HINT=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('websocket_url') or d.get('backend_url') or '')")
-# Claim + WS must hit the emulator gateway. Do not put an unreachable TEST-NET host
-# in cloud= — claim uses HTTP and would fail before LAN fallback.
+# Claim + WS must hit the emulator gateway. URL-encode http(s) query values —
+# raw "http://" inside -d breaks adb/intent parsing.
 LAN_WS="ws://10.0.2.2:8000/api/devices/connect"
-# Short code path (c=) — same as typing the code in-app
-PAIR_URL="mobilerun://pair?c=${TOKEN_PAIR}&cloud=${BACKEND_URL}&cloud_ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}"
+PAIR_URL=$(CODE="$TOKEN_PAIR" BACKEND_URL="$BACKEND_URL" LAN_WS="$LAN_WS" python3 - <<'PY'
+from urllib.parse import urlencode
+import os
+q = urlencode({
+    "c": os.environ["CODE"],
+    "cloud": os.environ["BACKEND_URL"],
+    "cloud_ws": os.environ["LAN_WS"],
+    "lan": os.environ["BACKEND_URL"],
+    "lan_ws": os.environ["LAN_WS"],
+})
+print("mobilerun://pair?" + q)
+PY
+)
+echo "PAIR_URL=$PAIR_URL" | tee -a "$ARTIFACTS_DIR/apk_paths.txt"
 
 echo "== Deep-link pair with short code c= (LAN preferred) =="
+adb logcat -c || true
 adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || \
   adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL"
-sleep 8
+sleep 10
+adb logcat -d -s BackendClient:I BackendClient:W BackendClient:E MainActivity:I 2>/dev/null | tee "$ARTIFACTS_DIR/pair_logcat.txt" | tail -40 || true
 adb exec-out screencap -p > "$ARTIFACTS_DIR/01_paired.png" || true
 echo "pair_ws=$WS_HINT" >> "$ARTIFACTS_DIR/apk_paths.txt"
 echo "pair_url_dual=1" >> "$ARTIFACTS_DIR/apk_paths.txt"
@@ -135,7 +149,19 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
   -d '{"device_name":"emulator","platform":"android"}')
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair_recreate.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
-PAIR_URL="mobilerun://pair?c=${TOKEN_PAIR}&cloud=${BACKEND_URL}&cloud_ws=${LAN_WS}&lan=${BACKEND_URL}&lan_ws=${LAN_WS}"
+PAIR_URL=$(CODE="$TOKEN_PAIR" BACKEND_URL="$BACKEND_URL" LAN_WS="$LAN_WS" python3 - <<'PY'
+from urllib.parse import urlencode
+import os
+q = urlencode({
+    "c": os.environ["CODE"],
+    "cloud": os.environ["BACKEND_URL"],
+    "cloud_ws": os.environ["LAN_WS"],
+    "lan": os.environ["BACKEND_URL"],
+    "lan_ws": os.environ["LAN_WS"],
+})
+print("mobilerun://pair?" + q)
+PY
+)
 adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || true
 sleep 8
 
@@ -1034,7 +1060,13 @@ PROD_PAIR=$(curl -sfS -X POST "$PROD_API/api/auth/pair/create" \
 echo "$PROD_PAIR" | tee "$ARTIFACTS_DIR/prod_cloud_pair.json"
 PROD_CODE=$(echo "$PROD_PAIR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 # Code alone — same as typing in-app; baked DEFAULT_CLOUD_HTTP, zero LAN params
-CLOUD_ONLY_URL="mobilerun://pair?c=${PROD_CODE}"
+CLOUD_ONLY_URL=$(CODE="$PROD_CODE" python3 - <<'PY'
+from urllib.parse import urlencode
+import os
+print("mobilerun://pair?" + urlencode({"c": os.environ["CODE"]}))
+PY
+)
+adb logcat -c || true
 adb shell am start -a android.intent.action.VIEW -d "$CLOUD_ONLY_URL" ai.mobilerun.selfhosted/.MainActivity || \
   adb shell am start -a android.intent.action.VIEW -d "$CLOUD_ONLY_URL"
 # Wait until the device appears on the prod ci-e2e account
