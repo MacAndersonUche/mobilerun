@@ -577,9 +577,9 @@ except Exception:
 @click.option("--ios", is_flag=True, default=False, help="Run on iOS device")
 @click.option(
     "--mode",
-    type=click.Choice(["normal", "dating"]),
+    type=click.Choice(["normal", "dating", "social"]),
     default=None,
-    help="Agent mode: normal (general phone agent) or dating",
+    help="Agent mode: normal, dating, or social",
 )
 @click.option(
     "--speed",

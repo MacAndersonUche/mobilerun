@@ -4,7 +4,7 @@ import axios from 'axios';
 import { getAuthToken, getBackendUrl, getHostedBackendUrl } from '../config';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
 
-type Mode = 'normal' | 'dating';
+type Mode = 'normal' | 'dating' | 'social';
 type Speed = 'fast' | 'balanced' | 'careful';
 
 type Msg = {
@@ -52,7 +52,7 @@ export default function ChatPage() {
         const modeRes = await axios.get(`${apiBase()}/api/mode`, {
           headers: { Authorization: `Bearer ${getAuthToken()}` },
         });
-        if (modeRes.data.mode === 'normal' || modeRes.data.mode === 'dating') {
+        if (['normal', 'dating', 'social'].includes(modeRes.data.mode)) {
           setMode(modeRes.data.mode);
         }
         if (['fast', 'balanced', 'careful'].includes(modeRes.data.speed_preset)) {
@@ -172,8 +172,8 @@ export default function ChatPage() {
       <div className="flex-1 overflow-y-auto bg-gray-800/60 rounded-lg p-4 space-y-3">
         {messages.length === 0 && (
           <div className="text-gray-500 text-sm">
-            Try: “device info”, “open Settings”, “switch to dating”, “speed careful”,
-            “dating stats”, “start dating dry”.
+            Try: “device info”, “open Settings”, “switch to social”, “needs you”,
+            “speed careful”, “dating stats”, “start dating dry”.
           </div>
         )}
         {messages.map((m, i) => (

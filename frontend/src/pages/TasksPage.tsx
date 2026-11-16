@@ -11,7 +11,7 @@ interface Device {
   connected: boolean;
 }
 
-type Mode = 'normal' | 'dating';
+type Mode = 'normal' | 'dating' | 'social';
 type Speed = 'fast' | 'balanced' | 'careful';
 
 export default function TasksPage() {
@@ -54,7 +54,7 @@ export default function TasksPage() {
       const res = await axios.get(`${getBackendUrl()}/api/mode`, {
         headers: authHeaders(),
       });
-      if (res.data.mode === 'normal' || res.data.mode === 'dating') {
+      if (['normal', 'dating', 'social'].includes(res.data.mode)) {
         setMode(res.data.mode);
       }
       if (['fast', 'balanced', 'careful'].includes(res.data.speed_preset)) {
@@ -82,8 +82,12 @@ export default function TasksPage() {
   const submitTask = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (mode === 'dating') {
-      alert('Dating mode runs from the Dating page. Switch to Normal for one-shot tasks.');
+    if (mode === 'dating' || mode === 'social') {
+      alert(
+        mode === 'dating'
+          ? 'Dating mode runs from the Dating page. Switch to Normal for one-shot tasks.'
+          : 'Social mode runs from the Social page. Switch to Normal for one-shot tasks.'
+      );
       return;
     }
 
@@ -146,6 +150,19 @@ export default function TasksPage() {
             Dating page
           </Link>
           , or switch back to Normal for a one-shot task.
+        </div>
+      )}
+      {mode === 'social' && (
+        <div className="bg-emerald-900/20 border border-emerald-700 rounded-lg p-4 text-sm text-emerald-100">
+          Social mode is active. Manage chats on the{' '}
+          <Link to="/social" className="underline text-emerald-300">
+            Social page
+          </Link>{' '}
+          or review{' '}
+          <Link to="/needs-you" className="underline text-amber-300">
+            Needs you
+          </Link>
+          .
         </div>
       )}
 
@@ -223,7 +240,7 @@ export default function TasksPage() {
 
           <button
             type="submit"
-            disabled={submitting || mode === 'dating'}
+            disabled={submitting || mode === 'dating' || mode === 'social'}
             className="w-full flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
           >
             {submitting ? (

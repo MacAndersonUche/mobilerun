@@ -7,6 +7,8 @@ import {
   Heart,
   MonitorPlay,
   MessageSquare,
+  MessageCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import DevicesPage from './pages/DevicesPage';
 import TasksPage from './pages/TasksPage';
@@ -15,6 +17,8 @@ import SettingsPage from './pages/SettingsPage';
 import DatingPage from './pages/DatingPage';
 import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
+import SocialPage from './pages/SocialPage';
+import NeedsYouPage from './pages/NeedsYouPage';
 
 function App() {
   return (
@@ -39,6 +43,8 @@ function App() {
               <NavItem to="/chat" icon={<MessageSquare />} label="AI Chat" />
               <NavItem to="/tasks" icon={<Play />} label="Run Task" />
               <NavItem to="/dating" icon={<Heart />} label="Dating Mode" />
+              <NavItem to="/social" icon={<MessageCircle />} label="Social Mode" />
+              <NavItem to="/needs-you" icon={<AlertTriangle />} label="Needs you" />
               <NavItem to="/history" icon={<History />} label="History" />
               <NavItem to="/settings" icon={<Settings />} label="Settings" />
             </ul>
@@ -51,6 +57,8 @@ function App() {
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/tasks" element={<TasksPage />} />
               <Route path="/dating" element={<DatingPage />} />
+              <Route path="/social" element={<SocialPage />} />
+              <Route path="/needs-you" element={<NeedsYouPage />} />
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

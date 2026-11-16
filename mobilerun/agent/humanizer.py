@@ -28,6 +28,7 @@ class SpeedPreset(str, Enum):
 class AgentMode(str, Enum):
     NORMAL = "normal"
     DATING = "dating"
+    SOCIAL = "social"
 
 
 # Inclusive (lo, hi) seconds for inter-action delays.

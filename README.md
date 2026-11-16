@@ -153,7 +153,9 @@ Read the full [framework documentation](https://docs.mobilerun.ai/framework/quic
 - **Portal-based control:** Use UI trees, screenshots, text input, gestures, app launching, and device state from the Portal runtime.
 - **Vision mode:** Send screenshots to the LLM with `--vision`, or use screenshot-only control with `--vision-only` (useful for the apps that do not have a11y tree information).
 - **Reasoning mode:** Use `--reasoning` for manager-executor planning on longer or more complex tasks.
-- **Interaction modes:** `normal` (general phone agent) or `dating` (existing dating loop). Select in the Control Center UI, AI Chat, or CLI (`--mode normal|dating`).
+- **Interaction modes:** `normal` (general phone agent), `dating`, or `social` (WhatsApp/Messenger/X/Snapchat/Instagram). Select in the UI, AI Chat, or CLI (`--mode`).
+- **Social mode:** Unread reporting + replies in Mac's tone; optional signature footer (`— from MacAI`, default ON, per-app/contact overrides); sensitive drafts escalate to **Needs you**.
+- **Needs you queue:** Shared Social + Dating confirmation queue (approve/edit/reject); UI badge, APK push, optional SES email (off by default).
 - **Humanizer pacing:** Shared Fast / Balanced / Careful presets (Balanced default) with randomized delays, jittered taps, curved swipes, and variable typing — configurable per mode/app via `--speed` or `/api/mode`.
 - **Tracing and telemetry:** Debug execution with Arize Phoenix, Langfuse, saved trajectories, and detailed logs.
 - **Structured output:** Return structured data from mobile workflows.

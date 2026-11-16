@@ -315,6 +315,8 @@ localStorage.setItem('backendUrl', 'http://your-server:8000');
 - ✅ **Accessibility Service:** Real gesture execution (tap, swipe, scroll)
 - ✅ **UI Tree Capture:** Sends layout XML to agent
 - ✅ **Always Connected:** Session token + exponential backoff reconnect
+- ✅ **Social mode:** Everyday apps + signature footer + Needs-you escalation
+- ✅ **Needs you:** Shared confirmation queue for Social + Dating (UI / APK / optional email)
 
 ### Setup
 

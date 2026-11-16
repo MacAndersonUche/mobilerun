@@ -36,8 +36,13 @@ def _parse_intent(text: str) -> Tuple[str, Dict[str, Any]]:
     if re.search(r"\b(device\s+info|what\s+device|list\s+devices|status)\b", lower):
         return "device_info", {}
 
-    m = re.search(r"\b(?:message\s+counts?|dating\s+stats|stats)\b", lower)
-    if m:
+    if re.search(r"\b(dating\s+stats|dating\s+message\s+counts?)\b", lower):
+        return "dating_stats", {}
+    if (
+        re.search(r"\b(stats)\b", lower)
+        and "social" not in lower
+        and "unread" not in lower
+    ):
         return "dating_stats", {}
 
     if re.search(r"\b(stop\s+dating|dating\s+stop)\b", lower):
@@ -53,6 +58,12 @@ def _parse_intent(text: str) -> Tuple[str, Dict[str, Any]]:
         return "set_mode", {"mode": "normal"}
     if re.search(r"\b(dating\s+mode|switch\s+to\s+dating)\b", lower):
         return "set_mode", {"mode": "dating"}
+    if re.search(r"\b(social\s+mode|switch\s+to\s+social)\b", lower):
+        return "set_mode", {"mode": "social"}
+    if re.search(r"\b(needs\s+you|escalation\s+queue|review\s+queue)\b", lower):
+        return "needs_you_list", {}
+    if re.search(r"\b(unread|message\s+counts?)\b", lower) and "dating" not in lower:
+        return "social_unreads", {}
     m = re.search(
         r"\b(?:speed|pacing|humanizer)\s*[:=]?\s*(fast|balanced|careful)\b", lower
     )

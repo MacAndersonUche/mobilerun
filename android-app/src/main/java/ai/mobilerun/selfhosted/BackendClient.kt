@@ -397,6 +397,36 @@ class BackendClient(private val context: Context) {
                         sendAgentEvent(null, null, action, "UI requested $action")
                     }
                 }
+                "push_notification" -> {
+                    val title = message["title"] as? String ?: "Needs you"
+                    val body = message["body"] as? String ?: ""
+                    val badge = (message["badge"] as? Number)?.toInt() ?: 0
+                    _taskFlow.value = "$title ($badge): $body"
+                    // System notification when POST_NOTIFICATIONS granted
+                    try {
+                        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                            as android.app.NotificationManager
+                        val channelId = "needs_you"
+                        if (android.os.Build.VERSION.SDK_INT >= 26) {
+                            nm.createNotificationChannel(
+                                android.app.NotificationChannel(
+                                    channelId,
+                                    "Needs you",
+                                    android.app.NotificationManager.IMPORTANCE_HIGH,
+                                ),
+                            )
+                        }
+                        val notif = android.app.Notification.Builder(context, channelId)
+                            .setContentTitle(title)
+                            .setContentText(body)
+                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setAutoCancel(true)
+                            .build()
+                        nm.notify(9001, notif)
+                    } catch (e: Exception) {
+                        Log.w(tag, "push_notification: ${e.message}")
+                    }
+                }
             }
             if (message["error"] != null) {
                 _statusFlow.value = "Auth error: ${message["error"]}"

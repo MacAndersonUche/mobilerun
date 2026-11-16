@@ -1,4 +1,4 @@
-type Mode = 'normal' | 'dating';
+type Mode = 'normal' | 'dating' | 'social';
 type Speed = 'fast' | 'balanced' | 'careful';
 
 interface Props {
@@ -31,26 +31,38 @@ export default function ModeSpeedPicker({
           <div className="flex rounded-lg overflow-hidden border border-gray-600">
             <button
               type="button"
-              className={`flex-1 px-3 py-2 text-sm ${
-                mode === 'normal' ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-650'
+              className={`flex-1 px-2 py-2 text-sm ${
+                mode === 'normal' ? 'bg-blue-600' : 'bg-gray-700'
               }`}
               onClick={() => onModeChange('normal')}
             >
               Normal
-              <span className="block text-xs opacity-80 font-normal">
-                General phone agent
+              <span className="block text-[11px] opacity-80 font-normal">
+                Any phone task
               </span>
             </button>
             <button
               type="button"
-              className={`flex-1 px-3 py-2 text-sm ${
+              className={`flex-1 px-2 py-2 text-sm ${
                 mode === 'dating' ? 'bg-rose-600' : 'bg-gray-700'
               }`}
               onClick={() => onModeChange('dating')}
             >
               Dating
-              <span className="block text-xs opacity-80 font-normal">
-                Apps · openers · replies
+              <span className="block text-[11px] opacity-80 font-normal">
+                Openers · replies
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`flex-1 px-2 py-2 text-sm ${
+                mode === 'social' ? 'bg-emerald-600' : 'bg-gray-700'
+              }`}
+              onClick={() => onModeChange('social')}
+            >
+              Social
+              <span className="block text-[11px] opacity-80 font-normal">
+                Chats · unread
               </span>
             </button>
           </div>

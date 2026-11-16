@@ -555,8 +555,10 @@ async def submit_task(
     task_id = f"task_{secrets.token_hex(8)}"
 
     mode = (request.mode or "normal").lower()
-    if mode not in ("normal", "dating"):
-        raise HTTPException(status_code=400, detail="mode must be 'normal' or 'dating'")
+    if mode not in ("normal", "dating", "social"):
+        raise HTTPException(
+            status_code=400, detail="mode must be 'normal', 'dating', or 'social'"
+        )
     speed = (request.speed_preset or "balanced").lower()
     if speed not in ("fast", "balanced", "careful"):
         raise HTTPException(
@@ -734,11 +736,34 @@ dating_mode_state = {
     "speed_preset": "balanced",
 }
 
+social_mode_state = {
+    "running": False,
+    "paused": False,
+    "current_app": None,
+    "speed_preset": "balanced",
+    "unread": {"total_unread": 0, "by_app": {}},
+}
+
 # Global agent mode selection (UI / CLI / chat)
 agent_mode_state = {
-    "mode": "normal",  # normal | dating
+    "mode": "normal",  # normal | dating | social
     "speed_preset": "balanced",  # fast | balanced | careful
 }
+
+_needs_you_queue = None
+
+
+def get_needs_you_queue():
+    """Shared Needs-you queue (Social + Dating)."""
+    global _needs_you_queue
+    if _needs_you_queue is None:
+        from mobilerun.needs_you.queue import NeedsYouQueue
+
+        path = Path.home() / ".mobilerun" / "needs_you.json"
+        if os.environ.get("MOBILERUN_DATA"):
+            path = Path(os.environ["MOBILERUN_DATA"]) / "needs_you.json"
+        _needs_you_queue = NeedsYouQueue(persist_path=path)
+    return _needs_you_queue
 
 
 class DatingModeConfig(BaseModel):
@@ -773,6 +798,33 @@ class DatingMessage(BaseModel):
     is_opener: bool = False
 
 
+class SocialConfigUpdate(BaseModel):
+    enabled_apps: Optional[List[str]] = None
+    speed_preset: str = "balanced"
+    tone_prompt: Optional[str] = None
+    signature_enabled: bool = True
+    signature_text: str = "— from MacAI"
+    per_app_signature: Optional[Dict[str, bool]] = None
+    always_ask_new_contacts: bool = True
+    email_notify: bool = False
+    email_to: str = "macandersonuche@yahoo.com"
+
+
+class SocialDraftRequest(BaseModel):
+    app_name: str
+    package_name: str
+    conversation_id: str
+    contact_name: str
+    draft_reply: str
+    inbound_preview: str = ""
+    confidence: float = 0.8
+    is_new_contact: bool = False
+
+
+class NeedsYouEdit(BaseModel):
+    draft_reply: Optional[str] = None
+
+
 @app.get("/api/mode")
 async def get_agent_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     """Current interaction mode + humanizer speed preset."""
@@ -781,9 +833,11 @@ async def get_agent_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     return {
         **agent_mode_state,
         "presets": describe_presets(),
+        "needs_you_badge": get_needs_you_queue().pending_count(),
         "modes": {
             "normal": "General-purpose phone agent (open apps, navigate, type, multi-step)",
             "dating": "Dating apps: swipes, openers, replies with human-like pacing",
+            "social": "WhatsApp/Messenger/X/Snapchat/Instagram — unread + replies in Mac's tone",
         },
     }
 
@@ -792,11 +846,13 @@ async def get_agent_mode(auth: Optional[dict] = Depends(optional_verify_token)):
 async def set_agent_mode(
     body: AgentModeConfig, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Select Normal vs Dating and Fast / Balanced / Careful pacing."""
+    """Select Normal / Dating / Social and Fast / Balanced / Careful pacing."""
     mode = (body.mode or "normal").lower()
     speed = (body.speed_preset or "balanced").lower()
-    if mode not in ("normal", "dating"):
-        raise HTTPException(status_code=400, detail="mode must be 'normal' or 'dating'")
+    if mode not in ("normal", "dating", "social"):
+        raise HTTPException(
+            status_code=400, detail="mode must be 'normal', 'dating', or 'social'"
+        )
     if speed not in ("fast", "balanced", "careful"):
         raise HTTPException(
             status_code=400, detail="speed_preset must be fast|balanced|careful"
@@ -804,6 +860,7 @@ async def set_agent_mode(
     agent_mode_state["mode"] = mode
     agent_mode_state["speed_preset"] = speed
     dating_mode_state["speed_preset"] = speed
+    social_mode_state["speed_preset"] = speed
     return {"status": "ok", **agent_mode_state}
 
 
@@ -972,8 +1029,13 @@ async def get_dating_status(auth: Optional[dict] = Depends(optional_verify_token
 
 @app.get("/api/dating/review-queue")
 async def get_review_queue(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Get messages in review queue."""
-    return {"messages": dating_mode_state["review_queue"]}
+    """Get messages in review queue (also mirrored in /api/needs-you)."""
+    return {
+        "messages": dating_mode_state["review_queue"],
+        "needs_you": [
+            i.to_dict() for i in get_needs_you_queue().list_pending(source="dating")
+        ],
+    }
 
 
 @app.post("/api/dating/review/{message_id}/approve")
@@ -984,6 +1046,7 @@ async def approve_message(
     dating_mode_state["review_queue"] = [
         msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
     ]
+    get_needs_you_queue().approve(message_id)
     return {"status": "approved", "message_id": message_id}
 
 
@@ -995,6 +1058,7 @@ async def reject_message(
     dating_mode_state["review_queue"] = [
         msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
     ]
+    get_needs_you_queue().reject(message_id)
     return {"status": "rejected", "message_id": message_id}
 
 
@@ -1008,9 +1072,283 @@ async def edit_message(
     for i, msg in enumerate(dating_mode_state["review_queue"]):
         if msg["id"] == message_id:
             dating_mode_state["review_queue"][i] = message.dict()
+            get_needs_you_queue().edit(message_id, message.message)
             return {"status": "updated", "message": message.dict()}
 
+    # May only exist in Needs-you (synced dating item)
+    item = get_needs_you_queue().edit(message_id, message.message)
+    if item:
+        return {"status": "updated", "message": item.to_dict()}
+
     raise HTTPException(status_code=404, detail="Message not found")
+
+
+@app.post("/api/dating/review")
+async def enqueue_dating_review(
+    message: DatingMessage, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Enqueue a dating draft into review + shared Needs-you queue."""
+    payload = message.dict() if hasattr(message, "dict") else message.model_dump()
+    dating_mode_state["review_queue"].append(payload)
+    q = get_needs_you_queue()
+    if q.get(message.id) is None:
+        q.add(
+            source="dating",
+            app_name=message.app_name,
+            package_name=message.package_name,
+            conversation_id=message.conversation_id,
+            contact_name=message.profile_name,
+            inbound_preview="",
+            draft_reply=message.message,
+            reasons=["dating_review"] + (["opener"] if message.is_opener else []),
+            confidence=0.5,
+            meta={"is_opener": message.is_opener},
+            item_id=message.id,
+        )
+    return {
+        "status": "queued",
+        "message": payload,
+        "needs_you_id": message.id,
+        "badge": q.pending_count(),
+    }
+
+
+# === Social mode + Needs-you ===
+
+_social_config_store: Dict[str, Any] = {}
+
+
+def _social_config():
+    from mobilerun.needs_you.escalation import EscalationRules
+    from mobilerun.social.config import SocialModeConfig
+    from mobilerun.social.signature import SignatureConfig
+
+    if _social_config_store.get("config") is None:
+        _social_config_store["config"] = SocialModeConfig()
+    cfg: SocialModeConfig = _social_config_store["config"]
+    # Keep type imports happy for readers
+    _ = (EscalationRules, SignatureConfig)
+    return cfg
+
+
+@app.get("/api/social/config")
+async def get_social_config(auth: Optional[dict] = Depends(optional_verify_token)):
+    cfg = _social_config()
+    return {
+        "apps": [
+            {
+                "name": a.name,
+                "package_name": a.package_name,
+                "enabled": a.enabled,
+                "signature_enabled": a.signature_enabled,
+            }
+            for a in cfg.apps
+        ],
+        "speed_preset": cfg.speed_preset,
+        "tone_prompt": cfg.tone_prompt,
+        "signature": cfg.signature.to_dict(),
+        "escalation": {
+            "always_ask_new_contacts": cfg.escalation.always_ask_new_contacts,
+            "always_ask_money": cfg.escalation.always_ask_money,
+            "always_ask_commitments": cfg.escalation.always_ask_commitments,
+            "always_ask_personal_info": cfg.escalation.always_ask_personal_info,
+            "min_confidence_to_autosend": cfg.escalation.min_confidence_to_autosend,
+            "trusted_contacts": cfg.escalation.trusted_contacts,
+        },
+        "email_notify": cfg.email_notify,
+        "email_to": cfg.email_to,
+    }
+
+
+@app.post("/api/social/config")
+async def update_social_config(
+    body: SocialConfigUpdate, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    cfg = _social_config()
+    if body.enabled_apps is not None:
+        enabled = set(body.enabled_apps)
+        for app in cfg.apps:
+            app.enabled = app.package_name in enabled
+    cfg.speed_preset = body.speed_preset
+    if body.tone_prompt is not None:
+        cfg.tone_prompt = body.tone_prompt
+    cfg.signature.enabled_global = body.signature_enabled
+    cfg.signature.text = body.signature_text or cfg.signature.text
+    if body.per_app_signature:
+        cfg.signature.per_app.update(body.per_app_signature)
+        for app in cfg.apps:
+            if app.package_name in body.per_app_signature:
+                app.signature_enabled = body.per_app_signature[app.package_name]
+    cfg.escalation.always_ask_new_contacts = body.always_ask_new_contacts
+    cfg.email_notify = body.email_notify
+    cfg.email_to = body.email_to
+    social_mode_state["speed_preset"] = body.speed_preset
+    agent_mode_state["speed_preset"] = body.speed_preset
+    agent_mode_state["mode"] = "social"
+    return {"status": "ok", "config": await get_social_config(auth)}
+
+
+@app.get("/api/social/status")
+async def get_social_status(auth: Optional[dict] = Depends(optional_verify_token)):
+    return {
+        **social_mode_state,
+        "needs_you_badge": get_needs_you_queue().pending_count(),
+    }
+
+
+@app.post("/api/social/start")
+async def start_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+    social_mode_state["running"] = True
+    social_mode_state["paused"] = False
+    agent_mode_state["mode"] = "social"
+    return {"status": "started", "state": social_mode_state}
+
+
+@app.post("/api/social/stop")
+async def stop_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+    social_mode_state["running"] = False
+    social_mode_state["paused"] = False
+    return {"status": "stopped", "state": social_mode_state}
+
+
+@app.post("/api/social/pause")
+async def pause_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+    social_mode_state["paused"] = not social_mode_state.get("paused", False)
+    return {
+        "status": "paused" if social_mode_state["paused"] else "resumed",
+        "state": social_mode_state,
+    }
+
+
+@app.post("/api/social/unread")
+async def report_social_unreads(
+    body: Dict[str, Any], auth: Optional[dict] = Depends(optional_verify_token)
+):
+    from mobilerun.social.agent import summarize_unreads
+
+    threads = body.get("threads") or []
+    summary = summarize_unreads(threads)
+    social_mode_state["unread"] = summary
+    return summary
+
+
+@app.post("/api/social/draft")
+async def social_prepare_draft(
+    body: SocialDraftRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Prepare outbound reply: signature + escalation → Needs-you or auto-ok."""
+    from mobilerun.needs_you.notify import notify_needs_you
+    from mobilerun.social.agent import prepare_outbound
+
+    cfg = _social_config()
+    q = get_needs_you_queue()
+    decision = prepare_outbound(
+        draft_reply=body.draft_reply,
+        config=cfg,
+        queue=q,
+        app_name=body.app_name,
+        package_name=body.package_name,
+        conversation_id=body.conversation_id,
+        contact_name=body.contact_name,
+        inbound_preview=body.inbound_preview,
+        confidence=body.confidence,
+        is_new_contact=body.is_new_contact,
+    )
+    notify_result = {}
+    if decision.needs_you and decision.needs_you_id:
+        item = q.get(decision.needs_you_id)
+        if item:
+
+            async def _broadcast(did, payload):
+                from backend.live_hub import broadcast_to_ui
+
+                await broadcast_to_ui(did if did != "all" else "", payload)
+
+            # Notify all connected devices + any UI subscribers
+            for did in list(connected_devices.keys()) or [""]:
+                notify_result = await notify_needs_you(
+                    item,
+                    badge_count=q.pending_count(),
+                    broadcast_ui=_broadcast,
+                    send_to_device=_send_to_device if did else None,
+                    device_id=did or None,
+                    email_enabled=cfg.email_notify,
+                    email_to=cfg.email_to,
+                )
+    return {
+        **decision.to_dict(),
+        "badge": q.pending_count(),
+        "notify": notify_result,
+        "speed_preset": cfg.speed_preset,
+    }
+
+
+@app.get("/api/needs-you")
+async def list_needs_you(
+    source: Optional[str] = None,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    q = get_needs_you_queue()
+    pending = q.list_pending(source=source)
+    return {
+        "badge": q.pending_count(),
+        "items": [i.to_dict() for i in pending],
+        "all": q.to_list(),
+    }
+
+
+@app.post("/api/needs-you/{item_id}/approve")
+async def needs_you_approve(
+    item_id: str,
+    body: NeedsYouEdit = NeedsYouEdit(),
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    item = get_needs_you_queue().approve(item_id, edited_reply=body.draft_reply)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    # Keep dating legacy queue in sync
+    dating_mode_state["review_queue"] = [
+        m for m in dating_mode_state["review_queue"] if m.get("id") != item_id
+    ]
+    return {
+        "status": "approved",
+        "item": item.to_dict(),
+        "badge": get_needs_you_queue().pending_count(),
+    }
+
+
+@app.post("/api/needs-you/{item_id}/reject")
+async def needs_you_reject(
+    item_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    item = get_needs_you_queue().reject(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    dating_mode_state["review_queue"] = [
+        m for m in dating_mode_state["review_queue"] if m.get("id") != item_id
+    ]
+    return {
+        "status": "rejected",
+        "item": item.to_dict(),
+        "badge": get_needs_you_queue().pending_count(),
+    }
+
+
+@app.post("/api/needs-you/{item_id}/edit")
+async def needs_you_edit(
+    item_id: str,
+    body: NeedsYouEdit,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if body.draft_reply is None:
+        raise HTTPException(status_code=400, detail="draft_reply required")
+    item = get_needs_you_queue().edit(item_id, body.draft_reply)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    for m in dating_mode_state["review_queue"]:
+        if m.get("id") == item_id:
+            m["message"] = body.draft_reply
+    return {"status": "updated", "item": item.to_dict()}
 
 
 # === Live view (UI WebSocket) + chat agent ===
@@ -1190,6 +1528,19 @@ async def chat_endpoint(
                 return {"message": "Dating stats", "stats": stats}
             except Exception as e:
                 return {"message": f"Stats unavailable: {e}", "stats": {}}
+        if intent == "needs_you_list":
+            items = get_needs_you_queue().list_pending()
+            return {
+                "message": f"{len(items)} item(s) need you",
+                "badge": len(items),
+                "items": [i.to_dict() for i in items],
+            }
+        if intent == "social_unreads":
+            unread = social_mode_state.get("unread") or {}
+            return {
+                "message": f"Unread total: {unread.get('total_unread', 0)}",
+                "unread": unread,
+            }
         if intent == "dating_start":
             dating_mode_state["running"] = True
             dating_mode_state["paused"] = False
