@@ -137,8 +137,9 @@ export default function DevicesPage() {
           </button>
         </div>
         <p className="text-sm text-mute">
-          Short-lived single-use code (~10 min). Open MobileRun on the phone and
-          tap Scan QR, or open the copyable link after install.
+          Short-lived single-use code (~10 min). Scan with the in-app Scan QR
+          button, or with the phone camera (opens the HTTPS link → app). Copyable
+          link works the same way after install.
         </p>
         {pairErr && <p className="text-sm text-red-400">{pairErr}</p>}
         {pairQr ? (

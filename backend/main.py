@@ -505,9 +505,10 @@ def _pairing_endpoints() -> dict:
 
 
 def _qr_png_b64(data: str) -> str:
+    # Prefer denser ECC so slightly damaged / low-res camera frames still decode.
     qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_Q,
         box_size=10,
         border=4,
     )
@@ -554,15 +555,24 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
     except ImportError:
         from backend.storage import save_pairing_token  # type: ignore
 
-    # Persist hashed — never store plaintext token
-    save_pairing_token(
-        token,
-        {
-            **pairing_data,
-            "owner": owner,
-        },
-    )
+    # Persist hashed — never store plaintext token. Fail closed if Dynamo write
+    # fails so claim on another Lambda cold start cannot miss the token.
+    try:
+        save_pairing_token(
+            token,
+            {
+                **pairing_data,
+                "owner": owner,
+            },
+        )
+    except Exception:
+        logger.exception("save_pairing_token failed for owner=%s", owner)
+        raise HTTPException(
+            status_code=503, detail="Could not persist pairing code — retry"
+        )
 
+    # Compact deep link (token only) — APK BuildConfig carries prod HTTP/WS.
+    # Full dual-endpoint URL kept for older APKs / LAN e2e via pairing_url_full.
     pairing_url = build_pairing_url(
         token=token,
         backend=ends["backend_url"],
@@ -571,18 +581,32 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         lan_ws=ends["lan_ws"],
         cloud_http=ends["cloud_http"],
         cloud_ws=ends["cloud_ws"],
+        compact=True,
+    )
+    pairing_url_full = build_pairing_url(
+        token=token,
+        backend=ends["backend_url"],
+        ws=ends["websocket_url"],
+        lan_http=ends["lan_http"],
+        lan_ws=ends["lan_ws"],
+        cloud_http=ends["cloud_http"],
+        cloud_ws=ends["cloud_ws"],
+        compact=False,
     )
     frontend = (
         os.environ.get("FRONTEND_URL")
         or os.environ.get("NETLIFY_URL")
         or "https://macsmobilerun.netlify.app"
     ).rstrip("/")
+    # HTTPS link is what we encode in the QR: camera apps open it, Netlify
+    # /pair hands off to mobilerun://, and in-app scanner accepts /pair? too.
     https_link = f"{frontend}/pair?{pairing_url.split('?', 1)[-1]}"
 
     return {
         "token": token,
-        "qr_code": _qr_png_b64(pairing_url),
+        "qr_code": _qr_png_b64(https_link),
         "pairing_url": pairing_url,
+        "pairing_url_full": pairing_url_full,
         "https_link": https_link,
         "backend_url": ends["backend_url"],
         "websocket_url": ends["websocket_url"],
@@ -648,6 +672,7 @@ async def claim_pairing_token(body: PairClaimRequest):
 
     meta = pairing_tokens.get(token) or get_pairing_token(token)
     if not meta:
+        logger.warning("pair claim miss token_prefix=%s len=%s", token[:8], len(token))
         raise HTTPException(status_code=400, detail="Invalid or expired pairing token")
     if meta.get("used"):
         raise HTTPException(status_code=400, detail="Pairing token already used")
@@ -663,6 +688,11 @@ async def claim_pairing_token(body: PairClaimRequest):
     owner = (meta.get("owner") or "").lower()
     if not owner:
         raise HTTPException(status_code=400, detail="Pairing token has no owner")
+    logger.info(
+        "pair claim ok owner=%s device_name=%s",
+        owner,
+        body.device_name or meta.get("device_name"),
+    )
 
     device_id = body.device_id or f"device_{secrets.token_hex(8)}"
     session_token = secrets.token_urlsafe(32)

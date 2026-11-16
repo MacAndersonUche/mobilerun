@@ -132,10 +132,17 @@ def merge_device_lists(
         # Prefer live WS truth on AWS; fall back to memory flag locally
         if ws_up:
             row["connected"] = True
-            row["connection_type"] = row.get("connection_type") or "websocket"
+            # Prefer live route over the "pending" value left by claim
+            row["connection_type"] = (
+                row.get("route") or row.get("connection_type") or "websocket"
+            )
+            if row["connection_type"] == "pending":
+                row["connection_type"] = "websocket"
         elif use_aws:
             # Stale "connected" rows in SETTINGS must not lie once the socket is gone
             row["connected"] = False
+            if row.get("connection_type") == "pending":
+                pass  # keep pending until first successful WS register
         elif row.get("connected") is None:
             row["connected"] = bool(memory.get(did, {}).get("connected"))
         out.append(row)

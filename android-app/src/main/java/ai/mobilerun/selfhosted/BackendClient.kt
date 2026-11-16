@@ -275,13 +275,22 @@ class BackendClient(private val context: Context) {
      * then auto-connect over cloud (LAN mDNS remains a faster fallback when available).
      */
     fun pairFromUri(uri: Uri) {
-        val token = uri.getQueryParameter("token") ?: return
+        val token = extractPairToken(uri)
+        if (token.isNullOrBlank()) {
+            val msg = "No pairing token in QR/link (${uri.scheme}://${uri.host}${uri.path})"
+            Log.e(tag, msg)
+            _pairErrorFlow.value = msg
+            prefs().edit().putString("last_pair_error", msg).apply()
+            return
+        }
         val cloud = uri.getQueryParameter("cloud")
             ?: uri.getQueryParameter("backend")
+            ?: cloudHttp
             ?: DEFAULT_CLOUD_HTTP
         val cws = uri.getQueryParameter("cloud_ws")
             ?: uri.getQueryParameter("ws")
             ?: cloudWsForHttp(cloud)
+            ?: cloudWs
             ?: DEFAULT_CLOUD_WS
         lanHttp = uri.getQueryParameter("lan")
         lanWs = uri.getQueryParameter("lan_ws")
@@ -297,21 +306,51 @@ class BackendClient(private val context: Context) {
             .apply()
         _pairBusyFlow.value = true
         _pairErrorFlow.value = null
+        _statusFlow.value = "Pairing… exchanging code"
+        prefs().edit().putString("last_pair_error", "").apply()
         scope.launch {
             try {
                 claimPairingToken(token)
                 userDisconnected = false
                 reconnectAttempt.set(0)
                 ConnectionService.start(context)
+                _statusFlow.value = "Paired · opening WebSocket…"
                 connectBest(force = true)
+                if (webSocket == null) {
+                    val msg = "Paired but WebSocket not connected — will retry"
+                    _pairErrorFlow.value = msg
+                    prefs().edit().putString("last_pair_error", msg).apply()
+                }
             } catch (e: Exception) {
                 Log.e(tag, "pair claim failed", e)
-                _pairErrorFlow.value = e.message ?: "Pairing failed"
+                val msg = e.message ?: "Pairing failed"
+                _pairErrorFlow.value = msg
+                _statusFlow.value = "Pairing failed"
+                prefs().edit().putString("last_pair_error", msg).apply()
             } finally {
                 _pairBusyFlow.value = false
             }
         }
     }
+
+    /** Pull token from mobilerun://pair?…, https://…/pair?…, or raw query. */
+    fun extractPairToken(uri: Uri): String? {
+        uri.getQueryParameter("token")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        // Some scanners wrap the URL; try parsing the whole string again
+        val raw = uri.toString()
+        val marker = "token="
+        val idx = raw.indexOf(marker)
+        if (idx >= 0) {
+            val rest = raw.substring(idx + marker.length)
+            val end = rest.indexOfFirst { it == '&' || it == '#' || it == ' ' }
+            val value = if (end < 0) rest else rest.substring(0, end)
+            return Uri.decode(value).trim().takeIf { it.isNotEmpty() }
+        }
+        return null
+    }
+
+    fun lastPairError(): String? =
+        prefs().getString("last_pair_error", null)?.takeIf { it.isNotBlank() }
 
     private fun claimPairingToken(token: String) {
         val httpBase = (cloudHttp ?: DEFAULT_CLOUD_HTTP).trimEnd('/')
@@ -330,16 +369,25 @@ class BackendClient(private val context: Context) {
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                error("claim failed: ${resp.code} $text")
+                val detail = try {
+                    @Suppress("UNCHECKED_CAST")
+                    (gson.fromJson(text, Map::class.java) as? Map<String, Any?>)?.get("detail")
+                } catch (_: Exception) {
+                    null
+                }
+                error("Claim failed (${resp.code}): ${detail ?: text.ifBlank { resp.message }}")
             }
             @Suppress("UNCHECKED_CAST")
             val map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
-            val session = map["session_token"] as? String ?: error("no session_token")
+            val session = map["session_token"] as? String ?: error("no session_token in claim response")
             val did = map["device_id"] as? String
             val owner = map["owner"] as? String
             (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
             (map["cloud_ws"] as? String)?.let { cloudWs = it }
             (map["access_token"] as? String)?.let { authToken = it }
+            // Always fall back to baked prod endpoints after claim
+            if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
+            if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
             sessionToken = session
             pairingToken = null
             if (did != null) deviceId = did
@@ -354,8 +402,10 @@ class BackendClient(private val context: Context) {
                 .putString("cloud_http", cloudHttp)
                 .putString("cloud_ws", cloudWs)
                 .putString("user_email", owner)
+                .putString("last_pair_error", "")
                 .apply()
             _pairedFlow.value = true
+            _pairErrorFlow.value = null
             _statusFlow.value = "Paired · connecting…"
         }
     }
@@ -475,6 +525,8 @@ class BackendClient(private val context: Context) {
                 Log.d(tag, "WebSocket opened via ${candidate.route}")
                 reconnectAttempt.set(0)
                 _statusFlow.value = "Connected"
+                _pairErrorFlow.value = null
+                prefs().edit().putString("last_pair_error", "").apply()
                 val msg = mutableMapOf<String, Any?>(
                     "device_id" to deviceId,
                     "platform" to "android",
@@ -482,6 +534,7 @@ class BackendClient(private val context: Context) {
                     "role" to "device",
                     "route" to candidate.route,
                     "latency_ms" to latencyMs,
+                    "name" to android.os.Build.MODEL,
                 )
                 val sess = sessionToken
                 val pair = pairingToken

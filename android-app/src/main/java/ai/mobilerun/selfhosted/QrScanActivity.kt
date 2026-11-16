@@ -71,12 +71,15 @@ class QrScanActivity : ComponentActivity() {
                         for (b in barcodes) {
                             val raw = b.rawValue ?: continue
                             if (b.format != Barcode.FORMAT_QR_CODE) continue
-                            if (raw.contains("mobilerun://pair") || raw.contains("/pair?")) {
+                            val looksLikePair =
+                                raw.contains("mobilerun://pair") ||
+                                    raw.contains("/pair?") ||
+                                    (raw.contains("token=") &&
+                                        (raw.contains("pair") || raw.contains("mobilerun")))
+                            if (looksLikePair) {
                                 if (handled.compareAndSet(false, true)) {
-                                    setResult(
-                                        RESULT_OK,
-                                        Intent().setData(Uri.parse(raw)),
-                                    )
+                                    val uri = Uri.parse(raw.trim())
+                                    setResult(RESULT_OK, Intent().setData(uri))
                                     finish()
                                 }
                                 break

@@ -50,6 +50,12 @@ def test_pair_claim_and_revoke(client):
     assert body["token"]
     assert "mobilerun://pair?" in body["pairing_url"]
     assert body["https_link"].startswith("http")
+    # Compact deep link: token-only (APK has baked prod HTTP/WS) so QR stays small
+    assert "token=" in body["pairing_url"]
+    assert "cloud_ws=" not in body["pairing_url"]
+    assert body["https_link"].startswith("https://")
+    assert body["token"] in body["https_link"]
+    assert "cloud_ws=" in body.get("pairing_url_full", "")
     # Hashed at rest — plaintext lookup via hash helper works; raw key not stored as file name
     stored = get_pairing_token(body["token"])
     assert stored is not None

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ai.mobilerun.selfhosted",
+      "sha256_cert_fingerprints": [
+        "16:AD:26:26:AC:90:F0:B7:2D:B7:8B:F1:DA:BD:BD:0F:A8:52:05:D2:4F:BD:35:D8:9F:6B:1A:2E:77:4D:33:86"
+      ]
+    }
+  }
+]

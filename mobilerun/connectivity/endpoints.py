@@ -72,22 +72,29 @@ def build_pairing_url(
     cloud_ws: Optional[str] = None,
     backend: Optional[str] = None,
     ws: Optional[str] = None,
+    compact: bool = True,
 ) -> str:
-    """Build mobilerun://pair deep link with dual endpoints."""
-    params = {"token": token}
-    # Primary (legacy) fields for older APKs
-    if backend or lan_http or cloud_http:
-        params["backend"] = backend or lan_http or cloud_http or ""
-    if ws or lan_ws or cloud_ws:
-        params["ws"] = ws or lan_ws or cloud_ws or ""
-    if lan_http:
-        params["lan"] = lan_http
-    if lan_ws:
-        params["lan_ws"] = lan_ws
-    if cloud_http:
-        params["cloud"] = cloud_http
-    if cloud_ws:
-        params["cloud_ws"] = cloud_ws
+    """Build mobilerun://pair deep link.
+
+    compact=True (default): token only — APK has baked prod HTTP/WS. Keeps QR
+    small (version ~3) so camera / in-app scanners reliably decode it.
+    compact=False: include dual LAN/cloud endpoints for older APKs / LAN e2e.
+    """
+    params: dict[str, str] = {"token": token}
+    if not compact:
+        # Primary (legacy) fields for older APKs / emulator LAN tests
+        if backend or lan_http or cloud_http:
+            params["backend"] = backend or lan_http or cloud_http or ""
+        if ws or lan_ws or cloud_ws:
+            params["ws"] = ws or lan_ws or cloud_ws or ""
+        if lan_http:
+            params["lan"] = lan_http
+        if lan_ws:
+            params["lan_ws"] = lan_ws
+        if cloud_http:
+            params["cloud"] = cloud_http
+        if cloud_ws:
+            params["cloud_ws"] = cloud_ws
     return "mobilerun://pair?" + urlencode(params)
 
 

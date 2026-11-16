@@ -15,8 +15,18 @@ export default function PairPage() {
 
   useEffect(() => {
     if (!deepLink) return;
-    // Attempt to hand off to the installed APK
-    window.location.href = deepLink;
+    // Attempt to hand off to the installed APK (custom scheme).
+    const t = window.setTimeout(() => {
+      window.location.href = deepLink;
+    }, 50);
+    // Retry once — some browsers swallow the first navigation from a QR landing.
+    const t2 = window.setTimeout(() => {
+      window.location.href = deepLink;
+    }, 800);
+    return () => {
+      window.clearTimeout(t);
+      window.clearTimeout(t2);
+    };
   }, [deepLink]);
 
   return (
@@ -34,6 +44,11 @@ export default function PairPage() {
           <a href={deepLink} className="inline-block text-sm text-accent break-all">
             Open in MobileRun app
           </a>
+        )}
+        {!params.get('token') && (
+          <p className="text-sm text-red-400">
+            This link is missing a pairing token. Generate a new QR on Devices.
+          </p>
         )}
       </Card>
     </div>

@@ -40,15 +40,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Deep link: mobilerun://pair?token=… -->
+            <!-- Deep link: mobilerun://pair?token=… (custom scheme; always works) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="mobilerun" android:host="pair" />
             </intent-filter>
-            <!-- HTTPS pair link from Netlify (opens app after install when possible) -->
-            <intent-filter>
+            <!-- HTTPS pair link from Netlify / camera QR (App Link when verified) -->
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
@@ -56,6 +56,15 @@
                     android:scheme="https"
                     android:host="macsmobilerun.netlify.app"
                     android:pathPrefix="/pair" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="macsmobilerun.netlify.app"
+                    android:path="/pair" />
             </intent-filter>
         </activity>
 

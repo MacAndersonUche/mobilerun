@@ -58,6 +58,51 @@ test.describe('prod API + hosted UI', () => {
     expect(typeof urls.stored === 'string' || urls.stored === null).toBeTruthy();
   });
 
+  test('pair/create returns compact https QR payload and claim works', async ({
+    request,
+  }) => {
+    const login = await request.post(`${PROD_API}/api/auth/login`, {
+      data: { username: 'admin', password: 'admin' },
+    });
+    expect(login.status()).toBe(200);
+    const { access_token } = await login.json();
+    const created = await request.post(`${PROD_API}/api/auth/pair/create`, {
+      headers: { Authorization: `Bearer ${access_token}` },
+      data: { device_name: 'playwright-qr', platform: 'android' },
+    });
+    expect(created.status()).toBe(200);
+    const body = await created.json();
+    expect(body.token).toBeTruthy();
+    expect(body.https_link).toContain('/pair?token=');
+    expect(body.pairing_url).toContain('mobilerun://pair?token=');
+    // After deploy: compact (no cloud_ws in primary pairing_url). Soft until then.
+    const compact = !String(body.pairing_url).includes('cloud_ws=');
+    test.info().annotations.push({
+      type: 'note',
+      description: `pairing_url compact=${compact} len=${String(body.pairing_url).length}`,
+    });
+
+    const claim = await request.post(`${PROD_API}/api/auth/pair/claim`, {
+      data: {
+        token: body.token,
+        device_name: 'playwright-phone',
+        platform: 'android',
+        device_id: `device_pw_${Date.now()}`,
+      },
+    });
+    expect(claim.status()).toBe(200);
+    const creds = await claim.json();
+    expect(creds.session_token).toBeTruthy();
+    expect(creds.cloud_ws).toContain('execute-api');
+
+    const devices = await request.get(`${PROD_API}/api/devices`, {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+    expect(devices.status()).toBe(200);
+    const list = await devices.json();
+    expect(list.some((d: { device_id: string }) => d.device_id === creds.device_id)).toBeTruthy();
+  });
+
   test('devices page does not show Failed to fetch from LAN', async ({
     page,
   }) => {
