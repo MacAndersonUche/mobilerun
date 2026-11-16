@@ -1019,6 +1019,8 @@ class DatingModeConfig(BaseModel):
     invite_enabled: Optional[bool] = None
     handoff_enabled: Optional[bool] = None
     calendar_on_handoff: Optional[bool] = None
+    contact_ask_enabled: Optional[bool] = None
+    contact_ask_text: Optional[str] = None
     date_flow_per_app: Optional[Dict[str, Dict[str, Any]]] = None
 
 
@@ -1592,6 +1594,8 @@ async def update_dating_config(
         "invite_enabled",
         "handoff_enabled",
         "calendar_on_handoff",
+        "contact_ask_enabled",
+        "contact_ask_text",
     ):
         if dump.get(key) is not None:
             cur[key] = dump[key]

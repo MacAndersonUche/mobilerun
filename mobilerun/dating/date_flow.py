@@ -7,6 +7,9 @@ Configurable globally and per-app:
   near → somewhere convenient. Never suggest staying over / his home.
 - Handoff: stop AI when she agrees day/time/place or asks logistics/personal;
   Needs-you + optional calendar; also escalate on discomfort/decline.
+- Optional one-shot WhatsApp/Snapchat ask after date agree (never auto-message
+  those apps — Mac continues personally). Decline/ignore → still hand off,
+  never ask again. Shared handle saved private per-user on the match record.
 """
 
 from __future__ import annotations
@@ -31,6 +34,10 @@ DEFAULT_HOME_LOCATION = "Stoke-on-Trent"
 DEFAULT_RADIUS_MILES = 50.0
 DEFAULT_INVITE_DAYS_MIN = 3
 DEFAULT_INVITE_DAYS_MAX = 7
+DEFAULT_CONTACT_ASK = (
+    "Would it be easier to chat on WhatsApp or Snapchat? "
+    "Totally optional — no pressure either way."
+)
 
 # Hard bans in invite / reply wording
 STAY_OVER_PATTERNS = [
@@ -96,6 +103,46 @@ HANDOFF_LOGISTICS_HINTS = [
     r"\bi can do\b.+\b(pm|am|o'?clock)\b",
 ]
 
+CONTACT_DECLINE_HINTS = [
+    r"\bprefer (to )?(keep|stay) (it |chatting )?here\b",
+    r"\brather (not|keep)\b",
+    r"\bdon'?t (want to )?share\b",
+    r"\bno (whats?app|snap|snapchat|number)\b",
+    r"\bdon'?t have (a )?(whats?app|snap|snapchat|number)\b",
+    r"\bi'?ll (just )?keep (it )?here\b",
+    r"\bnot comfortable (sharing|giving)\b",
+    r"\bno thanks?\b",
+    r"\bi'?m good\b",
+]
+
+# Capture WhatsApp / Snap / phone from a reply (after the one optional ask)
+_CONTACT_SNAP_RE = [
+    re.compile(
+        r"(?:my\s+)?snap(?:chat)?(?:\s+(?:is|handle|user(?:name)?))?\s*[:\-@]?\s*"
+        r"@?([A-Za-z][A-Za-z0-9._\-]{2,31})",
+        re.I,
+    ),
+    re.compile(
+        r"(?:add\s+me\s+on\s+)?snap(?:chat)?\s*[:\-@]\s*"
+        r"@?([A-Za-z][A-Za-z0-9._\-]{2,31})",
+        re.I,
+    ),
+]
+_CONTACT_WA_RE = [
+    re.compile(
+        r"(?:my\s+)?(?:whats?app|wa|number|phone)(?:\s+(?:is|number))?\s*[:\-]?\s*"
+        r"(\+?\d[\d\s\-().]{6,}\d)",
+        re.I,
+    ),
+    re.compile(
+        r"(?:whats?app|wa)\s*[:\-]?\s*(\+?\d[\d\s\-().]{6,}\d)",
+        re.I,
+    ),
+]
+_CONTACT_PHONE_LOOSE_RE = re.compile(
+    r"(?<!\d)(\+?\d[\d\s\-().]{7,}\d)(?!\d)",
+)
+
 
 def _match_any(text: str, patterns: List[str]) -> bool:
     t = (text or "").lower()
@@ -124,6 +171,54 @@ def strip_stay_over_wording(text: str) -> str:
     return out
 
 
+def _normalize_phone(raw: str) -> str:
+    digits = re.sub(r"[^\d+]", "", raw or "")
+    if digits.startswith("00"):
+        digits = "+" + digits[2:]
+    return digits
+
+
+def extract_contact_handle(text: str) -> Tuple[str, str]:
+    """
+    Parse WhatsApp / Snapchat / phone from an inbound reply.
+    Returns (handle, kind) where kind is whatsapp | snapchat | phone | "".
+    """
+    t = (text or "").strip()
+    if not t:
+        return "", ""
+    for rx in _CONTACT_SNAP_RE:
+        m = rx.search(t)
+        if m:
+            handle = m.group(1).strip().lstrip("@")
+            if handle.lower() not in ("chat", "me", "is", "on", "my"):
+                return handle, "snapchat"
+    for rx in _CONTACT_WA_RE:
+        m = rx.search(t)
+        if m:
+            phone = _normalize_phone(m.group(1))
+            if len(re.sub(r"\D", "", phone)) >= 7:
+                kind = (
+                    "whatsapp" if re.search(r"whats?app|\bwa\b", t, re.I) else "phone"
+                )
+                return phone, kind
+    # Loose phone only when message clearly offers a number
+    if re.search(r"\b(number|whats?app|wa|text|call|phone)\b", t, re.I):
+        m = _CONTACT_PHONE_LOOSE_RE.search(t)
+        if m:
+            phone = _normalize_phone(m.group(1))
+            if len(re.sub(r"\D", "", phone)) >= 7:
+                kind = (
+                    "whatsapp" if re.search(r"whats?app|\bwa\b", t, re.I) else "phone"
+                )
+                return phone, kind
+    return "", ""
+
+
+def build_contact_ask_text(cfg: "DateFlowConfig") -> str:
+    text = (cfg.contact_ask_text or DEFAULT_CONTACT_ASK).strip() or DEFAULT_CONTACT_ASK
+    return strip_stay_over_wording(text) if contains_stay_over_wording(text) else text
+
+
 @dataclass
 class DateFlowConfig:
     """Global (or resolved) reply persona + date-invite settings."""
@@ -136,6 +231,8 @@ class DateFlowConfig:
     invite_enabled: bool = True
     handoff_enabled: bool = True
     calendar_on_handoff: bool = True
+    contact_ask_enabled: bool = True
+    contact_ask_text: str = DEFAULT_CONTACT_ASK
     # Per-app overrides: package -> partial dict
     per_app: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
@@ -149,6 +246,9 @@ class DateFlowConfig:
         self.reply_persona_prompt = (
             self.reply_persona_prompt or DEFAULT_REPLY_PERSONA
         ).strip()
+        self.contact_ask_text = (
+            self.contact_ask_text or DEFAULT_CONTACT_ASK
+        ).strip() or DEFAULT_CONTACT_ASK
         return self
 
     def for_app(self, package_name: str = "") -> "DateFlowConfig":
@@ -172,6 +272,8 @@ class DateFlowConfig:
             "invite_enabled": self.invite_enabled,
             "handoff_enabled": self.handoff_enabled,
             "calendar_on_handoff": self.calendar_on_handoff,
+            "contact_ask_enabled": self.contact_ask_enabled,
+            "contact_ask_text": self.contact_ask_text,
             "per_app": dict(self.per_app or {}),
         }
 
@@ -197,8 +299,30 @@ class DateFlowConfig:
             invite_enabled=bool(raw.get("invite_enabled", True)),
             handoff_enabled=bool(raw.get("handoff_enabled", True)),
             calendar_on_handoff=bool(raw.get("calendar_on_handoff", True)),
+            contact_ask_enabled=bool(raw.get("contact_ask_enabled", True)),
+            contact_ask_text=str(raw.get("contact_ask_text") or DEFAULT_CONTACT_ASK),
             per_app=dict(raw.get("per_app") or {}),
         ).clamp()
+
+
+@dataclass
+class MatchContactRecord:
+    """Private per-user match contact (WhatsApp / Snap) — never auto-messaged."""
+
+    match_id: str
+    package_name: str = ""
+    contact_handle: str = ""
+    contact_kind: str = ""
+    date_details: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MatchContactRecord":
+        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore
+        return cls(**{k: v for k, v in (data or {}).items() if k in known})
 
 
 @dataclass
@@ -222,6 +346,10 @@ class ChatDateState:
     ai_replies_stopped: bool = False
     last_inbound: str = ""
     engaged: bool = False
+    contact_ask_sent: bool = False
+    contact_ask_pending: bool = False
+    contact_handle: str = ""
+    contact_kind: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -238,10 +366,14 @@ class DateFlowDecision:
 
     stop_ai: bool = False
     needs_you: bool = False
-    needs_you_kind: str = ""  # date_handoff | discomfort | decline
+    needs_you_kind: str = ""  # date_handoff | discomfort | invite
     reason: str = ""
     should_invite: bool = False
     invite_text: str = ""
+    should_contact_ask: bool = False
+    contact_ask_text: str = ""
+    contact_handle: str = ""
+    contact_kind: str = ""
     beyond_radius: bool = False
     calendar_entry: Optional[Dict[str, Any]] = None
     reply_persona_prompt: str = ""
@@ -361,6 +493,7 @@ class DateFlowManager:
         self.rng = rng or random.Random()
         self.push_needs_you = push_needs_you
         self._chats: Dict[str, ChatDateState] = {}
+        self._matches: Dict[str, MatchContactRecord] = {}
         self._invite_threshold: Dict[str, int] = {}
         self._stats = {
             "chats_active": 0,
@@ -384,6 +517,33 @@ class DateFlowManager:
             )
             self._bump_stat(package_name, "chats_active", 1)
         return self._chats[k]
+
+    def get_match_record(
+        self, match_id: str, package_name: str = ""
+    ) -> Optional[MatchContactRecord]:
+        return self._matches.get(self._key(package_name, match_id))
+
+    def save_match_contact(
+        self,
+        *,
+        match_id: str,
+        package_name: str,
+        contact_handle: str,
+        contact_kind: str,
+        date_details: str = "",
+    ) -> MatchContactRecord:
+        """Persist private per-user contact on the match record (no auto-message)."""
+        k = self._key(package_name, match_id)
+        rec = MatchContactRecord(
+            match_id=match_id,
+            package_name=package_name,
+            contact_handle=contact_handle,
+            contact_kind=contact_kind,
+            date_details=date_details,
+            updated_at=datetime.now().isoformat(),
+        )
+        self._matches[k] = rec
+        return rec
 
     def _bump_stat(self, package_name: str, field_name: str, delta: int = 1) -> None:
         self._stats[field_name] = int(self._stats.get(field_name) or 0) + delta
@@ -416,6 +576,7 @@ class DateFlowManager:
         Evaluate inbound before composing an AI reply.
 
         If stop_ai: caller must NOT send an AI reply (Needs-you owns the chat).
+        After date agree, may emit one optional contact ask before final handoff.
         """
         now = now or datetime.now()
         cfg = self.config.for_app(package_name)
@@ -436,6 +597,8 @@ class DateFlowManager:
             reply_persona_prompt=cfg.reply_persona_prompt,
             chat_state=chat,
             beyond_radius=is_beyond_radius(chat.distance_miles, cfg.radius_miles),
+            contact_handle=chat.contact_handle,
+            contact_kind=chat.contact_kind,
         )
 
         if chat.ai_replies_stopped or chat.handoff:
@@ -446,11 +609,29 @@ class DateFlowManager:
             return decision
 
         if is_opener:
-            # Date flow applies to existing chats / replies only
             self._persist()
             return decision
 
-        # Discomfort / decline always escalates
+        # After the one contact ask: capture / decline / ignore → always hand off.
+        # Re-compose with the same agree inbound re-emits the ask (idempotent).
+        if chat.contact_ask_pending and inbound:
+            if inbound.strip() == (chat.date_details or "").strip():
+                decision.should_contact_ask = True
+                decision.contact_ask_text = build_contact_ask_text(cfg)
+                decision.reason = "date_agreed_contact_ask"
+                decision.chat_state = chat
+                self._persist()
+                return decision
+            return self._resolve_contact_ask(
+                decision,
+                chat,
+                cfg,
+                inbound=inbound,
+                her_name=her_name,
+                package_name=package_name,
+            )
+
+        # Discomfort / decline always escalates (pre-contact-ask)
         if inbound and _match_any(inbound, DECLINE_HINTS):
             chat.invite_declined = True
             return self._handoff(
@@ -470,19 +651,46 @@ class DateFlowManager:
             if do_h:
                 if why == "discomfort_or_decline":
                     chat.invite_declined = True
-                    kind = "discomfort"
-                elif why == "date_agreed":
+                    return self._handoff(
+                        decision,
+                        chat,
+                        cfg,
+                        kind="discomfort",
+                        reason=why,
+                        inbound=inbound,
+                        her_name=her_name,
+                        package_name=package_name,
+                    )
+                if why == "date_agreed":
                     chat.date_booked = True
                     chat.date_details = inbound.strip()
                     self._bump_stat(package_name, "dates_booked", 1)
-                    kind = "date_handoff"
-                else:
-                    kind = "date_handoff"
+                    # Optional single WhatsApp/Snap ask before final handoff
+                    if cfg.contact_ask_enabled and not chat.contact_ask_sent:
+                        ask = build_contact_ask_text(cfg)
+                        decision.should_contact_ask = True
+                        decision.contact_ask_text = ask
+                        chat.contact_ask_sent = True
+                        chat.contact_ask_pending = True
+                        decision.chat_state = chat
+                        decision.reason = "date_agreed_contact_ask"
+                        self._persist()
+                        return decision
+                    return self._handoff(
+                        decision,
+                        chat,
+                        cfg,
+                        kind="date_handoff",
+                        reason=why,
+                        inbound=inbound,
+                        her_name=her_name,
+                        package_name=package_name,
+                    )
                 return self._handoff(
                     decision,
                     chat,
                     cfg,
-                    kind=kind,
+                    kind="date_handoff",
                     reason=why,
                     inbound=inbound,
                     her_name=her_name,
@@ -514,6 +722,58 @@ class DateFlowManager:
         decision.chat_state = chat
         return decision
 
+    def _resolve_contact_ask(
+        self,
+        decision: DateFlowDecision,
+        chat: ChatDateState,
+        cfg: DateFlowConfig,
+        *,
+        inbound: str,
+        her_name: str,
+        package_name: str,
+    ) -> DateFlowDecision:
+        """One ask only: share → save; decline/ignore → hand off; never re-ask."""
+        chat.contact_ask_pending = False
+        handle, kind = extract_contact_handle(inbound)
+        if handle:
+            chat.contact_handle = handle
+            chat.contact_kind = kind
+            decision.contact_handle = handle
+            decision.contact_kind = kind
+            self.save_match_contact(
+                match_id=chat.match_id,
+                package_name=package_name,
+                contact_handle=handle,
+                contact_kind=kind,
+                date_details=chat.date_details,
+            )
+            return self._handoff(
+                decision,
+                chat,
+                cfg,
+                kind="date_handoff",
+                reason="date_agreed_contact_shared",
+                inbound=inbound,
+                her_name=her_name,
+                package_name=package_name,
+            )
+        if _match_any(inbound, CONTACT_DECLINE_HINTS) or _match_any(
+            inbound, DECLINE_HINTS
+        ):
+            reason = "contact_declined"
+        else:
+            reason = "contact_ignored"
+        return self._handoff(
+            decision,
+            chat,
+            cfg,
+            kind="date_handoff",
+            reason=reason,
+            inbound=inbound,
+            her_name=her_name,
+            package_name=package_name,
+        )
+
     def _handoff(
         self,
         decision: DateFlowDecision,
@@ -528,11 +788,14 @@ class DateFlowManager:
     ) -> DateFlowDecision:
         chat.handoff = True
         chat.ai_replies_stopped = True
+        chat.contact_ask_pending = False
         chat.handoff_reason = reason
         decision.stop_ai = True
         decision.needs_you = True
         decision.needs_you_kind = kind
         decision.reason = reason
+        decision.contact_handle = chat.contact_handle
+        decision.contact_kind = chat.contact_kind
         decision.chat_state = chat
         if cfg.calendar_on_handoff and chat.date_booked:
             decision.calendar_entry = {
@@ -546,6 +809,12 @@ class DateFlowManager:
                 "created_at": datetime.now().isoformat(),
             }
         if self.push_needs_you:
+            contact_line = ""
+            if chat.contact_handle:
+                contact_line = (
+                    f" Contact ({chat.contact_kind or 'shared'}): "
+                    f"{chat.contact_handle}."
+                )
             try:
                 self.push_needs_you(
                     kind=kind,
@@ -558,14 +827,19 @@ class DateFlowManager:
                             if chat.date_details
                             else ""
                         )
-                        + "AI replies stopped — take over this chat."
+                        + contact_line
+                        + " AI replies stopped — take over this chat. "
+                        "Do not auto-message WhatsApp/Snap — continue personally."
                     ),
                     category="dating_date_flow",
                     meta={
                         "match_id": chat.match_id,
                         "invite_text": chat.invite_text,
                         "date_details": chat.date_details,
+                        "contact_handle": chat.contact_handle,
+                        "contact_kind": chat.contact_kind,
                         "calendar": decision.calendar_entry,
+                        "never_auto_message_contact": True,
                     },
                 )
             except TypeError:
@@ -590,6 +864,9 @@ class DateFlowManager:
             "handed_off": [
                 c.to_dict() for c in self._chats.values() if c.ai_replies_stopped
             ],
+            "match_contacts": {
+                k: v.to_dict() for k, v in self._matches.items() if v.contact_handle
+            },
         }
 
     def _persist(self) -> None:
@@ -599,6 +876,7 @@ class DateFlowManager:
         payload = {
             "config": self.config.to_dict(),
             "chats": {k: v.to_dict() for k, v in self._chats.items()},
+            "matches": {k: v.to_dict() for k, v in self._matches.items()},
             "invite_threshold": dict(self._invite_threshold),
             "stats": self._stats,
             "saved_at": datetime.now().isoformat(),
@@ -612,6 +890,10 @@ class DateFlowManager:
             self._chats = {
                 k: ChatDateState.from_dict(v)
                 for k, v in (raw.get("chats") or {}).items()
+            }
+            self._matches = {
+                k: MatchContactRecord.from_dict(v)
+                for k, v in (raw.get("matches") or {}).items()
             }
             self._invite_threshold = {
                 k: int(v) for k, v in (raw.get("invite_threshold") or {}).items()

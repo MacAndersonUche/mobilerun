@@ -111,6 +111,10 @@ export default function DatingPage() {
   const [inviteEnabled, setInviteEnabled] = useState(true);
   const [handoffEnabled, setHandoffEnabled] = useState(true);
   const [calendarOnHandoff, setCalendarOnHandoff] = useState(true);
+  const [contactAskEnabled, setContactAskEnabled] = useState(true);
+  const [contactAskText, setContactAskText] = useState(
+    'Would it be easier to chat on WhatsApp or Snapchat? Totally optional — no pressure either way.'
+  );
   const [dateFlowStats, setDateFlowStats] = useState<{
     chats_active: number;
     invites_sent: number;
@@ -201,6 +205,8 @@ export default function DatingPage() {
       setInviteEnabled(df.invite_enabled ?? true);
       setHandoffEnabled(df.handoff_enabled ?? true);
       setCalendarOnHandoff(df.calendar_on_handoff ?? true);
+      setContactAskEnabled(df.contact_ask_enabled ?? true);
+      if (df.contact_ask_text) setContactAskText(df.contact_ask_text);
       setDateFlowStats(configRes.data.date_flow_stats || null);
       setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
@@ -282,6 +288,8 @@ export default function DatingPage() {
           invite_enabled: inviteEnabled,
           handoff_enabled: handoffEnabled,
           calendar_on_handoff: calendarOnHandoff,
+          contact_ask_enabled: contactAskEnabled,
+          contact_ask_text: contactAskText,
         },
         { headers: authHeaders() }
       );
@@ -679,8 +687,9 @@ export default function DatingPage() {
         <h3 className="text-lg font-semibold">Reply persona & date flow</h3>
         <p className="text-xs text-mute">
           AI replies to existing chats. After a warm chat window, one polite
-          public-place invite — never stay-over / his home. Agreeing a day or
-          asking logistics hands off to you (Needs-you).
+          public-place invite — never stay-over / his home. After she agrees a
+          date, optionally one WhatsApp/Snap ask; then Needs-you handoff. Never
+          auto-message WhatsApp/Snap — you continue personally.
         </p>
         {dateFlowStats ? (
           <div className="flex flex-wrap gap-4 text-sm">
@@ -768,11 +777,32 @@ export default function DatingPage() {
             />
             Calendar entry on booked date
           </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={contactAskEnabled}
+              onChange={(e) => setContactAskEnabled(e.target.checked)}
+              aria-label="Contact ask enabled"
+            />
+            Ask once for WhatsApp / Snap after date agree
+          </label>
         </div>
+        <label className="block text-sm">
+          Contact ask wording (one message, optional)
+          <textarea
+            value={contactAskText}
+            onChange={(e) => setContactAskText(e.target.value)}
+            rows={2}
+            disabled={!contactAskEnabled}
+            aria-label="Contact ask wording"
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
+          />
+        </label>
         <p className="text-xs text-mute">
           Beyond {radiusMiles} mi → suggest meeting in {homeLocation} (public).
           Within radius → mutually convenient public place. Never suggest
-          staying over.
+          staying over. Contact ask is sent at most once; decline or ignore still
+          hands off.
         </p>
         <button
           onClick={saveConfig}

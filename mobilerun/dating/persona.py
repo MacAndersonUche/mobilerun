@@ -1,8 +1,8 @@
 """Persona / message generation for dating mode.
 
 Openers may come from the template library (no LLM). Replies use AI with the
-reply-persona prompt, and the date-flow manager may inject a one-time invite
-or stop AI (Needs-you handoff).
+reply-persona prompt, and the date-flow manager may inject a one-time invite,
+one optional WhatsApp/Snap ask after date agree, or stop AI (Needs-you handoff).
 """
 
 from __future__ import annotations
@@ -76,6 +76,18 @@ class PersonaManager:
             return {
                 "text": decision.invite_text,
                 "source": "date_invite",
+                "is_opener": False,
+                "stop_ai": False,
+                "needs_you": False,
+                "used_llm": False,
+                "date_flow": decision.to_dict(),
+            }
+
+        # One optional WhatsApp/Snap ask after date agree (never auto-message those apps)
+        if decision and decision.should_contact_ask and decision.contact_ask_text:
+            return {
+                "text": decision.contact_ask_text,
+                "source": "contact_ask",
                 "is_opener": False,
                 "stop_ai": False,
                 "needs_you": False,
