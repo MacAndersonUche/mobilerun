@@ -1,9 +1,10 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
-import { Smartphone, Settings, History, Play } from 'lucide-react';
+import { Smartphone, Settings, History, Play, Heart } from 'lucide-react';
 import DevicesPage from './pages/DevicesPage';
 import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
+import DatingPage from './pages/DatingPage';
 
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
             <ul className="space-y-2">
               <NavItem to="/" icon={<Smartphone />} label="Devices" />
               <NavItem to="/tasks" icon={<Play />} label="Run Task" />
+              <NavItem to="/dating" icon={<Heart />} label="Dating Mode" />
               <NavItem to="/history" icon={<History />} label="History" />
               <NavItem to="/settings" icon={<Settings />} label="Settings" />
             </ul>
@@ -39,6 +41,7 @@ function App() {
             <Routes>
               <Route path="/" element={<DevicesPage />} />
               <Route path="/tasks" element={<TasksPage />} />
+              <Route path="/dating" element={<DatingPage />} />
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

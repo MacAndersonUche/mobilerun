@@ -12,15 +12,22 @@ class AppProfile:
     name: str
     package_name: str
     daily_swipe_cap: int = 50
-    daily_message_cap: int = 20
     daily_reply_cap: int = 50
     enabled: bool = True
+
+    # Opening messages (new matches)
+    daily_opener_target_min: int = 50  # Randomized target range
+    daily_opener_target_max: int = 100
 
     # Activity patterns
     min_swipe_delay_ms: int = 800
     max_swipe_delay_ms: int = 3000
     min_typing_delay_ms: int = 50
     max_typing_delay_ms: int = 150
+
+    # Sequential message delays (between conversations)
+    min_conversation_gap_sec: int = 30  # 30 seconds between conversations
+    max_conversation_gap_sec: int = 180  # 3 minutes between conversations
 
     # Session limits
     max_swipes_per_session: int = 15
@@ -38,7 +45,8 @@ DEFAULT_APPS = [
     AppProfile(
         name="Bumble",
         package_name="com.bumble.app",
-        daily_message_cap=10,  # Women message first
+        daily_opener_target_min=20,  # Women message first (lower opener target)
+        daily_opener_target_max=40,
     ),
     AppProfile(
         name="Yubo",
@@ -60,11 +68,15 @@ DEFAULT_APPS = [
         name="Hinge",
         package_name="co.hinge.app",
         daily_swipe_cap=30,  # Hinge has stricter limits
+        daily_opener_target_min=30,
+        daily_opener_target_max=60,
     ),
     AppProfile(
         name="Facebook",
         package_name="com.facebook.katana",
         daily_swipe_cap=20,  # Facebook Dating is more limited
+        daily_opener_target_min=20,
+        daily_opener_target_max=40,
         enabled=False,  # Disabled by default (not primarily dating)
     ),
     AppProfile(
@@ -95,6 +107,7 @@ class DatingModeConfig:
     review_before_send: bool = True
     human_like_delays: bool = True
     randomize_order: bool = True
+    sequential_messaging: bool = True  # Process one conversation at a time
 
     # Mode
     round_robin: bool = True  # vs "one app at a time"
@@ -118,7 +131,10 @@ Avoid:
 
     # Global limits (safety)
     max_total_swipes_per_day: int = 300
-    max_total_messages_per_day: int = 100
+
+    # Global messaging caps (openers + replies across all apps)
+    min_total_messages_per_day: int = 100
+    max_total_messages_per_day: int = 500
 
     def get_enabled_apps(self) -> List[AppProfile]:
         """Get list of enabled apps."""
@@ -128,4 +144,12 @@ Avoid:
         """Get app profile by package name."""
         return next(
             (app for app in self.apps if app.package_name == package_name), None
+        )
+
+    def get_daily_message_target(self) -> int:
+        """Get randomized daily message target within configured range."""
+        import random
+
+        return random.randint(
+            self.min_total_messages_per_day, self.max_total_messages_per_day
         )

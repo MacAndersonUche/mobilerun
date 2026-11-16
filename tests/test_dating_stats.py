@@ -1,9 +1,7 @@
 """Tests for dating mode statistics."""
 
-import pytest
 import tempfile
 from pathlib import Path
-from datetime import date
 from mobilerun.dating.stats import DatingStats, AppStats
 
 
@@ -23,13 +21,15 @@ def test_app_stats_daily_reset():
 
     stats.swipes_today = 10
     stats.likes_today = 5
-    stats.messages_sent_today = 3
+    stats.openers_sent_today = 3
+    stats.replies_sent_today = 2
 
     stats.reset_daily_counts()
 
     assert stats.swipes_today == 0
     assert stats.likes_today == 0
-    assert stats.messages_sent_today == 0
+    assert stats.openers_sent_today == 0
+    assert stats.replies_sent_today == 0
 
 
 def test_dating_stats_swipe_recording():
@@ -38,7 +38,6 @@ def test_dating_stats_swipe_recording():
         stats_file = Path(tmpdir) / "stats.json"
         stats = DatingStats(app_stats={}, stats_file=stats_file)
 
-        # Record some swipes
         stats.record_swipe("co.hinge.app", "Hinge", liked=True)
         stats.record_swipe("co.hinge.app", "Hinge", liked=True)
         stats.record_swipe("co.hinge.app", "Hinge", liked=False)
@@ -51,21 +50,18 @@ def test_dating_stats_swipe_recording():
 
 
 def test_dating_stats_message_recording():
-    """Test message recording."""
+    """Test opener vs reply recording."""
     with tempfile.TemporaryDirectory() as tmpdir:
         stats_file = Path(tmpdir) / "stats.json"
         stats = DatingStats(app_stats={}, stats_file=stats_file)
 
-        # Record opener
-        stats.record_message("co.hinge.app", "Hinge", is_reply=False)
-
-        # Record reply
-        stats.record_message("co.hinge.app", "Hinge", is_reply=True)
+        stats.record_message("co.hinge.app", "Hinge", is_opener=True)
+        stats.record_message("co.hinge.app", "Hinge", is_opener=False)
 
         app_stats = stats.app_stats["co.hinge.app"]
-        assert app_stats.messages_sent_today == 1
+        assert app_stats.openers_sent_today == 1
         assert app_stats.replies_sent_today == 1
-        assert app_stats.total_messages == 1
+        assert app_stats.total_openers == 1
         assert app_stats.total_replies == 1
         assert stats.messages_today_all == 2
 
@@ -89,19 +85,17 @@ def test_dating_stats_persistence():
     with tempfile.TemporaryDirectory() as tmpdir:
         stats_file = Path(tmpdir) / "stats.json"
 
-        # Create and populate stats
         stats1 = DatingStats(app_stats={}, stats_file=stats_file)
         stats1.record_swipe("co.hinge.app", "Hinge", liked=True)
-        stats1.record_message("co.hinge.app", "Hinge", is_reply=False)
+        stats1.record_message("co.hinge.app", "Hinge", is_opener=True)
         stats1.total_sessions = 5
         stats1.save()
 
-        # Load stats
         stats2 = DatingStats.load(stats_file)
 
         assert "co.hinge.app" in stats2.app_stats
         assert stats2.app_stats["co.hinge.app"].total_swipes == 1
-        assert stats2.app_stats["co.hinge.app"].total_messages == 1
+        assert stats2.app_stats["co.hinge.app"].total_openers == 1
         assert stats2.total_sessions == 5
 
 
@@ -111,27 +105,24 @@ def test_dating_stats_daily_reset_detection():
         stats_file = Path(tmpdir) / "stats.json"
         stats = DatingStats(app_stats={}, stats_file=stats_file)
 
-        # Record activity
         stats.record_swipe("co.hinge.app", "Hinge", liked=True)
         stats.swipes_today_all = 10
 
-        # Simulate next day
         stats.last_session_date = "2020-01-01"
         stats.check_and_reset_daily()
 
-        # Should have reset
         assert stats.swipes_today_all == 0
 
 
 def test_dating_stats_summary():
-    """Test summary generation."""
+    """Test summary generation with progress vs caps."""
     with tempfile.TemporaryDirectory() as tmpdir:
         stats_file = Path(tmpdir) / "stats.json"
         stats = DatingStats(app_stats={}, stats_file=stats_file)
 
-        # Add activity
+        stats.set_daily_opener_target("co.hinge.app", "Hinge", 80)
         stats.record_swipe("co.hinge.app", "Hinge", liked=True)
-        stats.record_message("co.hinge.app", "Hinge", is_reply=False)
+        stats.record_message("co.hinge.app", "Hinge", is_opener=True)
         stats.update_inbox_count("co.hinge.app", "Hinge", unread=3, new_matches=1)
 
         summary = stats.get_summary()
@@ -141,4 +132,7 @@ def test_dating_stats_summary():
         assert len(summary["apps"]) == 1
         assert summary["apps"][0]["name"] == "Hinge"
         assert summary["apps"][0]["today"]["swipes"] == 1
+        assert summary["apps"][0]["today"]["openers"] == 1
+        assert summary["apps"][0]["targets"]["opener_target"] == 80
+        assert summary["apps"][0]["targets"]["opener_progress"] == 1
         assert summary["apps"][0]["inbox"]["unread"] == 3

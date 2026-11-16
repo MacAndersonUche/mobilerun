@@ -681,11 +681,13 @@ mobilerun serve --log-level debug
 
 **Features:**
 - 📱 Swipe/like with per-app daily caps and rules
-- 💬 Read inboxes and reply in bulk with LLM (Mac's persona/tone)
-- ✉️ Send opening messages to new matches
-- 📊 Per-app stats: unread messages, matches, swipes, replies
-- 🤖 Human-like behavior: randomized delays, natural swipe curves with jitter, active hours schedule, session breaks
+- 💬 **Sequential replies** — one conversation after another (never parallel), with human-like gaps (30–180s)
+- ✉️ Opening messages to new matches: **50–100 per app/day** (randomized within range, configurable)
+- 📈 Global auto-messaging cap: **100–500/day** across all apps (openers + replies, configurable)
+- 📊 Per-app stats + **progress vs caps** in the Dating Mode UI dashboard
+- 🤖 Human-like pacing: randomized delays, Bézier swipe curves with jitter, active hours, session breaks
 - 🔄 Round-robin or single-app mode; start/stop/pause from UI or CLI
+- Works for the MobileRun folder apps **and any other dating app added to the list**
 
 **Usage:**
 
@@ -696,33 +698,34 @@ mobilerun dating --stop          # Stop
 mobilerun dating --status        # Check status
 mobilerun dating --stats         # View per-app statistics
 
-# From UI
-# Navigate to "Dating" page:
-# - Configure app list, daily caps, persona prompt
+# From UI → Dating Mode page:
+# - Toggle apps, set global message min/max, persona prompt
 # - Enable/disable review-before-send
-# - Set active hours schedule
-# - View live stats dashboard
-# - Review & approve/edit queued messages
+# - Live progress bars: openers vs target, global messages vs cap
+# - Review & approve/edit/reject queued messages one-by-one
 ```
 
 **Configuration:**
-- Editable persona/style prompt in UI (default: Mac's confident, witty, casual tone)
-- Daily swipe/message caps per app (default: 50 swipes, 20 messages)
-- Active hours (default: 9 AM - 11 PM)
-- Session limits: max swipes per session (15), break timers (5-15 min)
-- Review mode: optional approval queue before sending messages
+- Editable persona/style prompt in UI
+- Per-app opener target range (default 50–100; Bumble/Hinge customized)
+- Global message range (default 100–500 openers+replies/day)
+- Active hours (default: 9 AM – 11 PM)
+- Session limits + conversation gaps for sequential sends
+- Review mode: optional approval queue before sending
 
 **Stats Tracked:**
-- Daily/total swipes, likes, messages, replies per app
+- Daily/total swipes, openers, replies per app
+- Progress vs opener target and global message cap
 - Unread message count, new matches
 - Session count, runtime minutes
-- Last active timestamp per app
 
 **Safety:**
-- Global daily caps (300 swipes, 100 messages total)
-- Human-like timing: Bézier curves, jitter, variable delays (800-3000ms swipes, 50-150ms typing)
+- Sequential messaging only (no parallel sends)
+- Global swipe cap (300/day) + message range (100–500)
+- Human-like timing: Bézier curves, jitter, variable delays
 - Session breaks and active-hour enforcement
 - Review queue prevents unintended sends
+- JWT auth required on all dating API endpoints
 
 ---
 

@@ -514,6 +514,9 @@ class DatingModeConfig(BaseModel):
     persona_prompt: str = ""
     active_hours_start: str = "09:00"
     active_hours_end: str = "23:00"
+    min_total_messages_per_day: int = 100
+    max_total_messages_per_day: int = 500
+    sequential_messaging: bool = True
 
 
 class DatingMessage(BaseModel):
@@ -541,15 +544,20 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
                 "package_name": app.package_name,
                 "enabled": app.enabled,
                 "daily_swipe_cap": app.daily_swipe_cap,
-                "daily_message_cap": app.daily_message_cap,
+                "daily_reply_cap": app.daily_reply_cap,
+                "daily_opener_target_min": app.daily_opener_target_min,
+                "daily_opener_target_max": app.daily_opener_target_max,
             }
             for app in config.apps
         ],
         "round_robin": config.round_robin,
         "review_before_send": config.review_before_send,
+        "sequential_messaging": config.sequential_messaging,
         "persona_prompt": config.persona_prompt,
         "active_hours_start": config.active_hours_start.isoformat(),
         "active_hours_end": config.active_hours_end.isoformat(),
+        "min_total_messages_per_day": config.min_total_messages_per_day,
+        "max_total_messages_per_day": config.max_total_messages_per_day,
     }
 
 

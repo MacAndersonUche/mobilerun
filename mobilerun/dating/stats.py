@@ -18,19 +18,22 @@ class AppStats:
     # Daily counts
     swipes_today: int = 0
     likes_today: int = 0
-    messages_sent_today: int = 0
-    replies_sent_today: int = 0
+    openers_sent_today: int = 0  # Opening messages to new matches
+    replies_sent_today: int = 0  # Replies to existing conversations
 
     # Totals
     total_swipes: int = 0
     total_likes: int = 0
-    total_messages: int = 0
+    total_openers: int = 0
     total_replies: int = 0
     total_matches: int = 0
 
     # Current state
     unread_messages: int = 0
     new_matches: int = 0
+
+    # Targets & caps
+    daily_opener_target: int = 0  # Randomized target for today
 
     # Last activity
     last_active: Optional[str] = None
@@ -40,8 +43,9 @@ class AppStats:
         """Reset daily counters (called at midnight)."""
         self.swipes_today = 0
         self.likes_today = 0
-        self.messages_sent_today = 0
+        self.openers_sent_today = 0
         self.replies_sent_today = 0
+        # daily_opener_target is re-randomized separately
 
 
 @dataclass
@@ -146,16 +150,16 @@ class DatingStats:
         self.swipes_today_all += 1
         stats.last_active = datetime.now().isoformat()
 
-    def record_message(self, package_name: str, app_name: str, is_reply: bool = False):
-        """Record a sent message."""
+    def record_message(self, package_name: str, app_name: str, is_opener: bool = False):
+        """Record a sent message (opener or reply)."""
         stats = self.get_or_create_app_stats(app_name, package_name)
 
-        if is_reply:
+        if is_opener:
+            stats.openers_sent_today += 1
+            stats.total_openers += 1
+        else:
             stats.replies_sent_today += 1
             stats.total_replies += 1
-        else:
-            stats.messages_sent_today += 1
-            stats.total_messages += 1
 
         self.messages_today_all += 1
         stats.last_active = datetime.now().isoformat()
@@ -168,6 +172,11 @@ class DatingStats:
         stats.unread_messages = unread
         stats.new_matches = new_matches
         stats.last_stats_update = datetime.now().isoformat()
+
+    def set_daily_opener_target(self, package_name: str, app_name: str, target: int):
+        """Set randomized daily opener target for an app."""
+        stats = self.get_or_create_app_stats(app_name, package_name)
+        stats.daily_opener_target = target
 
     def get_summary(self) -> Dict:
         """Get summary of all stats."""
@@ -185,12 +194,20 @@ class DatingStats:
                     "today": {
                         "swipes": stats.swipes_today,
                         "likes": stats.likes_today,
-                        "messages": stats.messages_sent_today,
+                        "openers": stats.openers_sent_today,
                         "replies": stats.replies_sent_today,
+                        "total_messages": stats.openers_sent_today
+                        + stats.replies_sent_today,
+                    },
+                    "targets": {
+                        "opener_target": stats.daily_opener_target,
+                        "opener_progress": stats.openers_sent_today,
                     },
                     "total": {
                         "swipes": stats.total_swipes,
-                        "messages": stats.total_messages + stats.total_replies,
+                        "openers": stats.total_openers,
+                        "replies": stats.total_replies,
+                        "messages": stats.total_openers + stats.total_replies,
                         "matches": stats.total_matches,
                     },
                     "inbox": {
