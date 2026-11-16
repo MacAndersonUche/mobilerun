@@ -1509,6 +1509,161 @@ async def test(
             logger.debug(traceback.format_exc())
 
 
+# === Self-Hosted Control Center Commands ===
+
+
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Host to bind to")
+@click.option("--port", default=8000, help="Port to bind to")
+@click.option("--no-browser", is_flag=True, help="Don't auto-open browser")
+@click.option(
+    "--allow-unauthenticated", is_flag=True, help="Disable JWT auth (local use only)"
+)
+def serve(host: str, port: int, no_browser: bool, allow_unauthenticated: bool):
+    """
+    Start the Mobilerun control center.
+
+    This starts the backend server and serves the web UI locally.
+    Your phone pairs to this PC over WiFi.
+
+    \b
+    Quick Start:
+        1. Run: mobilerun serve
+        2. Scan the QR code with your phone
+        3. Type tasks in the UI or use: mobilerun run "your task"
+    """
+    from mobilerun.server.serve import serve_command
+
+    # Call the serve implementation
+    ctx = click.get_current_context()
+    ctx.invoke(
+        serve_command,
+        host=host,
+        port=port,
+        no_browser=no_browser,
+        allow_unauthenticated=allow_unauthenticated,
+    )
+
+
+@cli.command()
+@click.argument("instruction")
+@click.option(
+    "--device-id", help="Device ID to run on (uses first connected if omitted)"
+)
+@click.option("--max-steps", default=15, help="Maximum steps for the agent")
+@click.option("--reasoning", is_flag=True, help="Enable reasoning/thinking mode")
+@click.option("--vision", is_flag=True, default=True, help="Enable vision mode")
+@click.option("--backend", default="http://localhost:8000", help="Backend URL")
+def run(
+    instruction: str,
+    device_id: str,
+    max_steps: int,
+    reasoning: bool,
+    vision: bool,
+    backend: str,
+):
+    """
+    Run a task on your phone from the terminal.
+
+    The task will execute via the backend and show up in the UI history.
+
+    \b
+    Examples:
+        mobilerun run "open WhatsApp"
+        mobilerun run "search for pizza places nearby" --reasoning
+        mobilerun run "take a screenshot and send it" --device-id phone-123
+    """
+    import requests
+
+    console.print(f"[blue]📱 Running:[/] {instruction}")
+    console.print(f"[dim]Backend: {backend}[/]")
+
+    try:
+        # Get connected devices
+        response = requests.get(f"{backend}/api/devices")
+        response.raise_for_status()
+        devices = response.json()
+
+        if not devices:
+            console.print("[red]❌ No devices connected![/]")
+            console.print(
+                "\n[yellow]Make sure:[/]\n"
+                "  1. Backend is running (mobilerun serve)\n"
+                "  2. Your phone app is connected\n"
+                "  3. Accessibility service is enabled"
+            )
+            sys.exit(1)
+
+        # Select device
+        if device_id:
+            device = next((d for d in devices if d["device_id"] == device_id), None)
+            if not device:
+                console.print(f"[red]❌ Device {device_id} not found![/]")
+                console.print(
+                    f"\nAvailable devices: {[d['device_id'] for d in devices]}"
+                )
+                sys.exit(1)
+        else:
+            device = devices[0]
+            device_id = device["device_id"]
+
+        console.print(f"[green]✓ Using device:[/] {device['name']} ({device_id})")
+
+        # Submit task
+        task_data = {
+            "device_id": device_id,
+            "instruction": instruction,
+            "max_steps": max_steps,
+            "reasoning": reasoning,
+            "vision": vision,
+        }
+
+        response = requests.post(f"{backend}/api/tasks", json=task_data)
+        response.raise_for_status()
+        task = response.json()
+
+        task_id = task["task_id"]
+        console.print(f"[green]✓ Task started:[/] {task_id}")
+        console.print(f"\n[dim]View in UI: {backend}/#/tasks/{task_id}[/]\n")
+
+        # Poll for completion
+        import time
+
+        with console.status("[blue]Running...[/]") as status:
+            while True:
+                response = requests.get(f"{backend}/api/tasks/{task_id}")
+                response.raise_for_status()
+                task_status = response.json()
+
+                status.update(f"[blue]{task_status['status'].title()}...[/]")
+
+                if task_status["status"] in ["completed", "failed"]:
+                    break
+
+                time.sleep(2)
+
+        # Show result
+        if task_status["status"] == "completed":
+            console.print(f"[green]✓ Completed successfully![/]")
+            if task_status.get("result"):
+                console.print(f"\n[dim]Result: {task_status['result']}[/]")
+        else:
+            console.print(
+                f"[red]❌ Failed:[/] {task_status.get('error', 'Unknown error')}"
+            )
+            sys.exit(1)
+
+    except requests.exceptions.ConnectionError:
+        console.print(f"[red]❌ Cannot connect to backend at {backend}[/]")
+        console.print("\n[yellow]Start the backend first:[/] mobilerun serve")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]❌ Error:[/] {e}")
+        if "--debug" in sys.argv:
+            raise
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     command = "open youtube and play a song by shakira"
     command = "use open_app to open the settings and search for the battery and enter the first result"

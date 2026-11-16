@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 import qrcode
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # Add mobilerun to path for local runs
@@ -44,6 +46,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve frontend if available
+FRONTEND_DIR = os.getenv("FRONTEND_DIR")
+if FRONTEND_DIR and Path(FRONTEND_DIR).exists():
+    logger.info(f"Serving frontend from {FRONTEND_DIR}")
+    try:
+        app.mount(
+            "/assets",
+            StaticFiles(directory=Path(FRONTEND_DIR) / "assets"),
+            name="assets",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to mount assets: {e}")
+
 # In-memory state (for Lambda, consider DynamoDB)
 connected_devices: Dict[str, Dict[str, Any]] = {}
 active_runs: Dict[str, Dict[str, Any]] = {}
@@ -51,6 +66,36 @@ run_history: List[Dict[str, Any]] = []
 websocket_clients: List[WebSocket] = []
 pairing_tokens: Dict[str, Dict[str, Any]] = {}
 device_websockets: Dict[str, WebSocket] = {}
+
+
+# === Frontend Routes ===
+
+if FRONTEND_DIR and Path(FRONTEND_DIR).exists():
+
+    @app.get("/", response_class=FileResponse)
+    async def serve_index():
+        """Serve the frontend index.html."""
+        index_path = Path(FRONTEND_DIR) / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path, media_type="text/html")
+        raise HTTPException(status_code=404, detail="Frontend not found")
+
+    @app.get("/{full_path:path}", response_class=FileResponse)
+    async def serve_spa_routes(full_path: str):
+        """Serve frontend for SPA routes (except API routes)."""
+        if full_path.startswith("api/") or full_path.startswith("ws/"):
+            raise HTTPException(status_code=404)
+
+        # Try to serve the file if it exists
+        file_path = Path(FRONTEND_DIR) / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+
+        # Otherwise serve index.html for SPA routing
+        index_path = Path(FRONTEND_DIR) / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path, media_type="text/html")
+        raise HTTPException(status_code=404)
 
 
 # === Models ===

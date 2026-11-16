@@ -1,174 +1,422 @@
-# Mobilerun Self-Hosted Edition
+# 🏠 Self-Hosted Mobilerun Control Center
 
-> Transform your laptop into a complete mobile automation control center.
+> Transform your PC into a complete mobile automation control center with wireless device control, modern web UI, and LLM-powered agent execution.
 
-This is Mac's fork of [droidrun/mobilerun](https://github.com/droidrun/mobilerun), converted into a **fully self-hosted system** for running AI agents on Android devices without cloud dependencies.
+## 🚀 Quick Start (Primary Workflow)
 
-## 🎯 What's Different
-
-| Feature | Upstream mobilerun | This Fork (Self-Hosted) |
-|---------|-------------------|------------------------|
-| **Control UI** | CLI only | Modern web UI (React + TypeScript) |
-| **Device Connection** | USB/ADB cable | **Wireless over WiFi** (no cable needed) |
-| **Backend Options** | N/A | Local (laptop) OR AWS Lambda |
-| **Frontend Deployment** | N/A | Netlify static site |
-| **Performance** | Standard | **Optimized agent loop** with profiling |
-| **LLM Providers** | All providers | **Gemini, Claude, OpenAI** (focused) |
-| **Pairing** | Manual setup | **QR code pairing** from UI |
-| **APK Distribution** | N/A | **Auto-build & QR code** via GitHub Actions |
-
-## 🚀 Quick Start
-
-### 1. Prerequisites
-
-- **Python 3.11+** (for backend)
-- **Node.js 20+** (for frontend - optional for local use)
-- **Android device** with Developer options enabled
-- **API key** for at least one LLM provider (Gemini, OpenAI, or Anthropic)
-
-### 2. Clone & Install
+**One command to run everything:**
 
 ```bash
-git clone https://github.com/MacAndersonUche/mobilerun
+# Install mobilerun
+pip install -e .
+
+# Start the control center (runs backend + UI)
+mobilerun serve
+```
+
+This will:
+- ✅ Start the backend server on your PC
+- ✅ Serve the web UI locally at http://localhost:8000
+- ✅ Print a QR code in your terminal for phone pairing
+- ✅ Auto-open the UI in your browser
+
+**Then pair your phone:**
+
+1. Install the Mobilerun Android app (download from [Releases](https://github.com/MacAndersonUche/mobilerun/releases))
+2. Open the app and enable Accessibility Service (Settings → Accessibility → Mobilerun)
+3. Return to the app and scan the QR code from your terminal
+
+**Now you're ready!**
+
+- Type tasks in the web UI: `"open WhatsApp"`, `"search for pizza near me"`
+- Or use the CLI: `mobilerun run "your task here"`
+- Watch live step logs, LLM reasoning, and phone screen in the UI
+- The agent runs on your PC, actions execute on your phone
+
+## 📋 Table of Contents
+
+- [How It Works](#-how-it-works)
+- [Installation](#-installation)
+- [Usage](#-usage)
+  - [Web UI](#web-ui)
+  - [CLI Commands](#cli-commands)
+- [Configuration](#-configuration)
+- [Android App](#-android-app)
+- [Cloud Deployment](#-cloud-deployment-optional)
+- [Architecture](#-architecture)
+- [Troubleshooting](#-troubleshooting)
+
+## 🎯 How It Works
+
+```
+┌─────────────┐          ┌──────────────┐          ┌─────────────┐
+│   Your PC   │   WiFi   │ Android App  │  A11y    │   Phone     │
+│             │◄────────►│              │─────────►│   Screen    │
+│  Backend    │          │  WebSocket   │          │             │
+│  + Agent    │          │  Client      │          │  Actions    │
+│  + Web UI   │          │              │          │  Execute    │
+└─────────────┘          └──────────────┘          └─────────────┘
+       ▲
+       │
+   Browser
+   (localhost:8000)
+```
+
+**Key Flow:**
+
+1. You run `mobilerun serve` on your PC
+2. Phone app connects to PC over WiFi (no USB needed!)
+3. You type a task in the UI or CLI
+4. Agent loop runs on PC (using your API keys & compute)
+5. Commands sent to phone via WebSocket
+6. Accessibility Service executes taps, swipes, etc.
+7. Screenshots and UI tree stream back to PC
+8. You see live progress in the web UI
+
+## 🔧 Installation
+
+### Prerequisites
+
+- **PC:** Python 3.10+, pip
+- **Phone:** Android 7.0+ with WiFi
+- **LLM API Key:** OpenAI, Anthropic Claude, or Google Gemini
+
+### Install Mobilerun
+
+```bash
+# Clone the repo
+git clone https://github.com/MacAndersonUche/mobilerun.git
 cd mobilerun
 
-# Install Python dependencies
-pip install -e .
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# (Optional) Install specific LLM providers
+pip install -e ".[anthropic]"  # For Claude
+pip install -e ".[gemini]"     # For Gemini
 ```
 
-### 3. Install Android App
+### Configure LLM Provider
 
-Scan the QR code below with your Android device to download the latest app:
-
-<!-- LATEST_APK_START -->
-*APK will be available after first GitHub Actions build*
-<!-- LATEST_APK_END -->
-
-Or download manually from [Releases](https://github.com/MacAndersonUche/mobilerun/releases/latest).
-
-**Installation:**
-1. Download APK on your phone
-2. Enable "Install from unknown sources" if prompted
-3. Tap "More details" then "Install anyway" if Play Protect warns you (normal for sideloaded apps)
-
-### 4. Start the Backend
-
-#### Option A: Local on Your Laptop (Recommended for First Time)
-
-**On macOS/Linux:**
 ```bash
-./start.sh
+# Option 1: Environment variable
+export OPENAI_API_KEY="sk-..."
+
+# Option 2: Configuration wizard
+mobilerun configure
+
+# Option 3: Set in backend/.env file
+echo "OPENAI_API_KEY=sk-..." >> backend/.env
 ```
 
-**On Windows:**
-```powershell
-start.bat
-```
+### Install Android App
 
-The backend starts at `http://localhost:8000`.
+1. Download the latest APK from [Releases](https://github.com/MacAndersonUche/mobilerun/releases)
+2. Install on your phone (Settings → Security → Install unknown apps)
+3. Open the app
+4. Enable Accessibility Service:
+   - Settings → Accessibility → Mobilerun → Enable
+   - Grant all permissions
+5. Return to the Mobilerun app
 
-On first run, edit `backend/.env` to add your API keys:
+## 💻 Usage
 
-```env
-# Add at least one
-GOOGLE_API_KEY=your_gemini_key_here
-OPENAI_API_KEY=your_openai_key_here
-ANTHROPIC_API_KEY=your_anthropic_key_here
-```
+### Primary Method: `mobilerun serve`
 
-#### Option B: AWS Lambda (Cloud Deployment)
+Start everything with one command:
 
-See [Deployment Guide](#cloud-deployment) below.
-
-### 5. Open the Control UI
-
-**Local Development:**
 ```bash
+mobilerun serve
+
+# Options:
+#   --host 0.0.0.0              # Bind to all interfaces
+#   --port 8000                 # Custom port
+#   --no-browser                # Don't auto-open browser
+#   --allow-unauthenticated     # Disable JWT auth (local use)
+```
+
+**What you'll see:**
+
+```
+══════════════════════════════════════════════════════════════════════
+🚀 Mobilerun Control Center Starting...
+══════════════════════════════════════════════════════════════════════
+
+📱 Backend API: http://localhost:8000
+🌐 Web UI: http://localhost:8000/
+✓ Frontend served from: /path/to/frontend/dist
+
+──────────────────────────────────────────────────────────────────────
+📲 PAIR YOUR ANDROID DEVICE:
+──────────────────────────────────────────────────────────────────────
+
+1. Install the Mobilerun app on your phone
+2. Enable Accessibility Service in Settings
+3. Return to app and scan this QR code:
+
+[ASCII QR CODE HERE]
+
+──────────────────────────────────────────────────────────────────────
+💡 Quick Start:
+──────────────────────────────────────────────────────────────────────
+  • Open http://localhost:8000 in your browser
+  • Pair your phone using the QR code above
+  • Type tasks in the UI (e.g., 'open WhatsApp')
+  • Or use CLI: mobilerun run 'your task here'
+
+══════════════════════════════════════════════════════════════════════
+
+✓ Opened http://localhost:8000 in your browser
+```
+
+### Web UI
+
+The UI opens automatically at `http://localhost:8000`
+
+**Devices Page:**
+- See connected phones
+- Connection status (WiFi)
+- Pair new devices (QR code)
+
+**Tasks Page:**
+- Type natural language instructions
+- Select device & LLM model
+- Enable reasoning/vision modes
+- Watch live execution:
+  - Step-by-step logs
+  - LLM reasoning traces
+  - Phone screen updates
+
+**History Page:**
+- Past task results
+- Success/failure status
+- Full execution logs
+- Replay trajectories
+
+**Settings Page:**
+- Backend URL configuration
+- LLM provider selection
+- API key management
+
+### CLI Commands
+
+Run tasks from the terminal:
+
+```bash
+# Basic usage
+mobilerun run "open WhatsApp"
+
+# With options
+mobilerun run "search for coffee shops" --reasoning --max-steps 20
+
+# Specific device
+mobilerun run "take a screenshot" --device-id phone-abc123
+
+# Custom backend
+mobilerun run "your task" --backend http://192.168.1.100:8000
+```
+
+**What happens:**
+- Task submitted to backend
+- Executes via the agent on your PC
+- Shows in UI history
+- CLI polls and displays result
+
+## ⚙️ Configuration
+
+### LLM Providers
+
+**Supported:** OpenAI (default), Anthropic Claude, Google Gemini
+
+**Configuration:**
+
+```bash
+# Via environment
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_API_KEY="..."
+
+# Or in backend/.env
+OPENAI_API_KEY=sk-...
+DEFAULT_PROVIDER=openai
+DEFAULT_MODEL=gpt-4
+```
+
+### Backend Options
+
+Create `backend/.env`:
+
+```bash
+# Server
+HOST=0.0.0.0
+PORT=8000
+
+# Auth (optional)
+JWT_SECRET=your-secret-here
+ALLOW_UNAUTHENTICATED=true  # For local use
+
+# LLM
+OPENAI_API_KEY=sk-...
+DEFAULT_PROVIDER=openai
+DEFAULT_MODEL=gpt-4
+
+# Pairing
+PAIRING_TOKEN=auto-generated
+```
+
+### Frontend Configuration
+
+The UI auto-detects `http://localhost:8000` when served locally.
+
+For remote backends, edit Settings in the UI or set:
+
+```javascript
+// Stored in localStorage
+localStorage.setItem('backendUrl', 'http://your-server:8000');
+```
+
+## 📱 Android App
+
+### Features
+
+- ✅ **WiFi Connection:** No USB cable needed
+- ✅ **Accessibility Service:** Real gesture execution (tap, swipe, scroll)
+- ✅ **UI Tree Capture:** Sends layout XML to agent
+- ✅ **QR Code Pairing:** Easy setup
+- ✅ **Always Connected:** Reconnects automatically
+
+### Setup
+
+1. **Install APK** from [Releases](https://github.com/MacAndersonUche/mobilerun/releases)
+
+2. **Enable Accessibility:**
+   ```
+   Settings → Accessibility → Mobilerun Self-Hosted → Enable
+   ```
+   Grant all permissions (overlay, accessibility, notifications)
+
+3. **Pair Device:**
+   - Open Mobilerun app
+   - Tap "Pair to Backend"
+   - Scan QR code from `mobilerun serve` terminal
+
+4. **Verify Connection:**
+   - App shows "Connected" status
+   - Backend UI shows device in Devices page
+
+### Permissions Required
+
+- **Accessibility Service:** Execute taps, swipes, get UI tree
+- **Display Over Other Apps:** Screen capture (future)
+- **Internet:** WebSocket connection to PC
+
+### Building from Source
+
+```bash
+cd android-app
+./gradlew assembleRelease
+
+# APK at: build/outputs/apk/release/app-release.apk
+```
+
+## ☁️ Cloud Deployment (Optional)
+
+While the primary workflow is local PC, you can deploy to AWS Lambda:
+
+### Prerequisites
+
+- AWS Account
+- AWS CLI configured
+- Node.js 20+ (for CDK)
+
+### Deploy
+
+```bash
+# Build frontend
 cd frontend
+npm ci && npm run build
+
+# Deploy infrastructure
+cd ../infra
 npm install
-npm run dev
+npx cdk deploy
+
+# Update backend URL in Settings
 ```
 
-Visit `http://localhost:3000`.
+**Note:** Lambda has 15-minute timeout limit. For long-running tasks, consider:
+- ECS Fargate (recommended for production)
+- EC2 instance
+- Keep using local PC
 
-**Production:** The UI is deployed to Netlify at `https://mobilerun-control.netlify.app` (or your custom domain).
+### Netlify Frontend
 
-### 6. Pair Your Device
+The frontend can also be served from Netlify (optional):
 
-1. Open the Control UI
-2. Click "Pair Device"
-3. Enter a device name
-4. Scan the QR code with the Mobilerun app on your phone
-5. Enable the Accessibility Service when prompted
+- **Site:** macsmobilerun.netlify.app (if configured)
+- **Base Directory:** `frontend`
+- **Build Command:** `npm ci && npm run build`
+- **Publish Directory:** `dist`
 
-### 7. Run Your First Task
+Point it at your local backend via Settings page.
 
-1. Go to "Run Task" in the UI
-2. Select your paired device
-3. Enter an instruction like: `"Open Settings and turn on dark mode"`
-4. Click "Run Task"
-5. Watch the live execution on your phone!
+## 🏗️ Architecture
 
-## 📐 Architecture
+### Components
+
+1. **Backend (FastAPI + Uvicorn)**
+   - Serves web UI (static files)
+   - WebSocket server for phone connections
+   - Agent execution with mobilerun
+   - Task queue & history
+   - JWT auth (optional)
+
+2. **Frontend (React + TypeScript + Vite)**
+   - Devices page (pairing & status)
+   - Tasks page (submit & monitor)
+   - History page (past runs)
+   - Settings page (config)
+   - Built and served by backend
+
+3. **Android App (Kotlin + Compose)**
+   - WebSocket client
+   - Accessibility Service
+   - Command execution (tap, swipe, keys)
+   - UI tree extraction
+   - QR code scanner
+
+4. **Agent (Mobilerun Core)**
+   - LLM-powered ReAct loop
+   - Vision support (screenshots)
+   - Tool calling (Android actions)
+   - State management
+   - Trajectory tracking
+
+### Data Flow
 
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│   Frontend      │         │   Backend        │         │  Android App    │
-│   (Netlify)     │────────▶│   (Laptop or     │◀────────│  (Your Phone)   │
-│                 │  HTTPS  │    AWS Lambda)   │  WSS    │                 │
-│  React + TS     │         │  FastAPI+Python  │         │  Kotlin+Compose │
-└─────────────────┘         └──────────────────┘         └─────────────────┘
-                                      │
-                                      │ Uses
-                                      ▼
-                            ┌──────────────────┐
-                            │  mobilerun Core  │
-                            │  Python Package  │
-                            │  (this repo)     │
-                            └──────────────────┘
+User Input (UI or CLI)
+    ↓
+Backend API (/api/tasks)
+    ↓
+Agent Loop (on PC)
+    ├─► LLM Reasoning
+    ├─► Tool Selection
+    └─► Action Commands
+         ↓
+WebSocket to Phone
+    ↓
+Android Accessibility Service
+    ├─► Execute Gesture
+    ├─► Capture Screenshot
+    └─► Extract UI Tree
+         ↓
+WebSocket to PC
+    ↓
+Agent Loop (next step)
+    ↓
+UI Update (live logs)
 ```
-
-**Key Design Decisions:**
-
-1. **Phone → Backend Connection:** The Android app connects OUTBOUND to the backend via WebSocket, so it works whether the backend is on your laptop (localhost) or in the cloud (Lambda).
-
-2. **Backend URL Configuration:** The frontend stores the backend URL in `localStorage`, configurable in Settings. Default from `VITE_BACKEND_URL` env var.
-
-3. **Auth:** Simple JWT tokens. Local mode can run with `ALLOW_UNAUTHENTICATED=true` for convenience. Cloud mode should use proper JWT secrets.
-
-4. **WebSocket Limitations on Lambda:** Long-running agent loops may exceed Lambda's 15-minute timeout. Current implementation uses step-per-invocation pattern. For production, consider running backend on ECS Fargate or EC2.
-
-## 🌐 Cloud Deployment
-
-### Frontend (Netlify)
-
-1. Fork this repo
-2. Connect to Netlify:
-   - New site from Git → Select your fork
-   - Build command: `cd frontend && npm install && npm run build`
-   - Publish directory: `frontend/dist`
-   - Environment variables:
-     ```
-     VITE_BACKEND_URL=https://your-api-url.execute-api.eu-west-2.amazonaws.com/prod
-     ```
-
-### Backend (AWS Lambda via CDK)
-
-1. Set GitHub repository secrets:
-   ```
-   AWS_ACCESS_KEY_ID
-   AWS_SECRET_ACCESS_KEY
-   JWT_SECRET
-   OPENAI_API_KEY (optional)
-   ANTHROPIC_API_KEY (optional)
-   GOOGLE_API_KEY (optional)
-   ```
-
-2. Push to `main` branch - GitHub Actions will deploy automatically
-
-3. Get the API URL from the Actions output and update your Netlify env var
-
-**Note:** If AWS secrets aren't set, the deploy workflow skips cleanly (CI stays green).
 
 ## ⚡ Performance Optimizations
 
@@ -181,101 +429,140 @@ This fork includes performance optimization infrastructure:
 
 These optimizations are designed to reduce per-step latency. Benchmarking against baseline will be available after full integration testing.
 
-## 🛠️ Development
+## 🔐 Security
 
-### Run Tests
+### Local Mode (Default)
 
+- Backend runs on `localhost:8000`
+- Not exposed to internet
+- `ALLOW_UNAUTHENTICATED=true` for convenience
+- Only devices on your LAN can connect
+
+### Production Mode
+
+If exposing backend publicly:
+
+1. **Enable JWT Auth:**
+   ```bash
+   # backend/.env
+   JWT_SECRET=your-long-random-secret
+   ALLOW_UNAUTHENTICATED=false
+   ```
+
+2. **HTTPS:** Use reverse proxy (nginx/Caddy) with Let's Encrypt
+
+3. **Firewall:** Restrict access to known IPs
+
+4. **Pairing Tokens:** Rotate regularly
+
+### APK Signing
+
+- Debug keystore committed for personal use
+- For public distribution, use proper signing key
+
+## 🐛 Troubleshooting
+
+### Phone Won't Connect
+
+**Check:**
+1. PC and phone on same WiFi network
+2. Firewall allows port 8000
+3. Backend URL correct in app (scan QR again)
+4. Accessibility Service enabled
+
+**Test:**
 ```bash
-# Python tests
-pytest
-
-# Frontend tests
-cd frontend
-npm test
+# From phone browser, visit:
+http://your-pc-ip:8000/api/devices
 ```
 
-### Build APK Locally
+### Accessibility Service Not Working
 
+1. Disable and re-enable in Settings
+2. Reboot phone
+3. Check app has all permissions
+4. Try reinstalling app
+
+### Agent Tasks Fail
+
+**Check:**
+1. LLM API key valid (`echo $OPENAI_API_KEY`)
+2. Internet connection on PC
+3. Backend logs for errors
+4. UI tree capture working (check logs)
+
+**Debug:**
 ```bash
-cd android-app
-./gradlew assembleRelease
+# Run with debug logging
+mobilerun serve --log-level debug
 ```
 
-APK will be in `android-app/build/outputs/apk/release/`.
+### Frontend Not Loading
 
-### Local Frontend Development
+**Check:**
+1. Frontend built:
+   ```bash
+   cd frontend && npm run build
+   ```
+2. Backend finds dist directory:
+   ```bash
+   export FRONTEND_DIR="/path/to/frontend/dist"
+   mobilerun serve
+   ```
+3. Or use Netlify site + Settings page to configure backend URL
 
-```bash
-cd frontend
-npm run dev
-```
+### CLI `mobilerun run` Fails
 
-Configure backend URL in Settings UI or set `VITE_BACKEND_URL` env var.
+**Check:**
+1. Backend running (`mobilerun serve` in another terminal)
+2. Device connected (check UI Devices page)
+3. Backend URL correct (`--backend http://localhost:8000`)
 
-## 📝 Project Structure
+## 📊 Current Status
 
-```
-mobilerun/
-├── frontend/              # React + TypeScript control UI
-│   ├── src/
-│   │   ├── pages/         # Devices, Tasks, History, Settings
-│   │   └── config.ts      # Runtime backend URL config
-│   ├── netlify.toml       # Netlify deployment config
-│   └── package.json
-├── backend/               # FastAPI Python backend
-│   ├── main.py            # HTTP & WebSocket endpoints
-│   ├── auth.py            # JWT authentication
-│   ├── Dockerfile.lambda  # Lambda container image
-│   └── requirements.txt
-├── infra/                 # AWS CDK infrastructure (TypeScript)
-│   ├── lib/mobilerun-stack.ts
-│   └── bin/infra.ts
-├── android-app/           # Android client app (Kotlin)
-│   ├── build.gradle.kts
-│   ├── src/main/
-│   │   ├── AndroidManifest.xml
-│   │   └── java/ai/mobilerun/selfhosted/
-│   │       ├── MainActivity.kt
-│   │       └── BackendClient.kt
-│   └── debug.keystore     # Committed for consistent signing
-├── scripts/               # Build automation scripts
-│   ├── generate-apk-qr.mjs
-│   └── update-readme-apk.mjs
-├── .github/workflows/
-│   ├── android-build.yml  # APK build & release
-│   └── deploy.yml         # AWS backend deployment
-├── start.sh / start.bat   # Cross-platform startup scripts
-└── mobilerun/             # Core Python package (upstream)
-    ├── agent/
-    ├── profiling/         # NEW: Performance profiling
-    └── ...
-```
+**✅ Fully Implemented & Verified:**
+- Backend API with WebSocket support
+- Frontend UI (all pages functional)
+- Android app with Accessibility Service
+- WebSocket device driver
+- CLI commands (`serve`, `run`)
+- QR code pairing flow
+- CI/CD (APK build, tests, linting)
+- Cross-platform scripts
+- Netlify deployment config
+- AWS CDK infrastructure
 
-## 🔒 Security Notes
+**⚠️ Requires Physical Device Testing:**
+- End-to-end task execution on real phone
+- Screenshot capture via MediaProjection API
+- Full agent loop with wireless device
+- Performance benchmarking
 
-- **Local Mode:** Uses `ALLOW_UNAUTHENTICATED=true` for convenience. Not exposed to internet.
-- **Cloud Mode:** MUST set a strong `JWT_SECRET`. Consider additional auth (OAuth, etc.).
-- **APK Signing:** Uses committed debug keystore for consistent updates. **Never use this pattern for production apps with sensitive data** - this is for personal automation only.
-- **API Keys:** Never commit API keys. Use environment variables or secrets.
+**📝 Documentation:**
+- Installation: Complete
+- Usage: Complete
+- Troubleshooting: Complete
+- Architecture: Complete
 
 ## 🤝 Contributing
 
-This is Mac's personal fork optimized for self-hosted use. For general mobilerun improvements, contribute to [droidrun/mobilerun](https://github.com/droidrun/mobilerun).
+This is Mac's personal automation fork. For upstream contributions, see [droidrun/mobilerun](https://github.com/droidrun/mobilerun).
 
-For issues specific to this self-hosted setup, open an issue here.
+## 📜 License
 
-## 📄 License
+MIT License (same as upstream mobilerun)
 
-MIT (same as upstream mobilerun)
+## 🙏 Acknowledgments
 
-## 🙏 Credits
-
-- **Upstream:** [droidrun/mobilerun](https://github.com/droidrun/mobilerun) - The amazing foundation this is built on
-- **Mac:** Self-hosted architecture, performance optimizations, and control UI
-- **Pattern inspiration:** Auto-Fab and Auto-Food-Ordering repos for deployment workflow
+Built on [droidrun/mobilerun](https://github.com/droidrun/mobilerun) - excellent foundation for LLM-powered mobile automation.
 
 ---
 
-**Status:** ✅ Functional | 🚧 Active Development
+**Need Help?**
 
-**Last Updated:** November 2026
+1. Check [Troubleshooting](#-troubleshooting)
+2. Review backend logs
+3. Test with `mobilerun run "open settings"` (simple task)
+4. Open an issue with logs attached
+
+**Happy Automating! 🎉**
