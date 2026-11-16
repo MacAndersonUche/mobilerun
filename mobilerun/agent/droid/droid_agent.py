@@ -1080,12 +1080,30 @@ class MobileAgent(Workflow):
         )
 
         try:
+            # Auto-pause safety: stop immediately on verification / captcha / ban
+            from mobilerun.safety.agent_hook import (
+                SafetyPauseRequested,
+                enforce_safety_or_raise,
+            )
+
+            action_ctx = getattr(self, "action_ctx", None)
+            ui = getattr(action_ctx, "ui", None) if action_ctx is not None else None
+            app = (
+                getattr(self.shared_state, "current_app_name", None)
+                or getattr(self.shared_state, "current_package_name", None)
+                or "unknown"
+            )
+            enforce_safety_or_raise(ui, app=str(app))
+
             handler = self.manager_agent.run()
 
             async for nested_ev in handler.stream_events():
                 self.handle_stream_event(nested_ev, ctx)
 
             result = await handler
+        except SafetyPauseRequested as e:
+            logger.error(f"Safety auto-pause: {e}")
+            return FinalizeEvent(success=False, reason=str(e))
         except DeviceDisconnectedError as e:
             logger.error(f"Device disconnected: {e}")
             return FinalizeEvent(success=False, reason=f"Device disconnected: {e}")

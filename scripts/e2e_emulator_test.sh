@@ -155,6 +155,75 @@ adb shell input tap 900 1600 || true
 sleep 1
 adb exec-out screencap -p > "$ARTIFACTS_DIR/07_reply_sent.png" || true
 
+echo "== Safety auto-pause: MockDating verification prompt =="
+# Relaunch MockDating with verification overlay (agent must pause, never bypass)
+adb shell am force-stop ai.mobilerun.mockdating || true
+adb shell am start -n ai.mobilerun.mockdating/.MainActivity --ez show_verification true
+sleep 2
+adb exec-out screencap -p > "$ARTIFACTS_DIR/05b_mock_dating_verify.png" || true
+# Dump a11y / UI text for heuristics
+adb shell uiautomator dump /sdcard/verify_ui.xml 2>/dev/null || true
+adb pull /sdcard/verify_ui.xml "$ARTIFACTS_DIR/verify_ui.xml" 2>/dev/null || true
+SHOT_B64=$(base64 -w0 "$ARTIFACTS_DIR/05b_mock_dating_verify.png" 2>/dev/null || base64 "$ARTIFACTS_DIR/05b_mock_dating_verify.png" | tr -d '\n' || true)
+export SHOT_B64
+python3 - <<'PY'
+import json, os, re, urllib.request
+from pathlib import Path
+host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
+artifacts = Path(os.environ["ARTIFACTS_DIR"])
+token = os.environ.get("E2E_TOKEN", "")
+headers = {"Content-Type": "application/json"}
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+
+# Prefer real dump text; fall back to known MockDating verification copy
+ui_text = ""
+xml = artifacts / "verify_ui.xml"
+if xml.exists():
+    ui_text = xml.read_text(errors="ignore")
+screen = ui_text or (
+    "Verify your identity. We noticed unusual activity. "
+    "Take a selfie for photo verification."
+)
+# Ensure dating is running so pause is observable
+urllib.request.urlopen(urllib.request.Request(
+    host + "/api/dating/start?device_id=emulator&dry_run=true",
+    data=b"{}", headers=headers, method="POST"), timeout=20).read()
+
+shot = os.environ.get("SHOT_B64", "")
+body = {
+    "app": "MockDating",
+    "package_name": "ai.mobilerun.mockdating",
+    "screen_text": screen,
+    "ui_texts": re.findall(r'text="([^"]+)"', ui_text)[:40] if ui_text else [
+        "Verify your identity", "unusual activity", "photo verification"
+    ],
+    "device_id": "emulator",
+}
+if shot:
+    body["screenshot_b64"] = shot
+req = urllib.request.Request(
+    host + "/api/safety/check", data=json.dumps(body).encode(), headers=headers, method="POST"
+)
+data = json.loads(urllib.request.urlopen(req, timeout=30).read())
+(artifacts / "safety_pause.json").write_text(json.dumps(data, indent=2))
+assert data.get("paused") is True, data
+assert data.get("dating_paused") is True, data
+assert data.get("needs_you_id"), data
+ny = json.loads(urllib.request.urlopen(urllib.request.Request(
+    host + "/api/needs-you", headers=headers)).read())
+(artifacts / "safety_needs_you.json").write_text(json.dumps(ny, indent=2))
+assert any(i.get("source") == "safety" for i in (ny.get("items") or [])), ny
+# Resume only via explicit API (simulates Mac tapping Resume in UI)
+resume = json.loads(urllib.request.urlopen(urllib.request.Request(
+    host + "/api/safety/resume",
+    data=json.dumps({"app": "MockDating"}).encode(),
+    headers=headers, method="POST")).read())
+(artifacts / "safety_resume.json").write_text(json.dumps(resume, indent=2))
+assert resume.get("dating_paused") is False, resume
+print("safety auto-pause ok", data.get("finding", {}).get("category"))
+PY
+
 echo "== Dating mode dry-run via API + step worker =="
 curl -sfS -X POST "$HOST_BACKEND/api/dating/start?device_id=emulator&dry_run=true" \
   -H "Authorization: Bearer ${TOKEN}" \
@@ -571,6 +640,9 @@ check("open_settings", "02_settings.png")
 check("type_text", "03_typed.png")
 check("swipe_scroll", "04_swiped.png")
 check("mock_dating", "05_mock_dating.png")
+check("safety_verify_pause", "safety_pause.json")
+check("safety_needs_you", "safety_needs_you.json")
+check("safety_resume", "safety_resume.json")
 check("dating_dry_run", "dating_dry_run.json")
 check("dating_caps_pause_stop", "dating_caps.json")
 check("chat_device_info", "chat_device_info.json")

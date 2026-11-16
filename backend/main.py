@@ -954,6 +954,27 @@ agent_mode_state = {
     "speed_preset": "balanced",  # fast | balanced | careful
 }
 
+# Humanizer knobs (UI-configurable; presets remain Fast/Balanced/Careful)
+humanizer_state: Dict[str, Any] = {
+    "enabled": True,
+    "delay_sigma": 0.55,
+    "tap_jitter_frac": 0.22,
+    "swipe_curve_amp": 0.14,
+    "session_start_jitter_min": 0,
+    "session_start_jitter_max": 45,
+    "session_end_early_min": 0,
+    "session_end_early_max": 35,
+    "shuffle_apps": True,
+    "shuffle_conversations": True,
+    "micro_pause_chance": None,
+    "long_break_chance": None,
+    "idle_chance": None,
+    "action_delay_min": None,
+    "action_delay_max": None,
+    "message_gap_min": None,
+    "message_gap_max": None,
+}
+
 _needs_you_queue = None
 
 
@@ -988,6 +1009,48 @@ class DatingModeConfig(BaseModel):
 class AgentModeConfig(BaseModel):
     mode: str = "normal"
     speed_preset: str = "balanced"
+
+
+class HumanizerUpdate(BaseModel):
+    """Optional overrides on top of Fast/Balanced/Careful presets."""
+
+    enabled: Optional[bool] = None
+    delay_sigma: Optional[float] = None
+    tap_jitter_frac: Optional[float] = None
+    swipe_curve_amp: Optional[float] = None
+    session_start_jitter_min: Optional[int] = None
+    session_start_jitter_max: Optional[int] = None
+    session_end_early_min: Optional[int] = None
+    session_end_early_max: Optional[int] = None
+    shuffle_apps: Optional[bool] = None
+    shuffle_conversations: Optional[bool] = None
+    micro_pause_chance: Optional[float] = None
+    long_break_chance: Optional[float] = None
+    idle_chance: Optional[float] = None
+    action_delay_min: Optional[float] = None
+    action_delay_max: Optional[float] = None
+    message_gap_min: Optional[float] = None
+    message_gap_max: Optional[float] = None
+    speed_preset: Optional[str] = None
+
+
+class SafetyCheckRequest(BaseModel):
+    """Screen observation for safety auto-pause (never solves prompts)."""
+
+    app: str = "MockDating"
+    screen_text: str = ""
+    ui_texts: Optional[List[str]] = None
+    ui_tree: Optional[Any] = None
+    llm_check: bool = False
+    force_pause_all: bool = False
+    screenshot_b64: Optional[str] = None
+    package_name: str = ""
+    device_id: Optional[str] = None
+
+
+class SafetyResumeRequest(BaseModel):
+    app: Optional[str] = None
+    resume_all: bool = False
 
 
 class DatingMessage(BaseModel):
@@ -1066,6 +1129,215 @@ async def set_agent_mode(
     dating_mode_state["speed_preset"] = speed
     social_mode_state["speed_preset"] = speed
     return {"status": "ok", **agent_mode_state}
+
+
+@app.get("/api/humanizer")
+async def get_humanizer(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Humanizer preset bands + UI-configurable knobs."""
+    from mobilerun.agent.humanizer import HumanizerConfig, describe_presets
+
+    preset = agent_mode_state.get("speed_preset", "balanced")
+    mode = agent_mode_state.get("mode", "normal")
+    cfg = HumanizerConfig.from_dict(
+        {
+            **{k: v for k, v in humanizer_state.items() if v is not None},
+            "preset": preset,
+            "mode": mode,
+        }
+    )
+    return {
+        "speed_preset": preset,
+        "mode": mode,
+        "config": cfg.to_public_dict(),
+        "overrides": humanizer_state,
+        "presets": describe_presets(),
+        "notes": (
+            "Delays are log-normal / non-uniform with micro-pauses and rare long "
+            "breaks. No fixed intervals. Caps and Fast/Balanced/Careful still apply."
+        ),
+    }
+
+
+@app.post("/api/humanizer")
+async def update_humanizer(
+    body: HumanizerUpdate, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Update humanizer knobs from UI. Presets stay Fast/Balanced/Careful."""
+    data = body.dict(exclude_unset=True)
+    speed = data.pop("speed_preset", None)
+    if speed is not None:
+        speed = str(speed).lower()
+        if speed not in ("fast", "balanced", "careful"):
+            raise HTTPException(
+                status_code=400, detail="speed_preset must be fast|balanced|careful"
+            )
+        agent_mode_state["speed_preset"] = speed
+        dating_mode_state["speed_preset"] = speed
+        social_mode_state["speed_preset"] = speed
+    for k, v in data.items():
+        if k in humanizer_state:
+            humanizer_state[k] = v
+    return await get_humanizer(auth=auth)
+
+
+@app.get("/api/safety/status")
+async def safety_status(auth: Optional[dict] = Depends(optional_verify_token)):
+    from mobilerun.safety.runtime import get_safety_state
+
+    st = get_safety_state().to_dict()
+    st["dating_paused"] = bool(dating_mode_state.get("paused"))
+    st["social_paused"] = bool(social_mode_state.get("paused"))
+    return st
+
+
+@app.post("/api/safety/check")
+async def safety_check(
+    body: SafetyCheckRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """
+    Detect on-screen warnings / verification / captcha / rate-limit / ban /
+    login / selfie prompts. On hit: pause that app's loop (optionally all),
+    screenshot, Needs-you + notify. Never solves or bypasses the prompt.
+    """
+    from mobilerun.safety.runtime import check_screen_and_pause
+
+    q = get_needs_you_queue()
+    screenshot_bytes = None
+    if body.screenshot_b64:
+        try:
+            screenshot_bytes = base64.b64decode(body.screenshot_b64)
+        except Exception:
+            screenshot_bytes = None
+
+    def _pause_dating() -> None:
+        dating_mode_state["paused"] = True
+        dating_mode_state["running"] = dating_mode_state.get("running", False)
+        dating_mode_state["current_app"] = body.app
+
+    def _pause_social() -> None:
+        social_mode_state["paused"] = True
+        social_mode_state["current_app"] = body.app
+
+    def _push_needs_you(**kwargs) -> str:
+        item = q.add(
+            source="safety",
+            app_name=kwargs.get("app") or body.app,
+            package_name=body.package_name or "",
+            conversation_id="safety",
+            contact_name="Safety pause",
+            inbound_preview=kwargs.get("body") or kwargs.get("reason") or "",
+            draft_reply="",
+            reasons=[kwargs.get("category") or "safety_pause", "needs_resume"],
+            confidence=float((kwargs.get("meta") or {}).get("confidence") or 0.9),
+            meta={
+                "kind": "safety_pause",
+                "category": kwargs.get("category"),
+                "screenshot_path": kwargs.get("screenshot_path"),
+                **(kwargs.get("meta") or {}),
+            },
+        )
+        return item.id
+
+    notified_payload: Dict[str, Any] = {}
+
+    def _notify(**kwargs) -> None:
+        notified_payload.update(kwargs)
+        # Best-effort APK push + UI broadcast (sync wrappers)
+        title = kwargs.get("title") or f"Needs you · {body.app}"
+        nbody = kwargs.get("body") or ""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(
+                    _broadcast_safety_notify(
+                        body.device_id, title, nbody, kwargs.get("needs_you_id")
+                    )
+                )
+        except Exception:
+            logger.exception("safety notify schedule failed")
+
+    result = check_screen_and_pause(
+        app=body.app,
+        screen_text=body.screen_text,
+        ui_texts=body.ui_texts,
+        ui_tree=body.ui_tree,
+        llm_check=body.llm_check,
+        force_pause_all=body.force_pause_all,
+        push_needs_you=_push_needs_you,
+        notify=_notify,
+        screenshot_bytes=screenshot_bytes,
+        pause_mode_callbacks={
+            "dating": _pause_dating,
+            "social": _pause_social,
+        },
+    )
+    return {
+        **result.to_dict(),
+        "badge": q.pending_count(),
+        "dating_paused": dating_mode_state.get("paused"),
+        "social_paused": social_mode_state.get("paused"),
+        "notify": notified_payload or None,
+    }
+
+
+async def _broadcast_safety_notify(
+    device_id: Optional[str], title: str, body: str, needs_you_id: Optional[str]
+) -> None:
+    payload = {
+        "type": "push_notification",
+        "title": title,
+        "body": body,
+        "kind": "safety_pause",
+        "needs_you_id": needs_you_id,
+    }
+    ui_payload = {
+        "type": "needs_you",
+        "kind": "safety_pause",
+        "badge": get_needs_you_queue().pending_count(),
+        "title": title,
+        "body": body,
+        "needs_you_id": needs_you_id,
+    }
+    # Fan out to UI websockets
+    dead = []
+    for ws in list(websocket_clients):
+        try:
+            await ws.send_json(ui_payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        try:
+            websocket_clients.remove(ws)
+        except ValueError:
+            pass
+    if device_id and device_id in device_websockets:
+        try:
+            await device_websockets[device_id].send_json(payload)
+        except Exception:
+            logger.warning("device notify failed for %s", device_id)
+
+
+@app.post("/api/safety/resume")
+async def safety_resume(
+    body: SafetyResumeRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Resume only when Mac taps Resume — never auto-resume after a safety pause."""
+    from mobilerun.safety.runtime import resume_safety
+
+    st = resume_safety(app=body.app, resume_all=body.resume_all or not body.app)
+    if st.pause_all is False and not st.paused_apps:
+        dating_mode_state["paused"] = False
+        social_mode_state["paused"] = False
+    elif body.app and body.app not in st.paused_apps and not st.pause_all:
+        # App-level resume: clear mode pause if nothing else blocked
+        dating_mode_state["paused"] = False
+        social_mode_state["paused"] = False
+    return {
+        "status": "resumed",
+        "safety": st.to_dict(),
+        "dating_paused": dating_mode_state.get("paused"),
+        "social_paused": social_mode_state.get("paused"),
+    }
 
 
 @app.get("/api/dating/config")

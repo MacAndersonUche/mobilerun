@@ -238,6 +238,28 @@ async def _macro_pre_ui_after_focus_tap(ctx: "ActionContext"):
 
 
 async def _humanize_before_action(ctx: "ActionContext") -> None:
+    # Safety first: never continue into captcha / verification / ban screens
+    try:
+        from mobilerun.safety.agent_hook import enforce_safety_or_raise
+
+        ui = getattr(ctx, "ui", None)
+        app = "unknown"
+        shared = getattr(ctx, "shared_state", None)
+        if shared is not None:
+            app = (
+                getattr(shared, "current_app_name", None)
+                or getattr(shared, "current_package_name", None)
+                or app
+            )
+        enforce_safety_or_raise(ui, app=str(app))
+    except Exception as e:
+        # Re-raise safety pauses; swallow import/other soft failures
+        from mobilerun.safety.agent_hook import SafetyPauseRequested
+
+        if isinstance(e, SafetyPauseRequested):
+            raise
+        logger.debug("safety pre-check skipped: %s", e)
+
     humanizer = getattr(ctx, "humanizer", None)
     if humanizer is not None:
         await humanizer.wait_action_gap()

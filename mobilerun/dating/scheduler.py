@@ -39,6 +39,22 @@ class DatingScheduler:
         self.current_session_swipes = 0
         self.current_session_messages = 0
         self.session_start_time = None
+        self._session_window: Optional[tuple] = None
+
+    def refresh_session_window(self, now: Optional[datetime] = None) -> tuple:
+        """Randomise today's start/end inside configured active hours."""
+        start, end = self.humanizer.sample_session_window(
+            self.active_hours_start, self.active_hours_end, now=now
+        )
+        self._session_window = (start, end)
+        return start, end
+
+    def ordered_apps(self, apps):
+        """Randomised app order when humanizer shuffle is on."""
+        return self.humanizer.ordered_apps(apps)
+
+    def ordered_conversations(self, convos):
+        return self.humanizer.ordered_conversations(convos)
 
     def apply_app_profile(
         self,
@@ -58,14 +74,20 @@ class DatingScheduler:
         )
 
     def is_within_active_hours(self) -> bool:
-        """Check if current time is within active hours."""
+        """Check if current time is within (possibly jittered) session window."""
         now = datetime.now().time()
+        start = self.active_hours_start
+        end = self.active_hours_end
+        if self.human_like:
+            if self._session_window is None:
+                self.refresh_session_window()
+            if self._session_window:
+                start, end = self._session_window
 
-        if self.active_hours_start <= self.active_hours_end:
-            return self.active_hours_start <= now <= self.active_hours_end
-        else:
-            # Crosses midnight
-            return now >= self.active_hours_start or now <= self.active_hours_end
+        if start <= end:
+            return start <= now <= end
+        # Crosses midnight
+        return now >= start or now <= end
 
     def should_take_break(
         self,

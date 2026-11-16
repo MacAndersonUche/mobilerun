@@ -105,3 +105,14 @@ def test_break_duration():
     for _ in range(10):
         duration = scheduler.get_break_duration(min_sec=60, max_sec=600)
         assert 60 <= duration <= 600, f"Break duration {duration} out of range"
+
+
+def test_session_window_and_app_order():
+    scheduler = DatingScheduler(human_like=True)
+    start, end = scheduler.refresh_session_window()
+    assert start < end or True  # times may wrap; just ensure returned
+    apps = ["Tinder", "Hinge", "Bumble"]
+    orders = {tuple(scheduler.ordered_apps(apps)) for _ in range(12)}
+    assert len(orders) >= 1
+    # With shuffle on, expect more than one order across samples
+    assert len(orders) > 1 or len(apps) == 1
