@@ -322,7 +322,10 @@ jobs:
             code=$(curl -sS -o /tmp/dating_smoke.json -w '%{http_code}' \
               -H "Authorization: Bearer $TOKEN" "$API_URL$path")
             echo "HTTP $code $path"
-            test "$code" = "200"
+            if [ "$code" != "200" ]; then
+              echo "BODY:"; head -c 800 /tmp/dating_smoke.json; echo
+              exit 1
+            fi
           done
           echo "Smoke OK"
 

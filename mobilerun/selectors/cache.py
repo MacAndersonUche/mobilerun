@@ -28,9 +28,21 @@ log = logging.getLogger("mobilerun.selectors.cache")
 
 
 def _data_root() -> Path:
-    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "selector_cache"
+    # Lambda only allows writes under /tmp; Path.home() is often read-only.
+    candidates = []
+    if os.environ.get("MOBILERUN_DATA"):
+        candidates.append(Path(os.environ["MOBILERUN_DATA"]))
+    candidates.append(Path("/tmp/mobilerun"))
+    candidates.append(Path.home() / ".mobilerun")
+    last_err: Optional[Exception] = None
+    for root in candidates:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            return root / "selector_cache"
+        except OSError as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"No writable MOBILERUN_DATA path: {last_err}")
 
 
 class SelectorCache:

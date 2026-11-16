@@ -2711,10 +2711,14 @@ async def selectors_status(
     auth: Optional[dict] = Depends(optional_verify_token),
 ):
     """Cache status per app: last discovered, version, LLM calls used."""
-    nav = get_selector_navigator(auth)
-    if package_name:
-        return {"apps": [nav.cache.status(package_name, version_code).to_dict()]}
-    return {"apps": [s.to_dict() for s in nav.cache.list_packages()]}
+    try:
+        nav = get_selector_navigator(auth)
+        if package_name:
+            return {"apps": [nav.cache.status(package_name, version_code).to_dict()]}
+        return {"apps": [s.to_dict() for s in nav.cache.list_packages()]}
+    except Exception as e:
+        logger.exception("selectors_status failed: %s", e)
+        return {"apps": [], "error": str(e)}
 
 
 @app.post("/api/selectors/resolve")
