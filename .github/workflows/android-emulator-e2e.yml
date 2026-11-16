@@ -84,14 +84,24 @@ jobs:
         run: |
           nohup python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
           echo $! > /tmp/backend.pid
-          for i in $(seq 1 30); do
+          for i in $(seq 1 40); do
             curl -sfS http://127.0.0.1:8000/api/health && break
             sleep 1
           done
           curl -sfS http://127.0.0.1:8000/api/health
 
+      # android-emulator-runner executes each script line as a separate `sh -c`,
+      # so shell exports do not persist. Pass everything via step env + one bash call.
       - name: Run emulator + e2e script
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/e2e-artifacts
+          BACKEND_URL: http://10.0.2.2:8000
+          HOST_BACKEND_URL: http://127.0.0.1:8000
+          CLOUD_API_URL: https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
+          ALLOW_UNAUTHENTICATED: 'true'
+          JWT_SECRET: e2e-test-secret
+          PYTHONPATH: ${{ github.workspace }}
         with:
           api-level: 34
           arch: x86_64
@@ -101,17 +111,8 @@ jobs:
           force-avd-creation: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            set -euo pipefail
-            export ARTIFACTS_DIR="${{ github.workspace }}/e2e-artifacts"
-            mkdir -p "$ARTIFACTS_DIR"
-            export MOBILERUN_APK=$(find android-app/build -name '*release*.apk' | head -1)
-            export MOCK_APK=$(find android-mock-dating -name '*debug*.apk' | head -1)
-            export BACKEND_URL=http://10.0.2.2:8000
-            export HOST_BACKEND_URL=http://127.0.0.1:8000
-            chmod +x scripts/e2e_emulator_test.sh
-            scripts/e2e_emulator_test.sh
-            cp /tmp/backend.log "$ARTIFACTS_DIR/" || true
+          emulator-boot-timeout: 900
+          script: bash scripts/e2e_emulator_test.sh
 
       - name: Upload artifacts
         if: always()
