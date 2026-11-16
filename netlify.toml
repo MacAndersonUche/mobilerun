@@ -1,6 +1,9 @@
-# Netlify site: base directory = frontend
-# publish is relative to base → frontend/dist
+# Site settings (also set in Netlify UI):
+# - base directory: frontend
+# - publish: dist (relative to base → frontend/dist)
+# - NODE_VERSION: 20
 [build]
+  base = "frontend"
   command = "npm ci && npm run build"
   publish = "dist"
 
