@@ -185,24 +185,32 @@ The UI opens automatically at `http://localhost:8000`
 - Connection status (WiFi)
 - Pair new devices (QR code)
 
+**Live View:**
+- Phone-frame panel streaming the device screen (MediaProjection → JPEG over WebSocket, ~2–5 fps)
+- Current app / step / action, tap·swipe overlays, live log, pause/stop
+- Optional click/swipe on the view to send manual taps
+- Streams **only while the UI is subscribed** (no frame storage; AWS relays via WebSocket API)
+
+**AI Chat:**
+- Chat with the configured LLM (Gemini / Claude / OpenAI / Grok)
+- Toggle **My PC** vs **Hosted server** execution target
+- Turns messages into tasks, dating start/stop, device info / message counts
+- Confirms before destructive or bulk-send actions
+- History in local SQLite (`~/.mobilerun/chat.db`) or DynamoDB `HISTORY_TABLE` on AWS
+
 **Tasks Page:**
 - Type natural language instructions
 - Select device & LLM model
 - Enable reasoning/vision modes
-- Watch live execution:
-  - Step-by-step logs
-  - LLM reasoning traces
-  - Phone screen updates
 
 **History Page:**
 - Past task results
 - Success/failure status
 - Full execution logs
-- Replay trajectories
 
 **Settings Page:**
 - Backend URL configuration
-- LLM provider selection
+- LLM provider selection (incl. xAI Grok)
 - API key management
 
 ### CLI Commands

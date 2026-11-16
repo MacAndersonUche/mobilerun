@@ -1,34 +1,42 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
-import { Smartphone, Settings, History, Play, Heart } from 'lucide-react';
+import {
+  Smartphone,
+  Settings,
+  History,
+  Play,
+  Heart,
+  MonitorPlay,
+  MessageSquare,
+} from 'lucide-react';
 import DevicesPage from './pages/DevicesPage';
 import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import DatingPage from './pages/DatingPage';
+import LiveViewPage from './pages/LiveViewPage';
+import ChatPage from './pages/ChatPage';
 
 function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-gray-900 text-gray-100">
-        {/* Header */}
         <header className="bg-gray-800 border-b border-gray-700">
           <div className="container mx-auto px-4 py-4">
             <div className="flex items-center justify-between">
               <h1 className="text-2xl font-bold text-blue-400">
                 Mobilerun Control Center
               </h1>
-              <div className="text-sm text-gray-400">
-                Self-Hosted Edition
-              </div>
+              <div className="text-sm text-gray-400">Self-Hosted Edition</div>
             </div>
           </div>
         </header>
 
         <div className="flex">
-          {/* Sidebar Navigation */}
           <nav className="w-64 bg-gray-800 min-h-[calc(100vh-73px)] p-4 border-r border-gray-700">
             <ul className="space-y-2">
               <NavItem to="/" icon={<Smartphone />} label="Devices" />
+              <NavItem to="/live" icon={<MonitorPlay />} label="Live View" />
+              <NavItem to="/chat" icon={<MessageSquare />} label="AI Chat" />
               <NavItem to="/tasks" icon={<Play />} label="Run Task" />
               <NavItem to="/dating" icon={<Heart />} label="Dating Mode" />
               <NavItem to="/history" icon={<History />} label="History" />
@@ -36,10 +44,11 @@ function App() {
             </ul>
           </nav>
 
-          {/* Main Content */}
           <main className="flex-1 p-6">
             <Routes>
               <Route path="/" element={<DevicesPage />} />
+              <Route path="/live" element={<LiveViewPage />} />
+              <Route path="/chat" element={<ChatPage />} />
               <Route path="/tasks" element={<TasksPage />} />
               <Route path="/dating" element={<DatingPage />} />
               <Route path="/history" element={<HistoryPage />} />
@@ -52,7 +61,15 @@ function App() {
   );
 }
 
-function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+function NavItem({
+  to,
+  icon,
+  label,
+}: {
+  to: string;
+  icon: React.ReactNode;
+  label: string;
+}) {
   return (
     <li>
       <Link

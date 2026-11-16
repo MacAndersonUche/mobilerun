@@ -363,25 +363,71 @@ async def device_websocket(websocket: WebSocket):
             logger.info(f"Device {device_id} disconnected")
 
 
+async def _send_to_device(device_id: str, payload: dict) -> bool:
+    ws = device_websockets.get(device_id)
+    if not ws:
+        return False
+    try:
+        await ws.send_json(payload)
+        return True
+    except Exception as e:
+        logger.warning("send to device %s failed: %s", device_id, e)
+        return False
+
+
 async def handle_device_message(device_id: str, message: dict):
     """Handle messages from connected device."""
+    from backend.live_hub import broadcast_to_ui, relay_frame, update_agent_state
+
     msg_type = message.get("type")
+    connected_devices.setdefault(device_id, {})["last_seen"] = datetime.now()
 
     if msg_type == "heartbeat":
-        connected_devices[device_id]["last_seen"] = datetime.now()
         ws = device_websockets.get(device_id)
         if ws:
             await ws.send_json({"type": "heartbeat_ack"})
 
     elif msg_type == "task_update":
-        # Update task status
         task_id = message.get("task_id")
         if task_id in active_runs:
             active_runs[task_id].update(message.get("update", {}))
+        await broadcast_to_ui(
+            device_id,
+            {"type": "task_update", "device_id": device_id, **message},
+        )
 
-    elif msg_type == "screenshot":
-        # Handle screenshot data
-        pass
+    elif msg_type == "frame":
+        # Ephemeral relay only — never store frames (bandwidth/cost).
+        await relay_frame(
+            device_id,
+            {
+                "mime": message.get("mime", "image/jpeg"),
+                "width": message.get("width"),
+                "height": message.get("height"),
+                "seq": message.get("seq"),
+                "ts": message.get("ts"),
+                "data": message.get("data"),
+            },
+        )
+
+    elif msg_type == "agent_event":
+        state = update_agent_state(
+            device_id,
+            {
+                "current_app": message.get("current_app"),
+                "step": message.get("step"),
+                "action": message.get("action"),
+                "log": message.get("log"),
+            },
+        )
+        await broadcast_to_ui(
+            device_id,
+            {"type": "agent_event", "device_id": device_id, "state": state},
+        )
+
+    elif msg_type in ("screenshot", "response"):
+        # Optional one-shot screenshot / command response — fan out if UI cares
+        await broadcast_to_ui(device_id, {"type": msg_type, "device_id": device_id, **message})
 
 
 @app.post("/api/tasks", response_model=TaskStatus)
@@ -780,6 +826,260 @@ async def edit_message(
             return {"status": "updated", "message": message.dict()}
 
     raise HTTPException(status_code=404, detail="Message not found")
+
+
+# === Live view (UI WebSocket) + chat agent ===
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    device_id: Optional[str] = None
+    # "pc" = local serve backend; "hosted" = AWS (UI points URL accordingly)
+    target: str = "pc"
+    confirmed: bool = False
+
+
+class InjectFrameRequest(BaseModel):
+    device_id: str
+    data: str  # base64 JPEG
+    mime: str = "image/jpeg"
+    width: int = 540
+    height: int = 960
+    seq: int = 1
+
+
+@app.websocket("/api/ui/connect")
+async def ui_websocket(websocket: WebSocket):
+    """
+    Browser live-view client.
+    Frames/agent_events are pushed as JSON and never stored.
+    Subscribe starts MediaProjection stream on the phone; unsubscribe stops it.
+    """
+    from backend.live_hub import (
+        agent_state,
+        notify_stream_control,
+        stream_wanted,
+        subscribe_ui,
+        unsubscribe_ui,
+    )
+
+    await websocket.accept()
+    device_id: Optional[str] = None
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            mtype = msg.get("type")
+            if mtype == "subscribe":
+                device_id = msg.get("device_id")
+                if not device_id:
+                    await websocket.send_json(
+                        {"type": "error", "detail": "device_id required"}
+                    )
+                    continue
+                await subscribe_ui(websocket, device_id)
+                await websocket.send_json(
+                    {
+                        "type": "subscribed",
+                        "device_id": device_id,
+                        "state": agent_state.get(device_id, {}),
+                    }
+                )
+                fps = int(msg.get("fps", 3))
+                quality = int(msg.get("quality", 45))
+                await notify_stream_control(
+                    _send_to_device, device_id, "start", fps=fps, quality=quality
+                )
+            elif mtype == "unsubscribe":
+                await unsubscribe_ui(websocket)
+                if device_id and not stream_wanted.get(device_id):
+                    await notify_stream_control(_send_to_device, device_id, "stop")
+                device_id = None
+            elif mtype == "input":
+                did = msg.get("device_id") or device_id
+                action = msg.get("action")
+                if not did or action not in ("tap", "swipe"):
+                    continue
+                params = {
+                    k: v
+                    for k, v in msg.items()
+                    if k not in ("type", "device_id", "action")
+                }
+                await _send_to_device(
+                    did,
+                    {
+                        "type": "command",
+                        "command": action,
+                        "request_id": f"ui_{secrets.token_hex(4)}",
+                        "params": params,
+                    },
+                )
+            elif mtype == "task_control":
+                did = msg.get("device_id") or device_id
+                if did:
+                    await _send_to_device(
+                        did,
+                        {
+                            "type": "task_control",
+                            "action": msg.get("action"),
+                            "task_id": msg.get("task_id"),
+                        },
+                    )
+            elif mtype == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        from backend.live_hub import stream_wanted as sw
+
+        await unsubscribe_ui(websocket)
+        if device_id and not sw.get(device_id):
+            await notify_stream_control(_send_to_device, device_id, "stop")
+
+
+@app.post("/api/live/inject-frame")
+async def inject_frame(
+    body: InjectFrameRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """E2E/test helper: inject a fake JPEG frame as if from the phone."""
+    from backend.live_hub import relay_frame
+
+    sent = await relay_frame(
+        body.device_id,
+        {
+            "mime": body.mime,
+            "width": body.width,
+            "height": body.height,
+            "seq": body.seq,
+            "ts": datetime.now().timestamp(),
+            "data": body.data,
+        },
+    )
+    return {"relayed": sent, "device_id": body.device_id}
+
+
+@app.get("/api/live/state/{device_id}")
+async def live_state(
+    device_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    from backend.live_hub import agent_state, subscribers_for, stream_wanted
+
+    return {
+        "device_id": device_id,
+        "subscribers": len(subscribers_for(device_id)),
+        "stream_wanted": bool(stream_wanted.get(device_id)),
+        "state": agent_state.get(device_id, {}),
+    }
+
+
+@app.post("/api/chat")
+async def chat_endpoint(
+    body: ChatRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """AI chat agent — answers + turns messages into tasks/dating commands."""
+    from backend.chat_agent import handle_chat
+
+    target = (body.target or "pc").lower()
+    if target not in ("pc", "hosted"):
+        raise HTTPException(status_code=400, detail="target must be 'pc' or 'hosted'")
+
+    async def execute(intent: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        did = params.get("device_id") or body.device_id
+        if intent == "device_info":
+            devices = [
+                {
+                    "device_id": d,
+                    "connected": v.get("connected"),
+                    "name": v.get("name"),
+                    "platform": v.get("platform"),
+                }
+                for d, v in connected_devices.items()
+            ]
+            return {"message": f"{len(devices)} device(s)", "devices": devices}
+        if intent == "dating_stats":
+            try:
+                from mobilerun.dating.stats import DatingStats
+
+                stats_file = Path.home() / ".mobilerun" / "dating_stats.json"
+                stats = DatingStats.load(stats_file).get_summary()
+                return {"message": "Dating stats", "stats": stats}
+            except Exception as e:
+                return {"message": f"Stats unavailable: {e}", "stats": {}}
+        if intent == "dating_start":
+            dating_mode_state["running"] = True
+            dating_mode_state["paused"] = False
+            return {
+                "message": (
+                    f"Dating mode start requested (dry_run={params.get('dry_run')})"
+                ),
+                "dry_run": params.get("dry_run", False),
+                "device_id": did,
+            }
+        if intent == "dating_stop":
+            dating_mode_state["running"] = False
+            dating_mode_state["paused"] = False
+            return {"message": "Dating mode stopped"}
+        if intent == "dating_pause":
+            dating_mode_state["paused"] = not dating_mode_state.get("paused", False)
+            return {
+                "message": "paused" if dating_mode_state["paused"] else "resumed",
+                "state": dating_mode_state,
+            }
+        if intent in ("task_stop", "task_pause"):
+            if did:
+                await _send_to_device(
+                    did, {"type": "task_control", "action": intent.split("_")[1]}
+                )
+            return {"message": f"Task {intent} sent", "device_id": did}
+        if intent == "run_task":
+            instruction = params.get("instruction") or ""
+            if not did:
+                return {"message": "No device_id — pair a phone first"}
+            if did not in connected_devices or not connected_devices[did].get(
+                "connected"
+            ):
+                return {
+                    "message": f"Queued task on {did}: {instruction}",
+                    "queued": True,
+                    "instruction": instruction,
+                }
+            task = await submit_task(
+                TaskRequest(device_id=did, instruction=instruction),
+                auth=None,
+            )
+            dumped = (
+                task.model_dump() if hasattr(task, "model_dump") else task.dict()
+            )
+            return {
+                "message": f"Started task {task.task_id}: {instruction}",
+                "task": dumped,
+            }
+        return {"message": f"Unhandled intent {intent}"}
+
+    context = {
+        "devices": list(connected_devices.keys()),
+        "dating_running": dating_mode_state.get("running"),
+        "provider": os.environ.get("LLM_PROVIDER", "gemini"),
+        "target": target,
+    }
+    return await handle_chat(
+        message=body.message,
+        session_id=body.session_id,
+        device_id=body.device_id,
+        target=target,
+        confirmed=body.confirmed,
+        context=context,
+        execute=execute,
+    )
+
+
+@app.get("/api/chat/{session_id}")
+async def chat_history(
+    session_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    from backend.chat_store import list_messages
+
+    return {"session_id": session_id, "messages": list_messages(session_id)}
 
 
 # Lambda handler (for AWS deployment)

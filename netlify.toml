@@ -17,3 +17,4 @@
   # Cloud backend (eu-west-2). Override in Netlify UI if the API URL changes.
   VITE_API_URL = "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
   VITE_BACKEND_URL = "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
+  VITE_WS_URL = "wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod"
