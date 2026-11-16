@@ -321,44 +321,197 @@ cd android-app
 
 ## ☁️ Cloud Deployment (Optional)
 
-While the primary workflow is local PC, you can deploy to AWS Lambda:
+> **Note:** The primary workflow is local PC (`mobilerun serve`). Cloud deployment is optional for remote access or shared deployments.
+
+### Why Deploy to AWS?
+
+- **Remote Access:** Control your phone from anywhere
+- **Shared Backend:** Team can share one deployment
+- **Persistent Storage:** DynamoDB + S3 for run history
+- **Always-On:** No need to keep PC running
+
+### Architecture Options
+
+**Option 1: EC2 Backend (Recommended)**
+- ✅ Free tier eligible (t3.micro, 750 hrs/month for 12 months)
+- ✅ No timeout limits (unlike Lambda's 15 minutes)
+- ✅ Full WebSocket support for live phone connections
+- ✅ Runs FastAPI backend as systemd service
+- ⚠️ Costs after free tier: ~$8/month for t3.micro
+
+**Option 2: Lambda Backend**
+- ✅ Serverless (pay per use)
+- ✅ Auto-scaling
+- ⚠️ 15-minute timeout (not ideal for long tasks)
+- ⚠️ Cold starts
+- 💰 Cost: Free tier 1M requests/month, then $0.20 per 1M
 
 ### Prerequisites
 
-- AWS Account
-- AWS CLI configured
-- Node.js 20+ (for CDK)
+1. **AWS Account** (sign up at aws.amazon.com)
+2. **AWS CLI** installed and configured
+3. **Node.js 20+** (for CDK)
+4. **GitHub Secrets** (for CI/CD):
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - Optional: `JWT_SECRET`, `OPENAI_API_KEY`, etc.
 
-### Deploy
+### Deploy Manually
 
 ```bash
-# Build frontend
-cd frontend
-npm ci && npm run build
-
-# Deploy infrastructure
-cd ../infra
+# Install CDK dependencies
+cd infra
 npm install
-npx cdk deploy
 
-# Update backend URL in Settings
+# Bootstrap CDK (first time only)
+npx cdk bootstrap
+
+# Option 1: Deploy with EC2 backend (recommended)
+npx cdk deploy -c backendMode=ec2 -c enableStorage=true
+
+# Option 2: Deploy with Lambda backend
+npx cdk deploy -c backendMode=lambda -c enableStorage=true
+
+# Set environment variables
+export JWT_SECRET="your-secret"
+export OPENAI_API_KEY="sk-..."
 ```
 
-**Note:** Lambda has 15-minute timeout limit. For long-running tasks, consider:
-- ECS Fargate (recommended for production)
-- EC2 instance
-- Keep using local PC
+**What gets deployed:**
 
-### Netlify Frontend
+- **EC2 Instance** (t3.micro, eu-west-2)
+  - Amazon Linux 2023
+  - FastAPI backend running on port 8000
+  - Systemd service for auto-restart
+  - Systems Manager access (no SSH needed)
+  
+- **DynamoDB Tables** (pay-per-request)
+  - `mobilerun-history`: Task run history
+  - `mobilerun-settings`: User settings & device metadata
+  
+- **S3 Bucket**
+  - `mobilerun-screenshots-{account}-{region}`
+  - Screenshots and trajectories
+  - Lifecycle: Glacier after 30 days, delete after 90 days
+  
+- **Security Group**
+  - Port 443 (HTTPS)
+  - Port 8000 (HTTP/WebSocket)
+  
+- **Elastic IP**
+  - Static IP for backend
+  - No DNS changes when redeployed
 
-The frontend can also be served from Netlify (optional):
+### Deploy via GitHub Actions
+
+Push to `main` branch with secrets configured:
+
+```bash
+git push origin main
+```
+
+The workflow:
+1. Checks if `AWS_ACCESS_KEY_ID` secret exists
+2. Skips cleanly if not configured
+3. Deploys to eu-west-2 with EC2 backend
+4. Outputs backend URL in summary
+
+### Configure Your App
+
+After deployment:
+
+1. **Get Backend URL:**
+   ```bash
+   # From CDK output
+   npx cdk deploy --outputs-file outputs.json
+   cat outputs.json | grep BackendUrl
+   
+   # Or check GitHub Actions summary
+   ```
+
+2. **Update Frontend:**
+   - Open Settings page in UI
+   - Set Backend URL to EC2 public IP: `http://YOUR-IP:8000`
+   - (Or configure domain + HTTPS with Caddy)
+
+3. **Update Android App:**
+   - Scan new QR code from `mobilerun serve` on EC2
+   - Or manually enter backend URL
+
+### Cost Breakdown
+
+**Free Tier (12 months):**
+- EC2 t3.micro: 750 hours/month ✅
+- DynamoDB: 25 GB storage, 25 WCU, 25 RCU ✅
+- S3: 5 GB storage, 20,000 GET, 2,000 PUT ✅
+- Data Transfer: 100 GB/month outbound ✅
+
+**After Free Tier (Monthly):**
+- EC2 t3.micro: ~$8 (if running 24/7)
+- DynamoDB: $0 for light use (pay-per-request)
+- S3: $0.023/GB + $0.0004/1000 GET
+- Elastic IP: $0 (while attached)
+
+**Total Est. Cost:** $8-12/month after free tier
+
+**Cost Optimization Tips:**
+1. Stop EC2 when not in use: `aws ec2 stop-instances --instance-ids i-xxx`
+2. Use S3 lifecycle (already configured)
+3. Set DynamoDB TTL for old data
+4. Use local PC for development
+
+### Optional: Domain & HTTPS
+
+**Option 1: Use Elastic IP directly**
+```bash
+http://YOUR-IP:8000
+```
+
+**Option 2: Add domain with Caddy (on EC2)**
+```bash
+# SSH to EC2 via Systems Manager
+aws ssm start-session --target i-YOUR-INSTANCE-ID
+
+# Install Caddy
+sudo yum install -y caddy
+
+# Configure reverse proxy
+sudo caddy reverse-proxy --from mobilerun.yourdomain.com --to localhost:8000
+```
+
+**Option 3: CloudFront + ACM**
+- Add CloudFront distribution
+- Use ACM certificate
+- Point to EC2 origin
+
+### Sync Local ↔ Cloud
+
+The backend supports AWS storage when deployed to AWS. Your local PC backend can optionally sync:
+
+```bash
+# Enable cloud storage in local backend
+export USE_AWS_STORAGE=true
+export AWS_REGION=eu-west-2
+export HISTORY_TABLE=mobilerun-history
+export SETTINGS_TABLE=mobilerun-settings
+export SCREENSHOT_BUCKET=mobilerun-screenshots-xxx-eu-west-2
+
+# Run local backend (will write to AWS)
+mobilerun serve
+```
+
+This way, runs on your PC also save to AWS for backup/sharing.
+
+### Netlify Frontend (Optional)
+
+The frontend can also be served from Netlify:
 
 - **Site:** macsmobilerun.netlify.app (if configured)
 - **Base Directory:** `frontend`
 - **Build Command:** `npm ci && npm run build`
 - **Publish Directory:** `dist`
 
-Point it at your local backend via Settings page.
+Point it at your EC2/Lambda backend via Settings page.
 
 ## 🏗️ Architecture
 

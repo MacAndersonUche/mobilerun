@@ -51,7 +51,10 @@ jobs:
       - name: CDK Deploy
         run: |
           cd infra
-          npx cdk deploy --require-approval never
+          # Deploy with EC2 backend (default) and AWS storage enabled
+          npx cdk deploy --require-approval never \
+            -c backendMode=ec2 \
+            -c enableStorage=true
         env:
           JWT_SECRET: ${{ secrets.JWT_SECRET || 'default-jwt-secret-change-me' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
@@ -68,9 +71,16 @@ jobs:
       
       - name: Summary
         run: |
-          echo "## ✅ Backend Deployed Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Backend Deployed to AWS" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** eu-west-2" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend Mode:** EC2 (t3.micro free tier)" >> $GITHUB_STEP_SUMMARY
           echo "**API URL:** ${{ steps.api_url.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Configure this URL in the frontend settings to use the cloud backend." >> $GITHUB_STEP_SUMMARY
+          echo "### Features Enabled:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ EC2 backend (no 15-min timeout)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ DynamoDB for run history" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ S3 for screenshots" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Free tier eligible (750 hrs/month)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Configure this URL in your phone app or local PC backend for cloud sync." >> $GITHUB_STEP_SUMMARY
