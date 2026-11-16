@@ -24,11 +24,45 @@ export default function TasksPage() {
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<Mode>('normal');
   const [speed, setSpeed] = useState<Speed>('balanced');
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<string>('');
+  const [taskLog, setTaskLog] = useState<string>('');
 
   useEffect(() => {
     loadDevices();
     loadMode();
   }, []);
+
+  useEffect(() => {
+    if (!activeTaskId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await axios.get(
+          `${getBackendUrl()}/api/tasks/${activeTaskId}`,
+          { headers: authHeaders() }
+        );
+        if (cancelled) return;
+        const d = res.data;
+        setTaskStatus(`${d.status} · step ${d.current_step || 0}/${d.max_steps || '?'}`);
+        setTaskLog(
+          [d.result, d.error].filter(Boolean).join(' — ') || 'Running…'
+        );
+        if (['completed', 'failed', 'stopped'].includes(d.status)) {
+          setActiveTaskId(null);
+          setSubmitting(false);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeTaskId]);
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -102,8 +136,10 @@ export default function TasksPage() {
     }
 
     setSubmitting(true);
+    setTaskStatus('starting…');
+    setTaskLog('');
     try {
-      await axios.post(
+      const res = await axios.post(
         `${getBackendUrl()}/api/tasks`,
         {
           device_id: selectedDevice,
@@ -116,14 +152,26 @@ export default function TasksPage() {
         },
         { headers: authHeaders() }
       );
-
-      alert('Task submitted successfully!');
+      const tid = res.data?.task_id;
+      if (tid) {
+        setActiveTaskId(tid);
+        setTaskStatus(res.data.status || 'running');
+        setTaskLog(res.data.result || res.data.error || 'Cloud agent started');
+      } else {
+        setSubmitting(false);
+        alert('Task submitted but no task_id returned');
+      }
       setInstruction('');
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Failed to submit task:', error);
-      alert('Failed to submit task');
-    } finally {
+      const detail =
+        axios.isAxiosError(error)
+          ? String(error.response?.data?.detail || error.message)
+          : 'Failed to submit task';
+      setTaskStatus('failed');
+      setTaskLog(detail);
       setSubmitting(false);
+      alert(detail);
     }
   };
 
@@ -163,6 +211,16 @@ export default function TasksPage() {
             Needs you
           </Link>
           .
+        </div>
+      )}
+
+      {(taskStatus || taskLog) && (
+        <div
+          className="rounded-lg border border-line bg-canvas-elev p-4 text-sm"
+          data-testid="task-progress"
+        >
+          <p className="font-medium text-white">{taskStatus || '…'}</p>
+          {taskLog && <p className="mt-1 text-mute whitespace-pre-wrap">{taskLog}</p>}
         </div>
       )}
 

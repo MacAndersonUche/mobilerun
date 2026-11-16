@@ -249,6 +249,8 @@ export class MobilerunStack extends cdk.Stack {
       SCREENSHOT_BUCKET: screenshotBucket.bucketName,
       USE_AWS_STORAGE: 'true',
       STEP_DRIVEN: 'true',
+      // Lambda filesystem is read-only except /tmp
+      MOBILERUN_DATA: '/tmp/mobilerun',
     };
 
     const code = this.lambdaCode();

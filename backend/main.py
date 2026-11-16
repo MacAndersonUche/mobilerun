@@ -1183,8 +1183,24 @@ async def handle_device_message(device_id: str, message: dict):
             {"type": "agent_event", "device_id": device_id, "state": state},
         )
 
-    elif msg_type in ("screenshot", "response"):
-        # Optional one-shot screenshot / command response — fan out if UI cares
+    elif msg_type == "response":
+        rid = message.get("request_id")
+        if rid:
+            try:
+                from device_rpc import store_rpc_response
+            except ImportError:
+                from backend.device_rpc import store_rpc_response  # type: ignore
+
+            store_rpc_response(
+                str(rid),
+                {"error": message.get("error"), "result": message.get("result")},
+            )
+        await broadcast_to_ui(
+            device_id, {"type": "response", "device_id": device_id, **message}
+        )
+
+    elif msg_type == "screenshot":
+        # Optional one-shot screenshot — fan out if UI cares
         await broadcast_to_ui(
             device_id, {"type": msg_type, "device_id": device_id, **message}
         )
@@ -1263,17 +1279,8 @@ async def submit_task(
 
     active_runs[task_id] = task
 
-    payload = {
-        "type": "run_task",
-        "task_id": task_id,
-        "instruction": request.instruction,
-        "max_steps": request.max_steps,
-        "reasoning": request.reasoning,
-        "vision": request.vision,
-        "mode": mode,
-        "speed_preset": speed,
-    }
-    # Always persist so HTTP Lambdas can poll status across cold starts
+    # Cloud agent loop (step worker) drives the phone via WS commands.
+    # Do NOT rely on the APK keyword stub for multi-step goals.
     try:
         try:
             from storage import put_job
@@ -1284,63 +1291,91 @@ async def submit_task(
             {
                 "job_id": task_id,
                 "kind": "agent",
-                "status": "pending",
+                "status": "running",
                 "device_id": request.device_id,
                 "instruction": request.instruction,
                 "max_steps": request.max_steps or 15,
                 "speed_preset": speed,
                 "mode": mode,
                 "created_at": int(datetime.now().timestamp()),
-                "next_run_at": int(datetime.now().timestamp()) + 5,
-                "state": {"steps": 0},
+                "next_run_at": int(datetime.now().timestamp()),
+                "state": {"steps": 0, "history": []},
                 "ttl": int(datetime.now().timestamp()) + 86400,
+                "result": "Queued for cloud agent",
             }
         )
     except Exception as e:
         logger.warning("put_job for task failed (local ok): %s", e)
 
-    sent = await _send_to_device(request.device_id, payload)
-    if sent:
-        task["status"] = "running"
-        try:
+    # Notify phone that a cloud-driven task started (optional; agent uses commands)
+    await _send_to_device(
+        request.device_id,
+        {
+            "type": "agent_control",
+            "action": "start",
+            "task_id": task_id,
+            "instruction": request.instruction,
+            "max_steps": request.max_steps,
+            "mode": mode,
+            "speed_preset": speed,
+        },
+    )
+
+    kicked = False
+    try:
+        step_arn = os.environ.get("STEP_WORKER_ARN")
+        if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
+            import boto3
+
+            boto3.client("lambda").invoke(
+                FunctionName=step_arn,
+                InvocationType="Event",
+                Payload=json.dumps({"job_id": task_id}).encode(),
+            )
+            kicked = True
+            task["status"] = "running"
+            task["result"] = "Cloud agent started (step worker)"
+        elif os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() == "true":
+            # Local/dev: run one step inline so CI/emulator can progress without EventBridge
+            try:
+                from cloud_agent import run_one_agent_step
+            except ImportError:
+                from backend.cloud_agent import run_one_agent_step  # type: ignore
             try:
                 from storage import get_job, put_job
             except ImportError:
                 from backend.storage import get_job, put_job  # type: ignore
 
-            job = get_job(task_id) or {}
-            job.update(
-                {
-                    "job_id": task_id,
-                    "status": "running",
-                    "result": "Dispatched to device",
-                }
-            )
-            put_job(job)
-        except Exception:
-            pass
-    else:
-        try:
-            step_arn = os.environ.get("STEP_WORKER_ARN")
-            if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
-                import boto3
+            job = get_job(task_id) or {
+                "job_id": task_id,
+                "kind": "agent",
+                "status": "running",
+                "device_id": request.device_id,
+                "instruction": request.instruction,
+                "max_steps": request.max_steps or 15,
+                "state": {"steps": 0, "history": []},
+            }
+            # Run up to a few steps inline for local backends
+            for _ in range(min(8, int(request.max_steps or 15))):
+                if job.get("status") != "running":
+                    break
+                job = run_one_agent_step(job)
+                put_job(job)
+            kicked = True
+            task["status"] = job.get("status") or "running"
+            task["result"] = job.get("result")
+            task["error"] = job.get("error")
+            task["current_step"] = int((job.get("state") or {}).get("steps") or 0)
+    except Exception as e:
+        logger.error("Failed to kick cloud agent: %s", e)
+        task["status"] = "failed"
+        task["error"] = f"Failed to start cloud agent: {e}"
 
-                boto3.client("lambda").invoke(
-                    FunctionName=step_arn,
-                    InvocationType="Event",
-                    Payload=json.dumps({"job_id": task_id}).encode(),
-                )
-                task["status"] = "running"
-                task["result"] = "Dispatched via step worker (async)"
-            else:
-                task["status"] = "failed"
-                task["error"] = (
-                    "No live WebSocket to device and no step worker configured"
-                )
-        except Exception as e:
-            logger.error("Failed to send/queue task: %s", e)
-            task["status"] = "failed"
-            task["error"] = f"Failed to reach device: {e}"
+    if not kicked and task["status"] != "failed":
+        task["status"] = "failed"
+        task["error"] = (
+            "Step worker not configured — cannot run cloud agent on this backend"
+        )
 
     return TaskStatus(**task)
 
@@ -1522,6 +1557,7 @@ dating_mode_state = {
     "paused": False,
     "current_app": None,
     "review_queue": [],
+    "review_before_send": True,
     "speed_preset": "balanced",
     "opener_mode": "templates",  # templates | ai
     "opener_library": None,
@@ -1566,17 +1602,109 @@ humanizer_state: Dict[str, Any] = {
 _needs_you_queue = None
 
 
-def get_needs_you_queue():
-    """Shared Needs-you queue (Social + Dating)."""
+def get_needs_you_queue(auth: Optional[dict] = None):
+    """Shared Needs-you queue (Social + Dating).
+
+    On AWS, Dynamo (`needs_you` user setting) is source of truth; /tmp JSON is
+    only a read-through cache.
+    """
     global _needs_you_queue
+    user_id = _dating_user_id(auth) if auth is not None else "local"
+    # Recreate when owner changes (multi-tenant Lambda warm reuse)
+    if _needs_you_queue is not None and getattr(
+        _needs_you_queue, "_user_id", None
+    ) not in (None, user_id):
+        _needs_you_queue = None
     if _needs_you_queue is None:
         from mobilerun.needs_you.queue import NeedsYouQueue
 
-        path = Path.home() / ".mobilerun" / "needs_you.json"
+        path = Path("/tmp/mobilerun") / "needs_you.json"
         if os.environ.get("MOBILERUN_DATA"):
             path = Path(os.environ["MOBILERUN_DATA"]) / "needs_you.json"
-        _needs_you_queue = NeedsYouQueue(persist_path=path)
+        elif os.environ.get("USE_AWS_STORAGE", "").lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            path = Path.home() / ".mobilerun" / "needs_you.json"
+
+        remote_load = None
+        remote_save = None
+        if os.environ.get("USE_AWS_STORAGE", "").lower() in ("1", "true", "yes"):
+            try:
+                from storage import get_user_setting, save_user_setting
+            except ImportError:
+                from backend.storage import (  # type: ignore
+                    get_user_setting,
+                    save_user_setting,
+                )
+
+            uid = user_id
+
+            def remote_load():
+                return get_user_setting(uid, "needs_you")
+
+            def remote_save(payload: Dict[str, Any]) -> None:
+                save_user_setting(uid, "needs_you", payload)
+
+        _needs_you_queue = NeedsYouQueue(
+            persist_path=path, remote_load=remote_load, remote_save=remote_save
+        )
+        _needs_you_queue._user_id = user_id  # type: ignore[attr-defined]
     return _needs_you_queue
+
+
+def _load_dating_runtime(auth: Optional[dict] = None) -> None:
+    """Hydrate dating_mode_state prefs/review_queue from Dynamo when present."""
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    try:
+        prefs = get_user_setting(user_id, "dating_runtime") or {}
+    except Exception:
+        prefs = {}
+    if not isinstance(prefs, dict):
+        return
+    if prefs.get("speed_preset") in ("fast", "balanced", "careful"):
+        dating_mode_state["speed_preset"] = prefs["speed_preset"]
+    if prefs.get("opener_mode") in ("templates", "ai"):
+        dating_mode_state["opener_mode"] = prefs["opener_mode"]
+    if "review_before_send" in prefs:
+        dating_mode_state["review_before_send"] = bool(prefs["review_before_send"])
+    if isinstance(prefs.get("review_queue"), list):
+        dating_mode_state["review_queue"] = list(prefs["review_queue"])
+    if "running" in prefs:
+        dating_mode_state["running"] = bool(prefs["running"])
+    if "paused" in prefs:
+        dating_mode_state["paused"] = bool(prefs["paused"])
+    if prefs.get("job_id"):
+        dating_mode_state["job_id"] = prefs["job_id"]
+
+
+def _save_dating_runtime(auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    save_user_setting(
+        user_id,
+        "dating_runtime",
+        {
+            "speed_preset": dating_mode_state.get("speed_preset", "balanced"),
+            "opener_mode": dating_mode_state.get("opener_mode", "templates"),
+            "review_before_send": dating_mode_state.get("review_before_send", True),
+            "review_queue": list(dating_mode_state.get("review_queue") or []),
+            "running": bool(dating_mode_state.get("running")),
+            "paused": bool(dating_mode_state.get("paused")),
+            "job_id": dating_mode_state.get("job_id"),
+            "current_app": dating_mode_state.get("current_app"),
+        },
+    )
 
 
 class DatingModeConfig(BaseModel):
@@ -2120,6 +2248,7 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
     """Get dating mode configuration."""
     from mobilerun.dating.config import DatingModeConfig as ConfigModel
 
+    _load_dating_runtime(auth)
     config = ConfigModel()
     lib, _ = _load_opener_library(auth)
     df = _load_date_flow(auth)
@@ -2214,6 +2343,9 @@ async def update_dating_config(
         cur["per_app"] = dump["date_flow_per_app"]
     mgr.config = DateFlowConfig.from_dict(cur)
     _save_date_flow(mgr, auth)
+    if dump.get("review_before_send") is not None:
+        dating_mode_state["review_before_send"] = bool(dump["review_before_send"])
+    _save_dating_runtime(auth)
 
     payload = dump
     payload["date_flow"] = mgr.config.to_dict()
@@ -2676,10 +2808,14 @@ async def selectors_status(
     auth: Optional[dict] = Depends(optional_verify_token),
 ):
     """Cache status per app: last discovered, version, LLM calls used."""
-    nav = get_selector_navigator(auth)
-    if package_name:
-        return {"apps": [nav.cache.status(package_name, version_code).to_dict()]}
-    return {"apps": [s.to_dict() for s in nav.cache.list_packages()]}
+    try:
+        nav = get_selector_navigator(auth)
+        if package_name:
+            return {"apps": [nav.cache.status(package_name, version_code).to_dict()]}
+        return {"apps": [s.to_dict() for s in nav.cache.list_packages()]}
+    except Exception as e:
+        logger.exception("selectors_status failed: %s", e)
+        return {"apps": [], "error": str(e)}
 
 
 @app.post("/api/selectors/resolve")
@@ -2838,6 +2974,7 @@ async def start_dating_mode(
     except Exception as e:
         logger.warning("Could not persist dating job (local mode ok): %s", e)
 
+    _save_dating_runtime(auth)
     return {"status": "started", "state": dating_mode_state, "job": job}
 
 
@@ -2859,6 +2996,7 @@ async def stop_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)
         except Exception as e:
             logger.warning("Could not stop job: %s", e)
 
+    _save_dating_runtime(auth)
     return {"status": "stopped", "state": dating_mode_state}
 
 
@@ -2869,6 +3007,7 @@ async def pause_dating_mode(auth: Optional[dict] = Depends(optional_verify_token
         raise HTTPException(status_code=400, detail="Dating mode not running")
 
     dating_mode_state["paused"] = not dating_mode_state["paused"]
+    _save_dating_runtime(auth)
 
     return {
         "status": "paused" if dating_mode_state["paused"] else "resumed",
@@ -2879,16 +3018,18 @@ async def pause_dating_mode(auth: Optional[dict] = Depends(optional_verify_token
 @app.get("/api/dating/status")
 async def get_dating_status(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode status."""
+    _load_dating_runtime(auth)
     return dating_mode_state
 
 
 @app.get("/api/dating/review-queue")
 async def get_review_queue(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get messages in review queue (also mirrored in /api/needs-you)."""
+    _load_dating_runtime(auth)
     return {
         "messages": dating_mode_state["review_queue"],
         "needs_you": [
-            i.to_dict() for i in get_needs_you_queue().list_pending(source="dating")
+            i.to_dict() for i in get_needs_you_queue(auth).list_pending(source="dating")
         ],
     }
 
@@ -2901,7 +3042,8 @@ async def approve_message(
     dating_mode_state["review_queue"] = [
         msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
     ]
-    get_needs_you_queue().approve(message_id)
+    get_needs_you_queue(auth).approve(message_id)
+    _save_dating_runtime(auth)
     return {"status": "approved", "message_id": message_id}
 
 
@@ -2913,7 +3055,8 @@ async def reject_message(
     dating_mode_state["review_queue"] = [
         msg for msg in dating_mode_state["review_queue"] if msg["id"] != message_id
     ]
-    get_needs_you_queue().reject(message_id)
+    get_needs_you_queue(auth).reject(message_id)
+    _save_dating_runtime(auth)
     return {"status": "rejected", "message_id": message_id}
 
 
@@ -2927,11 +3070,12 @@ async def edit_message(
     for i, msg in enumerate(dating_mode_state["review_queue"]):
         if msg["id"] == message_id:
             dating_mode_state["review_queue"][i] = message.dict()
-            get_needs_you_queue().edit(message_id, message.message)
+            get_needs_you_queue(auth).edit(message_id, message.message)
+            _save_dating_runtime(auth)
             return {"status": "updated", "message": message.dict()}
 
     # May only exist in Needs-you (synced dating item)
-    item = get_needs_you_queue().edit(message_id, message.message)
+    item = get_needs_you_queue(auth).edit(message_id, message.message)
     if item:
         return {"status": "updated", "message": item.to_dict()}
 
@@ -2945,7 +3089,7 @@ async def enqueue_dating_review(
     """Enqueue a dating draft into review + shared Needs-you queue."""
     payload = message.dict() if hasattr(message, "dict") else message.model_dump()
     dating_mode_state["review_queue"].append(payload)
-    q = get_needs_you_queue()
+    q = get_needs_you_queue(auth)
     if q.get(message.id) is None:
         q.add(
             source="dating",
@@ -2960,6 +3104,7 @@ async def enqueue_dating_review(
             meta={"is_opener": message.is_opener},
             item_id=message.id,
         )
+    _save_dating_runtime(auth)
     return {
         "status": "queued",
         "message": payload,
@@ -3143,7 +3288,7 @@ async def list_needs_you(
     source: Optional[str] = None,
     auth: Optional[dict] = Depends(optional_verify_token),
 ):
-    q = get_needs_you_queue()
+    q = get_needs_you_queue(auth)
     pending = q.list_pending(source=source)
     return {
         "badge": q.pending_count(),
@@ -3158,17 +3303,18 @@ async def needs_you_approve(
     body: NeedsYouEdit = NeedsYouEdit(),
     auth: Optional[dict] = Depends(optional_verify_token),
 ):
-    item = get_needs_you_queue().approve(item_id, edited_reply=body.draft_reply)
+    item = get_needs_you_queue(auth).approve(item_id, edited_reply=body.draft_reply)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     # Keep dating legacy queue in sync
     dating_mode_state["review_queue"] = [
         m for m in dating_mode_state["review_queue"] if m.get("id") != item_id
     ]
+    _save_dating_runtime(auth)
     return {
         "status": "approved",
         "item": item.to_dict(),
-        "badge": get_needs_you_queue().pending_count(),
+        "badge": get_needs_you_queue(auth).pending_count(),
     }
 
 
@@ -3176,16 +3322,17 @@ async def needs_you_approve(
 async def needs_you_reject(
     item_id: str, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    item = get_needs_you_queue().reject(item_id)
+    item = get_needs_you_queue(auth).reject(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     dating_mode_state["review_queue"] = [
         m for m in dating_mode_state["review_queue"] if m.get("id") != item_id
     ]
+    _save_dating_runtime(auth)
     return {
         "status": "rejected",
         "item": item.to_dict(),
-        "badge": get_needs_you_queue().pending_count(),
+        "badge": get_needs_you_queue(auth).pending_count(),
     }
 
 
@@ -3197,12 +3344,13 @@ async def needs_you_edit(
 ):
     if body.draft_reply is None:
         raise HTTPException(status_code=400, detail="draft_reply required")
-    item = get_needs_you_queue().edit(item_id, body.draft_reply)
+    item = get_needs_you_queue(auth).edit(item_id, body.draft_reply)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     for m in dating_mode_state["review_queue"]:
         if m.get("id") == item_id:
             m["message"] = body.draft_reply
+    _save_dating_runtime(auth)
     return {"status": "updated", "item": item.to_dict()}
 
 

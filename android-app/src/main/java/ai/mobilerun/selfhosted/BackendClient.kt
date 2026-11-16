@@ -813,21 +813,27 @@ class BackendClient(private val context: Context) {
                 "command" -> handleCommand(message)
                 "stream_control" -> handleStreamControl(message)
                 "run_task" -> {
+                    // Legacy: cloud agent owns multi-step work via `command` RPC.
                     val instruction = message["instruction"] as? String ?: "Unknown"
                     val taskId = message["task_id"] as? String ?: ""
-                    _taskFlow.value = "Running: $instruction"
+                    _taskFlow.value = "Cloud agent: $instruction"
                     scope.launch {
-                        sendTaskUpdate(taskId, "running", "Task started: $instruction")
-                        sendAgentEvent(null, 0, "run_task", instruction)
-                        val outcome = executeSimpleInstruction(instruction)
-                        _taskFlow.value = outcome
-                        sendAgentEvent(null, 1, "run_task_done", outcome)
-                        sendTaskUpdate(
-                            taskId,
-                            if (outcome.startsWith("OK")) "completed" else "failed",
-                            outcome,
-                        )
+                        sendAgentEvent(null, 0, "run_task_ack", "cloud_agent_owns:$instruction")
+                        if (taskId.isNotBlank()) {
+                            sendTaskUpdate(taskId, "running", "Waiting for cloud agent steps")
+                        }
                     }
+                }
+                "agent_control" -> {
+                    val action = message["action"] as? String ?: ""
+                    val instruction = message["instruction"] as? String ?: ""
+                    val step = (message["step"] as? Number)?.toInt()
+                    _taskFlow.value = when {
+                        action == "start" -> "Cloud agent starting…"
+                        step != null -> "Cloud step $step"
+                        else -> action.ifBlank { "agent" }
+                    }
+                    sendAgentEvent(null, step, action, instruction)
                 }
                 "task_control" -> {
                     val action = message["action"] as? String
@@ -986,6 +992,24 @@ class BackendClient(private val context: Context) {
                         }
                         "OK"
                     }
+                    "input_text", "type_text" -> {
+                        val text = params?.get("text") as? String ?: ""
+                        val clear = params?.get("clear") as? Boolean ?: false
+                        val ok = a11yService.inputText(text, clear)
+                        sendAgentEvent(null, null, "type", "type(${text.take(40)})")
+                        if (!ok) throw Exception("input_text failed — focus a text field")
+                        "OK"
+                    }
+                    "open_app", "start_app" -> {
+                        val app = (params?.get("app") as? String)
+                            ?: (params?.get("package") as? String)
+                            ?: ""
+                        val pkg = params?.get("package") as? String
+                        val ok = openAppByNameOrPackage(app, pkg)
+                        sendAgentEvent(null, null, "open_app", "open_app($app)")
+                        if (!ok) throw Exception("Could not open app: $app")
+                        "OK"
+                    }
                     "get_ui_tree" -> a11yService.getUITree()
                     "screenshot" -> ""
                     "get_device_info" -> {
@@ -1114,6 +1138,44 @@ class BackendClient(private val context: Context) {
                 false
             }
         }
+    }
+
+    /** Launch an app by friendly name (Settings, Chrome, …) or package id. */
+    private fun openAppByNameOrPackage(app: String, pkg: String?): Boolean {
+        val name = app.trim()
+        val lower = name.lowercase()
+        if (lower.contains("setting") || pkg == "com.android.settings") {
+            return startUiActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
+        }
+        if (lower.contains("wifi") || lower.contains("wi-fi")) {
+            return startUiActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))
+        }
+        val packageName = pkg?.takeIf { it.contains('.') }
+            ?: when {
+                lower.contains("chrome") -> "com.android.chrome"
+                lower.contains("gmail") -> "com.google.android.gm"
+                lower.contains("maps") -> "com.google.android.apps.maps"
+                lower.contains("youtube") -> "com.google.android.youtube"
+                lower.contains("camera") -> "com.android.camera"
+                else -> null
+            }
+        if (packageName != null) {
+            val launch = context.packageManager.getLaunchIntentForPackage(packageName)
+            if (launch != null) return startUiActivity(launch)
+        }
+        // Fallback: search installed apps by label
+        val pm = context.packageManager
+        val apps = pm.getInstalledApplications(0)
+        for (info in apps) {
+            val label = pm.getApplicationLabel(info)?.toString() ?: continue
+            if (label.equals(name, ignoreCase = true) ||
+                label.lowercase().contains(lower)
+            ) {
+                val launch = pm.getLaunchIntentForPackage(info.packageName) ?: continue
+                return startUiActivity(launch)
+            }
+        }
+        return false
     }
 
     /**

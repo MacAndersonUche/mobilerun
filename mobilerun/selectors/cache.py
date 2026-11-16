@@ -28,17 +28,54 @@ log = logging.getLogger("mobilerun.selectors.cache")
 
 
 def _data_root() -> Path:
-    root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "selector_cache"
+    # Lambda only allows writes under /tmp; Path.home() is often read-only.
+    candidates = []
+    if os.environ.get("MOBILERUN_DATA"):
+        candidates.append(Path(os.environ["MOBILERUN_DATA"]))
+    candidates.append(Path("/tmp/mobilerun"))
+    candidates.append(Path.home() / ".mobilerun")
+    last_err: Optional[Exception] = None
+    for root in candidates:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            return root / "selector_cache"
+        except OSError as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"No writable MOBILERUN_DATA path: {last_err}")
+
+
+def _aws_storage() -> bool:
+    return os.environ.get("USE_AWS_STORAGE", "").lower() in ("1", "true", "yes")
+
+
+def _storage_get():
+    try:
+        from storage import get_user_setting, save_user_setting
+
+        return get_user_setting, save_user_setting
+    except ImportError:
+        try:
+            from backend.storage import (  # type: ignore
+                get_user_setting,
+                save_user_setting,
+            )
+
+            return get_user_setting, save_user_setting
+        except ImportError:
+            return None, None
 
 
 class SelectorCache:
     """
     Keys: package_name + version_code → role → CachedEntry (with variants).
 
-    Local JSON is source of truth on device; DynamoDB mirrors for multi-device.
+    On AWS (USE_AWS_STORAGE): DynamoDB is the source of truth; /tmp (or
+    MOBILERUN_DATA) is a best-effort read-through cache only.
+    Locally: JSON under MOBILERUN_DATA / ~/.mobilerun is authoritative.
     """
+
+    INDEX_SETTING = "selectors_index"
 
     def __init__(
         self,
@@ -50,7 +87,11 @@ class SelectorCache:
     ):
         self.user_id = user_id
         self.persist_dir = persist_dir or _data_root()
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.persist_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Still usable via Dynamo / memory when disk is unavailable
+            log.warning("selector cache dir not writable: %s", self.persist_dir)
         self.max_rediscovery = max_rediscovery
         env_cap = os.environ.get("MOBILERUN_MAX_LAYOUT_VARIANTS")
         if max_layout_variants is None and env_cap:
@@ -80,15 +121,35 @@ class SelectorCache:
             return self._mem[k]
 
         entries: Dict[str, CachedEntry] = {}
+        remote_meta: Dict[str, Any] = {}
+
+        # Dynamo first when AWS; then local read-through cache
+        if _aws_storage():
+            remote, remote_meta = self._load_remote_full(package_name, version_code)
+            for role, entry in remote.items():
+                entries[role] = entry
+            if remote_meta.get("total_llm_calls") is not None:
+                self._llm_totals[k] = int(remote_meta["total_llm_calls"])
+
         path = self._path(package_name, version_code)
+        local_entries: Dict[str, CachedEntry] = {}
         if path.exists():
             try:
                 raw = json.loads(path.read_text())
                 for role, data in (raw.get("roles") or {}).items():
-                    entries[role] = CachedEntry.from_dict(data)
-                self._llm_totals[k] = int(raw.get("total_llm_calls") or 0)
+                    local_entries[role] = CachedEntry.from_dict(data)
+                if k not in self._llm_totals:
+                    self._llm_totals[k] = int(raw.get("total_llm_calls") or 0)
             except Exception:
                 log.exception("failed reading selector cache %s", path)
+
+        if not _aws_storage():
+            entries = local_entries
+        else:
+            # Fill gaps from local cache only when Dynamo had nothing for a role
+            for role, entry in local_entries.items():
+                if role not in entries:
+                    entries[role] = entry
 
         # Seed defaults for known packages if empty
         if not entries:
@@ -114,17 +175,24 @@ class SelectorCache:
                     ],
                 )
 
-        # Try DynamoDB overlay
-        remote = self._load_remote(package_name, version_code)
-        if remote:
+        # Non-AWS: overlay Dynamo if present (multi-device laptop sync)
+        if not _aws_storage():
+            remote, remote_meta = self._load_remote_full(package_name, version_code)
             for role, entry in remote.items():
                 if role not in entries or entry.source == "llm" or entry.variants:
                     entries[role] = entry
+            if remote_meta.get("total_llm_calls") is not None:
+                self._llm_totals[k] = max(
+                    self._llm_totals.get(k, 0), int(remote_meta["total_llm_calls"])
+                )
 
         for e in entries.values():
             e.ensure_variants()
 
         self._mem[k] = entries
+        # Warm /tmp read-through when we hydrated from Dynamo
+        if _aws_storage() and entries:
+            self._persist_local(package_name, version_code)
         return entries
 
     def get(
@@ -142,7 +210,6 @@ class SelectorCache:
         roles[entry.role] = entry
         self._mem[k] = roles
         self._persist(entry.package_name, entry.version_code)
-        self._save_remote(entry.package_name, entry.version_code)
 
     def ordered_variants(
         self, package_name: str, version_code: str, role: str
@@ -316,7 +383,6 @@ class SelectorCache:
             roles.clear()
         self._mem[k] = roles
         self._persist(package_name, version_code)
-        self._save_remote(package_name, version_code)
 
     def invalidate_if_version_changed(
         self, package_name: str, old_version: str, new_version: str
@@ -369,36 +435,43 @@ class SelectorCache:
     def list_packages(self) -> List[CacheStatus]:
         seen = set()
         out = []
-        for path in self.persist_dir.glob("*.json"):
-            try:
-                raw = json.loads(path.read_text())
-                pkg = raw.get("package_name")
-                ver = raw.get("version_code")
-                if pkg is None:
+
+        def _add(pkg: str, ver: str) -> None:
+            key = (pkg, str(ver))
+            if key in seen or not pkg:
+                return
+            seen.add(key)
+            out.append(self.status(pkg, str(ver)))
+
+        # Dynamo index is authoritative on AWS (survives cold starts / new /tmp)
+        for pkg, ver in self._list_remote_packages():
+            _add(pkg, ver)
+
+        try:
+            for path in self.persist_dir.glob("*.json"):
+                try:
+                    raw = json.loads(path.read_text())
+                    pkg = raw.get("package_name")
+                    ver = raw.get("version_code")
+                    if pkg is None:
+                        continue
+                    _add(str(pkg), str(ver))
+                except Exception:
                     continue
-                key = (pkg, str(ver))
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(self.status(pkg, str(ver)))
-            except Exception:
-                continue
-        for k, roles in self._mem.items():
+        except OSError:
+            pass
+
+        for _k, roles in self._mem.items():
             if not roles:
                 continue
             e = next(iter(roles.values()))
-            key = (e.package_name, e.version_code)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(self.status(e.package_name, e.version_code))
+            _add(e.package_name, e.version_code)
         return out
 
-    def _persist(self, package_name: str, version_code: str) -> None:
+    def _payload(self, package_name: str, version_code: str) -> Dict[str, Any]:
         k = self._key(package_name, version_code)
         roles = self._mem.get(k) or {}
-        path = self._path(package_name, version_code)
-        payload = {
+        return {
             "package_name": package_name,
             "version_code": str(version_code),
             "updated_at": int(time.time()),
@@ -406,53 +479,108 @@ class SelectorCache:
             "max_layout_variants": self.max_layout_variants,
             "roles": {r: e.to_dict() for r, e in roles.items()},
         }
-        path.write_text(json.dumps(payload, indent=2))
+
+    def _persist(self, package_name: str, version_code: str) -> None:
+        """Write local cache (best-effort) then Dynamo (source of truth on AWS)."""
+        self._persist_local(package_name, version_code)
+        self._save_remote(package_name, version_code)
+
+    def _persist_local(self, package_name: str, version_code: str) -> None:
+        path = self._path(package_name, version_code)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(self._payload(package_name, version_code), indent=2)
+            )
+        except OSError as e:
+            log.debug("selector local cache write skipped: %s", e)
 
     def _load_remote(
         self, package_name: str, version_code: str
     ) -> Dict[str, CachedEntry]:
-        try:
-            from storage import get_user_setting
-        except ImportError:
-            try:
-                from backend.storage import get_user_setting  # type: ignore
-            except ImportError:
-                return {}
+        roles, _meta = self._load_remote_full(package_name, version_code)
+        return roles
+
+    def _load_remote_full(
+        self, package_name: str, version_code: str
+    ) -> Tuple[Dict[str, CachedEntry], Dict[str, Any]]:
+        get_user_setting, _ = _storage_get()
+        if get_user_setting is None:
+            return {}, {}
         try:
             data = get_user_setting(
                 self.user_id, f"selectors:{package_name}:{version_code}"
             )
             if not data:
-                return {}
-            return {
+                return {}, {}
+            roles = {
                 role: CachedEntry.from_dict(d)
                 for role, d in (data.get("roles") or {}).items()
             }
+            return roles, data
         except Exception:
-            return {}
+            log.debug("selector DynamoDB load failed", exc_info=True)
+            return {}, {}
+
+    def _list_remote_packages(self) -> List[Tuple[str, str]]:
+        get_user_setting, _ = _storage_get()
+        if get_user_setting is None:
+            return []
+        try:
+            idx = get_user_setting(self.user_id, self.INDEX_SETTING) or {}
+            out: List[Tuple[str, str]] = []
+            for row in idx.get("packages") or []:
+                if not isinstance(row, dict):
+                    continue
+                pkg = row.get("package_name")
+                ver = row.get("version_code")
+                if pkg is None:
+                    continue
+                out.append((str(pkg), str(ver if ver is not None else "0")))
+            return out
+        except Exception:
+            log.debug("selector index load failed", exc_info=True)
+            return []
+
+    def _update_remote_index(self, package_name: str, version_code: str) -> None:
+        get_user_setting, save_user_setting = _storage_get()
+        if get_user_setting is None or save_user_setting is None:
+            return
+        try:
+            idx = get_user_setting(self.user_id, self.INDEX_SETTING) or {}
+            packages = list(idx.get("packages") or [])
+            key = (str(package_name), str(version_code))
+            found = False
+            for row in packages:
+                if not isinstance(row, dict):
+                    continue
+                if (
+                    str(row.get("package_name")) == key[0]
+                    and str(row.get("version_code")) == key[1]
+                ):
+                    found = True
+                    break
+            if not found:
+                packages.append({"package_name": key[0], "version_code": key[1]})
+            save_user_setting(
+                self.user_id,
+                self.INDEX_SETTING,
+                {"packages": packages, "updated_at": int(time.time())},
+            )
+        except Exception:
+            log.debug("selector index update failed", exc_info=True)
 
     def _save_remote(self, package_name: str, version_code: str) -> None:
+        _, save_user_setting = _storage_get()
+        if save_user_setting is None:
+            return
         try:
-            from storage import save_user_setting
-        except ImportError:
-            try:
-                from backend.storage import save_user_setting  # type: ignore
-            except ImportError:
-                return
-        try:
-            k = self._key(package_name, version_code)
-            roles = self._mem.get(k) or {}
             save_user_setting(
                 self.user_id,
                 f"selectors:{package_name}:{version_code}",
-                {
-                    "package_name": package_name,
-                    "version_code": str(version_code),
-                    "total_llm_calls": self._llm_totals.get(k, 0),
-                    "max_layout_variants": self.max_layout_variants,
-                    "roles": {r: e.to_dict() for r, e in roles.items()},
-                },
+                self._payload(package_name, version_code),
             )
+            self._update_remote_index(package_name, version_code)
         except Exception:
             log.debug("selector DynamoDB sync skipped", exc_info=True)
 

@@ -379,6 +379,21 @@ def handler(event: Dict[str, Any], context: Any):
         _send_to_device(client, str(device_id), body)
         return _ok({"sent": True})
 
+    if msg_type == "response":
+        # Correlate phone replies for step-worker device_rpc.call_device
+        rid = body.get("request_id")
+        if rid:
+            try:
+                from device_rpc import store_rpc_response
+            except ImportError:
+                from backend.device_rpc import store_rpc_response  # type: ignore
+
+            store_rpc_response(
+                str(rid),
+                {"error": body.get("error"), "result": body.get("result")},
+            )
+        return _ok({"stored": True, "request_id": rid})
+
     if msg_type == "task_update":
         task_id = body.get("task_id")
         update = body.get("update") or {}

@@ -174,28 +174,43 @@ export default function DatingPage() {
   });
 
   const loadAll = async () => {
+    const soft = async <T,>(path: string, fallback: T): Promise<T> => {
+      try {
+        const res = await axios.get(`${getBackendUrl()}${path}`, {
+          headers: authHeaders(),
+        });
+        return res.data as T;
+      } catch (e) {
+        console.warn('Dating optional load failed', path, e);
+        return fallback;
+      }
+    };
     try {
-      const [statusRes, statsRes, configRes, queueRes, openersRes, selRes] =
-        await Promise.all([
-          axios.get(`${getBackendUrl()}/api/dating/status`, {
-            headers: authHeaders(),
-          }),
-          axios.get(`${getBackendUrl()}/api/dating/stats`, {
-            headers: authHeaders(),
-          }),
-          axios.get(`${getBackendUrl()}/api/dating/config`, {
-            headers: authHeaders(),
-          }),
-          axios.get(`${getBackendUrl()}/api/dating/review-queue`, {
-            headers: authHeaders(),
-          }),
-          axios.get(`${getBackendUrl()}/api/dating/openers`, {
-            headers: authHeaders(),
-          }),
-          axios.get(`${getBackendUrl()}/api/selectors/status`, {
-            headers: authHeaders(),
-          }),
-        ]);
+      // Core dating endpoints must succeed; queue/selectors are soft so a
+      // missing Lambda module never blanks the whole page as "not connected".
+      const [statusRes, statsRes, configRes, openersRes] = await Promise.all([
+        axios.get(`${getBackendUrl()}/api/dating/status`, {
+          headers: authHeaders(),
+        }),
+        axios.get(`${getBackendUrl()}/api/dating/stats`, {
+          headers: authHeaders(),
+        }),
+        axios.get(`${getBackendUrl()}/api/dating/config`, {
+          headers: authHeaders(),
+        }),
+        axios.get(`${getBackendUrl()}/api/dating/openers`, {
+          headers: authHeaders(),
+        }),
+      ]);
+      const queueData = await soft<{ messages?: ReviewMessage[] }>(
+        '/api/dating/review-queue',
+        { messages: [] }
+      );
+      type SelectorApp = (typeof selectorApps)[number];
+      const selData = await soft<{ apps?: SelectorApp[] }>(
+        '/api/selectors/status',
+        { apps: [] }
+      );
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -237,11 +252,11 @@ export default function DatingPage() {
       ) {
         setOpenerMode(configRes.data.opener_mode);
       }
-      setReviewQueue(queueRes.data.messages || []);
+      setReviewQueue(queueData.messages || []);
       setTemplates(openersRes.data.library?.templates || []);
       setBucketNow(openersRes.data.bucket_now || 'morning');
       setBucketCounts(openersRes.data.bucket_counts || {});
-      setSelectorApps(selRes.data.apps || []);
+      setSelectorApps(selData.apps || []);
       setError(null);
     } catch (e: unknown) {
       console.error(e);
