@@ -83,6 +83,19 @@ jobs:
         working-directory: infra
         run: npx cdk bootstrap aws://$(aws sts get-caller-identity --query Account --output text)/eu-west-2 || true
 
+      - name: Build Lambda asset (binary wheels)
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lambda-asset
+          mkdir -p /tmp/lambda-asset
+          python3 -m pip install -r backend/requirements.txt -t /tmp/lambda-asset
+          cp backend/*.py /tmp/lambda-asset/
+          # Include dating package for imports used by API
+          mkdir -p /tmp/lambda-asset/mobilerun/dating
+          cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/ || true
+          printf '' > /tmp/lambda-asset/mobilerun/__init__.py
+          ls /tmp/lambda-asset | head
+
       - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)
         working-directory: infra
         run: |
@@ -94,8 +107,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # Allow Docker bundling on the runner
-          SKIP_BUNDLING: ''
+          LAMBDA_ASSET_DIR: /tmp/lambda-asset
+          SKIP_BUNDLING: '1'
 
       - name: Parse outputs
         id: outs
@@ -108,6 +121,16 @@ jobs:
           echo "API_URL=$API_URL" >> "$GITHUB_ENV"
           echo "WS_URL=$WS_URL" >> "$GITHUB_ENV"
           echo "::notice title=API Deployed::HTTP=$API_URL WS=$WS_URL"
+
+      - name: Point Lambda BACKEND_URL at HTTP API
+        run: |
+          set -euo pipefail
+          for fn in $(aws lambda list-functions --query "Functions[?contains(FunctionName,'HttpFunction') || contains(FunctionName,'Mobilerun')].FunctionName" --output text); do
+            echo "Updating $fn BACKEND_URL"
+            CFG=$(aws lambda get-function-configuration --function-name "$fn" --query 'Environment.Variables' --output json)
+            echo "$CFG" | python3 -c "import json,sys,os; d=json.load(sys.stdin) or {}; d['BACKEND_URL']=os.environ['API_URL']; d['API_URL']=os.environ['API_URL']; print(json.dumps({'Variables':d}))" > /tmp/env.json
+            aws lambda update-function-configuration --function-name "$fn" --environment file:///tmp/env.json >/dev/null || true
+          done
 
       - name: Smoke test
         if: ${{ github.event.inputs.skip_smoke != 'true' }}

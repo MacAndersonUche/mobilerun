@@ -187,7 +187,11 @@ export class MobilerunStack extends cdk.Stack {
   }
 
   private lambdaCode(): lambda.Code {
-    // Prefer prebuilt zip in CI; otherwise Docker bundling (skipped when SKIP_BUNDLING=1)
+    // Prefer CI-prebuilt asset dir (binary wheels; avoids Pillow jpeg compile in Docker)
+    const prebuilt = process.env.LAMBDA_ASSET_DIR;
+    if (prebuilt) {
+      return lambda.Code.fromAsset(prebuilt);
+    }
     const assetPath = path.join(__dirname, '../../backend');
     if (process.env.SKIP_BUNDLING === '1') {
       return lambda.Code.fromAsset(assetPath);
@@ -198,7 +202,11 @@ export class MobilerunStack extends cdk.Stack {
         command: [
           'bash',
           '-c',
-          'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+          [
+            'dnf install -y gcc libjpeg-turbo-devel zlib-devel || yum install -y gcc libjpeg-devel zlib-devel || true',
+            'pip install -r requirements.txt -t /asset-output',
+            'cp -au . /asset-output',
+          ].join(' && '),
         ],
       },
     });
