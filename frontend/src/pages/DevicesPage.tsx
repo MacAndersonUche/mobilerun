@@ -105,7 +105,7 @@ export default function DevicesPage() {
             <Smartphone size={48} className="mx-auto text-mute mb-4" />
             <p className="text-mute mb-2">No devices connected</p>
             <p className="text-sm text-mute">
-              Click "Pair Device" to add your phone
+              Tap Pair, or link via Account device code
             </p>
           </div>
         ) : (
