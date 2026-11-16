@@ -245,6 +245,140 @@ st = get("/api/selectors/status?package_name=ai.mobilerun.mockdating&version_cod
 print("selector cache v2 ok", r1.get("source"), r2.get("cache_hit"))
 PY
 
+echo "== Selector explore: off-screen in each scroll direction =="
+# API explore_sim covers cache+nav_path; device swipes prove MockDating reveal
+python3 - <<'PY'
+import json, os, urllib.request
+from pathlib import Path
+host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
+artifacts = Path(os.environ["ARTIFACTS_DIR"])
+token = os.environ.get("E2E_TOKEN", "")
+headers = {"Content-Type": "application/json"}
+if token:
+    headers["Authorization"] = f"Bearer {token}"
+
+def post(path, body):
+    req = urllib.request.Request(
+        host + path, data=json.dumps(body).encode(), headers=headers, method="POST"
+    )
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+HIDDEN = {"children": [{"resourceId": "ai.mobilerun.mockdating:id/profileName", "text": "Alex"}]}
+REVEALED = {
+    "children": [
+        {"resourceId": "ai.mobilerun.mockdating:id/profileName", "text": "Alex"},
+        {
+            "resourceId": "ai.mobilerun.mockdating:id/messageInput",
+            "hint": "Type a message",
+            "className": "android.widget.EditText",
+            "editable": True,
+            "boundsInScreen": {"left": 40, "top": 800, "right": 1000, "bottom": 920},
+        },
+        {
+            "resourceId": "ai.mobilerun.mockdating:id/btnSend",
+            "text": "Send",
+            "className": "android.widget.Button",
+            "clickable": True,
+        },
+        {
+            "resourceId": "ai.mobilerun.mockdating:id/matchesList",
+            "contentDescription": "Matches list",
+            "text": "Matches · Alex, Jordan, Sam",
+        },
+    ]
+}
+out = {}
+for direction in ("down", "up", "left", "right"):
+    role = "matches_list" if direction == "left" else (
+        "send_button" if direction == "up" else "message_input"
+    )
+    ver = f"scroll_{direction}"
+    r1 = post("/api/selectors/resolve", {
+        "role": role,
+        "package_name": "ai.mobilerun.mockdating",
+        "version_code": ver,
+        "tree": HIDDEN,
+        "allow_llm": False,
+        "explore_sim": {
+            "initial_tree": HIDDEN,
+            "revealed_tree": REVEALED,
+            "reveal_direction": direction,
+            "reveal_after": 2,
+        },
+    })
+    assert r1.get("found") is True, (direction, r1)
+    assert r1.get("source") == "explore", (direction, r1)
+    assert r1.get("used_llm") is False, r1
+    assert r1.get("llm_callable_invocations", 0) == 0, r1
+    assert r1.get("nav_path"), (direction, r1)
+    assert all(s.get("direction") == direction for s in r1["nav_path"]), r1
+    r2 = post("/api/selectors/resolve", {
+        "role": role,
+        "package_name": "ai.mobilerun.mockdating",
+        "version_code": ver,
+        "tree": HIDDEN,
+        "allow_llm": False,
+        "explore_sim": {
+            "initial_tree": HIDDEN,
+            "revealed_tree": REVEALED,
+            "reveal_direction": direction,
+            "reveal_after": 2,
+        },
+    })
+    assert r2.get("cache_hit") is True, (direction, r2)
+    assert r2.get("used_llm") is False, r2
+    out[direction] = {
+        "source": r1.get("source"),
+        "nav_path_len": len(r1.get("nav_path") or []),
+        "cache_hit": r2.get("cache_hit"),
+        "role": role,
+    }
+(artifacts / "selector_explore_scroll.json").write_text(json.dumps(out, indent=2))
+print("selector explore scroll ok", out)
+PY
+
+for DIR in down up left right; do
+  echo "== MockDating device scroll_$DIR reveal =="
+  adb shell am force-stop ai.mobilerun.mockdating || true
+  adb shell am start -n ai.mobilerun.mockdating/.MainActivity --es layout_variant "scroll_$DIR"
+  sleep 2
+  adb shell uiautomator dump /sdcard/scroll_before.xml 2>/dev/null || true
+  adb pull /sdcard/scroll_before.xml "$ARTIFACTS_DIR/scroll_${DIR}_before.xml" 2>/dev/null || true
+  # Human-like swipes (finger direction opposite content for vertical)
+  case "$DIR" in
+    down)
+      adb shell input swipe 540 1400 540 600 320
+      sleep 0.4
+      adb shell input swipe 540 1400 540 600 320
+      ;;
+    up)
+      adb shell input swipe 540 600 540 1400 320
+      sleep 0.4
+      adb shell input swipe 540 600 540 1400 320
+      ;;
+    right)
+      adb shell input swipe 900 900 200 900 320
+      sleep 0.4
+      adb shell input swipe 900 900 200 900 320
+      ;;
+    left)
+      adb shell input swipe 200 900 900 900 320
+      sleep 0.4
+      adb shell input swipe 200 900 900 900 320
+      ;;
+  esac
+  sleep 1
+  adb exec-out screencap -p > "$ARTIFACTS_DIR/scroll_${DIR}_after.png" || true
+  adb shell uiautomator dump /sdcard/scroll_after.xml 2>/dev/null || true
+  adb pull /sdcard/scroll_after.xml "$ARTIFACTS_DIR/scroll_${DIR}_after.xml" 2>/dev/null || true
+  # After reveal, messageInput or matchesList should appear in dump
+  if grep -qE 'messageInput|btnSend|matchesList' "$ARTIFACTS_DIR/scroll_${DIR}_after.xml" 2>/dev/null; then
+    echo "scroll_$DIR reveal ok" | tee -a "$ARTIFACTS_DIR/scroll_device_reveals.txt"
+  else
+    echo "scroll_$DIR reveal missing in dump (best-effort)" | tee -a "$ARTIFACTS_DIR/scroll_device_reveals.txt"
+  fi
+done
+
 echo "== Safety auto-pause: MockDating verification prompt =="
 # Relaunch MockDating with verification overlay (agent must pause, never bypass)
 adb shell am force-stop ai.mobilerun.mockdating || true
@@ -254,8 +388,10 @@ adb exec-out screencap -p > "$ARTIFACTS_DIR/05b_mock_dating_verify.png" || true
 # Dump a11y / UI text for heuristics
 adb shell uiautomator dump /sdcard/verify_ui.xml 2>/dev/null || true
 adb pull /sdcard/verify_ui.xml "$ARTIFACTS_DIR/verify_ui.xml" 2>/dev/null || true
-SHOT_B64=$(base64 -w0 "$ARTIFACTS_DIR/05b_mock_dating_verify.png" 2>/dev/null || base64 "$ARTIFACTS_DIR/05b_mock_dating_verify.png" | tr -d '\n' || true)
-export SHOT_B64
+# Write base64 to a file — do NOT export into the process environment (ARG_MAX)
+SHOT_B64_FILE="$ARTIFACTS_DIR/05b_mock_dating_verify.b64"
+(base64 -w0 "$ARTIFACTS_DIR/05b_mock_dating_verify.png" 2>/dev/null || base64 "$ARTIFACTS_DIR/05b_mock_dating_verify.png" | tr -d '\n' || true) > "$SHOT_B64_FILE" || true
+export SHOT_B64_FILE
 python3 - <<'PY'
 import json, os, re, urllib.request
 from pathlib import Path
@@ -280,7 +416,10 @@ urllib.request.urlopen(urllib.request.Request(
     host + "/api/dating/start?device_id=emulator&dry_run=true",
     data=b"{}", headers=headers, method="POST"), timeout=20).read()
 
-shot = os.environ.get("SHOT_B64", "")
+shot = ""
+shot_path = os.environ.get("SHOT_B64_FILE", "")
+if shot_path and Path(shot_path).exists():
+    shot = Path(shot_path).read_text().strip()
 body = {
     "app": "MockDating",
     "package_name": "ai.mobilerun.mockdating",
@@ -732,6 +871,8 @@ check("swipe_scroll", "04_swiped.png")
 check("mock_dating", "05_mock_dating.png")
 check("selector_v2", "selector_v2_resolve.json")
 check("selector_status", "selector_status.json")
+check("selector_explore_scroll", "selector_explore_scroll.json")
+check("selector_explore_device", "scroll_device_reveals.txt")
 check("safety_verify_pause", "safety_pause.json")
 check("safety_needs_you", "safety_needs_you.json")
 check("safety_resume", "safety_resume.json")

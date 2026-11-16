@@ -123,7 +123,13 @@ export default function DatingPage() {
       version_code: string;
       total_llm_calls: number;
       last_discovered_at?: string | null;
-      roles: { role: string; source: string; llm_calls: number; discovered_at: string }[];
+      roles: {
+        role: string;
+        source: string;
+        llm_calls: number;
+        discovered_at: string;
+        nav_path?: { kind?: string; direction?: string; count?: number }[];
+      }[];
     }[]
   >([]);
 
@@ -642,6 +648,7 @@ export default function DatingPage() {
           <select
             value={newTemplateBucket}
             onChange={(e) => setNewTemplateBucket(e.target.value)}
+            aria-label="New opener bucket"
             className="bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
           >
             <option value="morning">morning</option>
@@ -674,6 +681,7 @@ export default function DatingPage() {
                     );
                     setTemplates(next);
                   }}
+                  aria-label={`Bucket for opener ${t.id}`}
                   className="bg-surface border border-line rounded px-2 py-1"
                 >
                   <option value="morning">morning</option>
@@ -733,9 +741,9 @@ export default function DatingPage() {
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="text-lg font-semibold">Selector cache</h3>
         <p className="text-xs text-mute">
-          Dating/social navigation uses accessibility selectors (no LLM). On miss,
-          one LLM discovery is cached per app version. Failures escalate to Needs
-          you.
+          Dating/social navigation uses accessibility selectors (no LLM). Off-screen
+          targets are found via bounded scroll explore; selector + nav path are
+          cached per app version. Failures escalate to Needs you.
         </p>
         {selectorApps.length === 0 ? (
           <p className="text-sm text-mute">No cached apps yet.</p>
@@ -760,7 +768,13 @@ export default function DatingPage() {
               <ul className="text-xs text-mute grid sm:grid-cols-2 gap-1">
                 {(app.roles || []).map((r) => (
                   <li key={r.role}>
-                    {r.role}: {r.source} (llm {r.llm_calls})
+                    {r.role}: {r.source} (llm {r.llm_calls}
+                    {(r.nav_path || []).length
+                      ? `; nav ${r.nav_path!
+                          .map((s) => s.direction || s.kind || '?')
+                          .join('→')}`
+                      : ''}
+                    )
                   </li>
                 ))}
               </ul>

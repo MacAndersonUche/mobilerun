@@ -86,7 +86,9 @@ class CachedEntry:
     rediscovery_attempts: int = 0
     last_success_at: Optional[str] = None
     last_failure_at: Optional[str] = None
-    source: str = "heuristic"  # heuristic | llm | manual
+    source: str = "heuristic"  # heuristic | llm | manual | explore
+    # Replayable scroll/tab path to bring the element on-screen
+    nav_path: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -100,6 +102,7 @@ class CachedEntry:
             "last_success_at": self.last_success_at,
             "last_failure_at": self.last_failure_at,
             "source": self.source,
+            "nav_path": list(self.nav_path or []),
         }
 
     @classmethod
@@ -115,6 +118,7 @@ class CachedEntry:
             last_success_at=data.get("last_success_at"),
             last_failure_at=data.get("last_failure_at"),
             source=str(data.get("source") or "heuristic"),
+            nav_path=list(data.get("nav_path") or []),
         )
 
 
@@ -160,7 +164,8 @@ DEFAULT_SELECTORS: Dict[str, Dict[str, SelectorSpec]] = {
             class_name="android.widget.TextView",
         ),
         ElementRole.MATCHES_LIST.value: SelectorSpec(
-            resource_id="ai.mobilerun.mockdating:id/mainContent",
+            resource_id="ai.mobilerun.mockdating:id/matchesList",
+            content_desc="Matches list",
         ),
         ElementRole.OPEN_CHAT.value: SelectorSpec(
             resource_id="ai.mobilerun.mockdating:id/chatLog",
@@ -194,7 +199,8 @@ DEFAULT_SELECTORS: Dict[str, Dict[str, SelectorSpec]] = {
             resource_id="ai.mobilerun.mockdating:id/nameLabel",
         ),
         ElementRole.MATCHES_LIST.value: SelectorSpec(
-            resource_id="ai.mobilerun.mockdating:id/mainContent",
+            resource_id="ai.mobilerun.mockdating:id/matchesList",
+            content_desc="Matches list",
         ),
         ElementRole.OPEN_CHAT.value: SelectorSpec(
             resource_id="ai.mobilerun.mockdating:id/chatLog",

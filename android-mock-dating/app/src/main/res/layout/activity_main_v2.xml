@@ -36,6 +36,16 @@
             android:text="Swipes: 0 | Openers: 0 | Replies: 0"
             android:textSize="14sp" />
 
+        <TextView
+            android:id="@+id/matchesList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:contentDescription="Matches list"
+            android:text="Matches"
+            android:textSize="16sp"
+            android:visibility="gone" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

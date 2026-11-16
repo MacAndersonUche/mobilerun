@@ -184,6 +184,7 @@ class SelectorCache:
                     "last_success_at": e.last_success_at,
                     "last_failure_at": e.last_failure_at,
                     "version_code": e.version_code,
+                    "nav_path": list(e.nav_path or []),
                 }
             )
             total_llm = max(total_llm, e.llm_calls)

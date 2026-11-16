@@ -1716,6 +1716,10 @@ class SelectorResolveRequest(BaseModel):
     allow_llm: bool = True
     # Test hook: inline LLM JSON response (avoids real model in CI)
     llm_stub: Optional[Dict[str, Any]] = None
+    # E2E/CI: simulate bounded scroll exploration without a device gesture loop.
+    # initial_tree lacks the target; revealed_tree contains it after N scrolls
+    # in reveal_direction (down|up|left|right).
+    explore_sim: Optional[Dict[str, Any]] = None
 
 
 @app.get("/api/selectors/status")
@@ -1738,6 +1742,7 @@ async def selectors_resolve(
     """
     Resolve a dating/social nav role via cached a11y selector (no LLM),
     falling back ONCE to LLM discovery when missing/broken.
+    Supports explore_sim for scroll-off-screen rediscovery tests.
     """
     nav = get_selector_navigator(auth)
     llm_calls_box = {"n": 0}
@@ -1749,14 +1754,46 @@ async def selectors_resolve(
         # Soft default for tests without stub: refuse (caller may supply stub)
         return {}
 
+    get_tree = None
+    perform_scroll = None
+    perform_tap_tab = None
+    tree = body.tree or []
+    if body.explore_sim:
+        sim = body.explore_sim
+        initial = sim.get("initial_tree") or tree or {"children": []}
+        revealed = sim.get("revealed_tree") or tree or initial
+        reveal_dir = str(sim.get("reveal_direction") or "down")
+        reveal_after = int(sim.get("reveal_after") or 2)
+        tap_reveal = sim.get("tap_tab")  # optional tab text that reveals
+        state = {"tree": initial, "counts": {}}
+
+        def get_tree():
+            return state["tree"]
+
+        def perform_scroll(step):
+            d = getattr(step, "direction", None) or "down"
+            state["counts"][d] = int(state["counts"].get(d) or 0) + 1
+            if d == reveal_dir and state["counts"][d] >= reveal_after:
+                state["tree"] = revealed
+
+        def perform_tap_tab(tab: str):
+            if tap_reveal and tab == tap_reveal:
+                state["tree"] = revealed
+
+        tree = initial
+
     result = nav.resolve(
         role=body.role,
         package_name=body.package_name,
         version_code=body.version_code,
-        tree=body.tree or [],
+        tree=tree,
         screenshot_b64=body.screenshot_b64,
         llm_callable=llm_callable if body.allow_llm else None,
         allow_llm=body.allow_llm,
+        get_tree=get_tree,
+        perform_scroll=perform_scroll,
+        perform_tap_tab=perform_tap_tab,
+        explore=True,
     )
     st = nav.cache.status(body.package_name, body.version_code)
     return {
