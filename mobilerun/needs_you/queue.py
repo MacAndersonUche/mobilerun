@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 class NeedsYouSource(str, Enum):
@@ -65,12 +65,37 @@ class NeedsYouItem:
 
 
 class NeedsYouQueue:
-    """In-memory + optional JSON persistence for escalation items."""
+    """In-memory + optional JSON / remote persistence for escalation items.
 
-    def __init__(self, persist_path: Optional[Path] = None):
+    On AWS, wire ``remote_load`` / ``remote_save`` so Dynamo is the source of
+    truth; ``persist_path`` (/tmp) is only a read-through cache.
+    """
+
+    def __init__(
+        self,
+        persist_path: Optional[Path] = None,
+        *,
+        remote_load: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+        remote_save: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
         self.persist_path = persist_path
+        self.remote_load = remote_load
+        self.remote_save = remote_save
         self._items: Dict[str, NeedsYouItem] = {}
-        if persist_path and persist_path.exists():
+        loaded = False
+        if remote_load:
+            try:
+                data = remote_load()
+                if isinstance(data, dict) and "items" in data:
+                    self._items = {
+                        d["id"]: NeedsYouItem.from_dict(d)
+                        for d in (data.get("items") or [])
+                        if isinstance(d, dict) and d.get("id")
+                    }
+                    loaded = True
+            except Exception:
+                pass
+        if not loaded and persist_path and persist_path.exists():
             self.load(persist_path)
 
     def add(
@@ -179,13 +204,17 @@ class NeedsYouQueue:
             self._items = {}
 
     def _save(self) -> None:
+        payload = {"items": self.to_list()}
+        if self.remote_save:
+            try:
+                self.remote_save(payload)
+            except Exception:
+                pass
         if not self.persist_path:
             return
         try:
             self.persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self.persist_path.write_text(
-                json.dumps({"items": self.to_list()}, indent=2)
-            )
+            self.persist_path.write_text(json.dumps(payload, indent=2))
         except Exception:
             pass
 
