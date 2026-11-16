@@ -93,7 +93,8 @@ def test_chat_confirms_dating_start(client):
     assert "Dating mode start" in res2.json()["reply"]
 
 
-def test_chat_run_task_queues_without_device(client):
+def test_chat_run_task_errors_when_device_offline(client):
+    """Offline/missing device must surface an error — never silent 'Queued task'."""
     res = client.post(
         "/api/chat",
         json={
@@ -104,8 +105,10 @@ def test_chat_run_task_queues_without_device(client):
         },
     )
     assert res.status_code == 200
-    assert res.json()["intent"] == "run_task"
-    assert "Settings" in res.json()["reply"]
+    body = res.json()
+    assert body["intent"] == "run_task"
+    assert body.get("error") or "Error" in body["reply"] or "offline" in body["reply"].lower()
+    assert "Queued task" not in body["reply"]
 
 
 def test_live_inject_frame_relays_to_ui_subscriber(client):

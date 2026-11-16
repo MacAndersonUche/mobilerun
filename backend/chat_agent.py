@@ -193,16 +193,57 @@ async def handle_chat(
             "message stats. Try: `open Settings`, `start dating dry`, "
             "`device info`, or `dating stats`."
         )
+        if (
+            llm is None
+            and not os.environ.get("GOOGLE_API_KEY")
+            and not os.environ.get("OPENAI_API_KEY")
+        ):
+            # Make missing LLM keys explicit for free-form questions
+            reply = (
+                "(No LLM API key configured on the server — task commands still work.) "
+                + reply
+            )
     else:
         result = await execute(intent, {**params, "device_id": device_id})
         reply = result.get("message") or json.dumps(result, default=str)[:1200]
+        if result.get("error"):
+            reply = f"Error: {result.get('error')}"
 
-    append_message(
-        sid,
-        "assistant",
-        reply,
-        {"intent": intent, "params": params, "result": result, "target": target},
-    )
+    def _jsonable(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {k: _jsonable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_jsonable(v) for v in obj]
+        if hasattr(obj, "isoformat"):
+            try:
+                return obj.isoformat()
+            except Exception:
+                return str(obj)
+        return obj
+
+    safe_result = _jsonable(result)
+    meta = {
+        "intent": intent,
+        "params": params,
+        "result": safe_result,
+        "target": target,
+        "answer": reply,
+        "steps": safe_result.get("steps") if isinstance(safe_result, dict) else None,
+        "task_id": (
+            (safe_result.get("task_id") if isinstance(safe_result, dict) else None)
+            or (
+                (safe_result.get("task") or {}).get("task_id")
+                if isinstance(safe_result, dict)
+                else None
+            )
+        ),
+        "device_id": (
+            (safe_result.get("device_id") if isinstance(safe_result, dict) else None)
+            or device_id
+        ),
+        "error": safe_result.get("error") if isinstance(safe_result, dict) else None,
+    }
+    append_message(sid, "assistant", reply, meta)
     return {
         "session_id": sid,
         "reply": reply,
@@ -211,5 +252,7 @@ async def handle_chat(
         "result": result,
         "needs_confirm": False,
         "target": target,
+        "task_id": meta.get("task_id"),
+        "error": result.get("error"),
         "history": list_messages(sid),
     }

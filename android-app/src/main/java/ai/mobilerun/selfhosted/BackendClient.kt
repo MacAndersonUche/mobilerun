@@ -382,8 +382,16 @@ class BackendClient(private val context: Context) {
             val session = map["session_token"] as? String ?: error("no session_token in claim response")
             val did = map["device_id"] as? String
             val owner = map["owner"] as? String
-            (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
-            (map["cloud_ws"] as? String)?.let { cloudWs = it }
+            // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
+            // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
+            val localOverride =
+                httpBase.contains("10.0.2.2") ||
+                    httpBase.contains("127.0.0.1") ||
+                    httpBase.contains("localhost")
+            if (!localOverride) {
+                (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
+                (map["cloud_ws"] as? String)?.let { cloudWs = it }
+            }
             (map["access_token"] as? String)?.let { authToken = it }
             // Always fall back to baked prod endpoints after claim
             if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
@@ -694,18 +702,18 @@ class BackendClient(private val context: Context) {
                 "stream_control" -> handleStreamControl(message)
                 "run_task" -> {
                     val instruction = message["instruction"] as? String ?: "Unknown"
+                    val taskId = message["task_id"] as? String ?: ""
                     _taskFlow.value = "Running: $instruction"
                     scope.launch {
+                        sendTaskUpdate(taskId, "running", "Task started: $instruction")
+                        sendAgentEvent(null, 0, "run_task", instruction)
+                        val outcome = executeSimpleInstruction(instruction)
+                        _taskFlow.value = outcome
+                        sendAgentEvent(null, 1, "run_task_done", outcome)
                         sendTaskUpdate(
-                            message["task_id"] as? String ?: "",
-                            "running",
-                            "Task started: $instruction",
-                        )
-                        sendAgentEvent(
-                            currentApp = null,
-                            step = 0,
-                            action = "run_task",
-                            log = instruction,
+                            taskId,
+                            if (outcome.startsWith("OK")) "completed" else "failed",
+                            outcome,
                         )
                     }
                 }
@@ -897,9 +905,11 @@ class BackendClient(private val context: Context) {
     }
 
     private fun sendTaskUpdate(taskId: String, status: String, result: String) {
+        if (taskId.isBlank()) return
         val msg = mapOf(
             "type" to "task_update",
             "task_id" to taskId,
+            "device_id" to deviceId,
             "update" to mapOf(
                 "status" to status,
                 "result" to result,
@@ -907,6 +917,76 @@ class BackendClient(private val context: Context) {
             ),
         )
         webSocket?.send(gson.toJson(msg))
+    }
+
+    /**
+     * Execute common chat instructions without a full LLM agent loop.
+     * "open settings" / "settings" → system Settings; other open X → try launch.
+     */
+    private fun executeSimpleInstruction(instruction: String): String {
+        val text = instruction.trim()
+        val lower = text.lowercase()
+        return try {
+            when {
+                lower.contains("setting") -> {
+                    val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    "OK · opened Settings"
+                }
+                lower.contains("wifi") || lower.contains("wi-fi") -> {
+                    val intent = Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    "OK · opened Wi‑Fi settings"
+                }
+                lower.contains("bluetooth") -> {
+                    val intent = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    "OK · opened Bluetooth settings"
+                }
+                lower.startsWith("open ") || lower.startsWith("launch ") -> {
+                    val app = text.substringAfter(' ').trim()
+                    val pm = context.packageManager
+                    val launch = pm.getLaunchIntentForPackage(app)
+                        ?: pm.getLaunchIntentForPackage(guessPackage(app))
+                    if (launch != null) {
+                        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(launch)
+                        "OK · launched $app"
+                    } else {
+                        // Fall back to Settings if we can't resolve the app name
+                        val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                        "OK · could not resolve '$app'; opened Settings instead"
+                    }
+                }
+                else -> {
+                    // Default: open Settings so chat always does something visible
+                    val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    "OK · opened Settings for: $text"
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "executeSimpleInstruction failed", e)
+            "Failed: ${e.message}"
+        }
+    }
+
+    private fun guessPackage(name: String): String {
+        val n = name.lowercase().replace(" ", "")
+        return when {
+            n.contains("chrome") -> "com.android.chrome"
+            n.contains("setting") -> "com.android.settings"
+            n.contains("camera") -> "com.android.camera2"
+            n.contains("phone") -> "com.android.dialer"
+            n.contains("message") || n.contains("sms") -> "com.android.messaging"
+            else -> name
+        }
     }
 
     fun disconnect() {
