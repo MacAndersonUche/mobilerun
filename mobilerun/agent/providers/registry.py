@@ -104,6 +104,8 @@ def gemini_model_omits_sampling_params(model: object) -> bool:
     )
 
 
+# Self-hosted local version: only Gemini, Claude (Anthropic), and OpenAI are enabled.
+# Other providers are commented out but preserved for future re-enabling.
 PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
     ProviderFamilySpec(
         id="gemini",
@@ -194,119 +196,120 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
             ),
         ),
     ),
-    ProviderFamilySpec(
-        id="xai",
-        display_name="XAI",
-        variants=(
-            ProviderVariantSpec(
-                id="XAI",
-                runtime_provider_name="XAI",
-                auth_mode="api_key",
-                default_model=GROK_API_DEFAULT_MODEL,
-                models=GROK_API_MODELS,
-                requires_api_key=True,
-                base_url=XAI_API_BASE,
-            ),
-            ProviderVariantSpec(
-                id="xai_oauth",
-                runtime_provider_name="xai_oauth",
-                auth_mode="oauth",
-                default_model=GROK_OAUTH_DEFAULT_MODEL,
-                models=GROK_OAUTH_MODELS,
-                credential_path=str(GROK_OAUTH_CREDENTIAL_PATH),
-            ),
-        ),
-    ),
-    ProviderFamilySpec(
-        id="ollama",
-        display_name="Ollama",
-        variants=(
-            ProviderVariantSpec(
-                id="Ollama",
-                runtime_provider_name="Ollama",
-                auth_mode="none",
-                default_model="llama3.2:3b",
-                models=(),
-                requires_base_url=True,
-                base_url="http://localhost:11434",
-            ),
-        ),
-    ),
-    ProviderFamilySpec(
-        id="openai_like",
-        display_name="OpenAI Compatible",
-        variants=(
-            ProviderVariantSpec(
-                id="OpenAILike",
-                runtime_provider_name="OpenAILike",
-                auth_mode="api_key",
-                default_model=None,
-                models=(),
-                requires_api_key=True,
-                requires_base_url=True,
-            ),
-        ),
-        notes=(
-            "Use for OpenRouter, LM Studio, vLLM, and other OpenAI-compatible endpoints.",
-        ),
-    ),
-    ProviderFamilySpec(
-        id="minimax",
-        display_name="MiniMax",
-        variants=(
-            ProviderVariantSpec(
-                id="MiniMax",
-                runtime_provider_name="MiniMax",
-                runtime_transport_provider_name="OpenAILike",
-                auth_mode="api_key",
-                default_model=MINIMAX_DEFAULT_MODEL,
-                models=(
-                    MINIMAX_DEFAULT_MODEL,
-                    "MiniMax-M2.7",
-                    "MiniMax-M2.7-highspeed",
-                ),
-                requires_api_key=True,
-                requires_base_url=True,
-                base_url=MINIMAX_GLOBAL_BASE_URL,
-            ),
-        ),
-    ),
-    ProviderFamilySpec(
-        id="zai",
-        display_name="ZAI",
-        variants=(
-            ProviderVariantSpec(
-                id="ZAI",
-                runtime_provider_name="ZAI",
-                runtime_transport_provider_name="OpenAILike",
-                auth_mode="api_key",
-                default_model="glm-5",
-                models=(
-                    "glm-5",
-                    "glm-5v-turbo",
-                    "glm-4.7",
-                ),
-                requires_api_key=True,
-                requires_base_url=True,
-                base_url="https://api.z.ai/api/paas/v4",
-            ),
-            ProviderVariantSpec(
-                id="ZAI_Coding",
-                runtime_provider_name="ZAI",
-                runtime_transport_provider_name="OpenAILike",
-                auth_mode="coding_api",
-                default_model="glm-4.7",
-                models=("glm-4.7",),
-                requires_api_key=True,
-                requires_base_url=True,
-                base_url="https://api.z.ai/api/coding/paas/v4",
-            ),
-        ),
-        notes=(
-            "ZAI is exposed as a first-class provider family while reusing the OpenAI-compatible transport.",
-            "Use auth mode `coding_api` for the GLM Coding Plan endpoint.",
-        ),
-    ),
+    # # Commented out for self-hosted local version - can be re-enabled later
+    # ProviderFamilySpec(
+    #     id="xai",
+    #     display_name="XAI",
+    #     variants=(
+    #         ProviderVariantSpec(
+    #             id="XAI",
+    #             runtime_provider_name="XAI",
+    #             auth_mode="api_key",
+    #             default_model=GROK_API_DEFAULT_MODEL,
+    #             models=GROK_API_MODELS,
+    #             requires_api_key=True,
+    #             base_url=XAI_API_BASE,
+    #         ),
+    #         ProviderVariantSpec(
+    #             id="xai_oauth",
+    #             runtime_provider_name="xai_oauth",
+    #             auth_mode="oauth",
+    #             default_model=GROK_OAUTH_DEFAULT_MODEL,
+    #             models=GROK_OAUTH_MODELS,
+    #             credential_path=str(GROK_OAUTH_CREDENTIAL_PATH),
+    #         ),
+    #     ),
+    # ),
+    # ProviderFamilySpec(
+    #     id="ollama",
+    #     display_name="Ollama",
+    #     variants=(
+    #         ProviderVariantSpec(
+    #             id="Ollama",
+    #             runtime_provider_name="Ollama",
+    #             auth_mode="none",
+    #             default_model="llama3.2:3b",
+    #             models=(),
+    #             requires_base_url=True,
+    #             base_url="http://localhost:11434",
+    #         ),
+    #     ),
+    # ),
+    # ProviderFamilySpec(
+    #     id="openai_like",
+    #     display_name="OpenAI Compatible",
+    #     variants=(
+    #         ProviderVariantSpec(
+    #             id="OpenAILike",
+    #             runtime_provider_name="OpenAILike",
+    #             auth_mode="api_key",
+    #             default_model=None,
+    #             models=(),
+    #             requires_api_key=True,
+    #             requires_base_url=True,
+    #         ),
+    #     ),
+    #     notes=(
+    #         "Use for OpenRouter, LM Studio, vLLM, and other OpenAI-compatible endpoints.",
+    #     ),
+    # ),
+    # ProviderFamilySpec(
+    #     id="minimax",
+    #     display_name="MiniMax",
+    #     variants=(
+    #         ProviderVariantSpec(
+    #             id="MiniMax",
+    #             runtime_provider_name="MiniMax",
+    #             runtime_transport_provider_name="OpenAILike",
+    #             auth_mode="api_key",
+    #             default_model=MINIMAX_DEFAULT_MODEL,
+    #             models=(
+    #                 MINIMAX_DEFAULT_MODEL,
+    #                 "MiniMax-M2.7",
+    #                 "MiniMax-M2.7-highspeed",
+    #             ),
+    #             requires_api_key=True,
+    #             requires_base_url=True,
+    #             base_url=MINIMAX_GLOBAL_BASE_URL,
+    #         ),
+    #     ),
+    # ),
+    # ProviderFamilySpec(
+    #     id="zai",
+    #     display_name="ZAI",
+    #     variants=(
+    #         ProviderVariantSpec(
+    #             id="ZAI",
+    #             runtime_provider_name="ZAI",
+    #             runtime_transport_provider_name="OpenAILike",
+    #             auth_mode="api_key",
+    #             default_model="glm-5",
+    #             models=(
+    #                 "glm-5",
+    #                 "glm-5v-turbo",
+    #                 "glm-4.7",
+    #             ),
+    #             requires_api_key=True,
+    #             requires_base_url=True,
+    #             base_url="https://api.z.ai/api/paas/v4",
+    #         ),
+    #         ProviderVariantSpec(
+    #             id="ZAI_Coding",
+    #             runtime_provider_name="ZAI",
+    #             runtime_transport_provider_name="OpenAILike",
+    #             auth_mode="coding_api",
+    #             default_model="glm-4.7",
+    #             models=("glm-4.7",),
+    #             requires_api_key=True,
+    #             requires_base_url=True,
+    #             base_url="https://api.z.ai/api/coding/paas/v4",
+    #         ),
+    #     ),
+    #     notes=(
+    #         "ZAI is exposed as a first-class provider family while reusing the OpenAI-compatible transport.",
+    #         "Use auth mode `coding_api` for the GLM Coding Plan endpoint.",
+    #     ),
+    # ),
 )
 
 

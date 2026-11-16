@@ -1,0 +1,76 @@
+name: Deploy Backend to AWS
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Skip if AWS secrets aren't configured
+    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+    
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install CDK dependencies
+        run: |
+          cd infra
+          npm ci
+      
+      - name: Build CDK
+        run: |
+          cd infra
+          npm run build
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-2
+      
+      - name: CDK Bootstrap
+        run: |
+          cd infra
+          npx cdk bootstrap || true
+      
+      - name: CDK Deploy
+        run: |
+          cd infra
+          npx cdk deploy --require-approval never
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET || 'default-jwt-secret-change-me' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || '' }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || '' }}
+      
+      - name: Get API URL
+        id: api_url
+        run: |
+          cd infra
+          API_URL=$(npx cdk deploy --require-approval never --outputs-file outputs.json 2>&1 | grep -o 'https://[^"]*' | head -1)
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "::notice title=API Deployed::Backend API URL: $API_URL"
+      
+      - name: Summary
+        run: |
+          echo "## ✅ Backend Deployed Successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** eu-west-2" >> $GITHUB_STEP_SUMMARY
+          echo "**API URL:** ${{ steps.api_url.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Configure this URL in the frontend settings to use the cloud backend." >> $GITHUB_STEP_SUMMARY

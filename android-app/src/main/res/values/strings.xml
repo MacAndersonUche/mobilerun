@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Mobilerun</string>
+    <string name="accessibility_service_description">Allows Mobilerun to control your device for automation tasks</string>
+</resources>
