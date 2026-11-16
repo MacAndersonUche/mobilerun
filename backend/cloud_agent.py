@@ -51,34 +51,70 @@ def _compress_tree(tree: str, limit: int = 12000) -> str:
     return compact[:limit] + "\n...[truncated]"
 
 
+def _gemini_models() -> List[str]:
+    """Prefer env model, then known-good Gemini flash IDs (404-safe fallbacks)."""
+    preferred = (os.environ.get("LLM_MODEL") or "").strip()
+    defaults = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-001",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash-002",
+        "gemini-flash-latest",
+    ]
+    out: List[str] = []
+    if preferred and preferred.startswith("gemini"):
+        out.append(preferred)
+    for m in defaults:
+        if m not in out:
+            out.append(m)
+    return out
+
+
 def _call_gemini(user_prompt: str) -> str:
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not key:
         raise RuntimeError("No Gemini/Google API key configured on the backend")
-    model = os.environ.get("LLM_MODEL") or "gemini-2.0-flash"
-    if not model.startswith("gemini"):
-        model = "gemini-2.0-flash"
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={key}"
-    )
     body = {
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512},
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=40) as resp:
-        data = json.load(resp)
-    parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-    if not text.strip():
-        raise RuntimeError(f"Empty LLM response: {data}")
-    return text
+    last_err: Optional[Exception] = None
+    for model in _gemini_models():
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={key}"
+        )
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=40) as resp:
+                data = json.load(resp)
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode(errors="replace")[:300]
+            last_err = RuntimeError(f"Gemini {model} HTTP {e.code}: {err_body}")
+            if e.code in (404, 400):
+                logger.warning(
+                    "Gemini model %s failed (%s); trying next", model, e.code
+                )
+                continue
+            raise last_err from e
+        except Exception as e:
+            last_err = e
+            continue
+        parts = (data.get("candidates") or [{}])[0].get("content", {}).get(
+            "parts"
+        ) or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not text.strip():
+            last_err = RuntimeError(f"Empty LLM response from {model}: {data}")
+            continue
+        return text
+    raise RuntimeError(f"All Gemini models failed: {last_err}")
 
 
 def _call_openai(user_prompt: str) -> str:
