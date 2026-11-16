@@ -244,7 +244,7 @@ class ScreenCaptureService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Mobilerun live view")
             .setContentText("Streaming screen to control UI")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setSmallIcon(R.drawable.ic_stat_mobilerun)
             .setOngoing(true)
             .build()
     }

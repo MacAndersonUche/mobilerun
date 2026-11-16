@@ -664,7 +664,7 @@ class BackendClient(private val context: Context) {
                         val notif = android.app.Notification.Builder(context, channelId)
                             .setContentTitle(title)
                             .setContentText(body)
-                            .setSmallIcon(android.R.drawable.ic_dialog_info)
+                            .setSmallIcon(R.drawable.ic_stat_mobilerun)
                             .setAutoCancel(true)
                             .build()
                         nm.notify(9001, notif)
