@@ -139,7 +139,9 @@ class OptimizedStateProvider(AndroidStateProvider):
     async def _fetch_tree(self) -> dict:
         """Fetch and format just the UI tree."""
         tree_xml = await self.driver.get_ui_tree()
-        formatted = self.tree_formatter.format(tree_xml) if self.tree_formatter else tree_xml
+        formatted = (
+            self.tree_formatter.format(tree_xml) if self.tree_formatter else tree_xml
+        )
         indexed = {}  # Implement indexing if needed
         return {
             "formatted": formatted,
