@@ -15,8 +15,8 @@
     ]
   },
   "context": {
-    "backendMode": "ec2",
-    "enableStorage": true,
+    "enableEC2": false,
+    "budgetEmail": "macandersonuche@yahoo.com",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],

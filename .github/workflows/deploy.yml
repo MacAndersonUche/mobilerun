@@ -51,15 +51,15 @@ jobs:
       - name: CDK Deploy
         run: |
           cd infra
-          # Deploy with EC2 backend (default) and AWS storage enabled
-          npx cdk deploy --require-approval never \
-            -c backendMode=ec2 \
-            -c enableStorage=true
+          # Deploy with Lambda backend (default, near-zero cost)
+          # EC2 is opt-in only: add -c enableEC2=true to enable (costs ~$8/month)
+          npx cdk deploy --require-approval never
         env:
-          JWT_SECRET: ${{ secrets.JWT_SECRET || 'default-jwt-secret-change-me' }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || '' }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || '' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || '' }}
       
       - name: Get API URL
         id: api_url
@@ -71,16 +71,21 @@ jobs:
       
       - name: Summary
         run: |
-          echo "## ✅ Backend Deployed to AWS" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Backend Deployed to AWS (Near-Zero Cost)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** eu-west-2" >> $GITHUB_STEP_SUMMARY
-          echo "**Backend Mode:** EC2 (t3.micro free tier)" >> $GITHUB_STEP_SUMMARY
+          echo "**Backend:** Lambda (pay-per-use)" >> $GITHUB_STEP_SUMMARY
           echo "**API URL:** ${{ steps.api_url.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Features Enabled:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ EC2 backend (no 15-min timeout)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ DynamoDB for run history" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ S3 for screenshots" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Free tier eligible (750 hrs/month)" >> $GITHUB_STEP_SUMMARY
+          echo "### Cost-Optimized Stack:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Lambda (free tier: 1M requests/month)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ DynamoDB on-demand (free tier: 25GB, 25 WCU/RCU)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ S3 with 7-day expiration (free tier: 5GB)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ API Gateway (free tier: 1M calls/month)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Budget alert at \$5/month to macandersonuche@yahoo.com" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ CloudWatch logs: 7-day retention" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Configure this URL in your phone app or local PC backend for cloud sync." >> $GITHUB_STEP_SUMMARY
+          echo "**Expected monthly cost:** \$0-1 for light use (within free tier)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Lambda limitation:** 15-minute timeout per task" >> $GITHUB_STEP_SUMMARY
+          echo "For longer tasks, use local PC: \`mobilerun serve\`" >> $GITHUB_STEP_SUMMARY
