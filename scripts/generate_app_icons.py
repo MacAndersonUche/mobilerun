@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Regenerate Mobilerun launcher mipmaps + web favicon raster from the brand mark."""
+
 from __future__ import annotations
 
 import math
@@ -54,7 +55,9 @@ def draw_mark(size: int, round_mask: bool = False) -> Image.Image:
     )
     sw, sh = pw * 0.38, size * 0.025
     sx, sy = px + (pw - sw) / 2, py + ph * 0.07
-    draw.rounded_rectangle([sx, sy, sx + sw, sy + sh], radius=sh / 2, fill=(82, 82, 91, 255))
+    draw.rounded_rectangle(
+        [sx, sy, sx + sw, sy + sh], radius=sh / 2, fill=(82, 82, 91, 255)
+    )
     cx, cy = px + pw * 0.42, py + ph * 0.48
     tw, th = pw * 0.55, ph * 0.28
     draw.polygon(

@@ -1,4 +1,5 @@
 """Regression: launcher icons must not be placeholder 1x1 transparent PNGs."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 RES = ROOT / "android-app/src/main/res"
 PUBLIC = ROOT / "frontend/public"
 
-DENSITIES = ("mipmap-mdpi", "mipmap-hdpi", "mipmap-xhdpi", "mipmap-xxhdpi", "mipmap-xxxhdpi")
+DENSITIES = (
+    "mipmap-mdpi",
+    "mipmap-hdpi",
+    "mipmap-xhdpi",
+    "mipmap-xxhdpi",
+    "mipmap-xxxhdpi",
+)
 MIN_SIZES = {
     "mipmap-mdpi": 48,
     "mipmap-hdpi": 72,
@@ -47,7 +54,6 @@ def test_adaptive_and_notification_vectors_exist():
         text = path.read_text()
         assert text.strip(), path
     mono = (RES / "drawable/ic_launcher_monochrome.xml").read_text()
-    assert "ic_launcher_monochrome" in str(RES / "drawable/ic_launcher_monochrome.xml") or True
     assert "#FFFFFFFF" in mono or "#FFFFFF" in mono
     stat = (RES / "drawable/ic_stat_mobilerun.xml").read_text()
     assert "#FFFFFFFF" in stat or "#FFFFFF" in stat
