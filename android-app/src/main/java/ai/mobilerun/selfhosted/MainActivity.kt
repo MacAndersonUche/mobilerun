@@ -220,8 +220,9 @@ fun MainScreen(
                         var pasteCode by remember { mutableStateOf("") }
                         OutlinedTextField(
                             value = pasteCode,
-                            onValueChange = { pasteCode = it },
-                            label = { Text("Or paste pairing code") },
+                            onValueChange = { pasteCode = it.uppercase().filter { ch -> ch.isLetterOrDigit() }.take(8) },
+                            label = { Text("Enter pairing code") },
+                            placeholder = { Text("e.g. AB3K7Q2M") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             enabled = !pairBusy,

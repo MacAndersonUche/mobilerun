@@ -46,14 +46,14 @@ def test_build_and_parse_dual_endpoints():
     assert "wss://" in bundle.cloud.ws_url or "ws.example.com" in bundle.cloud.ws_url
 
 
-def test_build_pairing_url_compact_is_token_only():
+def test_build_pairing_url_compact_is_code_only():
     url = build_pairing_url(
         token="tokABC",
         cloud_http="https://api.example.com",
         cloud_ws="wss://ws.example.com",
         compact=True,
     )
-    assert url == "mobilerun://pair?token=tokABC"
+    assert url == "mobilerun://pair?c=tokABC"
     assert parse_pairing_uri(url).token == "tokABC"
 
 
@@ -132,7 +132,7 @@ def test_pair_qr_includes_lan_and_mdns_hint(client):
     assert body["mdns_service"] == "_mobilerun._tcp"
     assert "lan_ws" in body
     assert "mobilerun://pair?" in body["pairing_url"]
-    assert "token=" in body["pairing_url"]
+    assert "c=" in body["pairing_url"] or "token=" in body["pairing_url"]
     health = client.get("/api/health").json()
     assert health["usb_required"] is False
 

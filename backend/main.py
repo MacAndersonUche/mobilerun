@@ -191,12 +191,19 @@ class LoginRequest(BaseModel):
 async def login(request: LoginRequest):
     """Simple login endpoint (for development / local fallback)."""
     # In production prefer Cognito; local HS256 remains for offline serve.
-    if request.username == "admin" and request.password == os.environ.get(
-        "ADMIN_PASSWORD", "admin"
-    ):
-        token = create_access_token(
-            {"sub": request.username, "email": f"{request.username}@local"}
-        )
+    # CI/E2E uses dedicated `ci-e2e` so smoke devices never land on Mac/admin.
+    user = (request.username or "").strip().lower()
+    password = request.password or ""
+    admin_pw = os.environ.get("ADMIN_PASSWORD", "admin")
+    ci_pw = os.environ.get("CI_E2E_PASSWORD", admin_pw)
+    allowed = {
+        "admin": admin_pw,
+        "ci-e2e": ci_pw,
+        "ci_e2e": ci_pw,
+    }
+    if user in allowed and password == allowed[user]:
+        owner = "ci-e2e" if user.startswith("ci") else user
+        token = create_access_token({"sub": owner, "email": f"{owner}@local"})
         return {"access_token": token, "token_type": "bearer"}
 
     raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -505,12 +512,16 @@ def _pairing_endpoints() -> dict:
 
 
 def _qr_png_b64(data: str) -> str:
-    # Prefer denser ECC so slightly damaged / low-res camera frames still decode.
+    """High-contrast QR tuned for phone cameras scanning a laptop screen.
+
+    Short payloads (e.g. https://…/p/ABC12345) stay at low QR version.
+    Error correction M + large quiet zone for robust decode.
+    """
     qr = qrcode.QRCode(
         version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_Q,
-        box_size=10,
-        border=4,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=12,
+        border=6,
     )
     qr.add_data(data)
     qr.make(fit=True)
@@ -528,6 +539,10 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         from backend.pairing_security import check_rate_limit
     except ImportError:
         from pairing_security import check_rate_limit  # type: ignore
+    try:
+        from backend.pairing_codes import generate_pairing_code
+    except ImportError:
+        from pairing_codes import generate_pairing_code  # type: ignore
 
     if not check_rate_limit(
         f"pair-create:{owner or 'anon'}", limit=10, window_seconds=60
@@ -536,7 +551,24 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
             status_code=429, detail="Too many pairing codes — try again shortly"
         )
 
-    token = secrets.token_urlsafe(32)
+    try:
+        from storage import get_pairing_token, save_pairing_token
+    except ImportError:
+        from backend.storage import get_pairing_token, save_pairing_token  # type: ignore
+
+    # Short typeable code (also the claim token) — APK has baked prod URLs.
+    token = None
+    for _ in range(12):
+        candidate = generate_pairing_code(8)
+        if candidate in pairing_tokens:
+            continue
+        if get_pairing_token(candidate):
+            continue
+        token = candidate
+        break
+    if not token:
+        raise HTTPException(status_code=503, detail="Could not allocate pairing code")
+
     ends = _pairing_endpoints()
     expires_at = datetime.now().timestamp() + 600
     pairing_data = {
@@ -546,14 +578,10 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         "expires_at": expires_at,
         "owner": owner,
         "used": False,
+        "code": token,
         **ends,
     }
     pairing_tokens[token] = {**pairing_data, "token": token}
-
-    try:
-        from storage import save_pairing_token
-    except ImportError:
-        from backend.storage import save_pairing_token  # type: ignore
 
     # Persist hashed — never store plaintext token. Fail closed if Dynamo write
     # fails so claim on another Lambda cold start cannot miss the token.
@@ -571,8 +599,7 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
             status_code=503, detail="Could not persist pairing code — retry"
         )
 
-    # Compact deep link (token only) — APK BuildConfig carries prod HTTP/WS.
-    # Full dual-endpoint URL kept for older APKs / LAN e2e via pairing_url_full.
+    # Compact deep link: short code only (c=) — QR encodes even shorter HTTPS /p/CODE
     pairing_url = build_pairing_url(
         token=token,
         backend=ends["backend_url"],
@@ -598,16 +625,19 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         or os.environ.get("NETLIFY_URL")
         or "https://macsmobilerun.netlify.app"
     ).rstrip("/")
-    # HTTPS link is what we encode in the QR: camera apps open it, Netlify
-    # /pair hands off to mobilerun://, and in-app scanner accepts /pair? too.
-    https_link = f"{frontend}/pair?{pairing_url.split('?', 1)[-1]}"
+    # Tiny QR payload: /p/CODE (low QR version). Pair landing opens mobilerun://.
+    short_https = f"{frontend}/p/{token}"
+    https_link = short_https
 
     return {
         "token": token,
-        "qr_code": _qr_png_b64(https_link),
+        "code": token,
+        "qr_code": _qr_png_b64(short_https),
+        "qr_payload": short_https,
         "pairing_url": pairing_url,
         "pairing_url_full": pairing_url_full,
         "https_link": https_link,
+        "short_link": short_https,
         "backend_url": ends["backend_url"],
         "websocket_url": ends["websocket_url"],
         "lan_http": ends["lan_http"],
@@ -664,13 +694,23 @@ async def claim_pairing_token(body: PairClaimRequest):
             upsert_owned_device,
         )
 
-    token = (body.token or "").strip()
+    try:
+        from backend.pairing_codes import normalize_pairing_code
+    except ImportError:
+        from pairing_codes import normalize_pairing_code  # type: ignore
+
+    token = normalize_pairing_code(body.token) or (body.token or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="token required")
     if not check_rate_limit(f"pair-claim:{token[:16]}", limit=8, window_seconds=60):
         raise HTTPException(status_code=429, detail="Too many claim attempts")
 
     meta = pairing_tokens.get(token) or get_pairing_token(token)
+    # Case-insensitive fallback for short codes
+    if not meta and token != token.upper():
+        meta = pairing_tokens.get(token.upper()) or get_pairing_token(token.upper())
+        if meta:
+            token = token.upper()
     if not meta:
         logger.warning("pair claim miss token_prefix=%s len=%s", token[:8], len(token))
         raise HTTPException(status_code=400, detail="Invalid or expired pairing token")

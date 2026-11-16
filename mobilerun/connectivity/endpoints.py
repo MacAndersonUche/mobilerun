@@ -80,8 +80,11 @@ def build_pairing_url(
     small (version ~3) so camera / in-app scanners reliably decode it.
     compact=False: include dual LAN/cloud endpoints for older APKs / LAN e2e.
     """
-    params: dict[str, str] = {"token": token}
-    if not compact:
+    # Compact uses short `c=` so QR/deep-links stay tiny; full keeps `token=` + endpoints.
+    if compact:
+        params: dict[str, str] = {"c": token}
+    else:
+        params = {"token": token}
         # Primary (legacy) fields for older APKs / emulator LAN tests
         if backend or lan_http or cloud_http:
             params["backend"] = backend or lan_http or cloud_http or ""
@@ -107,7 +110,12 @@ def parse_pairing_uri(uri: str) -> PairingBundle:
         vals = q.get(key) or []
         return vals[0] if vals else None
 
-    token = one("token") or ""
+    token = one("c") or one("token") or ""
+    # Path form: …/p/CODE or …/pair/CODE
+    if not token and u.path:
+        parts = [p for p in u.path.split("/") if p]
+        if len(parts) >= 2 and parts[-2].lower() in ("p", "pair"):
+            token = parts[-1]
     lan_http = one("lan") or one("backend")
     lan_ws = one("lan_ws") or one("ws")
     cloud_http = one("cloud")

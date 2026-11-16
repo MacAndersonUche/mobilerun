@@ -333,19 +333,36 @@ class BackendClient(private val context: Context) {
         }
     }
 
-    /** Pull token from mobilerun://pair?…, https://…/pair?…, or raw query. */
+    /** Pull code from mobilerun://pair?c=…, https://…/p/CODE, /pair?token=…, or raw. */
     fun extractPairToken(uri: Uri): String? {
-        uri.getQueryParameter("token")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        // Some scanners wrap the URL; try parsing the whole string again
-        val raw = uri.toString()
-        val marker = "token="
-        val idx = raw.indexOf(marker)
-        if (idx >= 0) {
-            val rest = raw.substring(idx + marker.length)
-            val end = rest.indexOfFirst { it == '&' || it == '#' || it == ' ' }
-            val value = if (end < 0) rest else rest.substring(0, end)
-            return Uri.decode(value).trim().takeIf { it.isNotEmpty() }
+        uri.getQueryParameter("c")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            return it.uppercase()
         }
+        uri.getQueryParameter("token")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            return it.uppercase()
+        }
+        val path = uri.path.orEmpty()
+        // https://…/p/ABC12345
+        val segs = path.split('/').filter { it.isNotEmpty() }
+        if (segs.size >= 2 && segs[segs.size - 2].equals("p", ignoreCase = true)) {
+            return segs.last().uppercase().takeIf { it.isNotEmpty() }
+        }
+        if (segs.size >= 2 && segs[segs.size - 2].equals("pair", ignoreCase = true)) {
+            return segs.last().uppercase().takeIf { it.isNotEmpty() }
+        }
+        val raw = uri.toString()
+        for (marker in listOf("c=", "token=", "/p/")) {
+            val idx = raw.indexOf(marker, ignoreCase = true)
+            if (idx >= 0) {
+                val rest = raw.substring(idx + marker.length)
+                val end = rest.indexOfFirst { it == '&' || it == '#' || it == ' ' || it == '?' }
+                val value = if (end < 0) rest else rest.substring(0, end)
+                return Uri.decode(value).trim().uppercase().takeIf { it.isNotEmpty() }
+            }
+        }
+        // Bare short code
+        val bare = raw.trim().uppercase()
+        if (bare.matches(Regex("^[A-Z0-9]{6,8}$"))) return bare
         return null
     }
 
@@ -418,25 +435,27 @@ class BackendClient(private val context: Context) {
         }
     }
 
-    /** Paste / type the short pairing token from the Devices page (no QR). */
+    /** Paste / type the short pairing code from Devices (no QR). */
     fun pairWithCode(rawCode: String) {
         val raw = rawCode.trim().trim('"')
-        if (raw.contains("://") || raw.contains("/pair?")) {
+        if (raw.contains("://") || raw.contains("/pair") || raw.contains("/p/")) {
             pairFromUri(Uri.parse(raw))
             return
         }
-        var token = raw.removePrefix("token=")
-        if (token.contains("token=")) {
-            token = token.substringAfter("token=")
+        var token = raw
+        for (prefix in listOf("token=", "TOKEN=", "c=", "C=")) {
+            if (token.startsWith(prefix)) token = token.removePrefix(prefix)
         }
         token = token.substringBefore('&').substringBefore('#').trim()
+            .filter { it.isLetterOrDigit() }
+            .uppercase()
         if (token.isBlank()) {
-            val msg = "Paste the pairing code from Devices (or the full link)"
+            val msg = "Enter the pairing code from Devices (or the full link)"
             _pairErrorFlow.value = msg
             prefs().edit().putString("last_pair_error", msg).apply()
             return
         }
-        pairFromUri(Uri.parse("mobilerun://pair?token=${Uri.encode(token)}"))
+        pairFromUri(Uri.parse("mobilerun://pair?c=${Uri.encode(token)}"))
     }
 
     /** @deprecated use pairFromUri */
