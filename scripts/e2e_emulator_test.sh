@@ -1018,6 +1018,65 @@ if [[ -n "${CLOUD_API_URL:-}" ]]; then
   curl -sfS "$CLOUD_API_URL/api/health" | tee "$ARTIFACTS_DIR/cloud_health.json" || true
 fi
 
+echo "== Prod cloud-only short-code claim (no LAN — Mac's real-phone path) =="
+PROD_API="${PROD_API_URL:-https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com}"
+# Wipe prefs so stale lan_* cannot divert claim; keep the APK installed
+adb shell pm clear ai.mobilerun.selfhosted || true
+adb shell settings put secure enabled_accessibility_services "$A11Y" || true
+adb shell settings put secure accessibility_enabled 1 || true
+PROD_TOKEN=$(curl -sfS -X POST "$PROD_API/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+PROD_PAIR=$(curl -sfS -X POST "$PROD_API/api/auth/pair/create" \
+  -H "Authorization: Bearer ${PROD_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"device_name":"emu-cloud-only","platform":"android"}')
+echo "$PROD_PAIR" | tee "$ARTIFACTS_DIR/prod_cloud_pair.json"
+PROD_CODE=$(echo "$PROD_PAIR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
+# Code alone — same as typing in-app; baked DEFAULT_CLOUD_HTTP, zero LAN params
+CLOUD_ONLY_URL="mobilerun://pair?c=${PROD_CODE}"
+adb shell am start -a android.intent.action.VIEW -d "$CLOUD_ONLY_URL" ai.mobilerun.selfhosted/.MainActivity || \
+  adb shell am start -a android.intent.action.VIEW -d "$CLOUD_ONLY_URL"
+# Wait until the device appears on the prod ci-e2e account
+python3 - <<PY
+import json, os, time, urllib.request
+prod = os.environ.get("PROD_API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
+token = """$PROD_TOKEN"""
+code = """$PROD_CODE"""
+artifacts = os.environ["ARTIFACTS_DIR"]
+device_id = None
+for i in range(40):
+    req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
+    devices = json.load(urllib.request.urlopen(req))
+    open(os.path.join(artifacts, "prod_cloud_devices.json"), "w").write(
+        json.dumps(devices, indent=2, default=str)
+    )
+    for d in devices or []:
+        name = str(d.get("name") or d.get("device_name") or "")
+        if "emu-cloud" in name.lower() or d.get("device_id"):
+            device_id = d.get("device_id") or d.get("id")
+            break
+    if device_id:
+        break
+    time.sleep(2)
+assert device_id, f"cloud-only short-code {code} did not register on prod"
+open(os.path.join(artifacts, "prod_cloud_device_id.txt"), "w").write(device_id)
+print("prod_cloud_only_device", device_id)
+# Remove device (mirrors Devices Remove button)
+req = urllib.request.Request(
+    prod + f"/api/devices/{device_id}",
+    method="DELETE",
+    headers={"Authorization": f"Bearer {token}"},
+)
+print("prod_remove", json.load(urllib.request.urlopen(req)))
+req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
+left = json.load(urllib.request.urlopen(req))
+assert left == [] or len(left) == 0, left
+open(os.path.join(artifacts, "prod_cloud_only_ok.txt"), "w").write(f"{code}\n{device_id}\n")
+print("PROD_CLOUD_ONLY_OK", code)
+PY
+adb exec-out screencap -p > "$ARTIFACTS_DIR/09_prod_cloud_only.png" || true
+
 echo "== Screenrecord + final screenshots =="
 timeout 8 adb shell screenrecord --time-limit 6 /sdcard/e2e.mp4 || true
 adb pull /sdcard/e2e.mp4 "$ARTIFACTS_DIR/e2e.mp4" 2>/dev/null || true
@@ -1041,6 +1100,7 @@ check("install_apk", "apk_paths.txt")
 check("a11y_enabled", "a11y.txt")
 check("pair_lan", "01_paired.png")
 check("connection_route", "connection_route.txt")
+check("prod_cloud_only_pair", "prod_cloud_only_ok.txt")
 check("open_settings", "02_settings.png")
 check("type_text", "03_typed.png")
 check("swipe_scroll", "04_swiped.png")

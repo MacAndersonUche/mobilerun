@@ -278,6 +278,8 @@ jobs:
           python3 -c "import json; d=json.load(open('/tmp/health_alias.json')); assert d.get('status')=='ok', d"
           curl -sfS "$API_URL/api/releases/latest" | tee /tmp/apk.json
           python3 -c "import json; d=json.load(open('/tmp/apk.json')); assert d.get('apk_url') and d.get('qr_code'), d"
+          echo "Cloud-only short-code claim (no LAN, ≤2s dead-LAN timeout)..."
+          python3 scripts/verify_prod_cloud_only_pair.py "$API_URL"
           echo "Smoke OK"
 
       - name: Summary

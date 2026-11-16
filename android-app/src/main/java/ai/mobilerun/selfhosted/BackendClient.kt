@@ -38,6 +38,13 @@ class BackendClient(private val context: Context) {
         .readTimeout(0, TimeUnit.SECONDS)
         .build()
 
+    /** Short-timeout client for pairing claim — fail LAN fast, fall back to AWS. */
+    private val claimClient = OkHttpClient.Builder()
+        .connectTimeout(2, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(3, TimeUnit.SECONDS)
+        .build()
+
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
     private val discovery = LanDiscovery(context)
@@ -369,13 +376,44 @@ class BackendClient(private val context: Context) {
     fun lastPairError(): String? =
         prefs().getString("last_pair_error", null)?.takeIf { it.isNotBlank() }
 
+    /** True for emulator/LAN hosts that are safe to try before AWS. */
+    private fun isLocalClaimBase(base: String): Boolean {
+        val h = base.lowercase()
+        return h.contains("10.0.2.2") ||
+            h.contains("127.0.0.1") ||
+            h.contains("localhost") ||
+            h.contains("192.168.") ||
+            Regex("""://10\.\d+\.""").containsMatchIn(h) ||
+            h.contains(".local")
+    }
+
+    /** True for the baked AWS API (or another execute-api). Skip TEST-NET probes. */
+    private fun isCloudClaimBase(base: String): Boolean {
+        val h = base.lowercase()
+        if (h.contains("203.0.113.") || h.contains("198.51.100.") || h.contains("192.0.2.")) {
+            return false
+        }
+        return h.contains("execute-api") ||
+            h.trimEnd('/') == DEFAULT_CLOUD_HTTP.trimEnd('/').lowercase()
+    }
+
+    /**
+     * Claim order for real phones (often mobile data, no LAN):
+     * 1) local LAN only if present (≤2s connect), then
+     * 2) execute-api / baked DEFAULT_CLOUD_HTTP.
+     * Never block on unreachable cloud= probe hosts.
+     */
+    private fun claimHttpBases(): List<String> {
+        val out = linkedSetOf<String>()
+        lanHttp?.trimEnd('/')?.takeIf { it.isNotBlank() && isLocalClaimBase(it) }?.let { out.add(it) }
+        cloudHttp?.trimEnd('/')?.takeIf { it.isNotBlank() && isCloudClaimBase(it) }?.let { out.add(it) }
+        out.add(DEFAULT_CLOUD_HTTP.trimEnd('/'))
+        return out.toList()
+    }
+
     private fun claimPairingToken(token: String) {
-        // Prefer LAN/emulator gateway when present — deep links may also include a
-        // unreachable "cloud" probe host that must not be used for the HTTP claim.
-        val bases = linkedSetOf<String>()
-        lanHttp?.trimEnd('/')?.takeIf { it.isNotBlank() }?.let { bases.add(it) }
-        cloudHttp?.trimEnd('/')?.takeIf { it.isNotBlank() }?.let { bases.add(it) }
-        bases.add(DEFAULT_CLOUD_HTTP.trimEnd('/'))
+        val bases = claimHttpBases()
+        Log.i(tag, "claim bases=$bases")
 
         val body = gson.toJson(
             mapOf(
@@ -390,12 +428,13 @@ class BackendClient(private val context: Context) {
         var map: Map<String, Any?>? = null
         var usedBase: String? = null
         for (httpBase in bases) {
+            val t0 = System.nanoTime()
             try {
                 val req = Request.Builder()
                     .url("$httpBase/api/auth/pair/claim")
                     .post(body)
                     .build()
-                client.newCall(req).execute().use { resp ->
+                claimClient.newCall(req).execute().use { resp ->
                     val text = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
                         val detail = try {
@@ -410,9 +449,14 @@ class BackendClient(private val context: Context) {
                     map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
                     usedBase = httpBase
                 }
+                Log.i(
+                    tag,
+                    "claim ok via $httpBase in ${(System.nanoTime() - t0) / 1_000_000}ms",
+                )
                 break
             } catch (e: Exception) {
-                Log.w(tag, "claim via $httpBase failed: ${e.message}")
+                val ms = (System.nanoTime() - t0) / 1_000_000
+                Log.w(tag, "claim via $httpBase failed in ${ms}ms: ${e.message}")
                 lastErr = e
             }
         }
@@ -423,17 +467,16 @@ class BackendClient(private val context: Context) {
         val owner = claimed["owner"] as? String
         // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
         // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
-        val localOverride =
-            httpBase.contains("10.0.2.2") ||
-                httpBase.contains("127.0.0.1") ||
-                httpBase.contains("localhost")
+        val localOverride = isLocalClaimBase(httpBase)
         if (!localOverride) {
             (claimed["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
             (claimed["cloud_ws"] as? String)?.let { cloudWs = it }
         }
         (claimed["access_token"] as? String)?.let { authToken = it }
         // Always fall back to baked prod endpoints after claim
-        if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
+        if (cloudHttp.isNullOrBlank() || !isCloudClaimBase(cloudHttp!!)) {
+            cloudHttp = DEFAULT_CLOUD_HTTP
+        }
         if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
         sessionToken = session
         pairingToken = null
@@ -476,6 +519,19 @@ class BackendClient(private val context: Context) {
             prefs().edit().putString("last_pair_error", msg).apply()
             return
         }
+        // Code alone → baked AWS API (works on mobile data with no LAN server).
+        lanHttp = null
+        lanWs = null
+        discoveredHttp = null
+        discoveredWs = null
+        cloudHttp = DEFAULT_CLOUD_HTTP
+        cloudWs = DEFAULT_CLOUD_WS
+        prefs().edit()
+            .remove("lan_http")
+            .remove("lan_ws")
+            .putString("cloud_http", cloudHttp)
+            .putString("cloud_ws", cloudWs)
+            .apply()
         pairFromUri(Uri.parse("mobilerun://pair?c=${Uri.encode(token)}"))
     }
 
