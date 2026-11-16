@@ -6,11 +6,12 @@
 
 :root {
   color-scheme: dark;
-  --bg: #0a0a0a;
-  --bg-elev: #121212;
-  --card: #1c1c1e;
-  --card-elev: #27272a;
-  --border: #3f3f46;
+  /* Aligned to public embed/live-panel tokens; accent is MacAI blue (not third-party orange) */
+  --bg: #0e0e11;
+  --bg-elev: #121214;
+  --card: #18181b;
+  --card-elev: #212124;
+  --border: #212124;
   --accent: #3b82f6;
   --ok: #4ade80;
   --ok-bg: #14532d;

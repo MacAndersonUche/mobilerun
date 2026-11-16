@@ -160,14 +160,14 @@ export default function LiveViewPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="mr-page space-y-6 !max-w-5xl">
       <div className="flex flex-wrap items-end gap-4 justify-between">
         <div>
-          <h2 className="text-2xl font-semibold flex items-center gap-2">
-            <Smartphone className="text-blue-400" /> Live View
+          <h2 className="text-2xl font-semibold flex items-center gap-2 tracking-tight">
+            <Smartphone className="text-accent" /> Live View
           </h2>
           <p className="text-mute text-sm mt-1">
-            Streams JPEG frames only while this page is subscribed (~{fps} fps). Nothing is stored.
+            Device panel streams JPEG only while subscribed (~{fps} fps). Nothing is stored.
           </p>
         </div>
         <div className="flex flex-wrap gap-2 items-end">
@@ -226,54 +226,64 @@ export default function LiveViewPage() {
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-[320px_1fr] gap-6">
-        {/* Phone frame */}
-        <div className="mx-auto">
-          <div className="relative bg-black rounded-[2rem] border-[10px] border-line shadow-2xl overflow-hidden w-[300px] aspect-[9/19]">
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-24 h-5 bg-surface rounded-full z-10" />
-            {frameUrl ? (
-              <img
-                ref={imgRef}
-                src={frameUrl}
-                alt="Live device"
-                className="w-full h-full object-cover select-none touch-none"
-                onPointerDown={onPointerDown}
-                onPointerUp={onPointerUp}
-                draggable={false}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-500 text-sm p-6 text-center">
-                {connected
-                  ? 'Waiting for frames… grant MediaProjection on the phone once.'
-                  : 'Start stream to watch the phone.'}
-              </div>
-            )}
-            {overlay && (
-              <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                {overlay.kind === 'tap' ? (
-                  <circle
-                    cx={`${(overlay.x / (imgRef.current?.naturalWidth || 540)) * 100}%`}
-                    cy={`${(overlay.y / (imgRef.current?.naturalHeight || 960)) * 100}%`}
-                    r="12"
-                    fill="rgba(59,130,246,0.55)"
-                    stroke="white"
-                    strokeWidth="2"
-                  />
-                ) : (
-                  <line
-                    x1={`${(overlay.x / (imgRef.current?.naturalWidth || 540)) * 100}%`}
-                    y1={`${(overlay.y / (imgRef.current?.naturalHeight || 960)) * 100}%`}
-                    x2={`${((overlay.x2 || 0) / (imgRef.current?.naturalWidth || 540)) * 100}%`}
-                    y2={`${((overlay.y2 || 0) / (imgRef.current?.naturalHeight || 960)) * 100}%`}
-                    stroke="rgba(250,204,21,0.9)"
-                    strokeWidth="4"
-                    strokeLinecap="round"
-                  />
-                )}
-              </svg>
-            )}
+      <div className="grid gap-8 lg:grid-cols-[minmax(280px,340px)_1fr]">
+        {/* Device panel — public embed docs: 9/19.5, radius 24px */}
+        <div className="mx-auto w-full max-w-[320px]">
+          <p className="mb-2 text-sm font-medium">
+            {devices.find((d) => d.device_id === deviceId)?.name || 'Phone'}
+          </p>
+          <div className="device-panel overflow-hidden rounded-[24px] border border-line bg-black shadow-sheet">
+            <div className="relative aspect-[9/19.5] w-full overflow-hidden bg-[#0e0e11]">
+              <div className="absolute left-1/2 top-2 z-10 h-5 w-24 -translate-x-1/2 rounded-full bg-surface-elev" />
+              {frameUrl ? (
+                <img
+                  ref={imgRef}
+                  src={frameUrl}
+                  alt="Live device"
+                  className="h-full w-full select-none object-cover touch-none"
+                  onPointerDown={onPointerDown}
+                  onPointerUp={onPointerUp}
+                  draggable={false}
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center p-6 text-center text-sm text-mute">
+                  {connected
+                    ? 'Waiting for frames… grant MediaProjection on the phone once.'
+                    : 'Start stream to watch the phone.'}
+                </div>
+              )}
+              {overlay && (
+                <svg className="pointer-events-none absolute inset-0 h-full w-full">
+                  {overlay.kind === 'tap' ? (
+                    <circle
+                      cx={`${(overlay.x / (imgRef.current?.naturalWidth || 540)) * 100}%`}
+                      cy={`${(overlay.y / (imgRef.current?.naturalHeight || 960)) * 100}%`}
+                      r="12"
+                      fill="rgba(59,130,246,0.55)"
+                      stroke="white"
+                      strokeWidth="2"
+                    />
+                  ) : (
+                    <line
+                      x1={`${(overlay.x / (imgRef.current?.naturalWidth || 540)) * 100}%`}
+                      y1={`${(overlay.y / (imgRef.current?.naturalHeight || 960)) * 100}%`}
+                      x2={`${((overlay.x2 || 0) / (imgRef.current?.naturalWidth || 540)) * 100}%`}
+                      y2={`${((overlay.y2 || 0) / (imgRef.current?.naturalHeight || 960)) * 100}%`}
+                      stroke="rgba(250,204,21,0.9)"
+                      strokeWidth="4"
+                      strokeLinecap="round"
+                    />
+                  )}
+                </svg>
+              )}
+            </div>
+            <div className="flex items-center justify-around border-t border-line bg-canvas-elev py-3 text-mute">
+              <span className="text-lg leading-none">‹</span>
+              <span className="text-sm leading-none">⌂</span>
+              <span className="text-sm leading-none">▦</span>
+            </div>
           </div>
-          <label className="flex items-center gap-2 mt-3 text-sm text-mute">
+          <label className="mt-3 flex items-center gap-2 text-sm text-mute">
             <input
               type="checkbox"
               checked={manualInput}
@@ -283,11 +293,11 @@ export default function LiveViewPage() {
           </label>
         </div>
 
-        <div className="mr-page space-y-4">
-          <div className="bg-surface rounded-lg p-4 grid grid-cols-3 gap-3 text-sm">
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3 rounded-2xl border border-line bg-surface p-4 text-sm">
             <div>
               <div className="text-mute">Current app</div>
-              <div className="font-medium truncate">{meta.app}</div>
+              <div className="truncate font-medium">{meta.app}</div>
             </div>
             <div>
               <div className="text-mute">Step</div>
@@ -295,7 +305,7 @@ export default function LiveViewPage() {
             </div>
             <div>
               <div className="text-mute">Action</div>
-              <div className="font-medium truncate">{meta.action}</div>
+              <div className="truncate font-medium">{meta.action}</div>
             </div>
           </div>
 
@@ -303,22 +313,22 @@ export default function LiveViewPage() {
             <button
               onClick={() => sendTaskControl('pause')}
               disabled={!connected}
-              className="flex items-center gap-2 bg-amber-600/80 hover:bg-amber-600 disabled:opacity-40 px-4 py-2 rounded-lg"
+              className="flex items-center gap-2 rounded-xl bg-amber-600/80 px-4 py-2 hover:bg-amber-600 disabled:opacity-40"
             >
               <Pause size={16} /> Pause
             </button>
             <button
               onClick={() => sendTaskControl('stop')}
               disabled={!connected}
-              className="flex items-center gap-2 bg-red-600/80 hover:bg-red-600 disabled:opacity-40 px-4 py-2 rounded-lg"
+              className="flex items-center gap-2 rounded-xl bg-red-600/80 px-4 py-2 hover:bg-red-600 disabled:opacity-40"
             >
-              <Square size={16} /> Stop
+              <Square size={16} /> Stop agent
             </button>
           </div>
 
-          <div className="bg-surface rounded-lg p-4 h-72 overflow-y-auto font-mono text-xs space-y-1">
-            <div className="text-mute mb-2">Live log</div>
-            {logs.length === 0 && <div className="text-gray-600">No events yet</div>}
+          <div className="h-72 space-y-1 overflow-y-auto rounded-2xl border border-line bg-surface p-4 font-mono text-xs">
+            <div className="mb-2 text-mute">Live log</div>
+            {logs.length === 0 && <div className="text-mute">No events yet</div>}
             {logs.map((line, i) => (
               <div key={i} className="text-gray-200">
                 {line}

@@ -55,9 +55,7 @@ def cognito_enabled() -> bool:
 
 
 def _cognito_issuer() -> str:
-    return (
-        f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
-    )
+    return f"https://cognito-idp.{COGNITO_REGION}.amazonaws.com/{COGNITO_USER_POOL_ID}"
 
 
 def _get_jwks() -> dict:

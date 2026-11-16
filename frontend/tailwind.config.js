@@ -5,14 +5,14 @@ export default {
     extend: {
       colors: {
         canvas: {
-          DEFAULT: '#0A0A0A',
-          elev: '#121212',
+          DEFAULT: '#0E0E11',
+          elev: '#121214',
         },
         surface: {
-          DEFAULT: '#1C1C1E',
-          elev: '#27272A',
+          DEFAULT: '#18181B',
+          elev: '#212124',
         },
-        line: '#3F3F46',
+        line: '#212124',
         accent: {
           DEFAULT: '#3B82F6',
           soft: '#1D4ED8',

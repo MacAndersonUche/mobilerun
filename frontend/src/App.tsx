@@ -51,12 +51,12 @@ function Shell() {
     <div className="min-h-screen bg-canvas text-white">
       <div className="mx-auto flex min-h-screen max-w-6xl">
         {/* Desktop sidebar */}
-        <aside className="hidden w-56 shrink-0 border-r border-line bg-canvas-elev p-4 md:block">
-          <div className="mb-6 px-2">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-mute">MacAI</p>
-            <p className="text-lg font-semibold">MobileRun</p>
+        <aside className="hidden w-60 shrink-0 border-r border-line bg-canvas-elev/80 p-4 md:block">
+          <div className="mb-8 px-2">
+            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">MacAI</p>
+            <p className="text-lg font-semibold tracking-tight">MobileRun</p>
           </div>
-          <nav className="space-y-1">
+          <nav className="space-y-0.5">
             {[
               ...tabs,
               { to: '/live', icon: MonitorPlay, label: 'Live' },
@@ -72,9 +72,9 @@ function Shell() {
                 end={'end' in t ? t.end : false}
                 className={({ isActive }) =>
                   cn(
-                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm',
+                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition',
                     isActive
-                      ? 'bg-accent/20 text-accent'
+                      ? 'bg-surface-elev text-white'
                       : 'text-mute hover:bg-surface hover:text-white'
                   )
                 }

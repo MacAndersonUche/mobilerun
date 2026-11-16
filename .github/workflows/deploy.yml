@@ -108,12 +108,16 @@ jobs:
           cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/
           printf '' > /tmp/lambda-asset/mobilerun/dating/__init__.py
           cp mobilerun/connectivity/*.py /tmp/lambda-asset/mobilerun/connectivity/
+          # Stub package init so importlib.metadata.version("mobilerun") is not required in Lambda
+          printf '%s\n' '__version__ = "0.0.0"' > /tmp/lambda-asset/mobilerun/__init__.py
           printf '' > /tmp/lambda-asset/mobilerun/connectivity/__init__.py
-          # Minimal server stubs used by local LAN helpers (safe no-op on Lambda)
-          if [ -f mobilerun/server/__init__.py ]; then cp mobilerun/server/__init__.py /tmp/lambda-asset/mobilerun/server/; fi
-          if [ -f mobilerun/server/mdns.py ]; then cp mobilerun/server/mdns.py /tmp/lambda-asset/mobilerun/server/; fi
-          # Verify imports
-          PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; from mobilerun.connectivity.endpoints import build_pairing_url; print('imports ok', handler, w, s)"
+          # mdns helper only (avoid server/__init__ importing local serve)
+          if [ -f mobilerun/server/mdns.py ]; then
+            printf '' > /tmp/lambda-asset/mobilerun/server/__init__.py
+            cp mobilerun/server/mdns.py /tmp/lambda-asset/mobilerun/server/
+          fi
+          # Verify imports from a clean cwd so checkout mobilerun/ is not preferred
+          (cd /tmp && PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; from mobilerun.connectivity.endpoints import build_pairing_url; print('imports ok', handler, w, s)")
           ls /tmp/lambda-asset/backend | head
 
       - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)

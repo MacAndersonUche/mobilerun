@@ -80,7 +80,9 @@ device_link_codes: Dict[str, Dict[str, Any]] = {}  # user_code -> meta
 def _owner_key(auth: Optional[dict]) -> Optional[str]:
     if not auth:
         return None
-    return (auth.get("email") or auth.get("user_id") or auth.get("sub") or "").lower() or None
+    return (
+        auth.get("email") or auth.get("user_id") or auth.get("sub") or ""
+    ).lower() or None
 
 
 def _device_visible_to(device: Dict[str, Any], auth: Optional[dict]) -> bool:
@@ -537,9 +539,7 @@ async def device_websocket(websocket: WebSocket):
             owner = _owner_key(claims)
             device_id = data.get("device_id") or f"device_{secrets.token_hex(8)}"
             pairing_data = {
-                "device_name": data.get("device_name")
-                or data.get("name")
-                or "Android",
+                "device_name": data.get("device_name") or data.get("name") or "Android",
                 "platform": data.get("platform") or "android",
                 "owner": owner,
             }
