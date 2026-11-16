@@ -938,6 +938,8 @@ dating_mode_state = {
     "current_app": None,
     "review_queue": [],
     "speed_preset": "balanced",
+    "opener_mode": "templates",  # templates | ai
+    "opener_library": None,
 }
 
 social_mode_state = {
@@ -1004,6 +1006,32 @@ class DatingModeConfig(BaseModel):
     max_total_messages_per_day: int = 500
     sequential_messaging: bool = True
     speed_preset: str = "balanced"
+    opener_mode: str = "templates"  # templates | ai
+    # package_name -> templates | ai
+    per_app_opener_mode: Optional[Dict[str, str]] = None
+
+
+class OpenerTemplateBody(BaseModel):
+    id: Optional[str] = None
+    text: str
+    bucket: str = "any"
+    enabled: bool = True
+
+
+class OpenerLibraryUpdate(BaseModel):
+    opener_mode: Optional[str] = None
+    per_app_mode: Optional[Dict[str, str]] = None
+    templates: Optional[List[OpenerTemplateBody]] = None
+
+
+class ComposeOpenerRequest(BaseModel):
+    match_id: str
+    package_name: str = ""
+    profile_name: str = ""
+    is_opener: bool = True
+    inbound_preview: str = ""
+    local_hour: Optional[int] = None
+    local_minute: Optional[int] = None
 
 
 class AgentModeConfig(BaseModel):
@@ -1340,12 +1368,56 @@ async def safety_resume(
     }
 
 
+def _dating_user_id(auth: Optional[dict]) -> str:
+    return _owner_key(auth) or "local"
+
+
+def _load_opener_library(auth: Optional[dict] = None):
+    from mobilerun.dating.openers import load_default_library, merge_with_defaults
+
+    user_id = _dating_user_id(auth)
+    user_data = None
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+
+    try:
+        user_data = get_user_setting(user_id, "dating_openers")
+    except Exception:
+        logger.exception("load dating_openers failed")
+    # Prefer in-memory overrides from this process
+    mem = dating_mode_state.get("opener_library")
+    if isinstance(mem, dict) and mem.get("templates"):
+        user_data = mem
+    return merge_with_defaults(user_data), user_id
+
+
+def _save_opener_library(lib, auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    data = lib.to_dict()
+    dating_mode_state["opener_library"] = data
+    dating_mode_state["opener_mode"] = lib.opener_mode
+    save_user_setting(user_id, "dating_openers", data)
+
+
 @app.get("/api/dating/config")
 async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode configuration."""
     from mobilerun.dating.config import DatingModeConfig as ConfigModel
 
     config = ConfigModel()
+    lib, _ = _load_opener_library(auth)
+    opener_mode = (
+        dating_mode_state.get("opener_mode")
+        or lib.opener_mode
+        or getattr(config, "opener_mode", "templates")
+    )
     return {
         "apps": [
             {
@@ -1356,6 +1428,7 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
                 "daily_reply_cap": app.daily_reply_cap,
                 "daily_opener_target_min": app.daily_opener_target_min,
                 "daily_opener_target_max": app.daily_opener_target_max,
+                "opener_mode": lib.per_app_mode.get(app.package_name) or opener_mode,
             }
             for app in config.apps
         ],
@@ -1369,6 +1442,8 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
         "max_total_messages_per_day": config.max_total_messages_per_day,
         "speed_preset": getattr(config, "speed_preset", None)
         or dating_mode_state.get("speed_preset", "balanced"),
+        "opener_mode": opener_mode,
+        "per_app_opener_mode": lib.per_app_mode,
     }
 
 
@@ -1385,7 +1460,212 @@ async def update_dating_config(
     dating_mode_state["speed_preset"] = speed
     agent_mode_state["speed_preset"] = speed
     agent_mode_state["mode"] = "dating"
-    return {"status": "success", "config": config.dict()}
+    mode = (config.opener_mode or "templates").lower()
+    if mode not in ("templates", "ai"):
+        raise HTTPException(status_code=400, detail="opener_mode must be templates|ai")
+    dating_mode_state["opener_mode"] = mode
+    lib, _ = _load_opener_library(auth)
+    lib.opener_mode = mode
+    if config.per_app_opener_mode is not None:
+        cleaned = {}
+        for k, v in config.per_app_opener_mode.items():
+            vv = str(v).lower()
+            if vv in ("templates", "ai"):
+                cleaned[k] = vv
+        lib.per_app_mode = cleaned
+    _save_opener_library(lib, auth)
+    payload = config.dict() if hasattr(config, "dict") else config.model_dump()
+    return {"status": "success", "config": payload}
+
+
+@app.get("/api/dating/openers")
+async def get_dating_openers(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Template opener library (file defaults + per-user DynamoDB/local overrides)."""
+    from mobilerun.dating.openers import (
+        bucket_for_local_time,
+        summarize_buckets,
+        validate_active_bounds,
+    )
+
+    lib, user_id = _load_opener_library(auth)
+    ok, msg = validate_active_bounds(lib)
+    return {
+        "user_id": user_id,
+        "library": lib.to_dict(),
+        "bucket_now": bucket_for_local_time(),
+        "bucket_counts": summarize_buckets(lib),
+        "active_ok": ok,
+        "active_message": msg,
+        "min_active": lib.min_active,
+        "max_active": lib.max_active,
+    }
+
+
+@app.post("/api/dating/openers")
+async def update_dating_openers(
+    body: OpenerLibraryUpdate, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Replace/update opener library (add/edit/enable via full templates list)."""
+    import secrets as _secrets
+
+    from mobilerun.dating.openers import (
+        OpenerTemplate,
+        validate_active_bounds,
+    )
+
+    lib, _ = _load_opener_library(auth)
+    if body.opener_mode is not None:
+        mode = body.opener_mode.lower()
+        if mode not in ("templates", "ai"):
+            raise HTTPException(
+                status_code=400, detail="opener_mode must be templates|ai"
+            )
+        lib.opener_mode = mode
+        dating_mode_state["opener_mode"] = mode
+    if body.per_app_mode is not None:
+        cleaned = {}
+        for k, v in body.per_app_mode.items():
+            vv = str(v).lower()
+            if vv in ("templates", "ai"):
+                cleaned[k] = vv
+        lib.per_app_mode = cleaned
+    if body.templates is not None:
+        new_tmpls = []
+        for t in body.templates:
+            tid = (t.id or "").strip() or f"t_{_secrets.token_hex(3)}"
+            text = (t.text or "").strip()
+            if not text:
+                continue
+            new_tmpls.append(
+                OpenerTemplate(
+                    id=tid,
+                    text=text,
+                    bucket=(t.bucket or "any").lower(),
+                    enabled=bool(t.enabled),
+                )
+            )
+        lib.templates = new_tmpls
+    ok, msg = validate_active_bounds(lib)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _save_opener_library(lib, auth)
+    return {"status": "ok", "library": lib.to_dict(), "active_ok": ok}
+
+
+@app.post("/api/dating/openers/template")
+async def upsert_opener_template(
+    body: OpenerTemplateBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Add or edit a single template."""
+    import secrets as _secrets
+
+    from mobilerun.dating.openers import OpenerTemplate, validate_active_bounds
+
+    lib, _ = _load_opener_library(auth)
+    tid = (body.id or "").strip() or f"t_{_secrets.token_hex(3)}"
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text required")
+    lib.set_template(
+        OpenerTemplate(
+            id=tid,
+            text=text,
+            bucket=(body.bucket or "any").lower(),
+            enabled=bool(body.enabled),
+        )
+    )
+    ok, msg = validate_active_bounds(lib)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _save_opener_library(lib, auth)
+    return {"status": "ok", "id": tid, "library": lib.to_dict()}
+
+
+@app.delete("/api/dating/openers/template/{template_id}")
+async def delete_opener_template(
+    template_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    from mobilerun.dating.openers import validate_active_bounds
+
+    lib, _ = _load_opener_library(auth)
+    if not lib.delete_template(template_id):
+        raise HTTPException(status_code=404, detail="template not found")
+    ok, msg = validate_active_bounds(lib)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    _save_opener_library(lib, auth)
+    return {"status": "deleted", "id": template_id, "library": lib.to_dict()}
+
+
+@app.post("/api/dating/compose")
+async def compose_dating_message_api(
+    body: ComposeOpenerRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Compose opener (template or AI) or reply (always AI when callable provided)."""
+    from datetime import datetime as _dt
+
+    from mobilerun.dating.openers import compose_dating_message
+    from mobilerun.dating.persona import PersonaManager
+
+    # Honour safety pause — never send while blocked
+    try:
+        from mobilerun.safety.runtime import get_safety_state
+
+        if get_safety_state().is_paused(body.package_name or None):
+            raise HTTPException(
+                status_code=409, detail="Safety pause active — resume in UI first"
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    if dating_mode_state.get("paused"):
+        raise HTTPException(
+            status_code=409, detail="Dating mode paused — resume before composing"
+        )
+
+    lib, _ = _load_opener_library(auth)
+    now = None
+    if body.local_hour is not None:
+        now = _dt.now().replace(
+            hour=int(body.local_hour) % 24,
+            minute=int(body.local_minute or 0) % 60,
+            second=0,
+            microsecond=0,
+        )
+
+    ai_calls = {"n": 0}
+
+    def ai_callable(**kwargs):
+        ai_calls["n"] += 1
+        if kwargs.get("is_opener"):
+            return f"[AI opener for {kwargs.get('profile_name') or 'match'}]"
+        return f"[AI reply to: {(kwargs.get('inbound_preview') or '')[:40]}]"
+
+    try:
+        result = compose_dating_message(
+            is_opener=body.is_opener,
+            lib=lib,
+            match_id=body.match_id,
+            package_name=body.package_name,
+            profile_name=body.profile_name or None,
+            now=now,
+            ai_callable=ai_callable,
+            inbound_preview=body.inbound_preview,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Persist rotation / used_by_match when templates used
+    if result.get("source") == "template":
+        _save_opener_library(lib, auth)
+
+    return {
+        **result,
+        "ai_calls": ai_calls["n"],
+        "opener_mode": lib.mode_for_app(body.package_name),
+    }
 
 
 @app.get("/api/dating/stats")

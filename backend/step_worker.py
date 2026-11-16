@@ -94,6 +94,74 @@ def _humanizer_for_job(job: Dict[str, Any]):
     return Humanizer(config=cfg, _rng=rng)
 
 
+def _compose_for_step(
+    job: Dict[str, Any],
+    state: Dict[str, Any],
+    *,
+    action: str,
+    rng,
+) -> Dict[str, Any]:
+    """Compose opener via templates (no LLM) or reply via AI stub/callable."""
+    try:
+        from mobilerun.dating.openers import (
+            compose_dating_message,
+            merge_with_defaults,
+        )
+    except Exception:
+        logger.exception("opener library import failed")
+        return {}
+
+    raw_lib = job.get("opener_library") or state.get("opener_library")
+    lib = merge_with_defaults(raw_lib if isinstance(raw_lib, dict) else None)
+    # Honour job-level / global opener mode
+    mode = (
+        job.get("opener_mode")
+        or state.get("opener_mode")
+        or lib.opener_mode
+        or "templates"
+    )
+    lib.opener_mode = str(mode).lower()
+    package = (
+        state.get("current_app")
+        or job.get("current_app")
+        or (state.get("app_order") or [""])[0]
+        or ""
+    )
+    match_id = state.get("current_match_id") or f"match_{state.get('steps', 0)}"
+    profile = state.get("current_profile_name") or ""
+
+    ai_calls = {"n": 0}
+
+    def ai_callable(**kwargs):
+        ai_calls["n"] += 1
+        custom = job.get("ai_callable_result")
+        if custom:
+            return custom
+        if kwargs.get("is_opener"):
+            return f"[AI opener]"
+        return f"[AI reply]"
+
+    try:
+        result = compose_dating_message(
+            is_opener=(action == "opener"),
+            lib=lib,
+            match_id=str(match_id),
+            package_name=str(package),
+            profile_name=profile or None,
+            rng=rng,
+            ai_callable=ai_callable,
+            inbound_preview=state.get("inbound_preview") or "",
+        )
+        result["ai_calls"] = ai_calls["n"]
+        # Persist rotation state back onto job for subsequent ticks
+        state["opener_library"] = lib.to_dict()
+        job["opener_library"] = lib.to_dict()
+        return result
+    except Exception:
+        logger.exception("compose for step failed action=%s", action)
+        return {}
+
+
 def _safety_blocked(job: Dict[str, Any]) -> bool:
     """Skip work while safety pause is active for this job's app / all."""
     if job.get("safety_paused"):
@@ -165,9 +233,28 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
         ordered = humanizer.ordered_apps(apps)
         state["app_order"] = list(ordered)
         state["current_app"] = ordered[0] if ordered else state.get("current_app")
+
+    # Compose opener from templates (no LLM) or leave reply to AI path
+    composed: Dict[str, Any] = {}
+    if action in ("opener", "reply"):
+        composed = _compose_for_step(job, state, action=action, rng=humanizer._rng)
+        if composed:
+            state["last_message"] = composed.get("text")
+            state["last_message_source"] = composed.get("source")
+            state["last_template_id"] = composed.get("template_id")
+            state["last_used_llm"] = bool(composed.get("used_llm"))
+
     job["state"] = state
     job["next_run_at"] = int(time.time()) + gap_i
     job["updated_at"] = int(time.time())
+
+    params: Dict[str, Any] = {"dry_run": job.get("dry_run", False)}
+    if composed:
+        params["message"] = composed.get("text")
+        params["source"] = composed.get("source")
+        params["used_llm"] = composed.get("used_llm")
+        if composed.get("template_id"):
+            params["template_id"] = composed["template_id"]
 
     _send_to_device(
         device_id,
@@ -175,7 +262,7 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
             "type": "command",
             "command": action,
             "job_id": job.get("job_id"),
-            "params": {"dry_run": job.get("dry_run", False)},
+            "params": params,
         },
     )
     logger.info(

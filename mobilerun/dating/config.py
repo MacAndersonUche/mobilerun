@@ -35,6 +35,9 @@ class AppProfile:
     session_break_min_sec: int = 300  # 5 minutes
     session_break_max_sec: int = 900  # 15 minutes
 
+    # First-contact openers: "templates" | "ai" | None (inherit global)
+    opener_mode: Optional[str] = None
+
 
 # Default app profiles (Mac's dating folder)
 DEFAULT_APPS = [
@@ -110,6 +113,9 @@ class DatingModeConfig:
     speed_preset: str = "balanced"
     randomize_order: bool = True
     sequential_messaging: bool = True  # Process one conversation at a time
+
+    # First-contact openers: Templates (no LLM) | AI
+    opener_mode: str = "templates"  # templates | ai
 
     # Mode
     round_robin: bool = True  # vs "one app at a time"

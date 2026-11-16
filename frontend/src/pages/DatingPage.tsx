@@ -58,6 +58,16 @@ interface AppConfig {
   daily_swipe_cap: number;
   daily_opener_target_min?: number;
   daily_opener_target_max?: number;
+  opener_mode?: OpenerMode;
+}
+
+type OpenerMode = 'templates' | 'ai';
+
+interface OpenerTemplate {
+  id: string;
+  text: string;
+  bucket: 'morning' | 'afternoon' | 'evening' | 'any' | string;
+  enabled: boolean;
 }
 
 function ProgressBar({
@@ -101,6 +111,12 @@ export default function DatingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
+  const [openerMode, setOpenerMode] = useState<OpenerMode>('templates');
+  const [templates, setTemplates] = useState<OpenerTemplate[]>([]);
+  const [bucketNow, setBucketNow] = useState('morning');
+  const [bucketCounts, setBucketCounts] = useState<Record<string, number>>({});
+  const [newTemplateText, setNewTemplateText] = useState('');
+  const [newTemplateBucket, setNewTemplateBucket] = useState('any');
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -108,20 +124,24 @@ export default function DatingPage() {
 
   const loadAll = async () => {
     try {
-      const [statusRes, statsRes, configRes, queueRes] = await Promise.all([
-        axios.get(`${getBackendUrl()}/api/dating/status`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/stats`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/config`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/review-queue`, {
-          headers: authHeaders(),
-        }),
-      ]);
+      const [statusRes, statsRes, configRes, queueRes, openersRes] =
+        await Promise.all([
+          axios.get(`${getBackendUrl()}/api/dating/status`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/stats`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/config`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/review-queue`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/dating/openers`, {
+            headers: authHeaders(),
+          }),
+        ]);
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -133,7 +153,16 @@ export default function DatingPage() {
       if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
         setSpeed(configRes.data.speed_preset);
       }
+      if (
+        configRes.data.opener_mode === 'templates' ||
+        configRes.data.opener_mode === 'ai'
+      ) {
+        setOpenerMode(configRes.data.opener_mode);
+      }
       setReviewQueue(queueRes.data.messages || []);
+      setTemplates(openersRes.data.library?.templates || []);
+      setBucketNow(openersRes.data.bucket_now || 'morning');
+      setBucketCounts(openersRes.data.bucket_counts || {});
       setError(null);
     } catch (e: unknown) {
       console.error(e);
@@ -167,6 +196,12 @@ export default function DatingPage() {
   const saveConfig = async () => {
     setLoading(true);
     try {
+      const perApp: Record<string, OpenerMode> = {};
+      configApps.forEach((a) => {
+        if (a.opener_mode === 'templates' || a.opener_mode === 'ai') {
+          perApp[a.package_name] = a.opener_mode;
+        }
+      });
       await axios.post(
         `${getBackendUrl()}/api/dating/config`,
         {
@@ -181,6 +216,8 @@ export default function DatingPage() {
           min_total_messages_per_day: globalMin,
           max_total_messages_per_day: globalMax,
           speed_preset: speed,
+          opener_mode: openerMode,
+          per_app_opener_mode: perApp,
         },
         { headers: authHeaders() }
       );
@@ -196,6 +233,58 @@ export default function DatingPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const enabledCount = templates.filter((t) => t.enabled).length;
+
+  const saveTemplates = async (next: OpenerTemplate[]) => {
+    const enabled = next.filter((t) => t.enabled).length;
+    if (enabled < 2 || enabled > 50) {
+      alert('Keep 2–50 templates enabled');
+      return;
+    }
+    setLoading(true);
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/openers`,
+        {
+          opener_mode: openerMode,
+          templates: next,
+        },
+        { headers: authHeaders() }
+      );
+      setTemplates(next);
+      await loadAll();
+    } catch (e: unknown) {
+      console.error(e);
+      alert('Failed to save opener library');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addTemplate = async () => {
+    const text = newTemplateText.trim();
+    if (!text) return;
+    const next = [
+      ...templates,
+      {
+        id: `t_${Date.now().toString(36)}`,
+        text,
+        bucket: newTemplateBucket,
+        enabled: true,
+      },
+    ];
+    await saveTemplates(next);
+    setNewTemplateText('');
+  };
+
+  const setAppOpenerMode = (packageName: string, mode: OpenerMode) => {
+    setConfigApps((prev) =>
+      prev.map((a) =>
+        a.package_name === packageName ? { ...a, opener_mode: mode } : a
+      )
+    );
   };
 
   const onSpeedChange = async (next: Speed) => {
@@ -408,22 +497,91 @@ export default function DatingPage() {
         ))}
       </div>
 
+      {/* Global opener mode */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-lg font-semibold">Openers</h3>
+          <span className="text-xs text-mute">
+            Bucket now: {bucketNow} · enabled {enabledCount}/50
+          </span>
+        </div>
+        <p className="text-sm text-mute">
+          Templates save tokens on first-contact messages. Replies always use AI.
+          Respects caps, humanizer timing, and safety auto-pause.
+        </p>
+        <div className="flex overflow-hidden rounded-xl border border-line max-w-md">
+          <button
+            type="button"
+            className={`flex-1 px-3 py-2 text-sm ${
+              openerMode === 'templates' ? 'bg-rose-600' : 'bg-canvas-elev'
+            }`}
+            onClick={() => setOpenerMode('templates')}
+          >
+            Templates
+          </button>
+          <button
+            type="button"
+            className={`flex-1 px-3 py-2 text-sm ${
+              openerMode === 'ai' ? 'bg-rose-600' : 'bg-canvas-elev'
+            }`}
+            onClick={() => setOpenerMode('ai')}
+          >
+            AI
+          </button>
+        </div>
+        <div className="text-xs text-mute flex flex-wrap gap-3">
+          {Object.entries(bucketCounts).map(([b, n]) => (
+            <span key={b}>
+              {b}: {n}
+            </span>
+          ))}
+        </div>
+      </div>
+
       {/* App toggles + persona */}
       <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
         <h3 className="text-lg font-semibold">Apps & Persona</h3>
-        <div className="flex flex-wrap gap-2">
+        <div className="space-y-2">
           {configApps.map((app) => (
-            <button
+            <div
               key={app.package_name}
-              onClick={() => toggleApp(app.package_name)}
-              className={`px-3 py-1 rounded text-sm border ${
-                app.enabled
-                  ? 'bg-rose-900/50 border-rose-600 text-rose-200'
-                  : 'bg-canvas-elev border-line text-mute'
-              }`}
+              className="flex flex-wrap items-center gap-2 justify-between rounded-xl border border-line bg-canvas-elev px-3 py-2"
             >
-              {app.name}
-            </button>
+              <button
+                onClick={() => toggleApp(app.package_name)}
+                className={`px-3 py-1 rounded text-sm border ${
+                  app.enabled
+                    ? 'bg-rose-900/50 border-rose-600 text-rose-200'
+                    : 'bg-surface border-line text-mute'
+                }`}
+              >
+                {app.name}
+              </button>
+              <div className="flex overflow-hidden rounded-lg border border-line text-xs">
+                <button
+                  type="button"
+                  className={`px-2 py-1 ${
+                    (app.opener_mode || openerMode) === 'templates'
+                      ? 'bg-rose-700'
+                      : 'bg-surface'
+                  }`}
+                  onClick={() => setAppOpenerMode(app.package_name, 'templates')}
+                >
+                  Templates
+                </button>
+                <button
+                  type="button"
+                  className={`px-2 py-1 ${
+                    (app.opener_mode || openerMode) === 'ai'
+                      ? 'bg-rose-700'
+                      : 'bg-surface'
+                  }`}
+                  onClick={() => setAppOpenerMode(app.package_name, 'ai')}
+                >
+                  AI
+                </button>
+              </div>
+            </div>
           ))}
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -435,7 +593,7 @@ export default function DatingPage() {
           Review before send (sequential queue)
         </label>
         <label className="block text-sm">
-          Persona / style prompt
+          Persona / style prompt (replies + AI openers)
           <textarea
             value={persona}
             onChange={(e) => setPersona(e.target.value)}
@@ -449,6 +607,112 @@ export default function DatingPage() {
           className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
         >
           Save config
+        </button>
+      </div>
+
+      {/* Template library editor */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
+        <h3 className="text-lg font-semibold">
+          Opener library ({enabledCount} active)
+        </h3>
+        <p className="text-xs text-mute">
+          Pick 2–50 active. Morning / afternoon / evening buckets + time-neutral.
+          Optional {'{name}'} only when the match name is known.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            value={newTemplateText}
+            onChange={(e) => setNewTemplateText(e.target.value)}
+            placeholder="New opener text"
+            className="flex-1 bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
+          />
+          <select
+            value={newTemplateBucket}
+            onChange={(e) => setNewTemplateBucket(e.target.value)}
+            className="bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
+          >
+            <option value="morning">morning</option>
+            <option value="afternoon">afternoon</option>
+            <option value="evening">evening</option>
+            <option value="any">any</option>
+          </select>
+          <button
+            type="button"
+            onClick={addTemplate}
+            disabled={loading || !newTemplateText.trim()}
+            className="px-3 py-2 bg-rose-700 hover:bg-rose-600 disabled:opacity-50 rounded text-sm"
+          >
+            Add
+          </button>
+        </div>
+        <div className="max-h-80 overflow-y-auto space-y-2">
+          {templates.map((t, idx) => (
+            <div
+              key={t.id}
+              className="flex flex-col gap-2 rounded-xl border border-line bg-canvas-elev p-3"
+            >
+              <div className="flex flex-wrap items-center gap-2 text-xs text-mute">
+                <span className="font-mono">{t.id}</span>
+                <select
+                  value={t.bucket}
+                  onChange={(e) => {
+                    const next = templates.map((x, i) =>
+                      i === idx ? { ...x, bucket: e.target.value } : x
+                    );
+                    setTemplates(next);
+                  }}
+                  className="bg-surface border border-line rounded px-2 py-1"
+                >
+                  <option value="morning">morning</option>
+                  <option value="afternoon">afternoon</option>
+                  <option value="evening">evening</option>
+                  <option value="any">any</option>
+                </select>
+                <label className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={t.enabled}
+                    onChange={(e) => {
+                      const next = templates.map((x, i) =>
+                        i === idx ? { ...x, enabled: e.target.checked } : x
+                      );
+                      setTemplates(next);
+                    }}
+                  />
+                  enabled
+                </label>
+                <button
+                  type="button"
+                  className="ml-auto text-red-300 hover:text-red-200"
+                  onClick={() => {
+                    const next = templates.filter((_, i) => i !== idx);
+                    void saveTemplates(next);
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+              <textarea
+                value={t.text}
+                rows={2}
+                onChange={(e) => {
+                  const next = templates.map((x, i) =>
+                    i === idx ? { ...x, text: e.target.value } : x
+                  );
+                  setTemplates(next);
+                }}
+                className="w-full bg-surface border border-line rounded px-3 py-2 text-sm"
+              />
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => saveTemplates(templates)}
+          className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
+        >
+          Save library
         </button>
       </div>
 
