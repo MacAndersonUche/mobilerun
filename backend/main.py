@@ -11,6 +11,7 @@ import logging
 import os
 import secrets
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1021,6 +1022,9 @@ class DatingModeConfig(BaseModel):
     calendar_on_handoff: Optional[bool] = None
     contact_ask_enabled: Optional[bool] = None
     contact_ask_text: Optional[str] = None
+    contact_ask_order: Optional[List[str]] = None
+    contact_ask_whatsapp_text: Optional[str] = None
+    contact_ask_snapchat_text: Optional[str] = None
     date_flow_per_app: Optional[Dict[str, Dict[str, Any]]] = None
 
 
@@ -1477,18 +1481,38 @@ def _load_date_flow(auth: Optional[dict] = None):
         )
         return item.id
 
+    from mobilerun.dating.matches import MatchStore
+
+    match_store = MatchStore(user_id)
+
+    def _upsert_match(**kwargs):
+        return match_store.upsert_from_date_flow(**kwargs)
+
     persist = default_persist_path()
     if os.environ.get("MOBILERUN_DATA"):
         persist = _Path(os.environ["MOBILERUN_DATA"]) / "dating_date_flow.json"
     if _date_flow_mgr is None or getattr(_date_flow_mgr, "_user_id", None) != user_id:
         _date_flow_mgr = DateFlowManager(
-            config=cfg, persist_path=persist, push_needs_you=_push
+            config=cfg,
+            persist_path=persist,
+            push_needs_you=_push,
+            on_match_upsert=_upsert_match,
         )
         _date_flow_mgr._user_id = user_id  # type: ignore[attr-defined]
+        _date_flow_mgr._match_store = match_store  # type: ignore[attr-defined]
     else:
         _date_flow_mgr.config = cfg
         _date_flow_mgr.push_needs_you = _push
+        _date_flow_mgr.on_match_upsert = _upsert_match
+        _date_flow_mgr._match_store = match_store  # type: ignore[attr-defined]
     return _date_flow_mgr
+
+
+def _load_match_store(auth: Optional[dict] = None):
+    """Private per-user Matches DB (DynamoDB / local). Auth-scoped only."""
+    from mobilerun.dating.matches import MatchStore
+
+    return MatchStore(_dating_user_id(auth))
 
 
 def _save_date_flow(mgr, auth: Optional[dict] = None) -> None:
@@ -1596,6 +1620,9 @@ async def update_dating_config(
         "calendar_on_handoff",
         "contact_ask_enabled",
         "contact_ask_text",
+        "contact_ask_order",
+        "contact_ask_whatsapp_text",
+        "contact_ask_snapchat_text",
     ):
         if dump.get(key) is not None:
             cur[key] = dump[key]
@@ -1869,6 +1896,136 @@ async def evaluate_date_flow(
             body.match_id, body.package_name
         ),
     }
+
+
+class MatchUpsertBody(BaseModel):
+    match_id: Optional[str] = None
+    name: str = ""
+    app: str = ""
+    package_name: str = ""
+    date_agreed: str = ""
+    distance_miles: Optional[float] = None
+    whatsapp: str = ""
+    snapchat: str = ""
+    status: str = "chatting"
+    notes: str = ""
+
+
+class MatchPatchBody(BaseModel):
+    name: Optional[str] = None
+    app: Optional[str] = None
+    package_name: Optional[str] = None
+    date_agreed: Optional[str] = None
+    distance_miles: Optional[float] = None
+    whatsapp: Optional[str] = None
+    snapchat: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/dating/matches")
+async def list_dating_matches(
+    q: str = "",
+    sort: str = "updated_at",
+    order: str = "desc",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Private Matches DB for the authenticated user only."""
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    store = _load_match_store(auth)
+    rows = [m.to_dict() for m in store.list(q=q, sort=sort, order=order)]
+    return {"matches": rows, "count": len(rows), "user_id": _dating_user_id(auth)}
+
+
+@app.post("/api/dating/matches")
+async def create_dating_match(
+    body: MatchUpsertBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    from mobilerun.dating.matches import MatchRecord
+
+    store = _load_match_store(auth)
+    dump = body.dict() if hasattr(body, "dict") else body.model_dump()
+    if not dump.get("match_id"):
+        dump["match_id"] = str(uuid.uuid4())
+    dump["user_id"] = _dating_user_id(auth)
+    rec = store.upsert(MatchRecord.from_dict(dump))
+    return {"status": "success", "match": rec.to_dict()}
+
+
+@app.put("/api/dating/matches/{match_id}")
+async def update_dating_match(
+    match_id: str,
+    body: MatchPatchBody,
+    package_name: str = "",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    store = _load_match_store(auth)
+    dump = (
+        body.dict(exclude_unset=True)
+        if hasattr(body, "dict")
+        else body.model_dump(exclude_unset=True)
+    )
+    rec = store.update(match_id, dump, package_name=package_name)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return {"status": "success", "match": rec.to_dict()}
+
+
+@app.delete("/api/dating/matches/{match_id}")
+async def delete_dating_match(
+    match_id: str,
+    package_name: str = "",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    store = _load_match_store(auth)
+    ok = store.delete(match_id, package_name=package_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return {"status": "success"}
+
+
+@app.get("/api/dating/matches/export.csv")
+async def export_dating_matches_csv(
+    q: str = "",
+    sort: str = "updated_at",
+    order: str = "desc",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    if (
+        auth is None
+        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    from fastapi.responses import PlainTextResponse
+
+    store = _load_match_store(auth)
+    csv_text = store.export_csv(q=q, sort=sort, order=order)
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="matches.csv"',
+        },
+    )
 
 
 # === Selector discovery + cache (dating/social nav, a11y-first) ===

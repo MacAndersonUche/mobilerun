@@ -112,8 +112,15 @@ export default function DatingPage() {
   const [handoffEnabled, setHandoffEnabled] = useState(true);
   const [calendarOnHandoff, setCalendarOnHandoff] = useState(true);
   const [contactAskEnabled, setContactAskEnabled] = useState(true);
-  const [contactAskText, setContactAskText] = useState(
-    'Would it be easier to chat on WhatsApp or Snapchat? Totally optional — no pressure either way.'
+  const [contactAskOrder, setContactAskOrder] = useState<string[]>([
+    'whatsapp',
+    'snapchat',
+  ]);
+  const [contactAskWhatsappText, setContactAskWhatsappText] = useState(
+    'Would it be easier to chat on WhatsApp? Totally optional — no pressure either way.'
+  );
+  const [contactAskSnapchatText, setContactAskSnapchatText] = useState(
+    'No worries — would Snapchat be easier instead? Totally optional, only if you like.'
   );
   const [dateFlowStats, setDateFlowStats] = useState<{
     chats_active: number;
@@ -206,7 +213,17 @@ export default function DatingPage() {
       setHandoffEnabled(df.handoff_enabled ?? true);
       setCalendarOnHandoff(df.calendar_on_handoff ?? true);
       setContactAskEnabled(df.contact_ask_enabled ?? true);
-      if (df.contact_ask_text) setContactAskText(df.contact_ask_text);
+      if (Array.isArray(df.contact_ask_order) && df.contact_ask_order.length) {
+        setContactAskOrder(df.contact_ask_order);
+      }
+      if (df.contact_ask_whatsapp_text || df.contact_ask_text) {
+        setContactAskWhatsappText(
+          df.contact_ask_whatsapp_text || df.contact_ask_text
+        );
+      }
+      if (df.contact_ask_snapchat_text) {
+        setContactAskSnapchatText(df.contact_ask_snapchat_text);
+      }
       setDateFlowStats(configRes.data.date_flow_stats || null);
       setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
@@ -289,7 +306,10 @@ export default function DatingPage() {
           handoff_enabled: handoffEnabled,
           calendar_on_handoff: calendarOnHandoff,
           contact_ask_enabled: contactAskEnabled,
-          contact_ask_text: contactAskText,
+          contact_ask_order: contactAskOrder,
+          contact_ask_whatsapp_text: contactAskWhatsappText,
+          contact_ask_snapchat_text: contactAskSnapchatText,
+          contact_ask_text: contactAskWhatsappText,
         },
         { headers: authHeaders() }
       );
@@ -688,8 +708,9 @@ export default function DatingPage() {
         <p className="text-xs text-mute">
           AI replies to existing chats. After a warm chat window, one polite
           public-place invite — never stay-over / his home. After she agrees a
-          date, optionally one WhatsApp/Snap ask; then Needs-you handoff. Never
-          auto-message WhatsApp/Snap — you continue personally.
+          date, ask WhatsApp first (then Snapchat if she declines). Then
+          Needs-you handoff. Never auto-message WhatsApp/Snap — you continue
+          personally.
         </p>
         {dateFlowStats ? (
           <div className="flex flex-wrap gap-4 text-sm">
@@ -784,25 +805,62 @@ export default function DatingPage() {
               onChange={(e) => setContactAskEnabled(e.target.checked)}
               aria-label="Contact ask enabled"
             />
-            Ask once for WhatsApp / Snap after date agree
+            Contact asks after date agree (WhatsApp → Snap)
           </label>
         </div>
         <label className="block text-sm">
-          Contact ask wording (one message, optional)
+          Ask order
+          <select
+            value={contactAskOrder.join(',')}
+            disabled={!contactAskEnabled}
+            aria-label="Contact ask order"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === 'snapchat,whatsapp') {
+                setContactAskOrder(['snapchat', 'whatsapp']);
+              } else if (v === 'whatsapp') {
+                setContactAskOrder(['whatsapp']);
+              } else if (v === 'snapchat') {
+                setContactAskOrder(['snapchat']);
+              } else {
+                setContactAskOrder(['whatsapp', 'snapchat']);
+              }
+            }}
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
+          >
+            <option value="whatsapp,snapchat">WhatsApp first, then Snapchat</option>
+            <option value="snapchat,whatsapp">Snapchat first, then WhatsApp</option>
+            <option value="whatsapp">WhatsApp only</option>
+            <option value="snapchat">Snapchat only</option>
+          </select>
+        </label>
+        <label className="block text-sm">
+          WhatsApp ask wording
           <textarea
-            value={contactAskText}
-            onChange={(e) => setContactAskText(e.target.value)}
+            value={contactAskWhatsappText}
+            onChange={(e) => setContactAskWhatsappText(e.target.value)}
             rows={2}
             disabled={!contactAskEnabled}
-            aria-label="Contact ask wording"
+            aria-label="WhatsApp ask wording"
+            className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
+          />
+        </label>
+        <label className="block text-sm">
+          Snapchat ask wording
+          <textarea
+            value={contactAskSnapchatText}
+            onChange={(e) => setContactAskSnapchatText(e.target.value)}
+            rows={2}
+            disabled={!contactAskEnabled}
+            aria-label="Snapchat ask wording"
             className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm disabled:opacity-50"
           />
         </label>
         <p className="text-xs text-mute">
           Beyond {radiusMiles} mi → suggest meeting in {homeLocation} (public).
           Within radius → mutually convenient public place. Never suggest
-          staying over. Contact ask is sent at most once; decline or ignore still
-          hands off.
+          staying over. Decline first channel → ask second once; decline again or
+          ignore → hand off. Saved contacts appear on Matches.
         </p>
         <button
           onClick={saveConfig}

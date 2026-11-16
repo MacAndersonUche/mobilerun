@@ -12,6 +12,7 @@ from .openers import (
     pick_template_opener,
 )
 from .date_flow import DateFlowConfig, DateFlowManager
+from .matches import MatchRecord, MatchStore
 
 __all__ = [
     "DatingAgent",
@@ -27,4 +28,6 @@ __all__ = [
     "pick_template_opener",
     "DateFlowConfig",
     "DateFlowManager",
+    "MatchRecord",
+    "MatchStore",
 ]

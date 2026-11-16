@@ -34,10 +34,17 @@ DEFAULT_HOME_LOCATION = "Stoke-on-Trent"
 DEFAULT_RADIUS_MILES = 50.0
 DEFAULT_INVITE_DAYS_MIN = 3
 DEFAULT_INVITE_DAYS_MAX = 7
-DEFAULT_CONTACT_ASK = (
-    "Would it be easier to chat on WhatsApp or Snapchat? "
+DEFAULT_CONTACT_ASK_ORDER = ["whatsapp", "snapchat"]
+DEFAULT_CONTACT_ASK_WHATSAPP = (
+    "Would it be easier to chat on WhatsApp? "
     "Totally optional — no pressure either way."
 )
+DEFAULT_CONTACT_ASK_SNAPCHAT = (
+    "No worries — would Snapchat be easier instead? "
+    "Totally optional, only if you like."
+)
+# Legacy combined wording (kept for older configs)
+DEFAULT_CONTACT_ASK = DEFAULT_CONTACT_ASK_WHATSAPP
 
 # Hard bans in invite / reply wording
 STAY_OVER_PATTERNS = [
@@ -115,10 +122,11 @@ CONTACT_DECLINE_HINTS = [
     r"\bi'?m good\b",
 ]
 
-# Capture WhatsApp / Snap / phone from a reply (after the one optional ask)
+# Capture WhatsApp / Snap / phone from a reply (after the one optional ask).
+# Require "is"/":"/"@" so "no snap thanks" is not treated as a handle.
 _CONTACT_SNAP_RE = [
     re.compile(
-        r"(?:my\s+)?snap(?:chat)?(?:\s+(?:is|handle|user(?:name)?))?\s*[:\-@]?\s*"
+        r"(?:my\s+)?snap(?:chat)?\s+(?:is|handle|user(?:name)?)\s*[:\-@]?\s*"
         r"@?([A-Za-z][A-Za-z0-9._\-]{2,31})",
         re.I,
     ),
@@ -128,6 +136,23 @@ _CONTACT_SNAP_RE = [
         re.I,
     ),
 ]
+_CONTACT_SNAP_STOPWORDS = frozenset(
+    {
+        "chat",
+        "me",
+        "is",
+        "on",
+        "my",
+        "thanks",
+        "thank",
+        "please",
+        "here",
+        "no",
+        "not",
+        "dont",
+        "don't",
+    }
+)
 _CONTACT_WA_RE = [
     re.compile(
         r"(?:my\s+)?(?:whats?app|wa|number|phone)(?:\s+(?:is|number))?\s*[:\-]?\s*"
@@ -190,7 +215,7 @@ def extract_contact_handle(text: str) -> Tuple[str, str]:
         m = rx.search(t)
         if m:
             handle = m.group(1).strip().lstrip("@")
-            if handle.lower() not in ("chat", "me", "is", "on", "my"):
+            if handle.lower() not in _CONTACT_SNAP_STOPWORDS:
                 return handle, "snapchat"
     for rx in _CONTACT_WA_RE:
         m = rx.search(t)
@@ -214,8 +239,34 @@ def extract_contact_handle(text: str) -> Tuple[str, str]:
     return "", ""
 
 
-def build_contact_ask_text(cfg: "DateFlowConfig") -> str:
-    text = (cfg.contact_ask_text or DEFAULT_CONTACT_ASK).strip() or DEFAULT_CONTACT_ASK
+def _normalize_contact_order(raw: Any) -> List[str]:
+    allowed = {"whatsapp", "snapchat"}
+    out: List[str] = []
+    for x in list(raw or []) or list(DEFAULT_CONTACT_ASK_ORDER):
+        v = str(x).strip().lower()
+        if v in ("wa", "whats", "whatsapp"):
+            v = "whatsapp"
+        elif v in ("snap", "sc", "snapchat"):
+            v = "snapchat"
+        if v in allowed and v not in out:
+            out.append(v)
+    return out or list(DEFAULT_CONTACT_ASK_ORDER)
+
+
+def build_contact_ask_text(cfg: "DateFlowConfig", channel: str = "whatsapp") -> str:
+    ch = (channel or "whatsapp").strip().lower()
+    if ch == "snapchat":
+        text = (
+            cfg.contact_ask_snapchat_text
+            or cfg.contact_ask_text
+            or DEFAULT_CONTACT_ASK_SNAPCHAT
+        ).strip() or DEFAULT_CONTACT_ASK_SNAPCHAT
+    else:
+        text = (
+            cfg.contact_ask_whatsapp_text
+            or cfg.contact_ask_text
+            or DEFAULT_CONTACT_ASK_WHATSAPP
+        ).strip() or DEFAULT_CONTACT_ASK_WHATSAPP
     return strip_stay_over_wording(text) if contains_stay_over_wording(text) else text
 
 
@@ -232,6 +283,12 @@ class DateFlowConfig:
     handoff_enabled: bool = True
     calendar_on_handoff: bool = True
     contact_ask_enabled: bool = True
+    contact_ask_order: List[str] = field(
+        default_factory=lambda: list(DEFAULT_CONTACT_ASK_ORDER)
+    )
+    contact_ask_whatsapp_text: str = DEFAULT_CONTACT_ASK_WHATSAPP
+    contact_ask_snapchat_text: str = DEFAULT_CONTACT_ASK_SNAPCHAT
+    # Legacy single wording (falls back into channel-specific texts)
     contact_ask_text: str = DEFAULT_CONTACT_ASK
     # Per-app overrides: package -> partial dict
     per_app: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -246,8 +303,17 @@ class DateFlowConfig:
         self.reply_persona_prompt = (
             self.reply_persona_prompt or DEFAULT_REPLY_PERSONA
         ).strip()
+        self.contact_ask_order = _normalize_contact_order(self.contact_ask_order)
+        self.contact_ask_whatsapp_text = (
+            self.contact_ask_whatsapp_text
+            or self.contact_ask_text
+            or DEFAULT_CONTACT_ASK_WHATSAPP
+        ).strip() or DEFAULT_CONTACT_ASK_WHATSAPP
+        self.contact_ask_snapchat_text = (
+            self.contact_ask_snapchat_text or DEFAULT_CONTACT_ASK_SNAPCHAT
+        ).strip() or DEFAULT_CONTACT_ASK_SNAPCHAT
         self.contact_ask_text = (
-            self.contact_ask_text or DEFAULT_CONTACT_ASK
+            self.contact_ask_text or self.contact_ask_whatsapp_text
         ).strip() or DEFAULT_CONTACT_ASK
         return self
 
@@ -273,6 +339,9 @@ class DateFlowConfig:
             "handoff_enabled": self.handoff_enabled,
             "calendar_on_handoff": self.calendar_on_handoff,
             "contact_ask_enabled": self.contact_ask_enabled,
+            "contact_ask_order": list(self.contact_ask_order),
+            "contact_ask_whatsapp_text": self.contact_ask_whatsapp_text,
+            "contact_ask_snapchat_text": self.contact_ask_snapchat_text,
             "contact_ask_text": self.contact_ask_text,
             "per_app": dict(self.per_app or {}),
         }
@@ -300,6 +369,17 @@ class DateFlowConfig:
             handoff_enabled=bool(raw.get("handoff_enabled", True)),
             calendar_on_handoff=bool(raw.get("calendar_on_handoff", True)),
             contact_ask_enabled=bool(raw.get("contact_ask_enabled", True)),
+            contact_ask_order=list(
+                raw.get("contact_ask_order") or DEFAULT_CONTACT_ASK_ORDER
+            ),
+            contact_ask_whatsapp_text=str(
+                raw.get("contact_ask_whatsapp_text")
+                or raw.get("contact_ask_text")
+                or DEFAULT_CONTACT_ASK_WHATSAPP
+            ),
+            contact_ask_snapchat_text=str(
+                raw.get("contact_ask_snapchat_text") or DEFAULT_CONTACT_ASK_SNAPCHAT
+            ),
             contact_ask_text=str(raw.get("contact_ask_text") or DEFAULT_CONTACT_ASK),
             per_app=dict(raw.get("per_app") or {}),
         ).clamp()
@@ -313,6 +393,8 @@ class MatchContactRecord:
     package_name: str = ""
     contact_handle: str = ""
     contact_kind: str = ""
+    whatsapp: str = ""
+    snapchat: str = ""
     date_details: str = ""
     updated_at: str = ""
 
@@ -348,8 +430,13 @@ class ChatDateState:
     engaged: bool = False
     contact_ask_sent: bool = False
     contact_ask_pending: bool = False
+    contact_ask_channel: str = ""
+    contact_asks_done: List[str] = field(default_factory=list)
     contact_handle: str = ""
     contact_kind: str = ""
+    whatsapp: str = ""
+    snapchat: str = ""
+    her_name: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -357,7 +444,12 @@ class ChatDateState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ChatDateState":
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore
-        return cls(**{k: v for k, v in (data or {}).items() if k in known})
+        raw = {k: v for k, v in (data or {}).items() if k in known}
+        if "contact_asks_done" in raw and not isinstance(
+            raw["contact_asks_done"], list
+        ):
+            raw["contact_asks_done"] = list(raw["contact_asks_done"] or [])
+        return cls(**raw)
 
 
 @dataclass
@@ -372,6 +464,7 @@ class DateFlowDecision:
     invite_text: str = ""
     should_contact_ask: bool = False
     contact_ask_text: str = ""
+    contact_ask_channel: str = ""
     contact_handle: str = ""
     contact_kind: str = ""
     beyond_radius: bool = False
@@ -487,11 +580,14 @@ class DateFlowManager:
         persist_path: Optional[Path] = None,
         rng: Optional[random.Random] = None,
         push_needs_you: Optional[Callable[..., str]] = None,
+        on_match_upsert: Optional[Callable[..., Any]] = None,
     ):
         self.config = (config or DateFlowConfig()).clamp()
         self.persist_path = persist_path
         self.rng = rng or random.Random()
         self.push_needs_you = push_needs_you
+        # Optional MatchStore.upsert_from_date_flow(**kwargs) — never logs contacts
+        self.on_match_upsert = on_match_upsert
         self._chats: Dict[str, ChatDateState] = {}
         self._matches: Dict[str, MatchContactRecord] = {}
         self._invite_threshold: Dict[str, int] = {}
@@ -528,22 +624,97 @@ class DateFlowManager:
         *,
         match_id: str,
         package_name: str,
-        contact_handle: str,
-        contact_kind: str,
+        contact_handle: str = "",
+        contact_kind: str = "",
+        whatsapp: str = "",
+        snapchat: str = "",
         date_details: str = "",
+        her_name: str = "",
+        distance_miles: Optional[float] = None,
+        status: str = "booked",
     ) -> MatchContactRecord:
         """Persist private per-user contact on the match record (no auto-message)."""
         k = self._key(package_name, match_id)
+        wa = whatsapp
+        sn = snapchat
+        kind = (contact_kind or "").lower()
+        if contact_handle and not wa and not sn:
+            if kind in ("whatsapp", "phone"):
+                wa = contact_handle
+                kind = "whatsapp" if kind == "phone" else kind
+            elif kind == "snapchat":
+                sn = contact_handle
+        prev = self._matches.get(k)
+        if prev:
+            wa = wa or prev.whatsapp
+            sn = sn or prev.snapchat
+        handle = contact_handle or wa or sn
+        kind = kind or (
+            "whatsapp" if wa and not sn else "snapchat" if sn else contact_kind
+        )
         rec = MatchContactRecord(
             match_id=match_id,
             package_name=package_name,
-            contact_handle=contact_handle,
-            contact_kind=contact_kind,
+            contact_handle=handle,
+            contact_kind=kind,
+            whatsapp=wa,
+            snapchat=sn,
             date_details=date_details,
             updated_at=datetime.now().isoformat(),
         )
         self._matches[k] = rec
+        self._emit_match_upsert(
+            match_id=match_id,
+            package_name=package_name,
+            name=her_name,
+            date_agreed=date_details,
+            distance_miles=distance_miles,
+            whatsapp=wa,
+            snapchat=sn,
+            status=status,
+        )
         return rec
+
+    def _emit_match_upsert(self, **kwargs: Any) -> None:
+        if not self.on_match_upsert:
+            return
+        try:
+            self.on_match_upsert(**kwargs)
+        except TypeError:
+            try:
+                self.on_match_upsert(kwargs)  # type: ignore[misc]
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _next_contact_channel(self, cfg: DateFlowConfig, chat: ChatDateState) -> str:
+        done = {str(x).lower() for x in (chat.contact_asks_done or [])}
+        for ch in cfg.contact_ask_order:
+            if ch not in done:
+                return ch
+        return ""
+
+    def _start_contact_ask(
+        self,
+        decision: DateFlowDecision,
+        chat: ChatDateState,
+        cfg: DateFlowConfig,
+        *,
+        channel: str,
+        reason: str = "date_agreed_contact_ask",
+    ) -> DateFlowDecision:
+        ask = build_contact_ask_text(cfg, channel)
+        decision.should_contact_ask = True
+        decision.contact_ask_text = ask
+        decision.contact_ask_channel = channel
+        decision.reason = reason
+        chat.contact_ask_sent = True
+        chat.contact_ask_pending = True
+        chat.contact_ask_channel = channel
+        decision.chat_state = chat
+        self._persist()
+        return decision
 
     def _bump_stat(self, package_name: str, field_name: str, delta: int = 1) -> None:
         self._stats[field_name] = int(self._stats.get(field_name) or 0) + delta
@@ -612,16 +783,17 @@ class DateFlowManager:
             self._persist()
             return decision
 
-        # After the one contact ask: capture / decline / ignore → always hand off.
-        # Re-compose with the same agree inbound re-emits the ask (idempotent).
+        if her_name:
+            chat.her_name = her_name
+
+        # After a contact ask: capture / decline (maybe next channel) / ignore → hand off.
+        # Re-compose with the same agree inbound re-emits the current ask (idempotent).
         if chat.contact_ask_pending and inbound:
             if inbound.strip() == (chat.date_details or "").strip():
-                decision.should_contact_ask = True
-                decision.contact_ask_text = build_contact_ask_text(cfg)
-                decision.reason = "date_agreed_contact_ask"
-                decision.chat_state = chat
-                self._persist()
-                return decision
+                ch = chat.contact_ask_channel or self._next_contact_channel(cfg, chat)
+                return self._start_contact_ask(
+                    decision, chat, cfg, channel=ch or "whatsapp"
+                )
             return self._resolve_contact_ask(
                 decision,
                 chat,
@@ -634,6 +806,13 @@ class DateFlowManager:
         # Discomfort / decline always escalates (pre-contact-ask)
         if inbound and _match_any(inbound, DECLINE_HINTS):
             chat.invite_declined = True
+            self._emit_match_upsert(
+                match_id=match_id,
+                package_name=package_name,
+                name=her_name or chat.her_name,
+                status="handed_off",
+                distance_miles=chat.distance_miles,
+            )
             return self._handoff(
                 decision,
                 chat,
@@ -665,17 +844,21 @@ class DateFlowManager:
                     chat.date_booked = True
                     chat.date_details = inbound.strip()
                     self._bump_stat(package_name, "dates_booked", 1)
-                    # Optional single WhatsApp/Snap ask before final handoff
-                    if cfg.contact_ask_enabled and not chat.contact_ask_sent:
-                        ask = build_contact_ask_text(cfg)
-                        decision.should_contact_ask = True
-                        decision.contact_ask_text = ask
-                        chat.contact_ask_sent = True
-                        chat.contact_ask_pending = True
-                        decision.chat_state = chat
-                        decision.reason = "date_agreed_contact_ask"
-                        self._persist()
-                        return decision
+                    self._emit_match_upsert(
+                        match_id=match_id,
+                        package_name=package_name,
+                        name=her_name or chat.her_name,
+                        date_agreed=chat.date_details,
+                        distance_miles=chat.distance_miles,
+                        status="booked",
+                    )
+                    # Ordered contact asks (default WhatsApp → Snapchat)
+                    if cfg.contact_ask_enabled:
+                        channel = self._next_contact_channel(cfg, chat)
+                        if channel:
+                            return self._start_contact_ask(
+                                decision, chat, cfg, channel=channel
+                            )
                     return self._handoff(
                         decision,
                         chat,
@@ -717,6 +900,13 @@ class DateFlowManager:
                 chat.invite_sent = True
                 chat.invite_text = invite
                 self._bump_stat(package_name, "invites_sent", 1)
+                self._emit_match_upsert(
+                    match_id=match_id,
+                    package_name=package_name,
+                    name=her_name or chat.her_name,
+                    status="invited",
+                    distance_miles=chat.distance_miles,
+                )
 
         self._persist()
         decision.chat_state = chat
@@ -732,20 +922,43 @@ class DateFlowManager:
         her_name: str,
         package_name: str,
     ) -> DateFlowDecision:
-        """One ask only: share → save; decline/ignore → hand off; never re-ask."""
+        """Capture handle, or on decline ask next channel once; ignore → hand off."""
+        pending_ch = (chat.contact_ask_channel or "whatsapp").lower()
         chat.contact_ask_pending = False
-        handle, kind = extract_contact_handle(inbound)
+        declined = _match_any(inbound, CONTACT_DECLINE_HINTS) or _match_any(
+            inbound, DECLINE_HINTS
+        )
+        handle, kind = ("", "")
+        if not declined:
+            handle, kind = extract_contact_handle(inbound)
         if handle:
+            # Normalize phone shares while WhatsApp was asked → whatsapp
+            if kind == "phone" and pending_ch == "whatsapp":
+                kind = "whatsapp"
+            if kind not in ("whatsapp", "snapchat"):
+                kind = pending_ch if pending_ch in ("whatsapp", "snapchat") else kind
             chat.contact_handle = handle
             chat.contact_kind = kind
+            if kind == "snapchat":
+                chat.snapchat = handle
+            else:
+                chat.whatsapp = handle
+                kind = "whatsapp"
             decision.contact_handle = handle
             decision.contact_kind = kind
+            if pending_ch and pending_ch not in chat.contact_asks_done:
+                chat.contact_asks_done.append(pending_ch)
             self.save_match_contact(
                 match_id=chat.match_id,
                 package_name=package_name,
                 contact_handle=handle,
                 contact_kind=kind,
+                whatsapp=chat.whatsapp,
+                snapchat=chat.snapchat,
                 date_details=chat.date_details,
+                her_name=her_name or chat.her_name,
+                distance_miles=chat.distance_miles,
+                status="handed_off",
             )
             return self._handoff(
                 decision,
@@ -757,18 +970,40 @@ class DateFlowManager:
                 her_name=her_name,
                 package_name=package_name,
             )
-        if _match_any(inbound, CONTACT_DECLINE_HINTS) or _match_any(
-            inbound, DECLINE_HINTS
-        ):
-            reason = "contact_declined"
-        else:
-            reason = "contact_ignored"
+
+        if pending_ch and pending_ch not in chat.contact_asks_done:
+            chat.contact_asks_done.append(pending_ch)
+        chat.contact_ask_channel = ""
+
+        if declined:
+            # Decline WhatsApp → ask Snapchat once (or next in configured order)
+            nxt = self._next_contact_channel(cfg, chat)
+            if nxt:
+                return self._start_contact_ask(
+                    decision,
+                    chat,
+                    cfg,
+                    channel=nxt,
+                    reason=f"contact_declined_ask_{nxt}",
+                )
+            return self._handoff(
+                decision,
+                chat,
+                cfg,
+                kind="date_handoff",
+                reason="contact_declined",
+                inbound=inbound,
+                her_name=her_name,
+                package_name=package_name,
+            )
+
+        # Ignore / unrelated reply: still hand off; do not ask further channels
         return self._handoff(
             decision,
             chat,
             cfg,
             kind="date_handoff",
-            reason=reason,
+            reason="contact_ignored",
             inbound=inbound,
             her_name=her_name,
             package_name=package_name,
@@ -797,6 +1032,16 @@ class DateFlowManager:
         decision.contact_handle = chat.contact_handle
         decision.contact_kind = chat.contact_kind
         decision.chat_state = chat
+        self._emit_match_upsert(
+            match_id=chat.match_id,
+            package_name=package_name,
+            name=her_name or chat.her_name,
+            date_agreed=chat.date_details or "",
+            distance_miles=chat.distance_miles,
+            whatsapp=chat.whatsapp,
+            snapchat=chat.snapchat,
+            status="handed_off",
+        )
         if cfg.calendar_on_handoff and chat.date_booked:
             decision.calendar_entry = {
                 "title": f"Date with {her_name or chat.match_id}",
@@ -809,12 +1054,16 @@ class DateFlowManager:
                 "created_at": datetime.now().isoformat(),
             }
         if self.push_needs_you:
-            contact_line = ""
-            if chat.contact_handle:
-                contact_line = (
-                    f" Contact ({chat.contact_kind or 'shared'}): "
-                    f"{chat.contact_handle}."
+            bits = []
+            if chat.whatsapp:
+                bits.append(f"WhatsApp: {chat.whatsapp}")
+            if chat.snapchat:
+                bits.append(f"Snapchat: {chat.snapchat}")
+            if not bits and chat.contact_handle:
+                bits.append(
+                    f"Contact ({chat.contact_kind or 'shared'}): {chat.contact_handle}"
                 )
+            contact_line = (" " + "; ".join(bits) + ".") if bits else ""
             try:
                 self.push_needs_you(
                     kind=kind,
@@ -838,6 +1087,8 @@ class DateFlowManager:
                         "date_details": chat.date_details,
                         "contact_handle": chat.contact_handle,
                         "contact_kind": chat.contact_kind,
+                        "whatsapp": chat.whatsapp,
+                        "snapchat": chat.snapchat,
                         "calendar": decision.calendar_entry,
                         "never_auto_message_contact": True,
                     },

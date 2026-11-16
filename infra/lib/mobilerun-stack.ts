@@ -91,6 +91,15 @@ export class MobilerunStack extends cdk.Stack {
       sortKey: { name: 'next_run_at', type: dynamodb.AttributeType.NUMBER },
     });
 
+    // Private per-user dating Matches (WhatsApp / Snap — auth-only)
+    const matchesTable = new dynamodb.Table(this, 'Matches', {
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'match_key', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      tableName: 'mobilerun-matches',
+    });
+
     const screenshotBucket = new s3.Bucket(this, 'Screenshots', {
       bucketName: `mobilerun-screenshots-${this.account}-${this.region}`,
       versioned: false,
@@ -119,7 +128,8 @@ export class MobilerunStack extends cdk.Stack {
         screenshotBucket,
         settingsTable,
         connectionsTable,
-        jobsTable
+        jobsTable,
+        matchesTable
       );
     } else {
       new cdk.CfnOutput(this, 'EC2Disabled', {
@@ -217,7 +227,8 @@ export class MobilerunStack extends cdk.Stack {
     screenshotBucket: s3.Bucket,
     settingsTable: dynamodb.Table,
     connectionsTable: dynamodb.Table,
-    jobsTable: dynamodb.Table
+    jobsTable: dynamodb.Table,
+    matchesTable: dynamodb.Table
   ) {
     const envVars: { [key: string]: string } = {
       JWT_SECRET: process.env.JWT_SECRET || 'change-me-in-production',
@@ -234,6 +245,7 @@ export class MobilerunStack extends cdk.Stack {
       SETTINGS_TABLE: settingsTable.tableName,
       CONNECTIONS_TABLE: connectionsTable.tableName,
       JOBS_TABLE: jobsTable.tableName,
+      MATCHES_TABLE: matchesTable.tableName,
       SCREENSHOT_BUCKET: screenshotBucket.bucketName,
       USE_AWS_STORAGE: 'true',
       STEP_DRIVEN: 'true',
@@ -280,6 +292,7 @@ export class MobilerunStack extends cdk.Stack {
       settingsTable.grantReadWriteData(fn);
       connectionsTable.grantReadWriteData(fn);
       jobsTable.grantReadWriteData(fn);
+      matchesTable.grantReadWriteData(fn);
       screenshotBucket.grantReadWrite(fn);
     }
 

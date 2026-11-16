@@ -16,6 +16,7 @@ import {
   MonitorPlay,
   Settings,
   History,
+  Users,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth';
 import LoginPage from './pages/LoginPage';
@@ -30,6 +31,7 @@ import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
 import NeedsYouPage from './pages/NeedsYouPage';
+import MatchesPage from './pages/MatchesPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import { cn } from './lib/cn';
 
@@ -71,6 +73,7 @@ function Shell() {
               ...tabs,
               { to: '/live', icon: MonitorPlay, label: 'Live' },
               { to: '/dating', icon: Heart, label: 'Dating' },
+              { to: '/matches', icon: Users, label: 'Matches' },
               { to: '/social', icon: MessageCircle, label: 'Social' },
               { to: '/tasks', icon: Smartphone, label: 'Tasks' },
               { to: '/history', icon: History, label: 'Activity' },
@@ -104,6 +107,7 @@ function Shell() {
             <Route path="/live" element={<LiveViewPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/dating" element={<DatingPage />} />
+            <Route path="/matches" element={<MatchesPage />} />
             <Route path="/social" element={<SocialPage />} />
             <Route path="/needs-you" element={<NeedsYouPage />} />
             <Route path="/history" element={<HistoryPage />} />

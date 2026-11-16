@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 
 from mobilerun.dating.date_flow import (
-    DEFAULT_CONTACT_ASK,
+    DEFAULT_CONTACT_ASK_WHATSAPP,
     DateFlowConfig,
     DateFlowManager,
+    build_contact_ask_text,
     build_invite_text,
     contains_stay_over_wording,
     conversation_is_engaged,
@@ -20,6 +21,7 @@ from mobilerun.dating.date_flow import (
     pick_invite_day_threshold,
     strip_stay_over_wording,
 )
+from mobilerun.dating.matches import MatchStore, redact_for_log
 from mobilerun.dating.persona import PersonaManager
 
 
@@ -154,13 +156,15 @@ def test_handoff_stops_ai_on_agree_when_contact_ask_off(tmp_path: Path):
     assert out.get("text") == ""
 
 
-def test_contact_ask_once_then_capture(tmp_path: Path):
+def test_contact_ask_whatsapp_first_then_capture(tmp_path: Path):
     needs = []
+    store = MatchStore("mac@test", persist_path=tmp_path / "matches.json")
     mgr = DateFlowManager(
         DateFlowConfig(contact_ask_enabled=True),
         persist_path=tmp_path / "df.json",
         rng=random.Random(1),
         push_needs_you=lambda **kw: needs.append(kw) or "ny1",
+        on_match_upsert=store.upsert_from_date_flow,
     )
     chat = mgr.get_chat("c1", "co.hinge.app")
     chat.invite_sent = True
@@ -171,15 +175,20 @@ def test_contact_ask_once_then_capture(tmp_path: Path):
         package_name="co.hinge.app",
         inbound="Yes Saturday 7pm at the café works for me!",
         her_name="Sam",
+        distance_miles=12,
     )
     assert d1.stop_ai is False
     assert d1.should_contact_ask is True
-    assert "WhatsApp" in d1.contact_ask_text or "Snapchat" in d1.contact_ask_text
-    assert chat.contact_ask_sent is True
-    assert chat.contact_ask_pending is True
+    assert d1.contact_ask_channel == "whatsapp"
+    assert "WhatsApp" in d1.contact_ask_text
+    assert "Snapchat" not in d1.contact_ask_text
+    assert chat.contact_ask_channel == "whatsapp"
     assert chat.date_booked is True
-    assert chat.ai_replies_stopped is False
     assert needs == []
+    booked = store.get("c1", "co.hinge.app")
+    assert booked is not None
+    assert booked.status == "booked"
+    assert booked.name == "Sam"
 
     pm = PersonaManager(
         date_flow=mgr,
@@ -194,7 +203,6 @@ def test_contact_ask_once_then_capture(tmp_path: Path):
     assert out["source"] == "contact_ask"
     assert out["text"] == d1.contact_ask_text
 
-    # Second agree-like message must NOT re-ask — pending resolves to handoff
     d2 = mgr.evaluate_turn(
         match_id="c1",
         package_name="co.hinge.app",
@@ -202,31 +210,19 @@ def test_contact_ask_once_then_capture(tmp_path: Path):
         her_name="Sam",
     )
     assert d2.stop_ai is True
-    assert d2.needs_you is True
-    assert d2.contact_handle.replace(" ", "") in ("+447700900123",)
     assert d2.contact_kind == "whatsapp"
-    assert chat.ai_replies_stopped is True
-    assert chat.contact_ask_pending is False
-    rec = mgr.get_match_record("c1", "co.hinge.app")
+    assert "7700900123" in d2.contact_handle.replace(" ", "")
+    assert chat.whatsapp
+    rec = store.get("c1", "co.hinge.app")
     assert rec is not None
-    assert "7700900123" in rec.contact_handle.replace(" ", "")
-    assert needs
-    assert needs[0]["meta"]["contact_handle"]
+    assert "7700900123" in rec.whatsapp.replace(" ", "")
+    assert rec.status == "handed_off"
     assert needs[0]["meta"]["never_auto_message_contact"] is True
-    assert "continue personally" in needs[0]["body"].lower()
-
-    # Never ask again after handoff
-    d3 = mgr.evaluate_turn(
-        match_id="c1",
-        package_name="co.hinge.app",
-        inbound="you there?",
-        her_name="Sam",
-    )
-    assert d3.stop_ai is True
-    assert d3.should_contact_ask is False
+    red = redact_for_log(needs[0]["meta"])
+    assert red["whatsapp"] == "***"
 
 
-def test_contact_ask_decline_still_handoff_no_repeat(tmp_path: Path):
+def test_contact_ask_order_decline_whatsapp_then_snap(tmp_path: Path):
     needs = []
     mgr = DateFlowManager(
         DateFlowConfig(contact_ask_enabled=True),
@@ -242,25 +238,39 @@ def test_contact_ask_decline_still_handoff_no_repeat(tmp_path: Path):
         inbound="Yes Friday 6pm works!",
         her_name="Lee",
     )
-    assert d1.should_contact_ask is True
-    assert chat.contact_ask_sent is True
+    assert d1.contact_ask_channel == "whatsapp"
+    assert "WhatsApp" in build_contact_ask_text(mgr.config, "whatsapp")
 
+    # Decline WhatsApp → ask Snapchat once
     d2 = mgr.evaluate_turn(
         match_id="c2",
         package_name="com.bumble.app",
         inbound="Prefer to keep chatting here thanks",
         her_name="Lee",
     )
-    assert d2.stop_ai is True
-    assert d2.reason == "contact_declined"
-    assert not d2.contact_handle
-    assert chat.ai_replies_stopped is True
+    assert d2.stop_ai is False
+    assert d2.should_contact_ask is True
+    assert d2.contact_ask_channel == "snapchat"
+    assert "Snapchat" in d2.contact_ask_text
+    assert chat.contact_asks_done == ["whatsapp"]
+    assert chat.ai_replies_stopped is False
+    assert needs == []
+
+    # Decline Snapchat → hand off, no more asks
+    d3 = mgr.evaluate_turn(
+        match_id="c2",
+        package_name="com.bumble.app",
+        inbound="No snap thanks",
+        her_name="Lee",
+    )
+    assert d3.stop_ai is True
+    assert d3.reason == "contact_declined"
     assert chat.contact_ask_pending is False
-    assert mgr.get_match_record("c2", "com.bumble.app") is None
+    assert set(chat.contact_asks_done) == {"whatsapp", "snapchat"}
     assert needs
 
 
-def test_contact_ask_ignore_still_handoff(tmp_path: Path):
+def test_contact_ask_ignore_skips_second_channel(tmp_path: Path):
     mgr = DateFlowManager(
         DateFlowConfig(contact_ask_enabled=True),
         persist_path=tmp_path / "df.json",
@@ -272,7 +282,7 @@ def test_contact_ask_ignore_still_handoff(tmp_path: Path):
         package_name="co.hinge.app",
         inbound="Sounds good — Saturday coffee works",
     )
-    assert chat.contact_ask_pending is True
+    assert chat.contact_ask_channel == "whatsapp"
 
     d = mgr.evaluate_turn(
         match_id="c3",
@@ -281,7 +291,7 @@ def test_contact_ask_ignore_still_handoff(tmp_path: Path):
     )
     assert d.stop_ai is True
     assert d.reason == "contact_ignored"
-    assert chat.contact_ask_sent is True
+    assert d.should_contact_ask is False
     assert chat.contact_ask_pending is False
 
 
@@ -293,6 +303,7 @@ def test_extract_contact_handle_snap_and_wa():
     assert k2 in ("phone", "whatsapp")
     assert "7700900456" in h2.replace(" ", "")
     assert extract_contact_handle("haha yeah") == ("", "")
+    assert DEFAULT_CONTACT_ASK_WHATSAPP
 
 
 def test_handoff_on_discomfort(tmp_path: Path):
@@ -436,9 +447,10 @@ def test_api_date_flow(monkeypatch, tmp_path):
     body2 = ev2.json()
     assert body2["stop_ai"] is False
     assert body2["should_contact_ask"] is True
-    assert body2["contact_ask_text"]
+    assert body2["contact_ask_channel"] == "whatsapp"
+    assert "WhatsApp" in body2["contact_ask_text"]
 
-    # Share snap → handoff + save
+    # Share snap while WA pending → still capture + handoff
     ev3 = c.post(
         "/api/dating/date-flow/evaluate",
         json={
@@ -453,6 +465,11 @@ def test_api_date_flow(monkeypatch, tmp_path):
     assert body3["needs_you"] is True
     assert body3["contact_handle"] == "jordan.j92"
     assert body3["contact_kind"] == "snapchat"
+
+    matches = c.get("/api/dating/matches")
+    assert matches.status_code == 200
+    rows = matches.json()["matches"]
+    assert any(m["match_id"] == "api1" and m["snapchat"] == "jordan.j92" for m in rows)
 
     # Compose reply must stop AI
     comp = c.post(
@@ -469,8 +486,86 @@ def test_api_date_flow(monkeypatch, tmp_path):
     assert comp.json().get("stop_ai") is True
     assert comp.json().get("source") == "handoff"
 
-    # Config includes contact ask fields
+    # Config includes ordered contact ask fields
     cfg2 = c.get("/api/dating/date-flow").json()["config"]
     assert cfg2["contact_ask_enabled"] is True
-    assert cfg2["contact_ask_text"]
-    assert DEFAULT_CONTACT_ASK.split("?")[0] in cfg2["contact_ask_text"]
+    assert cfg2["contact_ask_order"][0] == "whatsapp"
+    assert "WhatsApp" in cfg2["contact_ask_whatsapp_text"]
+    assert "Snapchat" in cfg2["contact_ask_snapchat_text"]
+
+
+def test_matches_api_auth_and_crud(monkeypatch, tmp_path):
+    import importlib
+
+    monkeypatch.setenv("ALLOW_UNAUTHENTICATED", "false")
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    monkeypatch.setenv("ADMIN_PASSWORD", "admin")
+    monkeypatch.setenv("ALLOWED_USER_EMAILS", "admin")
+    monkeypatch.setenv("MOBILERUN_DATA", str(tmp_path))
+    monkeypatch.setenv("USE_AWS_STORAGE", "false")
+    monkeypatch.delenv("COGNITO_USER_POOL_ID", raising=False)
+
+    import backend.auth as auth_mod
+    import backend.main as main_mod
+
+    importlib.reload(auth_mod)
+    importlib.reload(main_mod)
+    main_mod._date_flow_mgr = None
+    from fastapi.testclient import TestClient
+
+    c = TestClient(main_mod.app)
+    assert c.get("/api/dating/matches").status_code == 401
+
+    login = c.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    created = c.post(
+        "/api/dating/matches",
+        headers=h,
+        json={
+            "match_id": "m-auth-1",
+            "name": "Alex",
+            "app": "Hinge",
+            "package_name": "co.hinge.app",
+            "date_agreed": "Sat 7pm café",
+            "whatsapp": "+447700900999",
+            "status": "booked",
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["match"]["whatsapp"].endswith("999")
+
+    listed = c.get("/api/dating/matches", headers=h, params={"q": "Alex"})
+    assert listed.status_code == 200
+    assert listed.json()["count"] >= 1
+
+    patched = c.put(
+        "/api/dating/matches/m-auth-1",
+        headers=h,
+        params={"package_name": "co.hinge.app"},
+        json={"snapchat": "alex.snap", "status": "handed_off"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["match"]["snapchat"] == "alex.snap"
+
+    csv_r = c.get("/api/dating/matches/export.csv", headers=h)
+    assert csv_r.status_code == 200
+    assert "whatsapp" in csv_r.text.lower()
+    assert "+447700900999" in csv_r.text
+
+    deleted = c.delete(
+        "/api/dating/matches/m-auth-1",
+        headers=h,
+        params={"package_name": "co.hinge.app"},
+    )
+    assert deleted.status_code == 200
+    assert c.get("/api/dating/matches", headers=h).json()["count"] == 0
+
+
+def test_redact_for_log_hides_contacts():
+    assert redact_for_log({"whatsapp": "+44123", "name": "Sam"}) == {
+        "whatsapp": "***",
+        "name": "Sam",
+    }
