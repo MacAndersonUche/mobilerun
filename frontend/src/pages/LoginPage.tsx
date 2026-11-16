@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useAuth } from '../auth';
+import { cognitoAuthorizeUrl, getCognitoConfig } from '../cognito';
 import { Button, Card, ErrorBanner, Input } from '../components/ui';
 
 export default function LoginPage() {
   const { login, loading, error } = useAuth();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin');
+  const cognito = getCognitoConfig();
 
   return (
     <div className="min-h-screen bg-canvas flex items-center justify-center px-4">
@@ -17,6 +19,30 @@ export default function LoginPage() {
         </div>
         <Card elev className="space-y-3">
           {error && <ErrorBanner message={error} />}
+          {cognito && (
+            <div className="space-y-2">
+              <Button
+                className="w-full"
+                onClick={async () => {
+                  window.location.href = await cognitoAuthorizeUrl(cognito, 'COGNITO');
+                }}
+              >
+                Sign in with email (Cognito)
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={async () => {
+                  window.location.href = await cognitoAuthorizeUrl(cognito, 'Google');
+                }}
+              >
+                Continue with Google
+              </Button>
+              <div className="relative py-2 text-center text-xs text-mute">
+                <span className="bg-surface-elev px-2">or local</span>
+              </div>
+            </div>
+          )}
           <label className="block text-sm text-mute">
             Email or username
             <Input
@@ -44,8 +70,8 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </Button>
           <p className="text-xs text-mute text-center">
-            Cognito (email + Google) coming next — local JWT works today. Same
-            account will link the APK.
+            Same Cognito account links the APK (no pairing QR after first login).
+            QR remains for APK download only.
           </p>
         </Card>
       </div>

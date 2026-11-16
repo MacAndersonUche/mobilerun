@@ -2,49 +2,79 @@
 
 ## Authentication & Authorization
 
-### JWT Tokens
+### AWS Cognito (preferred)
+
+Mac’s hosted UI (Netlify) and APK share **one Cognito user pool**:
+
+- **Email + password** and **Google** via Cognito Hosted UI
+- Web: PKCE authorization code → `/auth/callback` stores the ID token
+- APK: **device-code** flow (phone shows a code → approve on Account page) or Custom Tabs/AppAuth PKCE
+- Backend validates Cognito JWTs (RS256 / JWKS) when `COGNITO_USER_POOL_ID` is set
+- Local `mobilerun serve` can use the same Cognito pool **or** the HS256 fallback (`/api/auth/login`)
+
+**Environment variables:**
+
+```bash
+COGNITO_REGION=eu-west-2
+COGNITO_USER_POOL_ID=eu-west-2_xxxxxxxx
+COGNITO_APP_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+ALLOWED_USER_EMAILS=macandersonuche@yahoo.com,admin
+
+# Frontend (Netlify build)
+VITE_COGNITO_DOMAIN=your-domain.auth.eu-west-2.amazoncognito.com
+VITE_COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+VITE_COGNITO_REDIRECT_URI=https://deploy-preview-N--macsmobilerun.netlify.app/auth/callback
+```
+
+**Authorization:** only emails listed in `ALLOWED_USER_EMAILS` may control this instance. Devices auto-register to the signed-in account (`owner` on the device record). Listing and control are scoped to that owner — only Mac’s account sees Mac’s phones.
+
+### Local JWT fallback
 
 **Backend API Endpoints:**
-- All REST API endpoints require JWT authentication via `Authorization: Bearer <token>` header
-- JWT tokens are created with `create_access_token()` in `backend/auth.py`
-- Default expiration: 7 days
-- Algorithm: HS256
+- REST endpoints require `Authorization: Bearer <token>` (unless `ALLOW_UNAUTHENTICATED=true`)
+- Local tokens from `create_access_token()` in `backend/auth.py` (HS256, 7-day expiry)
+- Cognito ID/access tokens (RS256) accepted when the pool is configured
 
 **Environment Variables:**
-- `JWT_SECRET`: Must be set in production (defaults to `dev-secret-change-in-production` for local dev)
-- `ALLOW_UNAUTHENTICATED`: Set to `false` in production (defaults to `false`)
+- `JWT_SECRET`: required in production for local tokens
+- `ALLOW_UNAUTHENTICATED`: `false` in production
 
 **⚠️ CRITICAL: Production Deployment**
 ```bash
-# Generate a secure random secret
 export JWT_SECRET=$(openssl rand -hex 32)
-
-# Ensure auth is required
 export ALLOW_UNAUTHENTICATED=false
+export COGNITO_USER_POOL_ID=...
+export COGNITO_APP_CLIENT_ID=...
+export ALLOWED_USER_EMAILS=macandersonuche@yahoo.com
 ```
 
-### Device Pairing Tokens
+### Device linking (no QR after first login)
+
+1. **Preferred:** APK → “Sign in & link phone” → shows a 6-character code → Mac approves on Account while signed in → phone receives `session_token` + JWT and appears under his account.
+2. **Cognito Hosted UI / Custom Tabs:** same user pool; APK sends `auth_token` on WebSocket register and auto-binds to the account.
+3. **QR fallback:** `/api/devices/pair` still issues a one-time pairing token (also stamped with the signed-in `owner`). Use for APK download / first install when needed.
+
+### Device Pairing Tokens (QR fallback)
 
 **Pairing Flow:**
 1. Backend generates one-time pairing token via `/api/devices/pair`
 2. Token expires after 10 minutes
-3. QR code contains: `mobilerun://pair?token=<token>&backend=<backend_url>`
-4. Phone scans QR and connects via WebSocket with token
-5. Token is validated, checked for expiration, and consumed (deleted) on first use
+3. QR contains LAN + cloud WebSocket endpoints
+4. Phone connects via WebSocket with token; token consumed once
+5. Long-lived `session_token` issued for reconnect
 
 **Security Features:**
-- ✅ One-time use (token deleted after successful pairing)
-- ✅ 10-minute expiration enforced
-- ✅ Token stored in-memory only (not persisted)
-- ✅ No credentials in QR code (only pairing token)
+- ✅ One-time use
+- ✅ 10-minute expiration
+- ✅ Bound to the approving user’s `owner` email when authenticated
+- ✅ No Cognito secrets in the QR
 
 ### WebSocket Authentication
 
 **Device Connection (`/api/devices/connect`):**
-- Requires valid pairing token in first message
-- Token must not be expired (10 min window)
-- Token is consumed on successful connection
-- WebSocket remains authenticated for session lifetime
+- Accepts `auth_token` (Cognito/local JWT), `session_token`, or one-time pairing `token`
+- JWT path auto-registers the device to the token’s account
+- WebSocket remains authenticated for the session lifetime
 
 ## Secrets Management
 
@@ -52,177 +82,81 @@ export ALLOW_UNAUTHENTICATED=false
 
 ✅ **Verified Clean:**
 - ❌ No API keys (OpenAI, Anthropic, Gemini, xAI/Grok, AWS)
-- ❌ No JWT secrets
+- ❌ No JWT secrets / Cognito client secrets (public PKCE client only)
 - ❌ No AWS credentials
 - ❌ No hardcoded passwords
-- ❌ No backend credentials
 
 ### Backend URL Configuration
 
 **Frontend (React):**
-- Backend URL stored in browser `localStorage` (user-configurable in Settings)
-- Default: `http://localhost:8000` or `VITE_BACKEND_URL` env var at build time
-- No sensitive data in build artifacts
+- Backend URL in `localStorage` / Netlify `VITE_*` env
+- Cognito domain + client id are public (PKCE); no client secret
 
 **Android App:**
-- Backend URL obtained from QR code during pairing
-- Stored in SharedPreferences after pairing
-- Pairing token stored temporarily (deleted after connection)
-- No hardcoded backend URLs or credentials
+- Backend URL from device-code defaults, prefs, or QR
+- Tokens in SharedPreferences after sign-in
+- No hardcoded Cognito secrets
 
 ### Environment Variables (.env)
 
-**Required for Production:**
 ```bash
-# JWT secret (REQUIRED - generate with: openssl rand -hex 32)
 JWT_SECRET=your-secure-random-secret-here
-
-# Auth enforcement (REQUIRED)
 ALLOW_UNAUTHENTICATED=false
-
-# Backend URL for pairing QR codes
-BACKEND_URL=https://your-lambda-url.amazonaws.com
-
-# Optional: AWS credentials (if using Lambda)
-AWS_ACCESS_KEY_ID=your-key
-AWS_SECRET_ACCESS_KEY=your-secret
-AWS_REGION=eu-west-2
+BACKEND_URL=https://your-api.amazonaws.com
+COGNITO_REGION=eu-west-2
+COGNITO_USER_POOL_ID=...
+COGNITO_APP_CLIENT_ID=...
+ALLOWED_USER_EMAILS=macandersonuche@yahoo.com
+FRONTEND_URL=https://macsmobilerun.netlify.app
 ```
 
-**⚠️ NEVER commit `.env` files** - already in `.gitignore`
+**⚠️ NEVER commit `.env` files** — already in `.gitignore`
 
 ## API Endpoint Security
 
 ### Public Endpoints (No Auth Required)
 
-Only one endpoint is intentionally public:
-- `GET /api/releases/latest` - APK download info
+- `GET /api/health`
+- `GET /api/releases/latest`
+- `POST /api/auth/login` (local fallback)
+- `POST /api/auth/device/code` (starts link; no secrets returned)
+- `POST /api/auth/device/token` (poll; returns tokens only after approve)
 
 ### Protected Endpoints (Auth Required)
 
-All other endpoints require authentication:
-- `/api/devices` - Device management
-- `/api/tasks` - Task execution
-- `/api/config` - Configuration
-- `/api/dating/*` - Dating mode (all endpoints)
-
-**Dating Mode Endpoints Protected:**
-- ✅ `GET/POST /api/dating/config`
-- ✅ `GET /api/dating/stats`
-- ✅ `POST /api/dating/{start,stop,pause}`
-- ✅ `GET /api/dating/status`
-- ✅ `GET /api/dating/review-queue`
-- ✅ `POST /api/dating/review/{id}/{approve,reject,edit}`
-
-### Development vs Production
-
-**Development Mode:**
-```bash
-# Optional auth (allows unauthenticated for testing)
-ALLOW_UNAUTHENTICATED=true
-
-# Start with:
-mobilerun serve --allow-unauthenticated
-```
-
-**Production Mode:**
-```bash
-# Auth required (default)
-ALLOW_UNAUTHENTICATED=false
-
-# Or explicitly set:
-export JWT_SECRET=$(openssl rand -hex 32)
-mobilerun serve
-```
-
-## AWS Lambda Security
-
-### Lambda Deployment
-
-**Environment Variables (set via CDK or AWS Console):**
-```typescript
-// In infra/lib/mobilerun-stack.ts
-lambdaFunction.addEnvironment('JWT_SECRET', process.env.JWT_SECRET!);
-lambdaFunction.addEnvironment('ALLOW_UNAUTHENTICATED', 'false');
-```
-
-**IAM Permissions:**
-- Lambda execution role has minimal permissions
-- DynamoDB: read/write only to mobilerun-* tables
-- S3: read/write only to mobilerun-screenshots bucket
-- CloudWatch: log writing only
-
-**API Gateway:**
-- CORS configured with specific origins (update for production domain)
-- Rate limiting recommended (not yet implemented)
-- API keys optional (not yet implemented)
+- `/api/devices`, `/api/tasks`, `/api/config`, dating/social/needs-you/chat
+- `POST /api/auth/device/approve` — must be signed in as an allowed user
 
 ## Threat Model
 
 ### Protected Against
 
-✅ **Unauthorized API Access:**
-- JWT tokens required for all sensitive endpoints
-- Tokens expire after 7 days
-
-✅ **Pairing Token Replay:**
-- One-time use tokens
-- 10-minute expiration
-- Consumed on first use
-
-✅ **Credential Exposure:**
-- No secrets in APK or frontend build
-- Environment variables for all sensitive config
-- `.env` files in `.gitignore`
-
-✅ **Dating Mode Unauthorized Access:**
-- All dating endpoints require authentication
-- Configuration changes protected
-- Review queue access controlled
+✅ Unauthorized API access (JWT / Cognito)  
+✅ Cross-account device control (`owner` scoping + `ALLOWED_USER_EMAILS`)  
+✅ Pairing token replay (one-time + expiry)  
+✅ Credential exposure (no secrets in APK/frontend)
 
 ### Not Yet Implemented
 
-⚠️ **Rate Limiting:**
-- Currently no rate limiting on API endpoints
-- Recommended: Add rate limiting middleware for production
-
-⚠️ **API Key Rotation:**
-- JWT secret rotation not automated
-- Manually update `JWT_SECRET` and restart backend
-
-⚠️ **Device Revocation:**
-- No mechanism to revoke paired devices
-- Currently requires backend restart to clear connections
-
-⚠️ **WebSocket Re-authentication:**
-- WebSocket connections remain authenticated indefinitely
-- Consider adding periodic re-authentication
+⚠️ Rate limiting on auth/device-code endpoints  
+⚠️ Automated Cognito secret / JWT rotation  
+⚠️ Device revocation UI (clear session + owner unlink)
 
 ## Security Checklist for Production
 
-- [ ] Generate secure `JWT_SECRET` with `openssl rand -hex 32`
-- [ ] Set `ALLOW_UNAUTHENTICATED=false`
-- [ ] Use HTTPS for backend URL (not HTTP)
-- [ ] Configure CORS with specific allowed origins
-- [ ] Enable CloudWatch log retention limits (7 days configured)
-- [ ] Set up AWS Budget alerts ($5/month configured)
-- [ ] Review IAM permissions (least privilege)
-- [ ] Add rate limiting middleware (recommended)
-- [ ] Monitor pairing token usage
-- [ ] Regularly rotate JWT secret
-- [ ] Keep dependencies updated (`pip install -U`, `npm update`)
+- [ ] Create Cognito user pool (email+password + Google IdP)
+- [ ] Register Netlify + `mobilerun://` redirect URIs; public PKCE client
+- [ ] Set `COGNITO_*` on Lambda and `VITE_COGNITO_*` on Netlify
+- [ ] Set `ALLOWED_USER_EMAILS` to Mac’s email only
+- [ ] `JWT_SECRET` + `ALLOW_UNAUTHENTICATED=false`
+- [ ] HTTPS only for backend and UI
+- [ ] CORS locked to Netlify domain when ready
 
 ## Reporting Security Issues
 
-For security vulnerabilities, please contact: macandersonuche@yahoo.com
-
-Do not open public issues for security problems.
+Contact: macandersonuche@yahoo.com — do not open public issues for security problems.
 
 ## Audit History
 
-- **2026-11-16**: Initial security audit
-  - ✅ Confirmed no API keys in APK or frontend
-  - ✅ Added token expiration enforcement
-  - ✅ Added one-time pairing token consumption
-  - ✅ Added authentication to dating mode endpoints
-  - ✅ Documented JWT secret requirements
+- **2026-11-16**: Initial security audit (JWT, pairing, dating auth)
+- **2026-11-16**: Cognito + device-code linking; per-account device ownership

@@ -23,10 +23,20 @@ import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
 import NeedsYouPage from './pages/NeedsYouPage';
+import AuthCallbackPage from './pages/AuthCallbackPage';
 import { cn } from './lib/cn';
 
 function Shell() {
   const { token } = useAuth();
+  // Cognito redirect must render without a token
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/auth/')) {
+    return (
+      <Routes>
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    );
+  }
   if (!token) return <LoginPage />;
 
   const tabs = [

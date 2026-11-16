@@ -20,11 +20,12 @@ This will:
 - ✅ Print a QR code in your terminal for phone pairing
 - ✅ Auto-open the UI in your browser
 
-**Then pair your phone:**
+**Then sign in and link your phone (same Cognito account as the web UI):**
 
 1. Install the Mobilerun Android app (download from [Releases](https://github.com/MacAndersonUche/mobilerun/releases))
-2. Open the app and enable Accessibility Service (Settings → Accessibility → Mobilerun)
-3. Return to the app and scan the QR code from your terminal
+2. Open the app → **Sign in & link phone** → enter the code on the web **Account** page while signed in
+3. Enable Accessibility Service (Settings → Accessibility → Mobilerun)
+4. QR pairing remains available as a fallback (and for APK download links)
 
 **Now you're ready!**
 
@@ -64,14 +65,32 @@ This will:
 
 **Key Flow:**
 
-1. You run `mobilerun serve` on your PC (advertises `_mobilerun._tcp` via mDNS)
-2. Phone pairs once via QR (stores **LAN + AWS** WebSocket endpoints) — **never needs USB/ADB**
-3. APK auto-selects: NSD/mDNS LAN when on the same Wi‑Fi (lowest latency), else AWS cloud WS; seamless reconnect/backoff
-4. You type a task in the UI or CLI
-5. Agent loop runs on PC or cloud (your API keys & compute)
-6. Commands sent to phone via WebSocket; UI shows **active route + latency**
-7. Accessibility Service executes taps, swipes, etc.
-8. Live view frames stream back while the UI is subscribed
+1. You run `mobilerun serve` on your PC (advertises `_mobilerun._tcp` via mDNS) **or** use the hosted Netlify UI + AWS API
+2. Sign in once (Cognito email/Google on Netlify, or local JWT). APK uses the **same account** (device-code approve on Account, or Custom Tabs PKCE)
+3. Phone auto-registers to your account — **no QR after first login**; QR remains fallback / APK download
+4. APK auto-selects: NSD/mDNS LAN when on the same Wi‑Fi, else AWS cloud WS; seamless reconnect/backoff
+5. You type a task in the UI or CLI
+6. Agent loop runs on PC or cloud (your API keys & compute)
+7. Commands sent to phone via WebSocket; UI shows **active route + latency**
+8. Accessibility Service executes taps, swipes, etc.
+9. Live view frames stream back while the UI is subscribed
+
+### Cognito setup (hosted)
+
+```bash
+# Backend / Lambda
+COGNITO_USER_POOL_ID=eu-west-2_xxx
+COGNITO_APP_CLIENT_ID=xxx
+COGNITO_REGION=eu-west-2
+ALLOWED_USER_EMAILS=macandersonuche@yahoo.com
+
+# Netlify (frontend)
+VITE_COGNITO_DOMAIN=xxx.auth.eu-west-2.amazoncognito.com
+VITE_COGNITO_CLIENT_ID=xxx
+# redirect: https://<site>/auth/callback  (SPA redirect already in netlify.toml)
+```
+
+See [SECURITY.md](./SECURITY.md) for JWT validation, device ownership, and the device-code flow.
 
 ## 🔧 Installation
 

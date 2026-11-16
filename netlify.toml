@@ -18,3 +18,7 @@
   VITE_API_URL = "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
   VITE_BACKEND_URL = "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
   VITE_WS_URL = "wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod"
+  # Cognito (set real values in Netlify UI for Hosted UI + Google):
+  # VITE_COGNITO_DOMAIN = your-prefix.auth.eu-west-2.amazoncognito.com
+  # VITE_COGNITO_CLIENT_ID = ...
+  # VITE_COGNITO_REDIRECT_URI = https://<site>/auth/callback

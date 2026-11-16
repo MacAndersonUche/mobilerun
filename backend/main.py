@@ -26,7 +26,12 @@ from pydantic import BaseModel
 if Path(__file__).parent.parent.name == "mobilerun":
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.auth import create_access_token, optional_verify_token
+from backend.auth import (
+    cognito_enabled,
+    create_access_token,
+    decode_bearer,
+    optional_verify_token,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mobilerun.backend")
@@ -68,6 +73,24 @@ pairing_tokens: Dict[str, Dict[str, Any]] = {}
 # Long-lived device sessions for reconnect without USB / without re-scan
 device_sessions: Dict[str, Dict[str, Any]] = {}  # session_token -> meta
 device_websockets: Dict[str, WebSocket] = {}
+# Device-code OAuth style linking (APK shows code → approve on web)
+device_link_codes: Dict[str, Dict[str, Any]] = {}  # user_code -> meta
+
+
+def _owner_key(auth: Optional[dict]) -> Optional[str]:
+    if not auth:
+        return None
+    return (auth.get("email") or auth.get("user_id") or auth.get("sub") or "").lower() or None
+
+
+def _device_visible_to(device: Dict[str, Any], auth: Optional[dict]) -> bool:
+    """Only the owning account (Mac) can see/control a device."""
+    if auth is None:
+        return True  # unauthenticated mode
+    owner = (device.get("owner") or "").lower()
+    if not owner:
+        return True  # legacy unpaired ownership — assign on next connect
+    return owner == _owner_key(auth)
 
 
 # === Frontend Routes ===
@@ -162,15 +185,135 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/auth/login")
 async def login(request: LoginRequest):
-    """Simple login endpoint (for development)."""
-    # In production, verify against a user database
+    """Simple login endpoint (for development / local fallback)."""
+    # In production prefer Cognito; local HS256 remains for offline serve.
     if request.username == "admin" and request.password == os.environ.get(
         "ADMIN_PASSWORD", "admin"
     ):
-        token = create_access_token({"sub": request.username})
+        token = create_access_token(
+            {"sub": request.username, "email": f"{request.username}@local"}
+        )
         return {"access_token": token, "token_type": "bearer"}
 
     raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@app.get("/api/auth/me")
+async def auth_me(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Return current user claims + Cognito config flags."""
+    return {
+        "authenticated": auth is not None,
+        "email": (auth or {}).get("email"),
+        "user_id": (auth or {}).get("user_id"),
+        "cognito_enabled": cognito_enabled(),
+    }
+
+
+class DeviceCodeStart(BaseModel):
+    device_name: str = "Android"
+    platform: str = "android"
+
+
+class DeviceCodeApprove(BaseModel):
+    user_code: str
+
+
+class DeviceCodePoll(BaseModel):
+    device_code: str
+
+
+@app.post("/api/auth/device/code")
+async def start_device_code(body: DeviceCodeStart):
+    """
+    APK starts a device-code link. Shows user_code; user approves on the web UI
+    while signed in with the same Cognito (or local) account.
+    """
+    user_code = secrets.token_hex(3).upper()  # 6 hex chars
+    device_code = secrets.token_urlsafe(24)
+    expires_at = datetime.now().timestamp() + 600
+    meta = {
+        "user_code": user_code,
+        "device_code": device_code,
+        "device_name": body.device_name,
+        "platform": body.platform,
+        "expires_at": expires_at,
+        "approved": False,
+        "owner": None,
+        "access_token": None,
+        "session_token": None,
+        "device_id": None,
+    }
+    device_link_codes[user_code] = meta
+    # Index by device_code too
+    device_link_codes[f"dc:{device_code}"] = meta
+    ui = os.environ.get("FRONTEND_URL") or os.environ.get("NETLIFY_URL") or ""
+    return {
+        "user_code": user_code,
+        "device_code": device_code,
+        "expires_in": 600,
+        "interval": 3,
+        "verification_uri": f"{ui.rstrip('/')}/account" if ui else "/account",
+        "message": "Enter this code on the MobileRun Account page while signed in",
+    }
+
+
+@app.post("/api/auth/device/approve")
+async def approve_device_code(
+    body: DeviceCodeApprove, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Signed-in user (Mac) approves a phone's device code → phone auto-links."""
+    if auth is None:
+        raise HTTPException(status_code=401, detail="Sign in to approve a device")
+    code = body.user_code.strip().upper()
+    meta = device_link_codes.get(code)
+    if not meta or datetime.now().timestamp() > meta["expires_at"]:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+    owner = _owner_key(auth)
+    device_id = f"device_{secrets.token_hex(8)}"
+    session_token = secrets.token_urlsafe(32)
+    access = create_access_token(
+        {"sub": auth.get("sub") or owner, "email": owner, "device_id": device_id}
+    )
+    meta["approved"] = True
+    meta["owner"] = owner
+    meta["access_token"] = access
+    meta["session_token"] = session_token
+    meta["device_id"] = device_id
+    device_sessions[session_token] = {
+        "device_id": device_id,
+        "name": meta["device_name"],
+        "platform": meta["platform"],
+        "owner": owner,
+        "created_at": datetime.now().isoformat(),
+    }
+    # Pre-register device row so it appears in UI immediately
+    connected_devices[device_id] = {
+        "device_id": device_id,
+        "name": meta["device_name"],
+        "platform": meta["platform"],
+        "connected": False,
+        "connection_type": "pending",
+        "owner": owner,
+        "last_seen": datetime.now(),
+    }
+    return {"ok": True, "device_id": device_id, "owner": owner}
+
+
+@app.post("/api/auth/device/token")
+async def poll_device_code(body: DeviceCodePoll):
+    """APK polls until the user approves the code on the web UI."""
+    meta = device_link_codes.get(f"dc:{body.device_code}")
+    if not meta or datetime.now().timestamp() > meta["expires_at"]:
+        raise HTTPException(status_code=400, detail="expired_token")
+    if not meta.get("approved"):
+        raise HTTPException(status_code=400, detail="authorization_pending")
+    return {
+        "access_token": meta["access_token"],
+        "session_token": meta["session_token"],
+        "device_id": meta["device_id"],
+        "token_type": "bearer",
+        "owner": meta["owner"],
+    }
 
 
 # === Main Endpoints ===
@@ -192,9 +335,11 @@ async def root():
 
 @app.get("/api/devices", response_model=List[DeviceInfo])
 async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
-    """List all connected devices."""
+    """List devices owned by the signed-in account."""
     devices = []
     for device_id, device_data in connected_devices.items():
+        if not _device_visible_to(device_data, auth):
+            continue
         devices.append(
             DeviceInfo(
                 device_id=device_id,
@@ -287,6 +432,7 @@ async def initiate_pairing(
         "lan_ws": lan_ws_out,
         "cloud_http": cloud_http_out,
         "cloud_ws": cloud_ws_out,
+        "owner": _owner_key(auth),
     }
 
     pairing_tokens[token] = pairing_data
@@ -354,7 +500,7 @@ async def initiate_pairing(
 async def device_websocket(websocket: WebSocket):
     """
     WebSocket for device connection (outbound from phone — no USB/ADB).
-    Auth: one-time pairing token OR long-lived session_token for reconnect.
+    Auth: Cognito/local JWT (auth_token) OR one-time pairing token OR session_token.
     """
     await websocket.accept()
     device_id = None
@@ -363,16 +509,45 @@ async def device_websocket(websocket: WebSocket):
         data = await websocket.receive_json()
         token = data.get("token")
         session_token = data.get("session_token")
+        auth_token = data.get("auth_token") or data.get("jwt")
         route = (data.get("route") or "wifi").lower()
         latency_ms = data.get("latency_ms")
         pairing_data = None
+        owner = None
 
         if session_token and session_token in device_sessions:
             sess = device_sessions[session_token]
             device_id = sess["device_id"]
+            owner = sess.get("owner")
             pairing_data = {
                 "device_name": sess.get("name") or device_id,
                 "platform": sess.get("platform", "android"),
+                "owner": owner,
+            }
+        elif auth_token:
+            # Same Cognito/local account as the web UI → auto-register device
+            try:
+                claims = decode_bearer(auth_token)
+            except HTTPException as e:
+                await websocket.send_json({"error": e.detail})
+                await websocket.close()
+                return
+            owner = _owner_key(claims)
+            device_id = data.get("device_id") or f"device_{secrets.token_hex(8)}"
+            pairing_data = {
+                "device_name": data.get("device_name")
+                or data.get("name")
+                or "Android",
+                "platform": data.get("platform") or "android",
+                "owner": owner,
+            }
+            session_token = secrets.token_urlsafe(32)
+            device_sessions[session_token] = {
+                "device_id": device_id,
+                "name": pairing_data["device_name"],
+                "platform": pairing_data["platform"],
+                "owner": owner,
+                "created_at": datetime.now().isoformat(),
             }
         elif token and token in pairing_tokens:
             pairing_data = pairing_tokens[token]
@@ -382,6 +557,7 @@ async def device_websocket(websocket: WebSocket):
                 del pairing_tokens[token]
                 return
             device_id = data.get("device_id") or f"device_{secrets.token_hex(8)}"
+            owner = pairing_data.get("owner")
             del pairing_tokens[token]
             # Issue reconnect session
             session_token = secrets.token_urlsafe(32)
@@ -389,6 +565,7 @@ async def device_websocket(websocket: WebSocket):
                 "device_id": device_id,
                 "name": pairing_data["device_name"],
                 "platform": pairing_data["platform"],
+                "owner": owner,
                 "created_at": datetime.now().isoformat(),
             }
         else:
@@ -405,6 +582,7 @@ async def device_websocket(websocket: WebSocket):
             "connection_type": conn_type,
             "route": conn_type,
             "latency_ms": latency_ms,
+            "owner": owner or pairing_data.get("owner"),
             "last_seen": datetime.now(),
         }
 

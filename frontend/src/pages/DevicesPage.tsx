@@ -78,8 +78,8 @@ export default function DevicesPage() {
 
   return (
     <div className="mr-page space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-semibold">Connected Devices</h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-2xl font-semibold tracking-tight">Devices</h2>
         <button
           onClick={() => {
             setShowPairing(false);
@@ -88,12 +88,15 @@ export default function DevicesPage() {
             const modal = document.getElementById('pair-modal');
             if (modal) (modal as any).showModal();
           }}
-          className="flex items-center space-x-2 bg-accent hover:bg-accent-soft px-4 py-2 rounded-lg transition-colors"
+          className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-accent px-3 py-2 text-sm font-medium hover:bg-accent-soft"
         >
-          <Plus size={20} />
-          <span>Pair Device</span>
+          <Plus size={18} />
+          <span>Pair</span>
         </button>
       </div>
+      <p className="text-sm text-mute -mt-4">
+        Linked phones appear here after Cognito sign-in or QR fallback.
+      </p>
 
       {/* Devices Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

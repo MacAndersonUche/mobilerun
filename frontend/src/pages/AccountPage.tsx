@@ -1,10 +1,38 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import axios from 'axios';
 import { useAuth } from '../auth';
-import { Button, Card } from '../components/ui';
-import { getBackendUrl } from '../config';
+import { Button, Card, ErrorBanner, Input } from '../components/ui';
+import { getAuthToken, getBackendUrl } from '../config';
 
 export default function AccountPage() {
   const { email, logout } = useAuth();
+  const [userCode, setUserCode] = useState('');
+  const [linkMsg, setLinkMsg] = useState<string | null>(null);
+  const [linkErr, setLinkErr] = useState<string | null>(null);
+  const [linking, setLinking] = useState(false);
+
+  const approvePhone = async () => {
+    setLinking(true);
+    setLinkErr(null);
+    setLinkMsg(null);
+    try {
+      const res = await axios.post(
+        `${getBackendUrl()}/api/auth/device/approve`,
+        { user_code: userCode.trim().toUpperCase() },
+        { headers: { Authorization: `Bearer ${getAuthToken()}` } }
+      );
+      setLinkMsg(`Phone linked · ${res.data.device_id}`);
+      setUserCode('');
+    } catch (e: unknown) {
+      const msg = axios.isAxiosError(e)
+        ? String(e.response?.data?.detail || e.message)
+        : 'Approve failed';
+      setLinkErr(msg);
+    } finally {
+      setLinking(false);
+    }
+  };
 
   return (
     <div className="mr-page space-y-4">
@@ -28,6 +56,35 @@ export default function AccountPage() {
           <p className="font-medium">{email || 'Mac'}</p>
           <p className="text-xs text-mute">Owner · self-hosted</p>
         </div>
+      </Card>
+
+      <Card className="space-y-3">
+        <div>
+          <h2 className="font-medium">Link a phone</h2>
+          <p className="text-sm text-mute">
+            Open the APK → Sign in / Enter code. Type the 6-character code here.
+            Same Cognito account auto-links; QR remains a fallback for APK download.
+          </p>
+        </div>
+        {linkErr && <ErrorBanner message={linkErr} />}
+        {linkMsg && <p className="text-sm text-ok">{linkMsg}</p>}
+        <label className="block text-sm text-mute">
+          Device code
+          <Input
+            className="mt-1 uppercase tracking-widest"
+            value={userCode}
+            onChange={(e) => setUserCode(e.target.value.toUpperCase())}
+            placeholder="A1B2C3"
+            maxLength={8}
+          />
+        </label>
+        <Button
+          className="w-full"
+          disabled={linking || userCode.trim().length < 4}
+          onClick={approvePhone}
+        >
+          {linking ? 'Linking…' : 'Approve phone'}
+        </Button>
       </Card>
 
       <Card className="divide-y divide-line text-sm">

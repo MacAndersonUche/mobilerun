@@ -74,6 +74,8 @@ dependencies {
     // WebSocket & HTTP
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
+    // Cognito Hosted UI via Custom Tabs (PKCE); device-code flow needs no extra lib
+    implementation("androidx.browser:browser:1.8.0")
     
     // QR Code scanning
     implementation("com.google.mlkit:barcode-scanning:17.3.0")

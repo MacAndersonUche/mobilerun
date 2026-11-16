@@ -13,10 +13,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var backendClient: BackendClient
+    private lateinit var cognitoAuth: CognitoAuth
     private var pendingFps: Int = 3
     private var pendingQuality: Int = 45
 
@@ -37,6 +40,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         backendClient = BackendClient(this)
+        cognitoAuth = CognitoAuth(this)
         backendClient.onStreamPermissionNeeded = { fps, quality ->
             pendingFps = fps
             pendingQuality = quality
@@ -50,6 +54,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 MainScreen(
                     backendClient = backendClient,
+                    cognitoAuth = cognitoAuth,
                     onOpenAccessibilitySettings = {
                         startActivity(Intent("android.settings.ACCESSIBILITY_SETTINGS"))
                     },
@@ -70,20 +75,34 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handlePairingUri(uri: Uri) {
-        backendClient.pairFromUri(uri)
+        // QR remains fallback for pairing / APK deep link
+        if (uri.scheme == "mobilerun" && uri.host == "pair") {
+            backendClient.pairFromUri(uri)
+        }
     }
 }
 
 @Composable
 fun MainScreen(
     backendClient: BackendClient,
+    cognitoAuth: CognitoAuth,
     onOpenAccessibilitySettings: () -> Unit,
     onRequestLiveView: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var connectionStatus by remember { mutableStateOf("Disconnected") }
     var routeStatus by remember { mutableStateOf("Route: —") }
     var lastTask by remember { mutableStateOf("No tasks yet") }
     var streamStatus by remember { mutableStateOf("idle") }
+    var userCode by remember { mutableStateOf<String?>(null) }
+    var linkStatus by remember { mutableStateOf(cognitoAuth.savedEmail() ?: "Not signed in") }
+    var busy by remember { mutableStateOf(false) }
+    var backendUrl by remember {
+        mutableStateOf(
+            backendClient.defaultBackendHttp()
+                ?: "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com",
+        )
+    }
 
     LaunchedEffect(Unit) {
         backendClient.statusFlow.collect { connectionStatus = it }
@@ -109,17 +128,80 @@ fun MainScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(text = "Mobilerun", style = MaterialTheme.typography.headlineLarge)
+            Text(text = "MobileRun", style = MaterialTheme.typography.headlineLarge)
             Text(
-                text = "Wireless · no USB cable",
+                text = "by MacAI · wireless · no USB",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            StatusCard("Account", linkStatus, cognitoAuth.savedEmail() != null)
             StatusCard("Status", connectionStatus, connectionStatus.contains("Connected"))
             StatusCard("Active route", routeStatus, routeStatus.contains("LAN") || routeStatus.contains("DISCOVERED") || routeStatus.contains("CLOUD"))
             StatusCard("Last Task", lastTask, true)
             StatusCard("Live stream", streamStatus, streamStatus == "streaming")
+
+            if (userCode != null) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Enter this code on Account → Link a phone", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            text = userCode!!,
+                            style = MaterialTheme.typography.headlineMedium,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(linkStatus, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = backendUrl,
+                onValueChange = { backendUrl = it },
+                label = { Text("Backend URL") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            Button(
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        try {
+                            val started = cognitoAuth.startDeviceCode(backendUrl.trim())
+                            userCode = started.user_code
+                            linkStatus = "Approve ${started.user_code} on the web Account page"
+                            val tok = cognitoAuth.pollDeviceCode(
+                                backendUrl.trim(),
+                                started.device_code,
+                                started.interval,
+                            ) { linkStatus = it }
+                            tok.access_token?.let { backendClient.setAuthToken(it, backendUrl.trim()) }
+                            tok.session_token?.let {
+                                backendClient.setSessionFromDeviceCode(
+                                    it,
+                                    tok.device_id,
+                                    tok.owner,
+                                )
+                            }
+                            linkStatus = tok.owner ?: "Linked"
+                            userCode = null
+                        } catch (e: Exception) {
+                            linkStatus = "Link failed: ${e.message}"
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (busy) "Waiting…" else "Sign in & link phone")
+            }
 
             Spacer(modifier = Modifier.weight(1f))
 
@@ -131,7 +213,7 @@ fun MainScreen(
             }
 
             Text(
-                text = "Scan QR once (stores LAN + cloud). Prefers Wi‑Fi/mDNS; falls back to AWS. Auto-reconnects.",
+                text = "Same Cognito account as the web UI. QR pairing remains a fallback.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

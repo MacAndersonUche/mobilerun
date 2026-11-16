@@ -44,6 +44,8 @@ class BackendClient(private val context: Context) {
     private var deviceId: String = getOrCreateDeviceId()
     private var pairingToken: String? = null
     private var sessionToken: String? = null
+    private var authToken: String? = null
+    private val cognitoAuth = CognitoAuth(context)
 
     private var lanHttp: String? = null
     private var lanWs: String? = null
@@ -94,10 +96,47 @@ class BackendClient(private val context: Context) {
             }
         })
         discovery.start()
-        if (sessionToken != null || pairingToken != null) {
+        authToken = cognitoAuth.savedIdToken() ?: cognitoAuth.savedAccessToken()
+        if (sessionToken != null || pairingToken != null || authToken != null) {
             scope.launch { connectBest() }
         }
     }
+
+    /** After Cognito / device-code login — register with JWT (no pairing QR). */
+    fun setAuthToken(token: String, backendHttp: String? = null, backendWs: String? = null) {
+        authToken = token
+        if (backendHttp != null) {
+            cloudHttp = backendHttp
+            prefs().edit().putString("cloud_http", backendHttp)
+                .putString("backend_url", backendHttp).apply()
+        }
+        if (backendWs != null) {
+            cloudWs = backendWs
+            prefs().edit().putString("cloud_ws", backendWs)
+                .putString("ws_url", backendWs).apply()
+        }
+        userDisconnected = false
+        reconnectAttempt.set(0)
+        scope.launch { connectBest(force = true) }
+    }
+
+    fun setSessionFromDeviceCode(session: String, device: String?, owner: String?) {
+        sessionToken = session
+        if (device != null) {
+            deviceId = device
+            prefs().edit().putString("device_id", device).apply()
+        }
+        prefs().edit().putString("session_token", session)
+            .putString("user_email", owner)
+            .remove("pairing_token").apply()
+        pairingToken = null
+        userDisconnected = false
+        reconnectAttempt.set(0)
+        scope.launch { connectBest(force = true) }
+    }
+
+    fun defaultBackendHttp(): String? =
+        cloudHttp ?: lanHttp ?: discoveredHttp ?: prefs().getString("backend_url", null)
 
     private fun prefs() = context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
 
@@ -246,10 +285,11 @@ class BackendClient(private val context: Context) {
                 )
                 val sess = sessionToken
                 val pair = pairingToken
-                if (!sess.isNullOrBlank()) {
-                    msg["session_token"] = sess
-                } else if (!pair.isNullOrBlank()) {
-                    msg["token"] = pair
+                val jwt = authToken
+                when {
+                    !sess.isNullOrBlank() -> msg["session_token"] = sess
+                    !jwt.isNullOrBlank() -> msg["auth_token"] = jwt
+                    !pair.isNullOrBlank() -> msg["token"] = pair
                 }
                 webSocket.send(gson.toJson(msg))
                 startHeartbeat()

@@ -118,7 +118,7 @@ export default function ChatPage() {
   const device = devices.find((d) => d.device_id === deviceId);
 
   return (
-    <div className="flex h-[100dvh] flex-col md:h-screen">
+    <div className="mx-auto flex h-[100dvh] w-full max-w-content flex-col md:h-screen">
       <header className="flex items-center gap-3 border-b border-line px-4 py-3">
         <Link to="/" className="rounded-lg p-1 text-mute hover:bg-surface md:hidden">
           <ArrowLeft size={20} />
