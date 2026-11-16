@@ -2,6 +2,12 @@ name: Deploy Backend to AWS
 
 on:
   push:
+    branches: [main, 'cursor/**']
+    paths:
+      - 'backend/**'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  pull_request:
     branches: [main]
     paths:
       - 'backend/**'
