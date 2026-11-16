@@ -112,10 +112,11 @@ echo "PAIR_URL=$PAIR_URL" | tee -a "$ARTIFACTS_DIR/apk_paths.txt"
 
 echo "== Deep-link pair with short code c= (LAN via adb reverse) =="
 adb logcat -c || true
-# Single start — a second start races a parallel claim
-adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity
+# Quote the whole am command for the device shell — unquoted & in -d splits argv
+# (was: "ai.mobilerun.selfhosted/.MainActivity: inaccessible or not found" / exit 127)
+adb shell "am start -a android.intent.action.VIEW -d '$PAIR_URL'" || true
 sleep 12
-adb logcat -d 2>/dev/null | rg -i "BackendClient|pair claim|claim via|Claim failed|WebSocket" | tee "$ARTIFACTS_DIR/pair_logcat.txt" | tail -50 || true
+adb logcat -d 2>/dev/null | grep -iE 'BackendClient|pair claim|claim via|Claim failed|WebSocket' | tee "$ARTIFACTS_DIR/pair_logcat.txt" | tail -50 || true
 adb exec-out screencap -p > "$ARTIFACTS_DIR/01_paired.png" || true
 echo "pair_ws=$WS_HINT" >> "$ARTIFACTS_DIR/apk_paths.txt"
 echo "pair_url_dual=1" >> "$ARTIFACTS_DIR/apk_paths.txt"
@@ -183,7 +184,7 @@ q = urlencode({
 print("mobilerun://pair?" + q)
 PY
 )
-adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || true
+adb shell "am start -a android.intent.action.VIEW -d '$PAIR_URL'" || true
 sleep 8
 
 echo "== Fallback probe (unit-level already covers select_endpoint; health usb_required=false) =="
@@ -1088,8 +1089,7 @@ print("mobilerun://pair?" + urlencode({"c": os.environ["CODE"]}))
 PY
 )
 adb logcat -c || true
-adb shell am start -a android.intent.action.VIEW -d "$CLOUD_ONLY_URL" ai.mobilerun.selfhosted/.MainActivity || \
-  adb shell am start -a android.intent.action.VIEW -d "$CLOUD_ONLY_URL"
+adb shell "am start -a android.intent.action.VIEW -d '$CLOUD_ONLY_URL'" || true
 # Wait until the device appears on the prod ci-e2e account
 python3 - <<PY
 import json, os, time, urllib.request
