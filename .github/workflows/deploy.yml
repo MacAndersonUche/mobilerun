@@ -8,6 +8,12 @@ on:
       - 'infra/**'
       - 'mobilerun/connectivity/**'
       - 'mobilerun/dating/**'
+      - 'mobilerun/needs_you/**'
+      - 'mobilerun/selectors/**'
+      - 'mobilerun/safety/**'
+      - 'mobilerun/social/**'
+      - 'mobilerun/agent/humanizer.py'
+      - 'config/dating_openers.json'
       - '.github/workflows/deploy.yml'
   pull_request:
     branches: [main]
@@ -16,6 +22,12 @@ on:
       - 'infra/**'
       - 'mobilerun/connectivity/**'
       - 'mobilerun/dating/**'
+      - 'mobilerun/needs_you/**'
+      - 'mobilerun/selectors/**'
+      - 'mobilerun/safety/**'
+      - 'mobilerun/social/**'
+      - 'mobilerun/agent/humanizer.py'
+      - 'config/dating_openers.json'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
@@ -98,27 +110,61 @@ jobs:
           mkdir -p /tmp/lambda-asset
           python3 -m pip install -r backend/requirements.txt -t /tmp/lambda-asset
           # Package layout: /var/task/backend/*.py + /var/task/mobilerun/...
+          # Dating UI + step worker need needs_you/selectors/humanizer/safety/social.
+          # Do NOT copy full mobilerun/agent (pulls llama_index); only humanizer.py.
           mkdir -p /tmp/lambda-asset/backend \
             /tmp/lambda-asset/mobilerun/dating \
             /tmp/lambda-asset/mobilerun/connectivity \
-            /tmp/lambda-asset/mobilerun/server
+            /tmp/lambda-asset/mobilerun/server \
+            /tmp/lambda-asset/mobilerun/needs_you \
+            /tmp/lambda-asset/mobilerun/selectors \
+            /tmp/lambda-asset/mobilerun/safety \
+            /tmp/lambda-asset/mobilerun/social \
+            /tmp/lambda-asset/mobilerun/agent \
+            /tmp/lambda-asset/config
           cp backend/*.py /tmp/lambda-asset/backend/
           printf '' > /tmp/lambda-asset/backend/__init__.py
-          printf '' > /tmp/lambda-asset/mobilerun/__init__.py
           cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/
           printf '' > /tmp/lambda-asset/mobilerun/dating/__init__.py
           cp mobilerun/connectivity/*.py /tmp/lambda-asset/mobilerun/connectivity/
           # Stub package init so importlib.metadata.version("mobilerun") is not required in Lambda
           printf '%s\n' '__version__ = "0.0.0"' > /tmp/lambda-asset/mobilerun/__init__.py
           printf '' > /tmp/lambda-asset/mobilerun/connectivity/__init__.py
+          cp mobilerun/needs_you/*.py /tmp/lambda-asset/mobilerun/needs_you/
+          printf '' > /tmp/lambda-asset/mobilerun/needs_you/__init__.py
+          # Re-copy real needs_you __init__ if present
+          [ -f mobilerun/needs_you/__init__.py ] && cp mobilerun/needs_you/__init__.py /tmp/lambda-asset/mobilerun/needs_you/
+          cp mobilerun/selectors/*.py /tmp/lambda-asset/mobilerun/selectors/
+          [ -f mobilerun/selectors/__init__.py ] && cp mobilerun/selectors/__init__.py /tmp/lambda-asset/mobilerun/selectors/
+          cp mobilerun/safety/*.py /tmp/lambda-asset/mobilerun/safety/
+          [ -f mobilerun/safety/__init__.py ] && cp mobilerun/safety/__init__.py /tmp/lambda-asset/mobilerun/safety/
+          cp mobilerun/social/*.py /tmp/lambda-asset/mobilerun/social/
+          [ -f mobilerun/social/__init__.py ] && cp mobilerun/social/__init__.py /tmp/lambda-asset/mobilerun/social/
+          # Lightweight humanizer only (no agent package side effects)
+          cp mobilerun/agent/humanizer.py /tmp/lambda-asset/mobilerun/agent/
+          printf '%s\n' '"""Lambda-safe agent package (humanizer only)."""' > /tmp/lambda-asset/mobilerun/agent/__init__.py
+          if [ -f config/dating_openers.json ]; then
+            cp config/dating_openers.json /tmp/lambda-asset/config/
+          fi
           # mdns helper only (avoid server/__init__ importing local serve)
           if [ -f mobilerun/server/mdns.py ]; then
             printf '' > /tmp/lambda-asset/mobilerun/server/__init__.py
             cp mobilerun/server/mdns.py /tmp/lambda-asset/mobilerun/server/
           fi
           # Verify imports from a clean cwd so checkout mobilerun/ is not preferred
-          (cd /tmp && PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; from mobilerun.connectivity.endpoints import build_pairing_url; print('imports ok', handler, w, s)")
+          (cd /tmp && PYTHONPATH=/tmp/lambda-asset python3 -c "
+from backend.main import handler
+from backend.ws_handler import handler as w
+from backend.step_worker import handler as s
+from mobilerun.connectivity.endpoints import build_pairing_url
+from mobilerun.agent.humanizer import describe_presets
+from mobilerun.needs_you.queue import NeedsYouQueue
+from mobilerun.selectors.cache import SelectorCache
+from mobilerun.safety.runtime import get_safety_state
+print('imports ok', handler, w, s, describe_presets)
+")
           ls /tmp/lambda-asset/backend | head
+          ls /tmp/lambda-asset/mobilerun | head
 
       - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)
         working-directory: infra
@@ -280,6 +326,13 @@ jobs:
           python3 -c "import json; d=json.load(open('/tmp/apk.json')); assert d.get('apk_url') and d.get('qr_code'), d"
           echo "Cloud-only short-code claim (no LAN, ≤2s dead-LAN timeout)..."
           python3 scripts/verify_prod_cloud_only_pair.py "$API_URL"
+          echo "Dating + mode + selectors (must be 200 on Lambda)..."
+          for path in /api/dating/status /api/dating/review-queue /api/dating/openers /api/selectors/status /api/mode /api/humanizer; do
+            code=$(curl -sS -o /tmp/dating_smoke.json -w '%{http_code}' \
+              -H "Authorization: Bearer $TOKEN" "$API_URL$path")
+            echo "HTTP $code $path"
+            test "$code" = "200"
+          done
           echo "Smoke OK"
 
       - name: Summary

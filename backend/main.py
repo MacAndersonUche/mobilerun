@@ -1183,8 +1183,24 @@ async def handle_device_message(device_id: str, message: dict):
             {"type": "agent_event", "device_id": device_id, "state": state},
         )
 
-    elif msg_type in ("screenshot", "response"):
-        # Optional one-shot screenshot / command response — fan out if UI cares
+    elif msg_type == "response":
+        rid = message.get("request_id")
+        if rid:
+            try:
+                from device_rpc import store_rpc_response
+            except ImportError:
+                from backend.device_rpc import store_rpc_response  # type: ignore
+
+            store_rpc_response(
+                str(rid),
+                {"error": message.get("error"), "result": message.get("result")},
+            )
+        await broadcast_to_ui(
+            device_id, {"type": "response", "device_id": device_id, **message}
+        )
+
+    elif msg_type == "screenshot":
+        # Optional one-shot screenshot — fan out if UI cares
         await broadcast_to_ui(
             device_id, {"type": msg_type, "device_id": device_id, **message}
         )
@@ -1263,17 +1279,8 @@ async def submit_task(
 
     active_runs[task_id] = task
 
-    payload = {
-        "type": "run_task",
-        "task_id": task_id,
-        "instruction": request.instruction,
-        "max_steps": request.max_steps,
-        "reasoning": request.reasoning,
-        "vision": request.vision,
-        "mode": mode,
-        "speed_preset": speed,
-    }
-    # Always persist so HTTP Lambdas can poll status across cold starts
+    # Cloud agent loop (step worker) drives the phone via WS commands.
+    # Do NOT rely on the APK keyword stub for multi-step goals.
     try:
         try:
             from storage import put_job
@@ -1284,63 +1291,89 @@ async def submit_task(
             {
                 "job_id": task_id,
                 "kind": "agent",
-                "status": "pending",
+                "status": "running",
                 "device_id": request.device_id,
                 "instruction": request.instruction,
                 "max_steps": request.max_steps or 15,
                 "speed_preset": speed,
                 "mode": mode,
                 "created_at": int(datetime.now().timestamp()),
-                "next_run_at": int(datetime.now().timestamp()) + 5,
-                "state": {"steps": 0},
+                "next_run_at": int(datetime.now().timestamp()),
+                "state": {"steps": 0, "history": []},
                 "ttl": int(datetime.now().timestamp()) + 86400,
+                "result": "Queued for cloud agent",
             }
         )
     except Exception as e:
         logger.warning("put_job for task failed (local ok): %s", e)
 
-    sent = await _send_to_device(request.device_id, payload)
-    if sent:
-        task["status"] = "running"
-        try:
+    # Notify phone that a cloud-driven task started (optional; agent uses commands)
+    await _send_to_device(
+        request.device_id,
+        {
+            "type": "agent_control",
+            "action": "start",
+            "task_id": task_id,
+            "instruction": request.instruction,
+            "max_steps": request.max_steps,
+            "mode": mode,
+            "speed_preset": speed,
+        },
+    )
+
+    kicked = False
+    try:
+        step_arn = os.environ.get("STEP_WORKER_ARN")
+        if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
+            import boto3
+
+            boto3.client("lambda").invoke(
+                FunctionName=step_arn,
+                InvocationType="Event",
+                Payload=json.dumps({"job_id": task_id}).encode(),
+            )
+            kicked = True
+            task["status"] = "running"
+            task["result"] = "Cloud agent started (step worker)"
+        elif os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() == "true":
+            # Local/dev: run one step inline so CI/emulator can progress without EventBridge
+            try:
+                from cloud_agent import run_one_agent_step
+            except ImportError:
+                from backend.cloud_agent import run_one_agent_step  # type: ignore
             try:
                 from storage import get_job, put_job
             except ImportError:
                 from backend.storage import get_job, put_job  # type: ignore
 
-            job = get_job(task_id) or {}
-            job.update(
-                {
-                    "job_id": task_id,
-                    "status": "running",
-                    "result": "Dispatched to device",
-                }
-            )
-            put_job(job)
-        except Exception:
-            pass
-    else:
-        try:
-            step_arn = os.environ.get("STEP_WORKER_ARN")
-            if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
-                import boto3
+            job = get_job(task_id) or {
+                "job_id": task_id,
+                "kind": "agent",
+                "status": "running",
+                "device_id": request.device_id,
+                "instruction": request.instruction,
+                "max_steps": request.max_steps or 15,
+                "state": {"steps": 0, "history": []},
+            }
+            # Run up to a few steps inline for local backends
+            for _ in range(min(8, int(request.max_steps or 15))):
+                if job.get("status") != "running":
+                    break
+                job = run_one_agent_step(job)
+                put_job(job)
+            kicked = True
+            task["status"] = job.get("status") or "running"
+            task["result"] = job.get("result")
+            task["error"] = job.get("error")
+            task["current_step"] = int((job.get("state") or {}).get("steps") or 0)
+    except Exception as e:
+        logger.error("Failed to kick cloud agent: %s", e)
+        task["status"] = "failed"
+        task["error"] = f"Failed to start cloud agent: {e}"
 
-                boto3.client("lambda").invoke(
-                    FunctionName=step_arn,
-                    InvocationType="Event",
-                    Payload=json.dumps({"job_id": task_id}).encode(),
-                )
-                task["status"] = "running"
-                task["result"] = "Dispatched via step worker (async)"
-            else:
-                task["status"] = "failed"
-                task["error"] = (
-                    "No live WebSocket to device and no step worker configured"
-                )
-        except Exception as e:
-            logger.error("Failed to send/queue task: %s", e)
-            task["status"] = "failed"
-            task["error"] = f"Failed to reach device: {e}"
+    if not kicked and task["status"] != "failed":
+        task["status"] = "failed"
+        task["error"] = "Step worker not configured — cannot run cloud agent on this backend"
 
     return TaskStatus(**task)
 

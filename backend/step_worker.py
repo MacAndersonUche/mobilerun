@@ -279,7 +279,7 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute one agent task step."""
+    """Execute one real LLM agent step (UI tree → plan → WS action)."""
     job = _to_plain(job)
     state = job.setdefault("state", {})
     if _safety_blocked(job):
@@ -290,36 +290,16 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["updated_at"] = int(time.time())
         return job
 
-    step = int(state.get("steps", 0))
-    max_steps = int(job.get("max_steps", 15))
-    if step >= max_steps:
-        job["status"] = "completed"
-        job["completed_at"] = int(time.time())
-        return job
+    try:
+        from cloud_agent import run_one_agent_step
+    except ImportError:
+        from backend.cloud_agent import run_one_agent_step  # type: ignore
 
-    humanizer = _humanizer_for_job(job)
-    # Normal-mode agent steps use action gaps
-    from mobilerun.agent.humanizer import AgentMode
-
-    humanizer.config = humanizer.config.with_overrides(mode=AgentMode.NORMAL)
-    gap = max(1, int(round(humanizer.sample_step_gap_seconds(kind="action"))))
-
-    state["steps"] = step + 1
-    state["last_action"] = f"agent_step_{step + 1}"
-    state["last_gap_s"] = gap
-    job["state"] = state
-    job["next_run_at"] = int(time.time()) + gap
-    job["updated_at"] = int(time.time())
-    _send_to_device(
-        job.get("device_id", ""),
-        {
-            "type": "run_task",
-            "task_id": job.get("job_id"),
-            "instruction": job.get("instruction", ""),
-            "step": step + 1,
-        },
-    )
-    return job
+    updated = run_one_agent_step(job)
+    if updated.get("status") in ("completed", "failed", "stopped"):
+        updated["completed_at"] = int(time.time())
+    updated["updated_at"] = int(time.time())
+    return updated
 
 
 def process_job(job: Dict[str, Any]) -> None:

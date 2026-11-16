@@ -150,4 +150,41 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 }
             }
         }
+
+    /** Type into the focused editable node (or first editable on screen). */
+    fun inputText(text: String, clear: Boolean = false): Boolean {
+        val root = rootInActiveWindow ?: return false
+        var target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (target == null || !target.isEditable) {
+            target = findEditable(root)
+        }
+        if (target == null) return false
+        if (clear) {
+            val args = android.os.Bundle()
+            args.putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                "",
+            )
+            target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        }
+        val args = android.os.Bundle()
+        val existing = if (clear) "" else (target.text?.toString() ?: "")
+        args.putCharSequence(
+            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+            existing + text,
+        )
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        if (node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findEditable(child)
+            if (found != null) return found
+            child.recycle()
+        }
+        return null
+    }
 }
