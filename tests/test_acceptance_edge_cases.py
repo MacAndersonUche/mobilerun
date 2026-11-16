@@ -63,12 +63,16 @@ def test_mode_speed_presets(auth_client):
     token = _login(c)
     h = {"Authorization": f"Bearer {token}"}
     for speed in ("fast", "balanced", "careful"):
-        r = c.post("/api/mode", headers=h, json={"mode": "normal", "speed_preset": speed})
+        r = c.post(
+            "/api/mode", headers=h, json={"mode": "normal", "speed_preset": speed}
+        )
         assert r.status_code == 200, r.text
         g = c.get("/api/mode", headers=h)
         assert g.json()["speed_preset"] == speed
     for mode in ("dating", "social", "normal"):
-        r = c.post("/api/mode", headers=h, json={"mode": mode, "speed_preset": "balanced"})
+        r = c.post(
+            "/api/mode", headers=h, json={"mode": mode, "speed_preset": "balanced"}
+        )
         assert r.status_code == 200
         assert c.get("/api/mode", headers=h).json()["mode"] == mode
 
@@ -112,8 +116,20 @@ def test_empty_social_inbox_and_needs_you_flow(auth_client):
     ny = c.get("/api/needs-you", headers=h).json()
     assert ny["badge"] >= 1
     item_id = ny["items"][0]["id"]
-    assert c.post(f"/api/needs-you/{item_id}/edit", headers=h, json={"draft_reply": "later"}).status_code == 200
-    assert c.post(f"/api/needs-you/{item_id}/approve", headers=h, json={"draft_reply": "later"}).status_code == 200
+    assert (
+        c.post(
+            f"/api/needs-you/{item_id}/edit", headers=h, json={"draft_reply": "later"}
+        ).status_code
+        == 200
+    )
+    assert (
+        c.post(
+            f"/api/needs-you/{item_id}/approve",
+            headers=h,
+            json={"draft_reply": "later"},
+        ).status_code
+        == 200
+    )
 
     draft2 = c.post(
         "/api/social/draft",
@@ -172,8 +188,16 @@ def test_two_devices_list_scoped(auth_client):
     token = _login(c)
     h = {"Authorization": f"Bearer {token}"}
     # Register two logical devices via pair
-    p1 = c.post("/api/devices/pair", headers=h, json={"device_name": "phone-a", "platform": "android"})
-    p2 = c.post("/api/devices/pair", headers=h, json={"device_name": "phone-b", "platform": "android"})
+    p1 = c.post(
+        "/api/devices/pair",
+        headers=h,
+        json={"device_name": "phone-a", "platform": "android"},
+    )
+    p2 = c.post(
+        "/api/devices/pair",
+        headers=h,
+        json={"device_name": "phone-b", "platform": "android"},
+    )
     assert p1.status_code == 200 and p2.status_code == 200
     # Simulate connected sessions owned by admin
     me = c.get("/api/auth/me", headers=h).json()
