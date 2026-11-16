@@ -148,6 +148,19 @@ def test_ws_handler_register_upserts_owned_device(monkeypatch, tmp_path):
     assert any(d.get("device_id") == "device_ws1" for d in owned)
 
 
+def test_dynamo_safe_strips_none_and_floats():
+    from backend.storage import _dynamo_safe, _from_dynamo
+    from decimal import Decimal
+
+    raw = {"expires_at": 1.5, "owner": None, "ok": True, "n": 2}
+    safe = _dynamo_safe(raw)
+    assert "owner" not in safe
+    assert isinstance(safe["expires_at"], Decimal)
+    back = _from_dynamo(safe)
+    assert back["expires_at"] == 1.5
+    assert back["ok"] is True
+
+
 def test_merge_device_lists_aws_trusts_ws(monkeypatch, tmp_path):
     monkeypatch.setenv("MOBILERUN_DATA", str(tmp_path))
     monkeypatch.setenv("USE_AWS_STORAGE", "true")

@@ -191,7 +191,7 @@ def save_user_setting(user_id: str, name: str, data: Dict[str, Any]) -> bool:
                 "key": key,
                 "user_id": user_id,
                 "name": name,
-                "data": data,
+                "data": _dynamo_safe(data),
                 "updated_at": int(time.time()),
             }
         )
@@ -216,7 +216,9 @@ def get_user_setting(user_id: str, name: str) -> Optional[Dict[str, Any]]:
         if not item:
             return None
         data = item.get("data")
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        return _from_dynamo(data)
 
     root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
     path = root / f"{name}_{user_id.replace('/', '_')}.json"
@@ -233,16 +235,48 @@ def get_user_setting(user_id: str, name: str) -> Optional[Dict[str, Any]]:
 # --- Device registry + sessions (survive Lambda cold starts) ---
 
 
+def _dynamo_safe(obj: Any) -> Any:
+    """DynamoDB rejects float and None; convert recursively for put_item."""
+    import json
+    from decimal import Decimal
+
+    def _drop_none(o: Any) -> Any:
+        if isinstance(o, dict):
+            return {k: _drop_none(v) for k, v in o.items() if v is not None}
+        if isinstance(o, list):
+            return [_drop_none(v) for v in o if v is not None]
+        return o
+
+    cleaned = _drop_none(obj)
+    return json.loads(json.dumps(cleaned), parse_float=Decimal)
+
+
+def _from_dynamo(obj: Any) -> Any:
+    """Decimal → int/float for app code."""
+    from decimal import Decimal
+
+    if isinstance(obj, list):
+        return [_from_dynamo(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _from_dynamo(v) for k, v in obj.items()}
+    if isinstance(obj, Decimal):
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    return obj
+
+
 def _settings_put(key: str, data: Dict[str, Any]) -> bool:
     import json
     from pathlib import Path
 
     table = _table("SETTINGS_TABLE")
     if table is not None:
+        safe_data = _dynamo_safe(data)
         table.put_item(
             Item={
                 "key": key,
-                "data": data,
+                "data": safe_data,
                 "updated_at": int(time.time()),
                 "ttl": int(time.time()) + int(data.get("_ttl_seconds") or 86400 * 30),
             }
@@ -266,7 +300,9 @@ def _settings_get(key: str) -> Optional[Dict[str, Any]]:
         if not item:
             return None
         data = item.get("data")
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        return _from_dynamo(data)
     root = Path(os.environ.get("MOBILERUN_DATA", Path.home() / ".mobilerun"))
     safe = key.replace(":", "_").replace("/", "_")
     path = root / f"{safe}.json"

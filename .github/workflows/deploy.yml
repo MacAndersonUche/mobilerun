@@ -177,17 +177,31 @@ jobs:
           echo "HTTP $code"
           test "$code" = "401" -o "$code" = "403"
 
-          echo "Login + device-code + APK download QR..."
+          echo "Login + device-code + QR pair create + APK download QR..."
           # Default admin/admin unless ADMIN_PASSWORD overridden in Lambda env
           TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -sfS "$API_URL/api/auth/me" -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json
           python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d"
+          # Legacy device-code (still supported)
           curl -sfS -X POST "$API_URL/api/auth/device/code" \
             -H 'Content-Type: application/json' \
             -d '{"device_name":"smoke-device","platform":"android"}' | tee /tmp/dcode.json
           python3 -c "import json; d=json.load(open('/tmp/dcode.json')); assert d.get('user_code') and d.get('device_code'), d"
+          # Cognito-tied QR pairing (primary APK path)
+          curl -sfS -X POST "$API_URL/api/auth/pair/create" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{"device_name":"smoke-phone","platform":"android"}' | tee /tmp/pair.json
+          python3 -c "import json; d=json.load(open('/tmp/pair.json')); assert d.get('token') and d.get('pairing_url') and d.get('qr_code'), d"
+          curl -sfS -X POST "$API_URL/api/auth/pair/claim" \
+            -H 'Content-Type: application/json' \
+            -d "{\"token\":\"$(python3 -c "import json; print(json.load(open('/tmp/pair.json'))['token'])")\",\"device_name\":\"smoke-phone\"}" | tee /tmp/claim.json
+          python3 -c "import json; d=json.load(open('/tmp/claim.json')); assert d.get('session_token') and d.get('device_id'), d"
+          # /health alias
+          curl -sfS "$API_URL/health" | tee /tmp/health_alias.json
+          python3 -c "import json; d=json.load(open('/tmp/health_alias.json')); assert d.get('status')=='ok', d"
           curl -sfS "$API_URL/api/releases/latest" | tee /tmp/apk.json
           python3 -c "import json; d=json.load(open('/tmp/apk.json')); assert d.get('apk_url') and d.get('qr_code'), d"
           echo "Smoke OK"
