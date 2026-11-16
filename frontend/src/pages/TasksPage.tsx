@@ -169,7 +169,7 @@ export default function TasksPage() {
       {devices.length === 0 ? (
         <div className="bg-yellow-900/20 border border-yellow-700 rounded-lg p-4">
           <p className="text-yellow-400">
-            No connected devices. Please pair a device first.
+            No connected devices. Install the APK and sign in with your account.
           </p>
         </div>
       ) : (

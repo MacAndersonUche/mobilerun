@@ -117,7 +117,19 @@ class BackendClient(private val context: Context) {
         }
         userDisconnected = false
         reconnectAttempt.set(0)
+        ConnectionService.start(context)
         scope.launch { connectBest(force = true) }
+    }
+
+    /** Push permission checklist to hosted UI (Devices page). */
+    fun reportPermissions(mediaProjectionGranted: Boolean = false) {
+        val snap = PermissionStatus.snapshot(context, mediaProjectionGranted)
+        val payload = mutableMapOf<String, Any?>(
+            "type" to "permission_status",
+            "device_id" to deviceId,
+        )
+        payload.putAll(snap.toMap(mediaProjectionGranted))
+        webSocket?.send(gson.toJson(payload))
     }
 
     fun setSessionFromDeviceCode(session: String, device: String?, owner: String?) {
@@ -216,7 +228,7 @@ class BackendClient(private val context: Context) {
         if (connecting && !force) return
         val cands = candidates()
         if (cands.isEmpty()) {
-            _statusFlow.value = "No endpoints — scan QR"
+            _statusFlow.value = "No endpoints — set backend URL & sign in"
             _routeFlow.value = "Route: —"
             return
         }
@@ -404,6 +416,10 @@ class BackendClient(private val context: Context) {
                         }
                         updateRouteUi()
                         _statusFlow.value = "Connected"
+                        ConnectionService.start(context)
+                        reportPermissions(
+                            ScreenCaptureService.instance != null,
+                        )
                     }
                 }
                 "heartbeat_ack" -> {

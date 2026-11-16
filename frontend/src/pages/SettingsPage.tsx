@@ -228,8 +228,9 @@ export default function SettingsPage() {
           <section className="bg-surface rounded-lg p-6">
             <h3 className="text-xl font-semibold mb-4">Install Android App</h3>
             <p className="text-sm text-mute mb-4">
-              Scan this QR code on your Android device to download and install the
-              latest Mobilerun app
+              QR is download-only — scan to install the latest GitHub release APK.
+              Then open the app, finish the permissions checklist, and sign in with
+              the same Cognito account as this UI (no pairing QR).
             </p>
             <div className="bg-white p-4 rounded-lg inline-block">
               <img
@@ -239,7 +240,9 @@ export default function SettingsPage() {
               />
             </div>
             <p className="text-xs text-gray-500 mt-2">
-              After installing, return to the Devices page to pair your phone
+              After install: Accessibility (+ Android 13 restricted settings) →
+              notifications → screen capture → battery unrestricted → Sign in &amp;
+              link phone
             </p>
           </section>
         )}

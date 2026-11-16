@@ -147,10 +147,10 @@ export default function HomePage() {
         ) : devices.length === 0 ? (
           <EmptyState
             title="No devices yet"
-            hint="Install the APK and sign in on the phone — or use QR fallback."
+            hint="Scan the APK download QR, then sign in on the phone with the same account."
             action={
               <Link to="/devices" className="mr-btn-primary text-sm">
-                Pair / download APK
+                Download APK
               </Link>
             }
           />

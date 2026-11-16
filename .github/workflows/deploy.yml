@@ -6,12 +6,16 @@ on:
     paths:
       - 'backend/**'
       - 'infra/**'
+      - 'mobilerun/connectivity/**'
+      - 'mobilerun/dating/**'
       - '.github/workflows/deploy.yml'
   pull_request:
     branches: [main]
     paths:
       - 'backend/**'
       - 'infra/**'
+      - 'mobilerun/connectivity/**'
+      - 'mobilerun/dating/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
@@ -27,6 +31,10 @@ on:
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: mobilerun-aws-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -90,14 +98,22 @@ jobs:
           mkdir -p /tmp/lambda-asset
           python3 -m pip install -r backend/requirements.txt -t /tmp/lambda-asset
           # Package layout: /var/task/backend/*.py + /var/task/mobilerun/...
-          mkdir -p /tmp/lambda-asset/backend /tmp/lambda-asset/mobilerun/dating
+          mkdir -p /tmp/lambda-asset/backend \
+            /tmp/lambda-asset/mobilerun/dating \
+            /tmp/lambda-asset/mobilerun/connectivity \
+            /tmp/lambda-asset/mobilerun/server
           cp backend/*.py /tmp/lambda-asset/backend/
           printf '' > /tmp/lambda-asset/backend/__init__.py
           printf '' > /tmp/lambda-asset/mobilerun/__init__.py
           cp mobilerun/dating/*.py /tmp/lambda-asset/mobilerun/dating/
           printf '' > /tmp/lambda-asset/mobilerun/dating/__init__.py
+          cp mobilerun/connectivity/*.py /tmp/lambda-asset/mobilerun/connectivity/
+          printf '' > /tmp/lambda-asset/mobilerun/connectivity/__init__.py
+          # Minimal server stubs used by local LAN helpers (safe no-op on Lambda)
+          if [ -f mobilerun/server/__init__.py ]; then cp mobilerun/server/__init__.py /tmp/lambda-asset/mobilerun/server/; fi
+          if [ -f mobilerun/server/mdns.py ]; then cp mobilerun/server/mdns.py /tmp/lambda-asset/mobilerun/server/; fi
           # Verify imports
-          PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; print('imports ok', handler, w, s)"
+          PYTHONPATH=/tmp/lambda-asset python3 -c "from backend.main import handler; from backend.ws_handler import handler as w; from backend.step_worker import handler as s; from mobilerun.connectivity.endpoints import build_pairing_url; print('imports ok', handler, w, s)"
           ls /tmp/lambda-asset/backend | head
 
       - name: CDK Deploy (Lambda + HTTP API + WebSocket + EventBridge)
@@ -134,9 +150,12 @@ jobs:
           set -euo pipefail
           for fn in $(aws lambda list-functions --query "Functions[?contains(FunctionName,'HttpFunction') || contains(FunctionName,'Mobilerun')].FunctionName" --output text); do
             echo "Updating $fn BACKEND_URL"
+            # Wait out in-progress updates from overlapping deploys
+            aws lambda wait function-updated --function-name "$fn" || true
             CFG=$(aws lambda get-function-configuration --function-name "$fn" --query 'Environment.Variables' --output json)
             echo "$CFG" | python3 -c "import json,sys,os; d=json.load(sys.stdin) or {}; d['BACKEND_URL']=os.environ['API_URL']; d['API_URL']=os.environ['API_URL']; print(json.dumps({'Variables':d}))" > /tmp/env.json
             aws lambda update-function-configuration --function-name "$fn" --environment file:///tmp/env.json >/dev/null || true
+            aws lambda wait function-updated --function-name "$fn" || true
           done
 
       - name: Smoke test
@@ -154,16 +173,19 @@ jobs:
           echo "HTTP $code"
           test "$code" = "401" -o "$code" = "403"
 
-          echo "Login + pairing..."
+          echo "Login + device-code + APK download QR..."
           # Default admin/admin unless ADMIN_PASSWORD overridden in Lambda env
           TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-          curl -sfS -X POST "$API_URL/api/devices/pair" \
-            -H "Authorization: Bearer $TOKEN" \
+          curl -sfS "$API_URL/api/auth/me" -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json
+          python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d"
+          curl -sfS -X POST "$API_URL/api/auth/device/code" \
             -H 'Content-Type: application/json' \
-            -d '{"device_name":"smoke-device","platform":"android"}' | tee /tmp/pair.json
-          python3 -c "import json; d=json.load(open('/tmp/pair.json')); assert d.get('token') and d.get('websocket_url') or d.get('backend_url'), d"
+            -d '{"device_name":"smoke-device","platform":"android"}' | tee /tmp/dcode.json
+          python3 -c "import json; d=json.load(open('/tmp/dcode.json')); assert d.get('user_code') and d.get('device_code'), d"
+          curl -sfS "$API_URL/api/releases/latest" | tee /tmp/apk.json
+          python3 -c "import json; d=json.load(open('/tmp/apk.json')); assert d.get('apk_url') and d.get('qr_code'), d"
           echo "Smoke OK"
 
       - name: Summary

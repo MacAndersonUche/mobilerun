@@ -70,8 +70,8 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </Button>
           <p className="text-xs text-mute text-center">
-            Same Cognito account links the APK (no pairing QR after first login).
-            QR remains for APK download only.
+            Same Cognito account links the APK. QR codes are only for downloading
+            the APK — never for pairing.
           </p>
         </Card>
       </div>

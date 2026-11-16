@@ -135,6 +135,7 @@ class DeviceInfo(BaseModel):
     last_seen: datetime
     route: Optional[str] = None
     latency_ms: Optional[float] = None
+    permissions: Optional[Dict[str, Any]] = None
 
 
 class PairingRequest(BaseModel):
@@ -350,6 +351,7 @@ async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
                 last_seen=device_data.get("last_seen", datetime.now()),
                 route=device_data.get("route"),
                 latency_ms=device_data.get("latency_ms"),
+                permissions=device_data.get("permissions"),
             )
         )
     return devices
@@ -671,6 +673,30 @@ async def handle_device_message(device_id: str, message: dict):
                 "device_id": device_id,
                 "route": dev.get("route"),
                 "latency_ms": dev.get("latency_ms"),
+            },
+        )
+
+    elif msg_type == "permission_status":
+        # APK first-run / resume checklist → visible on hosted Devices page
+        keys = (
+            "accessibility",
+            "notifications",
+            "media_projection",
+            "battery_optimization",
+            "overlay",
+            "query_packages",
+            "foreground_service",
+            "updated_at",
+        )
+        perms = {k: message.get(k) for k in keys if k in message}
+        dev = connected_devices.setdefault(device_id, {})
+        dev["permissions"] = perms
+        await broadcast_to_ui(
+            device_id,
+            {
+                "type": "permission_status",
+                "device_id": device_id,
+                "permissions": perms,
             },
         )
 

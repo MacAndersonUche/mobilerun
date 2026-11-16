@@ -48,32 +48,21 @@ export COGNITO_APP_CLIENT_ID=...
 export ALLOWED_USER_EMAILS=macandersonuche@yahoo.com
 ```
 
-### Device linking (no QR after first login)
+### Device linking (Cognito — no pairing QR)
 
-1. **Preferred:** APK → “Sign in & link phone” → shows a 6-character code → Mac approves on Account while signed in → phone receives `session_token` + JWT and appears under his account.
-2. **Cognito Hosted UI / Custom Tabs:** same user pool; APK sends `auth_token` on WebSocket register and auto-binds to the account.
-3. **QR fallback:** `/api/devices/pair` still issues a one-time pairing token (also stamped with the signed-in `owner`). Use for APK download / first install when needed.
+Architecture: **hosted UI** = management (dashboard, live view, chat, modes, Needs you). **APK** = wireless executor on the phone.
 
-### Device Pairing Tokens (QR fallback)
-
-**Pairing Flow:**
-1. Backend generates one-time pairing token via `/api/devices/pair`
-2. Token expires after 10 minutes
-3. QR contains LAN + cloud WebSocket endpoints
-4. Phone connects via WebSocket with token; token consumed once
-5. Long-lived `session_token` issued for reconnect
-
-**Security Features:**
-- ✅ One-time use
-- ✅ 10-minute expiration
-- ✅ Bound to the approving user’s `owner` email when authenticated
-- ✅ No Cognito secrets in the QR
+1. **QR codes are download-only** — `/api/releases/latest` returns a QR pointing at the GitHub release APK URL (shown on Devices + Settings + README). Never used for pairing.
+2. **APK → Sign in & link phone** → 6-character device code → Mac approves on Account while signed in → phone gets `session_token` + JWT and appears under his account.
+3. **Cognito Hosted UI / Custom Tabs:** same user pool; APK sends `auth_token` on WebSocket register and auto-binds to the account.
+4. **Permissions onboarding (APK):** Accessibility (Android 13+ “Allow restricted settings” for sideloads), notifications, MediaProjection, battery unrestricted, overlay, query packages, foreground connection service. Checklist re-checks on resume and reports `permission_status` to the hosted Devices page.
 
 ### WebSocket Authentication
 
 **Device Connection (`/api/devices/connect`):**
-- Accepts `auth_token` (Cognito/local JWT), `session_token`, or one-time pairing `token`
-- JWT path auto-registers the device to the token’s account
+- Accepts `auth_token` (Cognito/local JWT) or `session_token` (reconnect)
+- JWT / device-code path auto-registers the device to the account
+- Foreground `ConnectionService` keeps the socket alive in background
 - WebSocket remains authenticated for the session lifetime
 
 ## Secrets Management

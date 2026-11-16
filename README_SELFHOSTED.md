@@ -17,15 +17,14 @@ mobilerun serve
 This will:
 - ✅ Start the backend server on your PC
 - ✅ Serve the web UI locally at http://localhost:8000
-- ✅ Print a QR code in your terminal for phone pairing
 - ✅ Auto-open the UI in your browser
 
-**Then sign in and link your phone (same Cognito account as the web UI):**
+**Then install the APK and link with the same Cognito account:**
 
-1. Install the Mobilerun Android app (download from [Releases](https://github.com/MacAndersonUche/mobilerun/releases))
-2. Open the app → **Sign in & link phone** → enter the code on the web **Account** page while signed in
-3. Enable Accessibility Service (Settings → Accessibility → Mobilerun)
-4. QR pairing remains available as a fallback (and for APK download links)
+1. Scan the **APK download QR** on Devices / Settings (or grab it from [Releases](https://github.com/MacAndersonUche/mobilerun/releases)) — QR is **download-only**, never for pairing
+2. Open MobileRun → complete the **permissions checklist** (Accessibility incl. Android 13+ *Allow restricted settings*, notifications, screen capture, battery unrestricted, overlay, packages, foreground service)
+3. Tap **Sign in & link phone** → enter the code on the hosted **Account** page while signed in
+4. Hosted UI = management (dashboard, live view, chat, modes, Needs you). APK = wireless executor.
 
 **Now you're ready!**
 
@@ -66,12 +65,12 @@ This will:
 **Key Flow:**
 
 1. You run `mobilerun serve` on your PC (advertises `_mobilerun._tcp` via mDNS) **or** use the hosted Netlify UI + AWS API
-2. Sign in once (Cognito email/Google on Netlify, or local JWT). APK uses the **same account** (device-code approve on Account, or Custom Tabs PKCE)
-3. Phone auto-registers to your account — **no QR after first login**; QR remains fallback / APK download
-4. APK auto-selects: NSD/mDNS LAN when on the same Wi‑Fi, else AWS cloud WS; seamless reconnect/backoff
+2. Install APK via **download QR** (GitHub release). Sign in once (Cognito) on UI + APK — **same account links the phone** (device-code on Account)
+3. APK completes permissions onboarding and keeps a foreground WebSocket (LAN mDNS preferred, else AWS)
+4. Hosted UI manages agents; APK executes actions wirelessly
 5. You type a task in the UI or CLI
 6. Agent loop runs on PC or cloud (your API keys & compute)
-7. Commands sent to phone via WebSocket; UI shows **active route + latency**
+7. Commands sent to phone via WebSocket; UI shows **active route + latency + permission status**
 8. Accessibility Service executes taps, swipes, etc.
 9. Live view frames stream back while the UI is subscribed
 

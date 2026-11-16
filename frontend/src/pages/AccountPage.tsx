@@ -62,8 +62,9 @@ export default function AccountPage() {
         <div>
           <h2 className="font-medium">Link a phone</h2>
           <p className="text-sm text-mute">
-            Open the APK → Sign in / Enter code. Type the 6-character code here.
-            Same Cognito account auto-links; QR remains a fallback for APK download.
+            Open the APK, tap Sign in and link phone, then type the 6-character
+            code here. Same Cognito account auto-links the executor. QR is only
+            for downloading the APK from Devices / Settings.
           </p>
         </div>
         {linkErr && <ErrorBanner message={linkErr} />}

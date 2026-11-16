@@ -1,7 +1,20 @@
 import { useState, useEffect } from 'react';
-import { Smartphone, Wifi, WifiOff, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Smartphone, Wifi, WifiOff, Download } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
+import { Badge, Card, EmptyState, LoadingBlock } from '../components/ui';
+
+interface DevicePermissions {
+  accessibility?: boolean;
+  notifications?: boolean;
+  media_projection?: boolean;
+  battery_optimization?: boolean;
+  overlay?: boolean;
+  query_packages?: boolean;
+  foreground_service?: boolean;
+  updated_at?: string;
+}
 
 interface Device {
   device_id: string;
@@ -12,27 +25,17 @@ interface Device {
   last_seen: string;
   route?: string | null;
   latency_ms?: number | null;
-}
-
-interface PairingInfo {
-  token: string;
-  qr_code: string;
-  pairing_url: string;
-  expires_in: number;
-  lan_ws?: string | null;
-  cloud_ws?: string | null;
-  mdns_service?: string;
+  permissions?: DevicePermissions | null;
 }
 
 export default function DevicesPage() {
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
-  const [showPairing, setShowPairing] = useState(false);
-  const [deviceName, setDeviceName] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [devices, setDevices] = useState<Device[] | null>(null);
+  const [apkQr, setApkQr] = useState<string | null>(null);
+  const [apkUrl, setApkUrl] = useState<string | null>(null);
 
   useEffect(() => {
     loadDevices();
+    loadApk();
     const interval = setInterval(loadDevices, 3000);
     return () => clearInterval(interval);
   }, []);
@@ -45,68 +48,84 @@ export default function DevicesPage() {
       setDevices(response.data);
     } catch (error) {
       console.error('Failed to load devices:', error);
+      setDevices([]);
     }
   };
 
-  const startPairing = async () => {
-    if (!deviceName.trim()) {
-      alert('Please enter a device name');
-      return;
-    }
-
-    setLoading(true);
+  const loadApk = async () => {
     try {
-      const response = await axios.post(
-        `${getBackendUrl()}/api/devices/pair`,
-        {
-          device_name: deviceName,
-          platform: 'android',
-        },
-        {
-          headers: { Authorization: `Bearer ${getAuthToken()}` },
-        }
-      );
-      setPairingInfo(response.data);
-      setShowPairing(true);
+      const response = await axios.get(`${getBackendUrl()}/api/releases/latest`);
+      setApkQr(response.data.qr_code);
+      setApkUrl(response.data.apk_url);
     } catch (error) {
-      console.error('Failed to initiate pairing:', error);
-      alert('Failed to start pairing. Please check backend connection.');
-    } finally {
-      setLoading(false);
+      console.error('Failed to load APK QR:', error);
     }
   };
 
   return (
     <div className="mr-page space-y-6">
-      <div className="flex items-center justify-between gap-3">
+      <div>
         <h2 className="text-2xl font-semibold tracking-tight">Devices</h2>
-        <button
-          onClick={() => {
-            setShowPairing(false);
-            setPairingInfo(null);
-            setDeviceName('');
-            const modal = document.getElementById('pair-modal');
-            if (modal) (modal as any).showModal();
-          }}
-          className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-accent px-3 py-2 text-sm font-medium hover:bg-accent-soft"
-        >
-          <Plus size={18} />
-          <span>Pair</span>
-        </button>
+        <p className="text-sm text-mute">
+          Hosted UI manages agents · APK executes on the phone. Link by signing
+          into the same Cognito account — QR is download-only.
+        </p>
       </div>
-      <p className="text-sm text-mute -mt-4">
-        Linked phones appear here after Cognito sign-in or QR fallback.
-      </p>
 
-      {/* Devices Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {devices.length === 0 ? (
-          <div className="col-span-full bg-surface rounded-lg p-8 text-center">
-            <Smartphone size={48} className="mx-auto text-mute mb-4" />
-            <p className="text-mute mb-2">No devices connected</p>
-            <p className="text-sm text-mute">
-              Tap Pair, or link via Account device code
-            </p>
+      <Card elev className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Download size={18} className="text-accent" />
+          <h3 className="font-medium">Install APK</h3>
+        </div>
+        <p className="text-sm text-mute">
+          Scan to download the latest GitHub release APK. After install, open
+          MobileRun → complete permissions → Sign in &amp; link phone (same
+          account as this UI).
+        </p>
+        {apkQr ? (
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+            <div className="rounded-xl bg-white p-3">
+              <img
+                src={`data:image/png;base64,${apkQr}`}
+                alt="APK download QR"
+                className="h-40 w-40"
+              />
+            </div>
+            {apkUrl && (
+              <a
+                href={apkUrl}
+                className="text-sm text-accent break-all"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {apkUrl}
+              </a>
+            )}
+          </div>
+        ) : (
+          <LoadingBlock label="Loading download QR…" />
+        )}
+        <Link to="/account" className="inline-block text-sm text-accent">
+          Approve a device code on Account →
+        </Link>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {devices === null ? (
+          <div className="col-span-full">
+            <LoadingBlock />
+          </div>
+        ) : devices.length === 0 ? (
+          <div className="col-span-full">
+            <EmptyState
+              title="No phones linked"
+              hint="Install via QR above, then sign in on the APK with your Cognito account."
+              action={
+                <Link to="/account" className="mr-btn-primary text-sm">
+                  Open Account
+                </Link>
+              }
+            />
           </div>
         ) : (
           devices.map((device) => (
@@ -114,113 +133,26 @@ export default function DevicesPage() {
           ))
         )}
       </div>
-
-      {/* Pairing Modal */}
-      <dialog id="pair-modal" className="modal bg-surface rounded-lg p-6 max-w-md">
-        <div className="space-y-4">
-          <h3 className="text-xl font-bold">Pair New Device</h3>
-
-          {!showPairing ? (
-            <>
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Device Name
-                </label>
-                <input
-                  type="text"
-                  value={deviceName}
-                  onChange={(e) => setDeviceName(e.target.value)}
-                  placeholder="My Phone"
-                  className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="flex justify-end space-x-3">
-                <button
-                  onClick={() => {
-                    const modal = document.getElementById('pair-modal');
-                    if (modal) (modal as any).close();
-                  }}
-                  className="px-4 py-2 bg-surface-elev hover:bg-gray-600 rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={startPairing}
-                  disabled={loading}
-                  className="px-4 py-2 bg-accent hover:bg-accent-soft rounded-lg disabled:opacity-50"
-                >
-                  {loading ? 'Starting...' : 'Start Pairing'}
-                </button>
-              </div>
-            </>
-          ) : (
-            pairingInfo && (
-              <>
-                <div className="text-center space-y-4">
-                  <p className="text-mute">
-                    Scan once — stores LAN + cloud WebSocket endpoints. No USB
-                    cable. Phone prefers Wi‑Fi/mDNS, then falls back to AWS.
-                  </p>
-                  {(pairingInfo.lan_ws || pairingInfo.cloud_ws) && (
-                    <p className="text-xs text-mute break-all">
-                      {pairingInfo.lan_ws && (
-                        <>
-                          LAN: {pairingInfo.lan_ws}
-                          <br />
-                        </>
-                      )}
-                      {pairingInfo.cloud_ws && <>Cloud: {pairingInfo.cloud_ws}</>}
-                    </p>
-                  )}
-
-                  <div className="bg-white p-4 rounded-lg inline-block">
-                    <img
-                      src={`data:image/png;base64,${pairingInfo.qr_code}`}
-                      alt="Pairing QR Code"
-                      className="w-64 h-64"
-                    />
-                  </div>
-
-                  <p className="text-sm text-mute">
-                    Expires in {Math.floor(pairingInfo.expires_in / 60)} minutes
-                  </p>
-
-                  <details className="text-left">
-                    <summary className="text-sm text-mute cursor-pointer">
-                      Manual pairing URL
-                    </summary>
-                    <code className="text-xs bg-gray-900 p-2 rounded block mt-2 break-all">
-                      {pairingInfo.pairing_url}
-                    </code>
-                  </details>
-                </div>
-
-                <button
-                  onClick={() => {
-                    const modal = document.getElementById('pair-modal');
-                    if (modal) (modal as any).close();
-                    setShowPairing(false);
-                    setPairingInfo(null);
-                  }}
-                  className="w-full px-4 py-2 bg-surface-elev hover:bg-gray-600 rounded-lg"
-                >
-                  Close
-                </button>
-              </>
-            )
-          )}
-        </div>
-      </dialog>
     </div>
   );
 }
 
 function DeviceCard({ device }: { device: Device }) {
+  const perms = device.permissions || {};
+  const rows: [string, boolean | undefined][] = [
+    ['Accessibility', perms.accessibility],
+    ['Notifications', perms.notifications],
+    ['Screen capture', perms.media_projection],
+    ['Battery unrestricted', perms.battery_optimization],
+    ['Overlay', perms.overlay],
+    ['Query packages', perms.query_packages],
+    ['Foreground service', perms.foreground_service],
+  ];
+
   return (
-    <div className="bg-surface rounded-lg p-4 border border-line">
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center space-x-3">
+    <div className="rounded-2xl border border-line bg-surface p-4">
+      <div className="mb-3 flex items-start justify-between">
+        <div className="flex items-center gap-3">
           <Smartphone className="text-accent" size={24} />
           <div>
             <h3 className="font-semibold">{device.name}</h3>
@@ -236,17 +168,13 @@ function DeviceCard({ device }: { device: Device }) {
 
       <div className="space-y-1 text-sm">
         <div className="flex justify-between">
-          <span className="text-mute">Platform:</span>
-          <span className="capitalize">{device.platform}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-mute">Route:</span>
+          <span className="text-mute">Route</span>
           <span className="uppercase">
             {device.route || device.connection_type || '—'}
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-mute">Latency:</span>
+          <span className="text-mute">Latency</span>
           <span>
             {device.latency_ms != null
               ? `${Math.round(device.latency_ms)} ms`
@@ -254,15 +182,27 @@ function DeviceCard({ device }: { device: Device }) {
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-mute">Status:</span>
-          <span
-            className={
-              device.connected ? 'text-green-400' : 'text-red-400'
-            }
-          >
-            {device.connected ? 'Connected' : 'Disconnected'}
-          </span>
+          <span className="text-mute">Status</span>
+          <Badge tone={device.connected ? 'ok' : 'mute'}>
+            {device.connected ? 'Connected' : 'Offline'}
+          </Badge>
         </div>
+      </div>
+
+      <div className="mt-4 border-t border-line pt-3">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-mute">
+          Permissions
+        </p>
+        <ul className="space-y-1 text-sm">
+          {rows.map(([label, ok]) => (
+            <li key={label} className="flex justify-between gap-2">
+              <span className="text-mute">{label}</span>
+              <span className={ok ? 'text-ok' : 'text-amber-300'}>
+                {ok == null ? '—' : ok ? 'OK' : 'Needed'}
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
