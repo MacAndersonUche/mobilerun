@@ -46,13 +46,13 @@ dist/
 .env.local
 .env.*.local
 
-# AWS CDK
+# AWS CDK (scoped — do NOT ignore frontend JS / Vite ambient .d.ts)
 cdk.out/
-*.js
-*.d.ts
-!jest.config.js
 infra/**/*.js
 infra/**/*.d.ts
+!infra/**/jest.config.js
+!frontend/**/*.js
+!frontend/src/**/*.d.ts
 
 # Android
 *.iml
