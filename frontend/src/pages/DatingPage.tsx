@@ -117,6 +117,15 @@ export default function DatingPage() {
   const [bucketCounts, setBucketCounts] = useState<Record<string, number>>({});
   const [newTemplateText, setNewTemplateText] = useState('');
   const [newTemplateBucket, setNewTemplateBucket] = useState('any');
+  const [selectorApps, setSelectorApps] = useState<
+    {
+      package_name: string;
+      version_code: string;
+      total_llm_calls: number;
+      last_discovered_at?: string | null;
+      roles: { role: string; source: string; llm_calls: number; discovered_at: string }[];
+    }[]
+  >([]);
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -124,7 +133,7 @@ export default function DatingPage() {
 
   const loadAll = async () => {
     try {
-      const [statusRes, statsRes, configRes, queueRes, openersRes] =
+      const [statusRes, statsRes, configRes, queueRes, openersRes, selRes] =
         await Promise.all([
           axios.get(`${getBackendUrl()}/api/dating/status`, {
             headers: authHeaders(),
@@ -139,6 +148,9 @@ export default function DatingPage() {
             headers: authHeaders(),
           }),
           axios.get(`${getBackendUrl()}/api/dating/openers`, {
+            headers: authHeaders(),
+          }),
+          axios.get(`${getBackendUrl()}/api/selectors/status`, {
             headers: authHeaders(),
           }),
         ]);
@@ -163,6 +175,7 @@ export default function DatingPage() {
       setTemplates(openersRes.data.library?.templates || []);
       setBucketNow(openersRes.data.bucket_now || 'morning');
       setBucketCounts(openersRes.data.bucket_counts || {});
+      setSelectorApps(selRes.data.apps || []);
       setError(null);
     } catch (e: unknown) {
       console.error(e);
@@ -714,6 +727,46 @@ export default function DatingPage() {
         >
           Save library
         </button>
+      </div>
+
+      {/* Selector cache status */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <h3 className="text-lg font-semibold">Selector cache</h3>
+        <p className="text-xs text-mute">
+          Dating/social navigation uses accessibility selectors (no LLM). On miss,
+          one LLM discovery is cached per app version. Failures escalate to Needs
+          you.
+        </p>
+        {selectorApps.length === 0 ? (
+          <p className="text-sm text-mute">No cached apps yet.</p>
+        ) : (
+          selectorApps.map((app) => (
+            <div
+              key={`${app.package_name}@${app.version_code}`}
+              className="rounded-xl border border-line bg-canvas-elev p-3 text-sm space-y-1"
+            >
+              <div className="flex flex-wrap justify-between gap-2">
+                <span className="font-medium">
+                  {app.package_name}{' '}
+                  <span className="text-mute">v{app.version_code}</span>
+                </span>
+                <span className="text-mute">
+                  LLM calls: {app.total_llm_calls} · last{' '}
+                  {app.last_discovered_at
+                    ? new Date(app.last_discovered_at).toLocaleString()
+                    : '—'}
+                </span>
+              </div>
+              <ul className="text-xs text-mute grid sm:grid-cols-2 gap-1">
+                {(app.roles || []).map((r) => (
+                  <li key={r.role}>
+                    {r.role}: {r.source} (llm {r.llm_calls})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Review queue */}

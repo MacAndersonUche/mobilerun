@@ -9,11 +9,14 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 /**
- * Minimal fake dating UI for emulator e2e:
- * swipe/like/pass, type message, send opener/reply, visible counters.
+ * Minimal fake dating UI for emulator e2e.
  *
- * Also exposes a verification / unusual-activity screen used by the
- * safety auto-pause E2E (agent must STOP — never solve or bypass).
+ * Layout variants (intent extra layout_variant):
+ * - default / v1: messageInput, btnSend, btnLike, btnPass, profileName
+ * - v2: chatComposer, btnSendMessage, btnHeart, btnNope, nameLabel
+ *   (different resource-ids → selector cache miss / rediscovery E2E)
+ *
+ * Verification overlay: --ez show_verification true
  */
 class MainActivity : AppCompatActivity() {
     private var swipes = 0
@@ -23,24 +26,46 @@ class MainActivity : AppCompatActivity() {
     private val profiles = listOf("Alex", "Jordan", "Sam", "Riley", "Casey")
     private var idx = 0
     private var showingVerification = false
+    private var layoutVariant = "v1"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        layoutVariant = intent?.getStringExtra("layout_variant")?.lowercase() ?: "v1"
+        if (layoutVariant == "v2") {
+            setContentView(R.layout.activity_main_v2)
+        } else {
+            setContentView(R.layout.activity_main)
+        }
 
-        val name = findViewById<TextView>(R.id.profileName)
+        val name = findViewById<TextView>(
+            if (layoutVariant == "v2") R.id.nameLabel else R.id.profileName
+        )
         val bio = findViewById<TextView>(R.id.profileBio)
         val stats = findViewById<TextView>(R.id.stats)
         val chat = findViewById<TextView>(R.id.chatLog)
-        val input = findViewById<EditText>(R.id.messageInput)
+        val input = findViewById<EditText>(
+            if (layoutVariant == "v2") R.id.chatComposer else R.id.messageInput
+        )
         val mainContent = findViewById<LinearLayout>(R.id.mainContent)
         val verifyPanel = findViewById<LinearLayout>(R.id.verifyPanel)
         val verifyTitle = findViewById<TextView>(R.id.verifyTitle)
         val verifyBody = findViewById<TextView>(R.id.verifyBody)
+        val btnPass = findViewById<Button>(
+            if (layoutVariant == "v2") R.id.btnNope else R.id.btnPass
+        )
+        val btnLike = findViewById<Button>(
+            if (layoutVariant == "v2") R.id.btnHeart else R.id.btnLike
+        )
+        val btnSend = findViewById<Button>(
+            if (layoutVariant == "v2") R.id.btnSendMessage else R.id.btnSend
+        )
+
+        // Expose variant for a11y / dumpsys debugging
+        title = "MockDating ($layoutVariant)"
 
         fun refresh() {
             name.text = profiles[idx % profiles.size]
-            bio.text = "Profile #${idx + 1} — coffee, dogs, and bad jokes."
+            bio.text = "Profile #${idx + 1} — coffee, dogs, and bad jokes. [$layoutVariant]"
             stats.text = "Swipes: $swipes | Openers: $openers | Replies: $replies"
         }
 
@@ -62,20 +87,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        findViewById<Button>(R.id.btnPass).setOnClickListener {
+        btnPass.setOnClickListener {
             swipes += 1
             idx += 1
             matched = false
             refresh()
         }
-        findViewById<Button>(R.id.btnLike).setOnClickListener {
+        btnLike.setOnClickListener {
             swipes += 1
             matched = true
             idx += 1
             chat.append("Matched with ${name.text}!\n")
             refresh()
         }
-        findViewById<Button>(R.id.btnSend).setOnClickListener {
+        btnSend.setOnClickListener {
             val text = input.text?.toString()?.trim().orEmpty()
             if (text.isEmpty()) return@setOnClickListener
             if (!matched || openers == 0) {
@@ -92,11 +117,9 @@ class MainActivity : AppCompatActivity() {
             showVerification(true)
         }
         findViewById<Button>(R.id.btnDismissVerify).setOnClickListener {
-            // Human-only dismiss — agent must never tap this to bypass.
             showVerification(false)
         }
 
-        // Launch with verification via: am start ... --ez show_verification true
         val wantVerify = intent?.getBooleanExtra("show_verification", false) == true
         showVerification(wantVerify)
         refresh()

@@ -1668,6 +1668,121 @@ async def compose_dating_message_api(
     }
 
 
+# === Selector discovery + cache (dating/social nav, a11y-first) ===
+
+_selector_nav = None
+
+
+def get_selector_navigator(auth: Optional[dict] = None):
+    global _selector_nav
+    from mobilerun.selectors.cache import SelectorCache
+    from mobilerun.selectors.navigator import SelectorNavigator
+
+    user_id = _dating_user_id(auth)
+
+    def _push(**kwargs) -> str:
+        q = get_needs_you_queue()
+        item = q.add(
+            source="safety",
+            app_name=kwargs.get("app") or "unknown",
+            package_name=kwargs.get("app") or "",
+            conversation_id="selector",
+            contact_name="Selector rediscovery",
+            inbound_preview=kwargs.get("body") or kwargs.get("reason") or "",
+            draft_reply="",
+            reasons=["selector_discovery", "needs_resume"],
+            confidence=0.9,
+            meta=kwargs.get("meta") or {"kind": kwargs.get("kind")},
+        )
+        return item.id
+
+    if (
+        _selector_nav is None
+        or getattr(_selector_nav.cache, "user_id", None) != user_id
+    ):
+        cache = SelectorCache(user_id=user_id, max_rediscovery=3)
+        _selector_nav = SelectorNavigator(
+            cache=cache, max_rediscovery=3, push_needs_you=_push
+        )
+    return _selector_nav
+
+
+class SelectorResolveRequest(BaseModel):
+    role: str
+    package_name: str
+    version_code: str = "1"
+    tree: Any = None
+    screenshot_b64: Optional[str] = None
+    allow_llm: bool = True
+    # Test hook: inline LLM JSON response (avoids real model in CI)
+    llm_stub: Optional[Dict[str, Any]] = None
+
+
+@app.get("/api/selectors/status")
+async def selectors_status(
+    package_name: Optional[str] = None,
+    version_code: str = "1",
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Cache status per app: last discovered, version, LLM calls used."""
+    nav = get_selector_navigator(auth)
+    if package_name:
+        return {"apps": [nav.cache.status(package_name, version_code).to_dict()]}
+    return {"apps": [s.to_dict() for s in nav.cache.list_packages()]}
+
+
+@app.post("/api/selectors/resolve")
+async def selectors_resolve(
+    body: SelectorResolveRequest, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """
+    Resolve a dating/social nav role via cached a11y selector (no LLM),
+    falling back ONCE to LLM discovery when missing/broken.
+    """
+    nav = get_selector_navigator(auth)
+    llm_calls_box = {"n": 0}
+
+    def llm_callable(**kwargs):
+        llm_calls_box["n"] += 1
+        if body.llm_stub is not None:
+            return body.llm_stub
+        # Soft default for tests without stub: refuse (caller may supply stub)
+        return {}
+
+    result = nav.resolve(
+        role=body.role,
+        package_name=body.package_name,
+        version_code=body.version_code,
+        tree=body.tree or [],
+        screenshot_b64=body.screenshot_b64,
+        llm_callable=llm_callable if body.allow_llm else None,
+        allow_llm=body.allow_llm,
+    )
+    st = nav.cache.status(body.package_name, body.version_code)
+    return {
+        **result.to_dict(),
+        "status": st.to_dict(),
+        "llm_callable_invocations": llm_calls_box["n"],
+    }
+
+
+@app.post("/api/selectors/invalidate")
+async def selectors_invalidate(
+    package_name: str,
+    version_code: str = "1",
+    role: Optional[str] = None,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    nav = get_selector_navigator(auth)
+    nav.cache.invalidate(package_name, version_code, role=role)
+    return {
+        "status": "invalidated",
+        "package_name": package_name,
+        "version_code": version_code,
+        "role": role,
+    }
+
+
 @app.get("/api/dating/stats")
 async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode statistics."""
