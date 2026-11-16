@@ -379,6 +379,40 @@ def handler(event: Dict[str, Any], context: Any):
         _send_to_device(client, str(device_id), body)
         return _ok({"sent": True})
 
+    if msg_type == "task_update":
+        task_id = body.get("task_id")
+        update = body.get("update") or {}
+        if task_id:
+            try:
+                from storage import get_job, put_job
+            except ImportError:
+                from backend.storage import get_job, put_job  # type: ignore
+
+            job = get_job(str(task_id)) or {
+                "job_id": str(task_id),
+                "kind": "agent",
+                "device_id": device_id,
+            }
+            status = update.get("status") or body.get("status") or job.get("status")
+            job["status"] = status
+            if update.get("result") is not None:
+                job["result"] = update.get("result")
+            if status in ("completed", "failed", "stopped"):
+                job["completed_at"] = int(time.time())
+            state = dict(job.get("state") or {})
+            state["last_action"] = update.get("result") or status
+            if status == "completed":
+                state["steps"] = int(state.get("steps") or 0) + 1
+            job["state"] = state
+            put_job(job)
+        if device_id:
+            _relay_to_ui(
+                client,
+                str(device_id),
+                {"type": "task_update", "device_id": device_id, **body},
+            )
+        return _ok({"updated": True, "task_id": task_id})
+
     # Default ack
     try:
         _post(

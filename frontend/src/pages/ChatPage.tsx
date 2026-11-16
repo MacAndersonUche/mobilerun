@@ -52,6 +52,9 @@ export default function ChatPage() {
     params?: Record<string, unknown>;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('normal');
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -70,8 +73,18 @@ export default function ChatPage() {
         const res = await axios.get(`${apiBase()}/api/devices`, {
           headers: { Authorization: `Bearer ${getAuthToken()}` },
         });
-        setDevices(res.data || []);
-        if (res.data?.[0]?.device_id) setDeviceId(res.data[0].device_id);
+        const list = res.data || [];
+        setDevices(list);
+        // Prefer a connected device; never leave deviceId empty when one exists
+        const live = list.find((d: { connected?: boolean }) => d.connected);
+        const pick = live || list[0];
+        if (pick?.device_id) {
+          setDeviceId((prev) =>
+            prev && list.some((d: { device_id: string }) => d.device_id === prev)
+              ? prev
+              : pick.device_id
+          );
+        }
       } catch {
         /* offline ok */
       }
@@ -93,7 +106,52 @@ export default function ChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, taskStatus]);
+
+  // Poll task progress while a chat-dispatched task is active
+  useEffect(() => {
+    if (!activeTaskId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await axios.get(`${apiBase()}/api/tasks/${activeTaskId}`, {
+          headers: { Authorization: `Bearer ${getAuthToken()}` },
+        });
+        if (cancelled) return;
+        const st = String(res.data.status || '');
+        const result = res.data.result || res.data.error || '';
+        setTaskStatus(`${st}${result ? ` · ${result}` : ''}`);
+        if (['completed', 'failed', 'stopped'].includes(st)) {
+          setActiveTaskId(null);
+          setMessages((m) => [
+            ...m,
+            {
+              role: 'assistant',
+              content:
+                st === 'completed'
+                  ? `Done: ${result || st}`
+                  : `Task ${st}: ${result || 'see phone'}`,
+              meta: {
+                answer: st === 'completed' ? `Done: ${result || st}` : `Task ${st}: ${result}`,
+                steps: [
+                  { title: 'Dispatched', done: true },
+                  { title: 'Executed on phone', done: st === 'completed', subtext: String(result || st) },
+                ],
+              },
+            },
+          ]);
+        }
+      } catch {
+        /* keep polling */
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [activeTaskId, target]);
 
   const persistMode = async (nextMode: Mode, nextSpeed: Speed) => {
     setMode(nextMode);
@@ -112,7 +170,12 @@ export default function ChatPage() {
   const send = async (confirmed = false, override?: string) => {
     const text = (override ?? input).trim();
     if (!text && !confirmed) return;
+    if (!deviceId && devices.length === 0) {
+      setSendError('No phone linked — open Devices and Connect this phone first.');
+      return;
+    }
     setBusy(true);
+    setSendError(null);
     try {
       const res = await axios.post(
         `${apiBase()}/api/chat`,
@@ -127,6 +190,17 @@ export default function ChatPage() {
       );
       setSessionId(res.data.session_id);
       setMessages(res.data.history || []);
+      if (res.data.error) {
+        setSendError(String(res.data.error));
+      }
+      const tid =
+        res.data.task_id ||
+        res.data.result?.task_id ||
+        res.data.result?.task?.task_id;
+      if (tid) {
+        setActiveTaskId(String(tid));
+        setTaskStatus('running · dispatched');
+      }
       if (res.data.needs_confirm) {
         setPendingConfirm({ intent: res.data.intent, params: res.data.params });
       } else {
@@ -137,7 +211,15 @@ export default function ChatPage() {
       const detail = axios.isAxiosError(e)
         ? e.response?.data?.detail || e.message
         : 'Chat failed';
-      setMessages((m) => [...m, { role: 'assistant', content: String(detail) }]);
+      setSendError(String(detail));
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'assistant',
+          content: `Error: ${detail}`,
+          meta: { answer: `Error: ${detail}`, error: detail },
+        },
+      ]);
     } finally {
       setBusy(false);
     }
@@ -199,23 +281,52 @@ export default function ChatPage() {
           </span>
         </div>
 
-        {device && (
-          <div className="flex items-center justify-between gap-2 rounded-2xl border border-line bg-surface px-3 py-2.5">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">
-                {device.name || device.device_id}
-              </p>
-              <p className="text-xs text-mute">
-                {device.latency_ms != null
-                  ? `${Math.round(device.latency_ms)} ms`
-                  : '—'}
-              </p>
-            </div>
-            <Badge tone={device.connected ? 'ok' : 'mute'}>
-              {device.connected ? 'Ready' : 'Offline'}
+        <div className="space-y-2 rounded-2xl border border-line bg-surface px-3 py-2.5">
+          <label
+            htmlFor="chat-device-picker"
+            className="block text-xs font-medium uppercase tracking-wide text-mute"
+          >
+            Target device
+          </label>
+          <select
+            id="chat-device-picker"
+            data-testid="chat-device-picker"
+            className="mr-input text-sm"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            aria-label="Target device"
+          >
+            {devices.length === 0 && (
+              <option value="">No phones linked</option>
+            )}
+            {devices.map((d) => (
+              <option key={d.device_id} value={d.device_id}>
+                {(d.name || d.device_id).slice(0, 40)}
+                {d.connected ? ' · online' : ' · offline'}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-mute">
+              {device?.latency_ms != null
+                ? `${Math.round(device.latency_ms)} ms`
+                : 'Pick a connected phone'}
+            </p>
+            <Badge tone={device?.connected ? 'ok' : 'mute'}>
+              {device?.connected ? 'Ready' : 'Offline'}
             </Badge>
           </div>
-        )}
+          {sendError && (
+            <p className="text-sm text-red-400" data-testid="chat-error">
+              {sendError}
+            </p>
+          )}
+          {taskStatus && (
+            <p className="text-xs text-accent" data-testid="chat-task-progress">
+              Task: {taskStatus}
+            </p>
+          )}
+        </div>
 
         {messages.length === 0 && (
           <AgentMessageCard

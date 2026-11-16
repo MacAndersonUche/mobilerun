@@ -33,6 +33,7 @@ def test_build_and_parse_dual_endpoints():
         cloud_ws="wss://ws.example.com",
         backend="http://192.168.1.5:8000",
         ws="ws://192.168.1.5:8000/api/devices/connect",
+        compact=False,
     )
     assert url.startswith("mobilerun://pair?")
     bundle = parse_pairing_uri(url)
@@ -43,6 +44,17 @@ def test_build_and_parse_dual_endpoints():
     assert bundle.cloud is not None
     assert bundle.cloud.kind == "cloud"
     assert "wss://" in bundle.cloud.ws_url or "ws.example.com" in bundle.cloud.ws_url
+
+
+def test_build_pairing_url_compact_is_token_only():
+    url = build_pairing_url(
+        token="tokABC",
+        cloud_http="https://api.example.com",
+        cloud_ws="wss://ws.example.com",
+        compact=True,
+    )
+    assert url == "mobilerun://pair?token=tokABC"
+    assert parse_pairing_uri(url).token == "tokABC"
 
 
 def test_select_prefers_fast_lan_over_cloud():

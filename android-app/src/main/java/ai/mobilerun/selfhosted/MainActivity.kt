@@ -113,9 +113,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleDeepLink(uri: Uri) {
+        val path = uri.path.orEmpty()
         val isPair = (uri.scheme == "mobilerun" && uri.host == "pair") ||
-            (uri.path?.contains("pair") == true && uri.getQueryParameter("token") != null)
-        if (isPair && uri.getQueryParameter("token") != null) {
+            path.contains("pair") ||
+            uri.toString().contains("token=")
+        if (isPair) {
             backendClient.pairFromUri(uri)
         }
     }
@@ -137,7 +139,7 @@ fun MainScreen(
     var streamStatus by remember { mutableStateOf("idle") }
     var paired by remember { mutableStateOf(backendClient.isPaired()) }
     var pairBusy by remember { mutableStateOf(false) }
-    var pairError by remember { mutableStateOf<String?>(null) }
+    var pairError by remember { mutableStateOf(backendClient.lastPairError()) }
     var showAdvanced by remember { mutableStateOf(false) }
     var advancedUrl by remember {
         mutableStateOf(backendClient.defaultBackendHttp() ?: BuildConfig.DEFAULT_CLOUD_HTTP)
@@ -215,9 +217,37 @@ fun MainScreen(
                         ) {
                             Text(if (pairBusy) "Pairing…" else "Scan QR to pair")
                         }
+                        var pasteCode by remember { mutableStateOf("") }
+                        OutlinedTextField(
+                            value = pasteCode,
+                            onValueChange = { pasteCode = it },
+                            label = { Text("Or paste pairing code") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            enabled = !pairBusy,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                pairError = null
+                                backendClient.pairWithCode(pasteCode)
+                            },
+                            enabled = !pairBusy && pasteCode.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Connect with code")
+                        }
+                        Text(
+                            "Pairing status: " + when {
+                                pairBusy -> "exchanging code…"
+                                pairError != null -> "failed"
+                                else -> "waiting for scan / code"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         if (pairError != null) {
                             Text(
-                                pairError!!,
+                                "Last error: $pairError",
                                 color = MaterialTheme.colorScheme.error,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -230,6 +260,11 @@ fun MainScreen(
                     "Active route",
                     routeStatus,
                     routeStatus.contains("LAN") || routeStatus.contains("DISCOVERED") || routeStatus.contains("CLOUD"),
+                )
+                StatusCard(
+                    "Pairing / last error",
+                    pairError ?: "OK · session stored",
+                    pairError == null,
                 )
                 StatusCard("Last Task", lastTask, true)
                 StatusCard("Live stream", streamStatus, streamStatus == "streaming")

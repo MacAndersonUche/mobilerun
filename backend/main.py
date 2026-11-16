@@ -505,9 +505,10 @@ def _pairing_endpoints() -> dict:
 
 
 def _qr_png_b64(data: str) -> str:
+    # Prefer denser ECC so slightly damaged / low-res camera frames still decode.
     qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_Q,
         box_size=10,
         border=4,
     )
@@ -554,15 +555,24 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
     except ImportError:
         from backend.storage import save_pairing_token  # type: ignore
 
-    # Persist hashed — never store plaintext token
-    save_pairing_token(
-        token,
-        {
-            **pairing_data,
-            "owner": owner,
-        },
-    )
+    # Persist hashed — never store plaintext token. Fail closed if Dynamo write
+    # fails so claim on another Lambda cold start cannot miss the token.
+    try:
+        save_pairing_token(
+            token,
+            {
+                **pairing_data,
+                "owner": owner,
+            },
+        )
+    except Exception:
+        logger.exception("save_pairing_token failed for owner=%s", owner)
+        raise HTTPException(
+            status_code=503, detail="Could not persist pairing code — retry"
+        )
 
+    # Compact deep link (token only) — APK BuildConfig carries prod HTTP/WS.
+    # Full dual-endpoint URL kept for older APKs / LAN e2e via pairing_url_full.
     pairing_url = build_pairing_url(
         token=token,
         backend=ends["backend_url"],
@@ -571,18 +581,32 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         lan_ws=ends["lan_ws"],
         cloud_http=ends["cloud_http"],
         cloud_ws=ends["cloud_ws"],
+        compact=True,
+    )
+    pairing_url_full = build_pairing_url(
+        token=token,
+        backend=ends["backend_url"],
+        ws=ends["websocket_url"],
+        lan_http=ends["lan_http"],
+        lan_ws=ends["lan_ws"],
+        cloud_http=ends["cloud_http"],
+        cloud_ws=ends["cloud_ws"],
+        compact=False,
     )
     frontend = (
         os.environ.get("FRONTEND_URL")
         or os.environ.get("NETLIFY_URL")
         or "https://macsmobilerun.netlify.app"
     ).rstrip("/")
+    # HTTPS link is what we encode in the QR: camera apps open it, Netlify
+    # /pair hands off to mobilerun://, and in-app scanner accepts /pair? too.
     https_link = f"{frontend}/pair?{pairing_url.split('?', 1)[-1]}"
 
     return {
         "token": token,
-        "qr_code": _qr_png_b64(pairing_url),
+        "qr_code": _qr_png_b64(https_link),
         "pairing_url": pairing_url,
+        "pairing_url_full": pairing_url_full,
         "https_link": https_link,
         "backend_url": ends["backend_url"],
         "websocket_url": ends["websocket_url"],
@@ -648,6 +672,7 @@ async def claim_pairing_token(body: PairClaimRequest):
 
     meta = pairing_tokens.get(token) or get_pairing_token(token)
     if not meta:
+        logger.warning("pair claim miss token_prefix=%s len=%s", token[:8], len(token))
         raise HTTPException(status_code=400, detail="Invalid or expired pairing token")
     if meta.get("used"):
         raise HTTPException(status_code=400, detail="Pairing token already used")
@@ -663,6 +688,11 @@ async def claim_pairing_token(body: PairClaimRequest):
     owner = (meta.get("owner") or "").lower()
     if not owner:
         raise HTTPException(status_code=400, detail="Pairing token has no owner")
+    logger.info(
+        "pair claim ok owner=%s device_name=%s",
+        owner,
+        body.device_name or meta.get("device_name"),
+    )
 
     device_id = body.device_id or f"device_{secrets.token_hex(8)}"
     session_token = secrets.token_urlsafe(32)
@@ -954,15 +984,22 @@ async def device_websocket(websocket: WebSocket):
 
 
 async def _send_to_device(device_id: str, payload: dict) -> bool:
+    """Prefer in-memory WS (local); fall back to API GW Management API (AWS)."""
     ws = device_websockets.get(device_id)
-    if not ws:
-        return False
+    if ws:
+        try:
+            await ws.send_json(payload)
+            return True
+        except Exception as e:
+            logger.warning("in-memory send to %s failed: %s", device_id, e)
     try:
-        await ws.send_json(payload)
-        return True
-    except Exception as e:
-        logger.warning("send to device %s failed: %s", device_id, e)
-        return False
+        from backend.device_push import push_to_device
+    except ImportError:
+        try:
+            from device_push import push_to_device  # type: ignore
+        except ImportError:
+            return False
+    return push_to_device(device_id, payload)
 
 
 async def handle_device_message(device_id: str, message: dict):
@@ -1118,11 +1155,41 @@ async def submit_task(
     request: TaskRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """Submit a new automation task to a device."""
-    if request.device_id not in connected_devices:
-        raise HTTPException(status_code=404, detail="Device not found")
+    mem = connected_devices.get(request.device_id) or {}
+    try:
+        from backend.device_push import device_is_reachable
+    except ImportError:
+        try:
+            from device_push import device_is_reachable  # type: ignore
+        except ImportError:
+            device_is_reachable = lambda _d: False  # type: ignore
 
-    if not connected_devices[request.device_id].get("connected", False):
-        raise HTTPException(status_code=400, detail="Device not connected")
+    reachable = bool(mem.get("connected")) or device_is_reachable(request.device_id)
+    if not mem and not reachable:
+        # Still allow if owned device exists in Dynamo (offline → clear error)
+        owner = _owner_key(auth)
+        owned = False
+        if owner:
+            try:
+                from storage import list_owned_devices
+            except ImportError:
+                from backend.storage import list_owned_devices  # type: ignore
+
+            owned = any(
+                str(d.get("device_id")) == request.device_id
+                for d in list_owned_devices(owner)
+            )
+        if not owned:
+            raise HTTPException(status_code=404, detail="Device not found")
+        raise HTTPException(
+            status_code=400,
+            detail="Device offline — open MobileRun on the phone and wait until Devices shows Connected",
+        )
+    if not reachable:
+        raise HTTPException(
+            status_code=400,
+            detail="Device offline — no live WebSocket. Re-open the app on the phone.",
+        )
 
     task_id = f"task_{secrets.token_hex(8)}"
 
@@ -1156,27 +1223,84 @@ async def submit_task(
 
     active_runs[task_id] = task
 
-    # Send task to device via WebSocket
-    ws = device_websockets.get(request.device_id)
-    if ws:
+    payload = {
+        "type": "run_task",
+        "task_id": task_id,
+        "instruction": request.instruction,
+        "max_steps": request.max_steps,
+        "reasoning": request.reasoning,
+        "vision": request.vision,
+        "mode": mode,
+        "speed_preset": speed,
+    }
+    # Always persist so HTTP Lambdas can poll status across cold starts
+    try:
         try:
-            await ws.send_json(
+            from storage import put_job
+        except ImportError:
+            from backend.storage import put_job  # type: ignore
+
+        put_job(
+            {
+                "job_id": task_id,
+                "kind": "agent",
+                "status": "pending",
+                "device_id": request.device_id,
+                "instruction": request.instruction,
+                "max_steps": request.max_steps or 15,
+                "speed_preset": speed,
+                "mode": mode,
+                "created_at": int(datetime.now().timestamp()),
+                "next_run_at": int(datetime.now().timestamp()) + 5,
+                "state": {"steps": 0},
+                "ttl": int(datetime.now().timestamp()) + 86400,
+            }
+        )
+    except Exception as e:
+        logger.warning("put_job for task failed (local ok): %s", e)
+
+    sent = await _send_to_device(request.device_id, payload)
+    if sent:
+        task["status"] = "running"
+        try:
+            try:
+                from storage import get_job, put_job
+            except ImportError:
+                from backend.storage import get_job, put_job  # type: ignore
+
+            job = get_job(task_id) or {}
+            job.update(
                 {
-                    "type": "run_task",
-                    "task_id": task_id,
-                    "instruction": request.instruction,
-                    "max_steps": request.max_steps,
-                    "reasoning": request.reasoning,
-                    "vision": request.vision,
-                    "mode": mode,
-                    "speed_preset": speed,
+                    "job_id": task_id,
+                    "status": "running",
+                    "result": "Dispatched to device",
                 }
             )
-            task["status"] = "running"
+            put_job(job)
+        except Exception:
+            pass
+    else:
+        try:
+            step_arn = os.environ.get("STEP_WORKER_ARN")
+            if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
+                import boto3
+
+                boto3.client("lambda").invoke(
+                    FunctionName=step_arn,
+                    InvocationType="Event",
+                    Payload=json.dumps({"job_id": task_id}).encode(),
+                )
+                task["status"] = "running"
+                task["result"] = "Dispatched via step worker (async)"
+            else:
+                task["status"] = "failed"
+                task["error"] = (
+                    "No live WebSocket to device and no step worker configured"
+                )
         except Exception as e:
-            logger.error(f"Failed to send task to device: {e}")
+            logger.error("Failed to send/queue task: %s", e)
             task["status"] = "failed"
-            task["error"] = "Failed to communicate with device"
+            task["error"] = f"Failed to reach device: {e}"
 
     return TaskStatus(**task)
 
@@ -1185,13 +1309,66 @@ async def submit_task(
 async def get_task_status(
     task_id: str, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Get status of a specific task."""
-    if task_id in active_runs:
-        return TaskStatus(**active_runs[task_id])
+    """Get status of a specific task (durable Dynamo job preferred over memory)."""
+    try:
+        from storage import get_job
+    except ImportError:
+        from backend.storage import get_job  # type: ignore
 
-    for run in run_history:
-        if run["task_id"] == task_id:
-            return TaskStatus(**run)
+    job = None
+    try:
+        job = get_job(task_id)
+    except Exception:
+        job = None
+
+    mem = active_runs.get(task_id)
+    if not mem:
+        for run in run_history:
+            if run["task_id"] == task_id:
+                mem = run
+                break
+
+    # Prefer durable job when present so WS task_update progress is visible
+    # across HTTP Lambda instances (in-memory active_runs stays stale).
+    if job:
+        started = job.get("created_at") or job.get("started_at")
+        if isinstance(started, (int, float)):
+            started_at = datetime.fromtimestamp(float(started))
+        elif mem and mem.get("started_at"):
+            started_at = mem["started_at"]
+        else:
+            started_at = datetime.now()
+        completed = job.get("completed_at")
+        completed_at = (
+            datetime.fromtimestamp(float(completed))
+            if isinstance(completed, (int, float))
+            else (mem or {}).get("completed_at")
+        )
+        status = str(job.get("status") or (mem or {}).get("status") or "pending")
+        result = job.get("result") or (job.get("state") or {}).get("last_action")
+        if mem:
+            mem["status"] = status
+            if result is not None:
+                mem["result"] = result
+            if completed_at is not None:
+                mem["completed_at"] = completed_at
+        return TaskStatus(
+            task_id=task_id,
+            device_id=str(job.get("device_id") or (mem or {}).get("device_id") or ""),
+            instruction=str(
+                job.get("instruction") or (mem or {}).get("instruction") or ""
+            ),
+            status=status,
+            current_step=int((job.get("state") or {}).get("steps") or 0),
+            max_steps=int(job.get("max_steps") or (mem or {}).get("max_steps") or 15),
+            result=result if result is not None else (mem or {}).get("result"),
+            error=job.get("error") or (mem or {}).get("error"),
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+    if mem:
+        return TaskStatus(**mem)
 
     raise HTTPException(status_code=404, detail="Task not found")
 
@@ -3223,34 +3400,78 @@ async def chat_endpoint(
         if intent == "run_task":
             instruction = params.get("instruction") or ""
             if not did:
-                return {"message": "No device_id — pair a phone first"}
+                # Auto-pick first live device for this owner when UI forgot device_id
+                owner = _owner_key(auth)
+                try:
+                    from device_registry import merge_device_lists
+                except ImportError:
+                    from backend.device_registry import merge_device_lists  # type: ignore
+
+                merged = merge_device_lists(connected_devices, owner)
+                live = next(
+                    (
+                        d
+                        for d in merged
+                        if d.get("connected") and _device_visible_to(d, auth)
+                    ),
+                    None,
+                )
+                if live:
+                    did = str(live["device_id"])
+                else:
+                    return {
+                        "message": "No device selected and none online — open Devices, connect a phone, then pick it in Chat settings.",
+                        "error": "no_device",
+                    }
             mode = params.get("mode") or agent_mode_state.get("mode", "normal")
             speed = params.get("speed_preset") or agent_mode_state.get(
                 "speed_preset", "balanced"
             )
-            if did not in connected_devices or not connected_devices[did].get(
-                "connected"
-            ):
+            try:
+                task = await submit_task(
+                    TaskRequest(
+                        device_id=did,
+                        instruction=instruction,
+                        mode=mode,
+                        speed_preset=speed,
+                    ),
+                    auth=auth,
+                )
+            except HTTPException as he:
+                detail = he.detail if isinstance(he.detail, str) else str(he.detail)
                 return {
-                    "message": f"Queued task on {did}: {instruction}",
-                    "queued": True,
+                    "message": detail,
+                    "error": detail,
+                    "device_id": did,
                     "instruction": instruction,
-                    "mode": mode,
-                    "speed_preset": speed,
                 }
-            task = await submit_task(
-                TaskRequest(
-                    device_id=did,
-                    instruction=instruction,
-                    mode=mode,
-                    speed_preset=speed,
-                ),
-                auth=None,
-            )
             dumped = task.model_dump() if hasattr(task, "model_dump") else task.dict()
+            status = dumped.get("status")
+            err = dumped.get("error")
+            if status == "failed" or err:
+                return {
+                    "message": err or f"Task failed on {did}",
+                    "error": err or "task_failed",
+                    "task": dumped,
+                    "device_id": did,
+                }
             return {
                 "message": f"Started task {task.task_id}: {instruction}",
                 "task": dumped,
+                "task_id": task.task_id,
+                "device_id": did,
+                "steps": [
+                    {
+                        "title": "Dispatched to phone",
+                        "subtext": f"{did} · {status}",
+                        "done": True,
+                    },
+                    {
+                        "title": "Waiting for device execution",
+                        "subtext": instruction,
+                        "done": False,
+                    },
+                ],
             }
         return {"message": f"Unhandled intent {intent}"}
 

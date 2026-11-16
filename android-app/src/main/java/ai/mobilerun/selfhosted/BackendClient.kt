@@ -275,13 +275,22 @@ class BackendClient(private val context: Context) {
      * then auto-connect over cloud (LAN mDNS remains a faster fallback when available).
      */
     fun pairFromUri(uri: Uri) {
-        val token = uri.getQueryParameter("token") ?: return
+        val token = extractPairToken(uri)
+        if (token.isNullOrBlank()) {
+            val msg = "No pairing token in QR/link (${uri.scheme}://${uri.host}${uri.path})"
+            Log.e(tag, msg)
+            _pairErrorFlow.value = msg
+            prefs().edit().putString("last_pair_error", msg).apply()
+            return
+        }
         val cloud = uri.getQueryParameter("cloud")
             ?: uri.getQueryParameter("backend")
+            ?: cloudHttp
             ?: DEFAULT_CLOUD_HTTP
         val cws = uri.getQueryParameter("cloud_ws")
             ?: uri.getQueryParameter("ws")
             ?: cloudWsForHttp(cloud)
+            ?: cloudWs
             ?: DEFAULT_CLOUD_WS
         lanHttp = uri.getQueryParameter("lan")
         lanWs = uri.getQueryParameter("lan_ws")
@@ -297,21 +306,51 @@ class BackendClient(private val context: Context) {
             .apply()
         _pairBusyFlow.value = true
         _pairErrorFlow.value = null
+        _statusFlow.value = "Pairing… exchanging code"
+        prefs().edit().putString("last_pair_error", "").apply()
         scope.launch {
             try {
                 claimPairingToken(token)
                 userDisconnected = false
                 reconnectAttempt.set(0)
                 ConnectionService.start(context)
+                _statusFlow.value = "Paired · opening WebSocket…"
                 connectBest(force = true)
+                if (webSocket == null) {
+                    val msg = "Paired but WebSocket not connected — will retry"
+                    _pairErrorFlow.value = msg
+                    prefs().edit().putString("last_pair_error", msg).apply()
+                }
             } catch (e: Exception) {
                 Log.e(tag, "pair claim failed", e)
-                _pairErrorFlow.value = e.message ?: "Pairing failed"
+                val msg = e.message ?: "Pairing failed"
+                _pairErrorFlow.value = msg
+                _statusFlow.value = "Pairing failed"
+                prefs().edit().putString("last_pair_error", msg).apply()
             } finally {
                 _pairBusyFlow.value = false
             }
         }
     }
+
+    /** Pull token from mobilerun://pair?…, https://…/pair?…, or raw query. */
+    fun extractPairToken(uri: Uri): String? {
+        uri.getQueryParameter("token")?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        // Some scanners wrap the URL; try parsing the whole string again
+        val raw = uri.toString()
+        val marker = "token="
+        val idx = raw.indexOf(marker)
+        if (idx >= 0) {
+            val rest = raw.substring(idx + marker.length)
+            val end = rest.indexOfFirst { it == '&' || it == '#' || it == ' ' }
+            val value = if (end < 0) rest else rest.substring(0, end)
+            return Uri.decode(value).trim().takeIf { it.isNotEmpty() }
+        }
+        return null
+    }
+
+    fun lastPairError(): String? =
+        prefs().getString("last_pair_error", null)?.takeIf { it.isNotBlank() }
 
     private fun claimPairingToken(token: String) {
         val httpBase = (cloudHttp ?: DEFAULT_CLOUD_HTTP).trimEnd('/')
@@ -330,16 +369,33 @@ class BackendClient(private val context: Context) {
         client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                error("claim failed: ${resp.code} $text")
+                val detail = try {
+                    @Suppress("UNCHECKED_CAST")
+                    (gson.fromJson(text, Map::class.java) as? Map<String, Any?>)?.get("detail")
+                } catch (_: Exception) {
+                    null
+                }
+                error("Claim failed (${resp.code}): ${detail ?: text.ifBlank { resp.message }}")
             }
             @Suppress("UNCHECKED_CAST")
             val map = gson.fromJson(text, Map::class.java) as Map<String, Any?>
-            val session = map["session_token"] as? String ?: error("no session_token")
+            val session = map["session_token"] as? String ?: error("no session_token in claim response")
             val did = map["device_id"] as? String
             val owner = map["owner"] as? String
-            (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
-            (map["cloud_ws"] as? String)?.let { cloudWs = it }
+            // Keep emulator/local overrides (10.0.2.2 / localhost) — claim often
+            // echoes prod CLOUD_BACKEND_URL which would yank the phone off the LAN.
+            val localOverride =
+                httpBase.contains("10.0.2.2") ||
+                    httpBase.contains("127.0.0.1") ||
+                    httpBase.contains("localhost")
+            if (!localOverride) {
+                (map["cloud_http"] as? String)?.let { cloudHttp = it.trimEnd('/') }
+                (map["cloud_ws"] as? String)?.let { cloudWs = it }
+            }
             (map["access_token"] as? String)?.let { authToken = it }
+            // Always fall back to baked prod endpoints after claim
+            if (cloudHttp.isNullOrBlank()) cloudHttp = DEFAULT_CLOUD_HTTP
+            if (cloudWs.isNullOrBlank()) cloudWs = DEFAULT_CLOUD_WS
             sessionToken = session
             pairingToken = null
             if (did != null) deviceId = did
@@ -354,10 +410,33 @@ class BackendClient(private val context: Context) {
                 .putString("cloud_http", cloudHttp)
                 .putString("cloud_ws", cloudWs)
                 .putString("user_email", owner)
+                .putString("last_pair_error", "")
                 .apply()
             _pairedFlow.value = true
+            _pairErrorFlow.value = null
             _statusFlow.value = "Paired · connecting…"
         }
+    }
+
+    /** Paste / type the short pairing token from the Devices page (no QR). */
+    fun pairWithCode(rawCode: String) {
+        val raw = rawCode.trim().trim('"')
+        if (raw.contains("://") || raw.contains("/pair?")) {
+            pairFromUri(Uri.parse(raw))
+            return
+        }
+        var token = raw.removePrefix("token=")
+        if (token.contains("token=")) {
+            token = token.substringAfter("token=")
+        }
+        token = token.substringBefore('&').substringBefore('#').trim()
+        if (token.isBlank()) {
+            val msg = "Paste the pairing code from Devices (or the full link)"
+            _pairErrorFlow.value = msg
+            prefs().edit().putString("last_pair_error", msg).apply()
+            return
+        }
+        pairFromUri(Uri.parse("mobilerun://pair?token=${Uri.encode(token)}"))
     }
 
     /** @deprecated use pairFromUri */
@@ -475,6 +554,8 @@ class BackendClient(private val context: Context) {
                 Log.d(tag, "WebSocket opened via ${candidate.route}")
                 reconnectAttempt.set(0)
                 _statusFlow.value = "Connected"
+                _pairErrorFlow.value = null
+                prefs().edit().putString("last_pair_error", "").apply()
                 val msg = mutableMapOf<String, Any?>(
                     "device_id" to deviceId,
                     "platform" to "android",
@@ -482,6 +563,7 @@ class BackendClient(private val context: Context) {
                     "role" to "device",
                     "route" to candidate.route,
                     "latency_ms" to latencyMs,
+                    "name" to android.os.Build.MODEL,
                 )
                 val sess = sessionToken
                 val pair = pairingToken
@@ -620,18 +702,18 @@ class BackendClient(private val context: Context) {
                 "stream_control" -> handleStreamControl(message)
                 "run_task" -> {
                     val instruction = message["instruction"] as? String ?: "Unknown"
+                    val taskId = message["task_id"] as? String ?: ""
                     _taskFlow.value = "Running: $instruction"
                     scope.launch {
+                        sendTaskUpdate(taskId, "running", "Task started: $instruction")
+                        sendAgentEvent(null, 0, "run_task", instruction)
+                        val outcome = executeSimpleInstruction(instruction)
+                        _taskFlow.value = outcome
+                        sendAgentEvent(null, 1, "run_task_done", outcome)
                         sendTaskUpdate(
-                            message["task_id"] as? String ?: "",
-                            "running",
-                            "Task started: $instruction",
-                        )
-                        sendAgentEvent(
-                            currentApp = null,
-                            step = 0,
-                            action = "run_task",
-                            log = instruction,
+                            taskId,
+                            if (outcome.startsWith("OK")) "completed" else "failed",
+                            outcome,
                         )
                     }
                 }
@@ -823,9 +905,11 @@ class BackendClient(private val context: Context) {
     }
 
     private fun sendTaskUpdate(taskId: String, status: String, result: String) {
+        if (taskId.isBlank()) return
         val msg = mapOf(
             "type" to "task_update",
             "task_id" to taskId,
+            "device_id" to deviceId,
             "update" to mapOf(
                 "status" to status,
                 "result" to result,
@@ -833,6 +917,156 @@ class BackendClient(private val context: Context) {
             ),
         )
         webSocket?.send(gson.toJson(msg))
+    }
+
+    /**
+     * Launch a UI activity from the FGS/WebSocket path. Android 14+ blocks
+     * background starts (BAL); try move-to-front, ActivityOptions BAL allow,
+     * then a full-screen notification trampoline.
+     */
+    private fun startUiActivity(intent: Intent): Boolean {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Overlay permission is a documented BAL exemption on Android 10+
+        try {
+            if (android.provider.Settings.canDrawOverlays(context)) {
+                context.startActivity(intent)
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "overlay launch failed: ${e.message}")
+        }
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.appTasks.firstOrNull()?.moveToFront()
+        } catch (_: Exception) {
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                val opts = android.app.ActivityOptions.makeBasic()
+                opts.setPendingIntentCreatorBackgroundActivityStartMode(
+                    android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                )
+                // Options must be attached at PendingIntent *creation* time
+                val pi = android.app.PendingIntent.getActivity(
+                    context,
+                    (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+                    intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_IMMUTABLE,
+                    opts.toBundle(),
+                )
+                pi.send()
+                return true
+            }
+            context.startActivity(intent)
+            return true
+        } catch (e: Exception) {
+            Log.w(tag, "startUiActivity direct failed: ${e.message}")
+        }
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            try {
+                val pi = android.app.PendingIntent.getActivity(
+                    context,
+                    9101,
+                    intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_IMMUTABLE,
+                )
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                    as android.app.NotificationManager
+                val channelId = "task_launch"
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    nm.createNotificationChannel(
+                        android.app.NotificationChannel(
+                            channelId,
+                            "Task launch",
+                            android.app.NotificationManager.IMPORTANCE_HIGH,
+                        ),
+                    )
+                }
+                val notif = android.app.Notification.Builder(context, channelId)
+                    .setContentTitle("MobileRun")
+                    .setContentText("Opening requested screen…")
+                    .setSmallIcon(R.drawable.ic_stat_mobilerun)
+                    .setContentIntent(pi)
+                    .setFullScreenIntent(pi, true)
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(9101, notif)
+                true
+            } catch (e2: Exception) {
+                Log.e(tag, "startUiActivity failed", e2)
+                false
+            }
+        }
+    }
+
+    /**
+     * Execute common chat instructions without a full LLM agent loop.
+     * "open settings" / "settings" → system Settings; other open X → try launch.
+     */
+    private fun executeSimpleInstruction(instruction: String): String {
+        val text = instruction.trim()
+        val lower = text.lowercase()
+        return try {
+            when {
+                lower.contains("setting") -> {
+                    val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                    if (startUiActivity(intent)) "OK · opened Settings"
+                    else "Failed: could not launch Settings (background activity blocked)"
+                }
+                lower.contains("wifi") || lower.contains("wi-fi") -> {
+                    val intent = Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+                    if (startUiActivity(intent)) "OK · opened Wi‑Fi settings"
+                    else "Failed: could not launch Wi‑Fi settings"
+                }
+                lower.contains("bluetooth") -> {
+                    val intent = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+                    if (startUiActivity(intent)) "OK · opened Bluetooth settings"
+                    else "Failed: could not launch Bluetooth settings"
+                }
+                lower.startsWith("open ") || lower.startsWith("launch ") -> {
+                    val app = text.substringAfter(' ').trim()
+                    val pm = context.packageManager
+                    val launch = pm.getLaunchIntentForPackage(app)
+                        ?: pm.getLaunchIntentForPackage(guessPackage(app))
+                    if (launch != null) {
+                        if (startUiActivity(launch)) "OK · launched $app"
+                        else "Failed: could not launch $app"
+                    } else {
+                        val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                        if (startUiActivity(intent)) {
+                            "OK · could not resolve '$app'; opened Settings instead"
+                        } else {
+                            "Failed: could not resolve '$app'"
+                        }
+                    }
+                }
+                else -> {
+                    val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                    if (startUiActivity(intent)) "OK · opened Settings for: $text"
+                    else "Failed: could not launch Settings for: $text"
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "executeSimpleInstruction failed", e)
+            "Failed: ${e.message}"
+        }
+    }
+
+    private fun guessPackage(name: String): String {
+        val n = name.lowercase().replace(" ", "")
+        return when {
+            n.contains("chrome") -> "com.android.chrome"
+            n.contains("setting") -> "com.android.settings"
+            n.contains("camera") -> "com.android.camera2"
+            n.contains("phone") -> "com.android.dialer"
+            n.contains("message") || n.contains("sms") -> "com.android.messaging"
+            else -> name
+        }
     }
 
     fun disconnect() {
