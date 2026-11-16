@@ -59,10 +59,10 @@ class MainActivity : ComponentActivity() {
             if (ScreenCaptureService.isStreaming()) {
                 ScreenCaptureService.updateParams(fps, quality)
                 backendClient.reportPermissions(true)
-                return@onStreamPermissionNeeded
+            } else {
+                val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                projectionLauncher.launch(mgr.createScreenCaptureIntent())
             }
-            val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            projectionLauncher.launch(mgr.createScreenCaptureIntent())
         }
 
         intent?.data?.let { handleDeepLink(it) }
