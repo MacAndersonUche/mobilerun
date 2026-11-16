@@ -11,6 +11,7 @@ from .openers import (
     load_default_library,
     pick_template_opener,
 )
+from .date_flow import DateFlowConfig, DateFlowManager
 
 __all__ = [
     "DatingAgent",
@@ -24,4 +25,6 @@ __all__ = [
     "compose_dating_message",
     "load_default_library",
     "pick_template_opener",
+    "DateFlowConfig",
+    "DateFlowManager",
 ]
