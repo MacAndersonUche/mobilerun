@@ -33,7 +33,9 @@ async def subscribe_ui(ws: WebSocket, device_id: str) -> None:
     ui_subscribers.setdefault(device_id, set()).add(ws)
     ui_device[ws] = device_id
     stream_wanted[device_id] = True
-    logger.info("UI subscribed to %s (%d clients)", device_id, len(ui_subscribers[device_id]))
+    logger.info(
+        "UI subscribed to %s (%d clients)", device_id, len(ui_subscribers[device_id])
+    )
 
 
 async def unsubscribe_ui(ws: WebSocket) -> None:

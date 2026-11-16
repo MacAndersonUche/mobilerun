@@ -22,8 +22,7 @@ def _sqlite_path() -> Path:
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_sqlite_path()))
     conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -32,8 +31,7 @@ def _conn() -> sqlite3.Connection:
             meta TEXT,
             created_at REAL NOT NULL
         )
-        """
-    )
+        """)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id, created_at)"
     )

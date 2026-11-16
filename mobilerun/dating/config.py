@@ -106,6 +106,8 @@ class DatingModeConfig:
     # Behavior
     review_before_send: bool = True
     human_like_delays: bool = True
+    # Shared humanizer preset (fast | balanced | careful) — Balanced default
+    speed_preset: str = "balanced"
     randomize_order: bool = True
     sequential_messaging: bool = True  # Process one conversation at a time
 

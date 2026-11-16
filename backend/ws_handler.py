@@ -182,7 +182,9 @@ def handler(event: Dict[str, Any], context: Any):
 
     if msg_type == "unsubscribe" and device_id:
         # If no other UI clients, stop stream
-        uis = [c for c in get_device_connections(str(device_id)) if c.get("role") == "ui"]
+        uis = [
+            c for c in get_device_connections(str(device_id)) if c.get("role") == "ui"
+        ]
         if len(uis) <= 1:
             _send_to_device(
                 client,

@@ -34,7 +34,11 @@ class CachedStateProvider:
     async def get_state(
         self, force_refresh: bool = False, skip_screenshot: bool = False
     ) -> UIState:
-        """Get UI state with caching."""
+        """Get UI state with caching.
+
+        When ``skip_screenshot`` is True and a fresh-enough cached state exists
+        with a usable accessibility tree, reuse it to avoid an LLM/vision trip.
+        """
         now = time.time()
 
         # Check if cached state is still valid
@@ -43,10 +47,34 @@ class CachedStateProvider:
             and self._state_cache is not None
             and (now - self._state_cache[0]) < self.cache_ttl_seconds
         ):
-            return self._state_cache[1]
+            cached = self._state_cache[1]
+            if skip_screenshot:
+                return cached
+            return cached
+
+        if (
+            skip_screenshot
+            and not force_refresh
+            and self._state_cache is not None
+            and getattr(self._state_cache[1], "formatted_text", None)
+        ):
+            # Tree-only reuse slightly beyond TTL when screenshots aren't needed
+            age = now - self._state_cache[0]
+            if age < self.cache_ttl_seconds * 2.5:
+                return self._state_cache[1]
 
         # Fetch new state
         state = await self.provider.get_state()
+        if skip_screenshot and self._state_cache is not None:
+            # Prefer keeping previous screenshot bytes if provider always refreshes
+            prev = self._state_cache[1]
+            if not getattr(state, "screenshot_bytes", None) and getattr(
+                prev, "screenshot_bytes", None
+            ):
+                try:
+                    state.screenshot_bytes = prev.screenshot_bytes
+                except Exception:
+                    pass
         self._state_cache = (now, state)
 
         return state

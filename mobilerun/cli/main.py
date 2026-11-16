@@ -149,6 +149,8 @@ async def run_command(
     save_trajectory: str | None = None,
     ios: bool = False,
     temperature: float | None = None,
+    interaction_mode: str | None = None,
+    speed_preset: str | None = None,
     **kwargs,
 ) -> bool:
     """Run a command on your Android device using natural language.
@@ -219,6 +221,10 @@ async def run_command(
             config.agent.reasoning = reasoning
         if stream is not None:
             config.agent.streaming = stream
+        if interaction_mode is not None:
+            config.agent.interaction_mode = interaction_mode
+        if speed_preset is not None:
+            config.agent.speed_preset = speed_preset
 
         # Device overrides
         if device is not None:
@@ -267,6 +273,10 @@ async def run_command(
             "planning with reasoning" if config.agent.reasoning else "direct execution"
         )
         logger.info(f"🤖 Agent mode: {mode}")
+        logger.info(
+            f"🎛️  Interaction: {config.agent.interaction_mode} · "
+            f"speed={config.agent.speed_preset}"
+        )
         logger.info(
             f"👁️  Vision settings: Manager={config.agent.manager.vision}, "
             f"Executor={config.agent.executor.vision}, FastAgent={config.agent.fast_agent.vision}"
@@ -565,6 +575,19 @@ except Exception:
     default=None,
 )
 @click.option("--ios", is_flag=True, default=False, help="Run on iOS device")
+@click.option(
+    "--mode",
+    type=click.Choice(["normal", "dating"]),
+    default=None,
+    help="Agent mode: normal (general phone agent) or dating",
+)
+@click.option(
+    "--speed",
+    "speed_preset",
+    type=click.Choice(["fast", "balanced", "careful"]),
+    default=None,
+    help="Humanizer pacing preset (default: balanced)",
+)
 @coro
 async def run(
     command: str,
@@ -588,6 +611,8 @@ async def run(
     device_id: str | None,
     save_trajectory: str | None,
     ios: bool,
+    mode: str | None,
+    speed_preset: str | None,
 ):
     """Run a command on your mobile device using natural language."""
 
@@ -613,6 +638,8 @@ async def run(
         temperature=temperature,
         save_trajectory=save_trajectory,
         ios=ios,
+        interaction_mode=mode,
+        speed_preset=speed_preset,
     )
 
     # Exit with appropriate code
@@ -1455,6 +1482,10 @@ async def test(
             "planning with reasoning" if config.agent.reasoning else "direct execution"
         )
         logger.info(f"🤖 Agent mode: {mode}")
+        logger.info(
+            f"🎛️  Interaction: {config.agent.interaction_mode} · "
+            f"speed={config.agent.speed_preset}"
+        )
         logger.info(
             f"👁️  Vision settings: Manager={config.agent.manager.vision}, "
             f"Executor={config.agent.executor.vision}, FastAgent={config.agent.fast_agent.vision}"

@@ -132,6 +132,10 @@ class AgentConfig:
     after_sleep_action: float = 1.0
     wait_for_stable_ui: float = 0.3
     use_normalized_coordinates: bool = False
+    # normal = general phone agent; dating = dating-app orchestrator profile
+    interaction_mode: str = "normal"
+    # Fast / Balanced / Careful — shared humanizer pacing (Balanced default)
+    speed_preset: str = "balanced"
     # Optional cap (px, long edge) on the model-facing screenshot size, applied
     # on top of per-model effective-size resolution. Escape hatch for local
     # vision models (e.g. Ollama) that downsize to an undocumented size.
@@ -362,6 +366,8 @@ class MobileConfig:
             streaming=agent_data.get("streaming", False),
             vision_only=agent_data.get("vision_only", False),
             after_sleep_action=agent_data.get("after_sleep_action", 1.0),
+            interaction_mode=agent_data.get("interaction_mode", "normal"),
+            speed_preset=agent_data.get("speed_preset", "balanced"),
             wait_for_stable_ui=agent_data.get("wait_for_stable_ui", 0.3),
             use_normalized_coordinates=agent_data.get(
                 "use_normalized_coordinates", False

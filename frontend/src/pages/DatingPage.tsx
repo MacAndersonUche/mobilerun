@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { Heart, Play, Pause, Square, RefreshCw } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
+import ModeSpeedPicker from '../components/ModeSpeedPicker';
+
+type Speed = 'fast' | 'balanced' | 'careful';
 
 interface AppStats {
   name: string;
@@ -97,6 +100,7 @@ export default function DatingPage() {
   const [todayMessages, setTodayMessages] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [speed, setSpeed] = useState<Speed>('balanced');
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -126,6 +130,9 @@ export default function DatingPage() {
       setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
       setGlobalMax(configRes.data.max_total_messages_per_day ?? 500);
+      if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
+        setSpeed(configRes.data.speed_preset);
+      }
       setReviewQueue(queueRes.data.messages || []);
       setError(null);
     } catch (e: unknown) {
@@ -173,7 +180,13 @@ export default function DatingPage() {
           active_hours_end: '23:00',
           min_total_messages_per_day: globalMin,
           max_total_messages_per_day: globalMax,
+          speed_preset: speed,
         },
+        { headers: authHeaders() }
+      );
+      await axios.post(
+        `${getBackendUrl()}/api/mode`,
+        { mode: 'dating', speed_preset: speed },
         { headers: authHeaders() }
       );
       await loadAll();
@@ -182,6 +195,19 @@ export default function DatingPage() {
       alert('Failed to save config');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onSpeedChange = async (next: Speed) => {
+    setSpeed(next);
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/mode`,
+        { mode: 'dating', speed_preset: next },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -271,6 +297,13 @@ export default function DatingPage() {
           {error}
         </div>
       )}
+
+      <ModeSpeedPicker
+        mode="dating"
+        speed={speed}
+        hideMode
+        onSpeedChange={onSpeedChange}
+      />
 
       {/* Controls */}
       <div className="flex gap-3">

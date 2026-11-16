@@ -1,13 +1,18 @@
 import { useState, useEffect } from 'react';
 import { Play, Loader } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
+import ModeSpeedPicker from '../components/ModeSpeedPicker';
 
 interface Device {
   device_id: string;
   name: string;
   connected: boolean;
 }
+
+type Mode = 'normal' | 'dating';
+type Speed = 'fast' | 'balanced' | 'careful';
 
 export default function TasksPage() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -17,15 +22,22 @@ export default function TasksPage() {
   const [reasoning, setReasoning] = useState(false);
   const [vision, setVision] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState<Mode>('normal');
+  const [speed, setSpeed] = useState<Speed>('balanced');
 
   useEffect(() => {
     loadDevices();
+    loadMode();
   }, []);
+
+  const authHeaders = () => ({
+    Authorization: `Bearer ${getAuthToken()}`,
+  });
 
   const loadDevices = async () => {
     try {
       const response = await axios.get(`${getBackendUrl()}/api/devices`, {
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        headers: authHeaders(),
       });
       const connected = response.data.filter((d: Device) => d.connected);
       setDevices(connected);
@@ -37,8 +49,43 @@ export default function TasksPage() {
     }
   };
 
+  const loadMode = async () => {
+    try {
+      const res = await axios.get(`${getBackendUrl()}/api/mode`, {
+        headers: authHeaders(),
+      });
+      if (res.data.mode === 'normal' || res.data.mode === 'dating') {
+        setMode(res.data.mode);
+      }
+      if (['fast', 'balanced', 'careful'].includes(res.data.speed_preset)) {
+        setSpeed(res.data.speed_preset);
+      }
+    } catch {
+      /* defaults ok */
+    }
+  };
+
+  const persistMode = async (nextMode: Mode, nextSpeed: Speed) => {
+    setMode(nextMode);
+    setSpeed(nextSpeed);
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/mode`,
+        { mode: nextMode, speed_preset: nextSpeed },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const submitTask = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (mode === 'dating') {
+      alert('Dating mode runs from the Dating page. Switch to Normal for one-shot tasks.');
+      return;
+    }
 
     if (!selectedDevice) {
       alert('Please select a device');
@@ -60,10 +107,10 @@ export default function TasksPage() {
           max_steps: maxSteps,
           reasoning,
           vision,
+          mode: 'normal',
+          speed_preset: speed,
         },
-        {
-          headers: { Authorization: `Bearer ${getAuthToken()}` },
-        }
+        { headers: authHeaders() }
       );
 
       alert('Task submitted successfully!');
@@ -78,7 +125,29 @@ export default function TasksPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <h2 className="text-3xl font-bold">Run Automation Task</h2>
+      <div>
+        <h2 className="text-3xl font-bold">Run Automation Task</h2>
+        <p className="text-gray-400 text-sm mt-1">
+          Normal mode: general-purpose phone agent (open apps, navigate, type, multi-step).
+        </p>
+      </div>
+
+      <ModeSpeedPicker
+        mode={mode}
+        speed={speed}
+        onModeChange={(m) => persistMode(m, speed)}
+        onSpeedChange={(s) => persistMode(mode, s)}
+      />
+
+      {mode === 'dating' && (
+        <div className="bg-rose-900/20 border border-rose-700 rounded-lg p-4 text-sm text-rose-100">
+          Dating mode is active. Start the dating loop on the{' '}
+          <Link to="/dating" className="underline text-rose-300">
+            Dating page
+          </Link>
+          , or switch back to Normal for a one-shot task.
+        </div>
+      )}
 
       {devices.length === 0 ? (
         <div className="bg-yellow-900/20 border border-yellow-700 rounded-lg p-4">
@@ -154,7 +223,7 @@ export default function TasksPage() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || mode === 'dating'}
             className="w-full flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
           >
             {submitting ? (

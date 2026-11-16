@@ -121,6 +121,10 @@ class TaskRequest(BaseModel):
     max_steps: int = 15
     reasoning: bool = False
     vision: bool = False
+    # normal = general phone agent; dating uses /api/dating/*
+    mode: str = "normal"
+    # Shared humanizer: fast | balanced | careful
+    speed_preset: str = "balanced"
 
 
 class TaskStatus(BaseModel):
@@ -427,7 +431,9 @@ async def handle_device_message(device_id: str, message: dict):
 
     elif msg_type in ("screenshot", "response"):
         # Optional one-shot screenshot / command response — fan out if UI cares
-        await broadcast_to_ui(device_id, {"type": msg_type, "device_id": device_id, **message})
+        await broadcast_to_ui(
+            device_id, {"type": msg_type, "device_id": device_id, **message}
+        )
 
 
 @app.post("/api/tasks", response_model=TaskStatus)
@@ -443,6 +449,15 @@ async def submit_task(
 
     task_id = f"task_{secrets.token_hex(8)}"
 
+    mode = (request.mode or "normal").lower()
+    if mode not in ("normal", "dating"):
+        raise HTTPException(status_code=400, detail="mode must be 'normal' or 'dating'")
+    speed = (request.speed_preset or "balanced").lower()
+    if speed not in ("fast", "balanced", "careful"):
+        raise HTTPException(
+            status_code=400, detail="speed_preset must be fast|balanced|careful"
+        )
+
     task = {
         "task_id": task_id,
         "device_id": request.device_id,
@@ -452,6 +467,8 @@ async def submit_task(
         "max_steps": request.max_steps,
         "reasoning": request.reasoning,
         "vision": request.vision,
+        "mode": mode,
+        "speed_preset": speed,
         "result": None,
         "error": None,
         "started_at": datetime.now(),
@@ -472,6 +489,8 @@ async def submit_task(
                     "max_steps": request.max_steps,
                     "reasoning": request.reasoning,
                     "vision": request.vision,
+                    "mode": mode,
+                    "speed_preset": speed,
                 }
             )
             task["status"] = "running"
@@ -570,6 +589,7 @@ async def update_llm_config(
         "model": model,
     }
 
+
 @app.get("/api/releases/latest")
 async def get_latest_release():
     """Get latest APK release info with QR code."""
@@ -606,6 +626,13 @@ dating_mode_state = {
     "paused": False,
     "current_app": None,
     "review_queue": [],
+    "speed_preset": "balanced",
+}
+
+# Global agent mode selection (UI / CLI / chat)
+agent_mode_state = {
+    "mode": "normal",  # normal | dating
+    "speed_preset": "balanced",  # fast | balanced | careful
 }
 
 
@@ -621,6 +648,12 @@ class DatingModeConfig(BaseModel):
     min_total_messages_per_day: int = 100
     max_total_messages_per_day: int = 500
     sequential_messaging: bool = True
+    speed_preset: str = "balanced"
+
+
+class AgentModeConfig(BaseModel):
+    mode: str = "normal"
+    speed_preset: str = "balanced"
 
 
 class DatingMessage(BaseModel):
@@ -633,6 +666,40 @@ class DatingMessage(BaseModel):
     profile_name: str
     message: str
     is_opener: bool = False
+
+
+@app.get("/api/mode")
+async def get_agent_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Current interaction mode + humanizer speed preset."""
+    from mobilerun.agent.humanizer import describe_presets
+
+    return {
+        **agent_mode_state,
+        "presets": describe_presets(),
+        "modes": {
+            "normal": "General-purpose phone agent (open apps, navigate, type, multi-step)",
+            "dating": "Dating apps: swipes, openers, replies with human-like pacing",
+        },
+    }
+
+
+@app.post("/api/mode")
+async def set_agent_mode(
+    body: AgentModeConfig, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Select Normal vs Dating and Fast / Balanced / Careful pacing."""
+    mode = (body.mode or "normal").lower()
+    speed = (body.speed_preset or "balanced").lower()
+    if mode not in ("normal", "dating"):
+        raise HTTPException(status_code=400, detail="mode must be 'normal' or 'dating'")
+    if speed not in ("fast", "balanced", "careful"):
+        raise HTTPException(
+            status_code=400, detail="speed_preset must be fast|balanced|careful"
+        )
+    agent_mode_state["mode"] = mode
+    agent_mode_state["speed_preset"] = speed
+    dating_mode_state["speed_preset"] = speed
+    return {"status": "ok", **agent_mode_state}
 
 
 @app.get("/api/dating/config")
@@ -662,6 +729,8 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
         "active_hours_end": config.active_hours_end.isoformat(),
         "min_total_messages_per_day": config.min_total_messages_per_day,
         "max_total_messages_per_day": config.max_total_messages_per_day,
+        "speed_preset": getattr(config, "speed_preset", None)
+        or dating_mode_state.get("speed_preset", "balanced"),
     }
 
 
@@ -670,6 +739,14 @@ async def update_dating_config(
     config: DatingModeConfig, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """Update dating mode configuration."""
+    speed = (config.speed_preset or "balanced").lower()
+    if speed not in ("fast", "balanced", "careful"):
+        raise HTTPException(
+            status_code=400, detail="speed_preset must be fast|balanced|careful"
+        )
+    dating_mode_state["speed_preset"] = speed
+    agent_mode_state["speed_preset"] = speed
+    agent_mode_state["mode"] = "dating"
     return {"status": "success", "config": config.dict()}
 
 
@@ -710,6 +787,8 @@ async def start_dating_mode(
         "dry_run": dry_run,
         "created_at": int(datetime.now().timestamp()),
         "next_run_at": int(datetime.now().timestamp()),
+        "speed_preset": dating_mode_state.get("speed_preset")
+        or agent_mode_state.get("speed_preset", "balanced"),
         "caps": {
             "opener_target": secrets.randbelow(51) + 50,  # 50-100
             "global_message_max": secrets.randbelow(401) + 100,  # 100-500
@@ -724,6 +803,7 @@ async def start_dating_mode(
         },
         "ttl": int(datetime.now().timestamp()) + 7 * 86400,
     }
+    agent_mode_state["mode"] = "dating"
     try:
         from storage import put_job
 
@@ -1031,10 +1111,29 @@ async def chat_endpoint(
                     did, {"type": "task_control", "action": intent.split("_")[1]}
                 )
             return {"message": f"Task {intent} sent", "device_id": did}
+        if intent == "set_mode":
+            mode = (
+                params.get("mode") or agent_mode_state.get("mode", "normal")
+            ).lower()
+            speed = (
+                params.get("speed_preset")
+                or agent_mode_state.get("speed_preset", "balanced")
+            ).lower()
+            await set_agent_mode(
+                AgentModeConfig(mode=mode, speed_preset=speed), auth=None
+            )
+            return {
+                "message": f"Mode set to {mode} · speed {speed}",
+                **agent_mode_state,
+            }
         if intent == "run_task":
             instruction = params.get("instruction") or ""
             if not did:
                 return {"message": "No device_id — pair a phone first"}
+            mode = params.get("mode") or agent_mode_state.get("mode", "normal")
+            speed = params.get("speed_preset") or agent_mode_state.get(
+                "speed_preset", "balanced"
+            )
             if did not in connected_devices or not connected_devices[did].get(
                 "connected"
             ):
@@ -1042,14 +1141,19 @@ async def chat_endpoint(
                     "message": f"Queued task on {did}: {instruction}",
                     "queued": True,
                     "instruction": instruction,
+                    "mode": mode,
+                    "speed_preset": speed,
                 }
             task = await submit_task(
-                TaskRequest(device_id=did, instruction=instruction),
+                TaskRequest(
+                    device_id=did,
+                    instruction=instruction,
+                    mode=mode,
+                    speed_preset=speed,
+                ),
                 auth=None,
             )
-            dumped = (
-                task.model_dump() if hasattr(task, "model_dump") else task.dict()
-            )
+            dumped = task.model_dump() if hasattr(task, "model_dump") else task.dict()
             return {
                 "message": f"Started task {task.task_id}: {instruction}",
                 "task": dumped,
@@ -1059,6 +1163,8 @@ async def chat_endpoint(
     context = {
         "devices": list(connected_devices.keys()),
         "dating_running": dating_mode_state.get("running"),
+        "mode": agent_mode_state.get("mode"),
+        "speed_preset": agent_mode_state.get("speed_preset"),
         "provider": os.environ.get("LLM_PROVIDER", "gemini"),
         "target": target,
     }

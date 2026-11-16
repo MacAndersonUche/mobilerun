@@ -6,24 +6,56 @@ from datetime import datetime, time
 from typing import Optional
 import math
 
+from mobilerun.agent.humanizer import (
+    AgentMode,
+    Humanizer,
+    HumanizerConfig,
+    merge_app_humanizer,
+)
+
 
 class DatingScheduler:
-    """Manages human-like timing and scheduling."""
+    """Manages human-like timing and scheduling (delegates gestures to Humanizer)."""
 
     def __init__(
         self,
         active_hours_start: time = time(9, 0),
         active_hours_end: time = time(23, 0),
         human_like: bool = True,
+        speed_preset: str = "balanced",
+        humanizer: Optional[Humanizer] = None,
     ):
         self.active_hours_start = active_hours_start
         self.active_hours_end = active_hours_end
         self.human_like = human_like
+        self.speed_preset = speed_preset
+        self.humanizer = humanizer or Humanizer(
+            config=HumanizerConfig.from_preset(
+                speed_preset, AgentMode.DATING, enabled=human_like
+            )
+        )
 
         # Session state
         self.current_session_swipes = 0
         self.current_session_messages = 0
         self.session_start_time = None
+
+    def apply_app_profile(
+        self,
+        *,
+        min_swipe_delay_ms: int,
+        max_swipe_delay_ms: int,
+        min_typing_delay_ms: int,
+        max_typing_delay_ms: int,
+    ) -> None:
+        """Per-app delay overrides on top of the shared preset."""
+        self.humanizer.config = merge_app_humanizer(
+            self.humanizer.config,
+            min_swipe_delay_ms=min_swipe_delay_ms,
+            max_swipe_delay_ms=max_swipe_delay_ms,
+            min_typing_delay_ms=min_typing_delay_ms,
+            max_typing_delay_ms=max_typing_delay_ms,
+        )
 
     def is_within_active_hours(self) -> bool:
         """Check if current time is within active hours."""
@@ -74,67 +106,37 @@ class DatingScheduler:
         """Get delay between swipes in seconds with natural variation."""
         if not self.human_like:
             return min_ms / 1000.0
-
-        # Gamma distribution for swipe timing (more realistic than uniform)
-        shape = 2.0  # Makes it more bell-curved
-        scale = (min_ms + max_ms) / 2 / shape
-
-        delay_ms = random.gammavariate(shape, scale)
-        delay_ms = max(min_ms, min(delay_ms, max_ms))
-
-        # Add small random jitter (±10%)
-        jitter = delay_ms * random.uniform(-0.1, 0.1)
-
-        return (delay_ms + jitter) / 1000.0
+        # Prefer shared humanizer ranges; fall back to explicit ms window
+        cfg = self.humanizer.config.with_overrides(
+            action_delay_min=min_ms / 1000.0,
+            action_delay_max=max_ms / 1000.0,
+        )
+        return Humanizer(config=cfg, _rng=self.humanizer._rng).sample_action_delay()
 
     def get_typing_delay(self, text: str, min_ms: int = 50, max_ms: int = 150) -> float:
         """Get delay for typing a message (simulates human typing speed)."""
         if not self.human_like:
             return 0.5
-
-        # Base typing delay per character
-        chars = len(text)
-
-        # Typing speed: 40-60 WPM = ~200-300 chars/min = ~3-5 chars/sec
-        # So per char: ~0.2-0.33 seconds
-        base_delay_per_char = random.uniform(0.18, 0.35)
-
-        # Total typing time
-        typing_time = chars * base_delay_per_char
-
-        # Add thinking pause at the beginning (1-3 seconds)
-        thinking_pause = random.uniform(1.0, 3.0)
-
-        return thinking_pause + typing_time
+        cfg = self.humanizer.config.with_overrides(
+            typing_char_ms_min=float(min_ms),
+            typing_char_ms_max=float(max_ms),
+        )
+        h = Humanizer(config=cfg, _rng=self.humanizer._rng)
+        # Thinking pause + per-char cadence
+        think = (
+            h.sample_idle_pause() if h.idle_chance() > 0 else random.uniform(0.4, 1.2)
+        )
+        return think + h.typing_total_seconds(text)
 
     def get_swipe_curve(self, distance: int) -> list:
         """Generate a natural swipe curve with jitter."""
         if not self.human_like:
-            # Simple linear path
             return [(i * distance // 10, 0) for i in range(11)]
-
-        # Bezier-like curve with jitter
-        points = []
-        num_points = random.randint(8, 15)
-
-        for i in range(num_points + 1):
-            progress = i / num_points
-
-            # Ease-in-out curve
-            if progress < 0.5:
-                smooth = 2 * progress * progress
-            else:
-                smooth = 1 - pow(-2 * progress + 2, 2) / 2
-
-            x = int(smooth * distance)
-
-            # Add jitter (±5 pixels)
-            jitter_x = random.randint(-5, 5)
-            jitter_y = random.randint(-3, 3)
-
-            points.append((x + jitter_x, jitter_y))
-
-        return points
+        path = self.humanizer.curved_swipe(
+            0, 0, distance, 0, steps=random.randint(8, 14)
+        )
+        # Return relative (x, y) like the legacy API
+        return [(x, y) for x, y in path]
 
     def start_session(self):
         """Start a new session."""

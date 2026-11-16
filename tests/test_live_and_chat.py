@@ -26,7 +26,36 @@ def client(monkeypatch, tmp_path):
     live_hub.stream_wanted.clear()
     backend_main.connected_devices.clear()
     backend_main.device_websockets.clear()
+    backend_main.agent_mode_state.update({"mode": "normal", "speed_preset": "balanced"})
     return TestClient(backend_main.app)
+
+
+def test_mode_api_and_chat_speed(client):
+    res = client.get("/api/mode")
+    assert res.status_code == 200
+    assert res.json()["mode"] == "normal"
+    assert res.json()["speed_preset"] == "balanced"
+    assert "fast" in res.json()["presets"]
+
+    res2 = client.post("/api/mode", json={"mode": "dating", "speed_preset": "careful"})
+    assert res2.status_code == 200
+    assert res2.json()["mode"] == "dating"
+    assert res2.json()["speed_preset"] == "careful"
+
+    chat = client.post(
+        "/api/chat",
+        json={"message": "switch to normal mode", "target": "pc"},
+    )
+    assert chat.status_code == 200
+    assert chat.json()["intent"] == "set_mode"
+
+    chat2 = client.post(
+        "/api/chat",
+        json={"message": "speed fast", "target": "pc"},
+    )
+    assert chat2.status_code == 200
+    assert chat2.json()["intent"] == "set_mode"
+    assert client.get("/api/mode").json()["speed_preset"] == "fast"
 
 
 def test_chat_device_info_and_history(client):
@@ -97,7 +126,9 @@ def test_live_inject_frame_relays_to_ui_subscriber(client):
     ).decode()
 
     with client.websocket_connect("/api/ui/connect") as ws:
-        ws.send_json({"type": "subscribe", "device_id": "emu1", "fps": 2, "quality": 40})
+        ws.send_json(
+            {"type": "subscribe", "device_id": "emu1", "fps": 2, "quality": 40}
+        )
         sub = ws.receive_json()
         assert sub["type"] == "subscribed"
         assert live_hub.stream_wanted.get("emu1") is True

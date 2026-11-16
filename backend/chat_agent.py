@@ -48,6 +48,21 @@ def _parse_intent(text: str) -> Tuple[str, Dict[str, Any]]:
         dry = "dry" in lower
         return "dating_start", {"dry_run": dry}
 
+    # Mode / speed: "use normal mode", "switch to dating", "speed careful"
+    if re.search(r"\b(normal\s+mode|switch\s+to\s+normal|general\s+mode)\b", lower):
+        return "set_mode", {"mode": "normal"}
+    if re.search(r"\b(dating\s+mode|switch\s+to\s+dating)\b", lower):
+        return "set_mode", {"mode": "dating"}
+    m = re.search(
+        r"\b(?:speed|pacing|humanizer)\s*[:=]?\s*(fast|balanced|careful)\b", lower
+    )
+    if m:
+        return "set_mode", {"speed_preset": m.group(1)}
+    if re.search(r"\b(fast|balanced|careful)\s+speed\b", lower):
+        m2 = re.search(r"\b(fast|balanced|careful)\b", lower)
+        if m2:
+            return "set_mode", {"speed_preset": m2.group(1)}
+
     if re.search(r"\b(stop\s+task|cancel\s+task)\b", lower):
         return "task_stop", {}
     if re.search(r"\b(pause\s+task)\b", lower):
@@ -88,7 +103,9 @@ def _llm_reply(question: str, context: Dict[str, Any]) -> Optional[str]:
             from openai import OpenAI
 
             base = (
-                "https://api.x.ai/v1" if provider == "xai" else "https://api.openai.com/v1"
+                "https://api.x.ai/v1"
+                if provider == "xai"
+                else "https://api.openai.com/v1"
             )
             client = OpenAI(api_key=api_key, base_url=base)
             use_model = model or ("grok-4.7" if provider == "xai" else "gpt-4o-mini")
@@ -139,8 +156,7 @@ async def handle_chat(
     }
     if needs_confirm and not confirmed:
         reply = (
-            f"This looks like a bulk/dating action (`{intent}`). "
-            "Confirm to proceed?"
+            f"This looks like a bulk/dating action (`{intent}`). " "Confirm to proceed?"
         )
         append_message(
             sid,
