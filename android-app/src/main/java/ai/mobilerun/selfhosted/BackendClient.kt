@@ -469,7 +469,11 @@ class BackendClient(private val context: Context) {
             } catch (e: Exception) {
                 val ms = (System.nanoTime() - t0) / 1_000_000
                 Log.w(tag, "claim via $httpBase failed in ${ms}ms: ${e.message}")
-                lastErr = e
+                // Prefer the first network/local failure over a later "invalid token"
+                // from the wrong environment (local code claimed against AWS).
+                if (lastErr == null || isLocalClaimBase(httpBase)) {
+                    lastErr = e
+                }
             }
         }
         val claimed = map ?: throw (lastErr ?: IllegalStateException("Claim failed"))

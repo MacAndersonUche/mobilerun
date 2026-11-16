@@ -61,6 +61,13 @@ if [[ -z "$TOKEN" ]]; then
 fi
 export E2E_TOKEN="${TOKEN:-}"
 
+# Emulator → host backend via adb reverse (more reliable than 10.0.2.2 on CI)
+adb reverse tcp:8000 tcp:8000 || true
+EMU_HTTP="${EMU_BACKEND_URL:-http://127.0.0.1:8000}"
+EMU_WS="${EMU_BACKEND_WS:-ws://127.0.0.1:8000/api/devices/connect}"
+# Keep BACKEND_URL for any later steps that still expect the gateway form
+export BACKEND_URL="$EMU_HTTP"
+
 PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
@@ -71,30 +78,44 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 WS_HINT=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('websocket_url') or d.get('backend_url') or '')")
-# Claim + WS must hit the emulator gateway. URL-encode http(s) query values —
-# raw "http://" inside -d breaks adb/intent parsing.
-LAN_WS="ws://10.0.2.2:8000/api/devices/connect"
-PAIR_URL=$(CODE="$TOKEN_PAIR" BACKEND_URL="$BACKEND_URL" LAN_WS="$LAN_WS" python3 - <<'PY'
+# Prove the code claims on the host before involving the APK
+curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/claim" \
+  -H 'Content-Type: application/json' \
+  -d "{\"token\":\"${TOKEN_PAIR}\",\"device_name\":\"host-preclaim\",\"device_id\":\"device_host_preclaim\"}" \
+  | tee "$ARTIFACTS_DIR/host_preclaim.json" || true
+# Token is single-use — create a fresh code for the APK after the host sanity claim
+if [[ -f "$ARTIFACTS_DIR/host_preclaim.json" ]] && grep -q session_token "$ARTIFACTS_DIR/host_preclaim.json"; then
+  curl -sfS -X DELETE "$HOST_BACKEND/api/devices/device_host_preclaim" \
+    -H "Authorization: Bearer ${TOKEN}" || true
+  PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d '{"device_name":"emulator","platform":"android"}')
+  echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair.json"
+  TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
+fi
+# URL-encode query values — raw "http://" inside -d breaks adb/intent parsing.
+PAIR_URL=$(CODE="$TOKEN_PAIR" EMU_HTTP="$EMU_HTTP" EMU_WS="$EMU_WS" python3 - <<'PY'
 from urllib.parse import urlencode
 import os
 q = urlencode({
     "c": os.environ["CODE"],
-    "cloud": os.environ["BACKEND_URL"],
-    "cloud_ws": os.environ["LAN_WS"],
-    "lan": os.environ["BACKEND_URL"],
-    "lan_ws": os.environ["LAN_WS"],
+    "cloud": os.environ["EMU_HTTP"],
+    "cloud_ws": os.environ["EMU_WS"],
+    "lan": os.environ["EMU_HTTP"],
+    "lan_ws": os.environ["EMU_WS"],
 })
 print("mobilerun://pair?" + q)
 PY
 )
 echo "PAIR_URL=$PAIR_URL" | tee -a "$ARTIFACTS_DIR/apk_paths.txt"
 
-echo "== Deep-link pair with short code c= (LAN preferred) =="
+echo "== Deep-link pair with short code c= (LAN via adb reverse) =="
 adb logcat -c || true
-adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity || \
-  adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL"
-sleep 10
-adb logcat -d -s BackendClient:I BackendClient:W BackendClient:E MainActivity:I 2>/dev/null | tee "$ARTIFACTS_DIR/pair_logcat.txt" | tail -40 || true
+# Single start — a second start races a parallel claim
+adb shell am start -a android.intent.action.VIEW -d "$PAIR_URL" ai.mobilerun.selfhosted/.MainActivity
+sleep 12
+adb logcat -d 2>/dev/null | rg -i "BackendClient|pair claim|claim via|Claim failed|WebSocket" | tee "$ARTIFACTS_DIR/pair_logcat.txt" | tail -50 || true
 adb exec-out screencap -p > "$ARTIFACTS_DIR/01_paired.png" || true
 echo "pair_ws=$WS_HINT" >> "$ARTIFACTS_DIR/apk_paths.txt"
 echo "pair_url_dual=1" >> "$ARTIFACTS_DIR/apk_paths.txt"
@@ -149,15 +170,15 @@ PAIR_JSON=$(curl -sfS -X POST "$HOST_BACKEND/api/auth/pair/create" \
   -d '{"device_name":"emulator","platform":"android"}')
 echo "$PAIR_JSON" | tee "$ARTIFACTS_DIR/pair_recreate.json"
 TOKEN_PAIR=$(echo "$PAIR_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
-PAIR_URL=$(CODE="$TOKEN_PAIR" BACKEND_URL="$BACKEND_URL" LAN_WS="$LAN_WS" python3 - <<'PY'
+PAIR_URL=$(CODE="$TOKEN_PAIR" EMU_HTTP="$EMU_HTTP" EMU_WS="$EMU_WS" python3 - <<'PY'
 from urllib.parse import urlencode
 import os
 q = urlencode({
     "c": os.environ["CODE"],
-    "cloud": os.environ["BACKEND_URL"],
-    "cloud_ws": os.environ["LAN_WS"],
-    "lan": os.environ["BACKEND_URL"],
-    "lan_ws": os.environ["LAN_WS"],
+    "cloud": os.environ["EMU_HTTP"],
+    "cloud_ws": os.environ["EMU_WS"],
+    "lan": os.environ["EMU_HTTP"],
+    "lan_ws": os.environ["EMU_WS"],
 })
 print("mobilerun://pair?" + q)
 PY
