@@ -272,3 +272,43 @@ To help catch security issues before submitting changes, run:
 bandit -r mobilerun
 safety scan
 ```
+
+
+<!-- LATEST_APK_START -->
+## 📱 Install Latest Android App
+
+**Version:** 1.0.87 | **Build:** [#87](https://github.com/MacAndersonUche/mobilerun/actions/runs/43831547583) | **Commit:** [`8809530`](https://github.com/MacAndersonUche/mobilerun/commit/8809530d3082a95f13d235d62539a5c4c5b4b4f4)
+
+[![Release](https://img.shields.io/badge/download-mobilerun.apk-blue?style=for-the-badge&logo=android)](https://github.com/MacAndersonUche/mobilerun/releases/latest/download/mobilerun.apk)
+
+### Quick Install - Scan QR Code
+
+<p align="center">
+  <img src="https://github.com/MacAndersonUche/mobilerun/releases/latest/download/apk-download-qr.png" alt="Download APK QR Code" width="300"/>
+</p>
+
+<p align="center">
+  <em>Scan with your Android device to download and install</em>
+</p>
+
+### Manual Download
+
+| Method | Link |
+|--------|------|
+| **Latest APK** | [mobilerun.apk](https://github.com/MacAndersonUche/mobilerun/releases/latest/download/mobilerun.apk) |
+| **All Releases** | [View all releases](https://github.com/MacAndersonUche/mobilerun/releases) |
+| **This Build** | [Release apk-87](https://github.com/MacAndersonUche/mobilerun/releases/tag/apk-87) |
+
+### Installation Notes
+
+1. Download the APK on your Android device (or scan the QR code above)
+2. Open the downloaded file to install
+3. If prompted, enable "Install from unknown sources" in Settings
+4. **Play Protect Warning:** If you see a warning, tap "More details" then "Install anyway"
+   - This is normal for apps outside the Play Store
+5. New builds will update in place (same signing key used for all builds)
+
+### After Installation
+
+Open the Mobilerun app and scan the pairing QR code from the control UI to connect your device.
+<!-- LATEST_APK_END -->
