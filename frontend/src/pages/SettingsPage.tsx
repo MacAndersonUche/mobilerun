@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Download } from 'lucide-react';
+import { Save } from 'lucide-react';
 import { getBackendUrl, setBackendUrl, getAuthToken, setAuthToken } from '../config';
 import axios from 'axios';
 
