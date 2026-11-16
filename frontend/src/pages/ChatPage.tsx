@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquare, Send } from 'lucide-react';
+import { ArrowLeft, Send, Sparkles, Settings2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { getAuthToken, getBackendUrl, getHostedBackendUrl } from '../config';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
+import { Badge, Button, Card, Sheet } from '../components/ui';
 
 type Mode = 'normal' | 'dating' | 'social';
 type Speed = 'fast' | 'balanced' | 'careful';
@@ -15,9 +17,9 @@ type Msg = {
 };
 
 export default function ChatPage() {
-  const [target, setTarget] = useState<'pc' | 'hosted'>('pc');
+  const [target, setTarget] = useState<'pc' | 'hosted'>('hosted');
   const [deviceId, setDeviceId] = useState('');
-  const [devices, setDevices] = useState<{ device_id: string; name?: string }[]>([]);
+  const [devices, setDevices] = useState<{ device_id: string; name?: string; connected?: boolean; latency_ms?: number }[]>([]);
   const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -28,14 +30,11 @@ export default function ChatPage() {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<Mode>('normal');
   const [speed, setSpeed] = useState<Speed>('balanced');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const apiBase = () => {
-    if (target === 'hosted') {
-      return getHostedBackendUrl();
-    }
-    return getBackendUrl();
-  };
+  const apiBase = () =>
+    target === 'hosted' ? getHostedBackendUrl() : getBackendUrl();
 
   useEffect(() => {
     (async () => {
@@ -59,10 +58,14 @@ export default function ChatPage() {
           setSpeed(modeRes.data.speed_preset);
         }
       } catch {
-        /* defaults ok */
+        /* defaults */
       }
     })();
   }, [target]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const persistMode = async (nextMode: Mode, nextSpeed: Speed) => {
     setMode(nextMode);
@@ -78,19 +81,11 @@ export default function ChatPage() {
     }
   };
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
   const send = async (confirmed = false) => {
     if (!input.trim() && !confirmed) return;
     const text = input.trim() || '(confirmed)';
     setBusy(true);
     try {
-      // When switching target, optionally remember PC URL already in localStorage.
-      if (target === 'pc') {
-        /* keep */
-      }
       const res = await axios.post(
         `${apiBase()}/api/chat`,
         {
@@ -100,7 +95,7 @@ export default function ChatPage() {
           target,
           confirmed,
         },
-        { headers: { Authorization: `Bearer ${getAuthToken()}` } },
+        { headers: { Authorization: `Bearer ${getAuthToken()}` } }
       );
       setSessionId(res.data.session_id);
       setMessages(res.data.history || []);
@@ -111,131 +106,195 @@ export default function ChatPage() {
         setInput('');
       }
     } catch (e: unknown) {
-      const detail =
-        axios.isAxiosError(e) ? e.response?.data?.detail || e.message : 'Chat failed';
+      const detail = axios.isAxiosError(e)
+        ? e.response?.data?.detail || e.message
+        : 'Chat failed';
       setMessages((m) => [...m, { role: 'assistant', content: String(detail) }]);
     } finally {
       setBusy(false);
     }
   };
 
+  const device = devices.find((d) => d.device_id === deviceId);
+
   return (
-    <div className="max-w-3xl mx-auto space-y-4 h-[calc(100vh-8rem)] flex flex-col">
-      <div>
-        <h2 className="text-3xl font-bold flex items-center gap-2">
-          <MessageSquare className="text-blue-400" /> AI Chat Agent
-        </h2>
-        <p className="text-gray-400 text-sm mt-1">
-          Talk to your assistant (Gemini / Claude / OpenAI / Grok). It can run phone tasks,
-          control dating mode, and report device/stats. Destructive/bulk actions ask for confirm.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-3 items-center bg-gray-800 rounded-lg p-3">
-        <span className="text-sm text-gray-400">Execute on</span>
-        <div className="flex rounded-lg overflow-hidden border border-gray-600">
-          <button
-            className={`px-3 py-1.5 text-sm ${target === 'pc' ? 'bg-blue-600' : 'bg-gray-700'}`}
-            onClick={() => setTarget('pc')}
-          >
-            My PC
-          </button>
-          <button
-            className={`px-3 py-1.5 text-sm ${target === 'hosted' ? 'bg-blue-600' : 'bg-gray-700'}`}
-            onClick={() => setTarget('hosted')}
-          >
-            Hosted server
-          </button>
+    <div className="flex h-[100dvh] flex-col md:h-screen">
+      <header className="flex items-center gap-3 border-b border-line px-4 py-3">
+        <Link to="/" className="rounded-lg p-1 text-mute hover:bg-surface md:hidden">
+          <ArrowLeft size={20} />
+        </Link>
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent font-semibold">
+          M
         </div>
-        <select
-          className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm"
-          value={deviceId}
-          onChange={(e) => setDeviceId(e.target.value)}
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">Mac</p>
+          <p className="truncate text-xs text-mute">
+            {target === 'hosted' ? 'Hosted' : 'My PC'} · {mode} · {speed}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="rounded-lg p-2 text-mute hover:bg-surface"
+          onClick={() => setSettingsOpen(true)}
         >
-          <option value="">No device</option>
-          {devices.map((d) => (
-            <option key={d.device_id} value={d.device_id}>
-              {d.name || d.device_id}
-            </option>
-          ))}
-        </select>
-        <span className="text-xs text-gray-500 truncate max-w-[240px]">{apiBase()}</span>
-      </div>
+          <Settings2 size={20} />
+        </button>
+      </header>
 
-      <ModeSpeedPicker
-        mode={mode}
-        speed={speed}
-        onModeChange={(m) => persistMode(m, speed)}
-        onSpeedChange={(s) => persistMode(mode, s)}
-      />
+      <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+        {device && (
+          <Card className="flex items-center justify-between gap-2 py-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">
+                {device.name || device.device_id}
+              </p>
+              <p className="text-xs text-mute">
+                {device.latency_ms != null
+                  ? `${Math.round(device.latency_ms)} ms`
+                  : '—'}
+              </p>
+            </div>
+            <Badge tone={device.connected ? 'ok' : 'mute'}>
+              {device.connected ? 'Ready' : 'Offline'}
+            </Badge>
+          </Card>
+        )}
 
-      <div className="flex-1 overflow-y-auto bg-gray-800/60 rounded-lg p-4 space-y-3">
         {messages.length === 0 && (
-          <div className="text-gray-500 text-sm">
-            Try: “device info”, “open Settings”, “switch to social”, “needs you”,
-            “speed careful”, “dating stats”, “start dating dry”.
+          <div className="rounded-2xl border border-line bg-surface p-4 text-sm text-mute">
+            Ask Mac to open Settings, check unread, switch modes, or start dating
+            dry. Try follow-ups below.
           </div>
         )}
+
         {messages.map((m, i) => (
           <div
             key={m.id || i}
-            className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+            className={
               m.role === 'user'
-                ? 'ml-auto bg-blue-600/80'
-                : 'mr-auto bg-gray-700'
-            }`}
+                ? 'ml-auto max-w-[85%] rounded-2xl bg-surface-elev px-3 py-2 text-sm'
+                : 'mr-auto max-w-[90%] space-y-2'
+            }
           >
-            {m.content}
+            {m.role === 'user' ? (
+              m.content
+            ) : (
+              <Card className="text-sm whitespace-pre-wrap">{m.content}</Card>
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
 
       {pendingConfirm && (
-        <div className="bg-amber-900/40 border border-amber-600 rounded-lg p-3 flex items-center justify-between gap-3">
-          <span className="text-sm">
-            Confirm `{String(pendingConfirm.intent)}` before running?
-          </span>
+        <div className="mx-4 mb-2 flex items-center justify-between gap-2 rounded-xl border border-amber-800 bg-amber-950/40 px-3 py-2 text-sm">
+          <span>Confirm `{String(pendingConfirm.intent)}`?</span>
           <div className="flex gap-2">
-            <button
-              className="px-3 py-1 rounded bg-gray-700"
-              onClick={() => setPendingConfirm(null)}
-            >
+            <Button variant="ghost" onClick={() => setPendingConfirm(null)}>
               Cancel
-            </button>
-            <button
-              className="px-3 py-1 rounded bg-amber-600"
-              onClick={() => send(true)}
-              disabled={busy}
-            >
+            </Button>
+            <Button onClick={() => send(true)} disabled={busy}>
               Confirm
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      <form
-        className="flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send(false);
-        }}
-      >
-        <input
-          className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2"
-          placeholder="Message the agent…"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={busy}
-        />
-        <button
-          type="submit"
-          disabled={busy || !input.trim()}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 px-4 py-2 rounded-lg flex items-center gap-2"
+      <div className="border-t border-line bg-canvas-elev px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 md:pb-3">
+        <div className="no-scrollbar mb-2 flex gap-2 overflow-x-auto">
+          {['device info', 'needs you', 'switch to social', 'open Settings'].map(
+            (s) => (
+              <button
+                key={s}
+                type="button"
+                className="shrink-0 rounded-full border border-line px-3 py-1 text-xs text-mute"
+                onClick={() => setInput(s)}
+              >
+                {s} →
+              </button>
+            )
+          )}
+        </div>
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(false);
+          }}
         >
-          <Send size={16} /> Send
-        </button>
-      </form>
+          <div className="relative flex-1">
+            <Sparkles
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-accent"
+            />
+            <input
+              className="mr-input pl-9"
+              placeholder="Ask Mac…"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={busy || !input.trim()}
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-accent disabled:opacity-40"
+          >
+            <Send size={18} />
+          </button>
+        </form>
+      </div>
+
+      <Sheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        title="Mac · Settings"
+      >
+        <div className="space-y-4">
+          <div>
+            <p className="mb-2 text-sm text-mute">Execute on</p>
+            <div className="flex overflow-hidden rounded-xl border border-line">
+              <button
+                type="button"
+                className={`flex-1 py-2 text-sm ${
+                  target === 'pc' ? 'bg-accent' : 'bg-surface-elev'
+                }`}
+                onClick={() => setTarget('pc')}
+              >
+                My PC
+              </button>
+              <button
+                type="button"
+                className={`flex-1 py-2 text-sm ${
+                  target === 'hosted' ? 'bg-accent' : 'bg-surface-elev'
+                }`}
+                onClick={() => setTarget('hosted')}
+              >
+                Hosted
+              </button>
+            </div>
+          </div>
+          <select
+            className="mr-input"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+          >
+            <option value="">No device</option>
+            {devices.map((d) => (
+              <option key={d.device_id} value={d.device_id}>
+                {d.name || d.device_id}
+              </option>
+            ))}
+          </select>
+          <ModeSpeedPicker
+            mode={mode}
+            speed={speed}
+            onModeChange={(m) => persistMode(m, speed)}
+            onSpeedChange={(s) => persistMode(mode, s)}
+          />
+          <p className="text-xs text-mute break-all">{apiBase()}</p>
+        </div>
+      </Sheet>
     </div>
   );
 }

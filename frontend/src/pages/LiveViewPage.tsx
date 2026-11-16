@@ -163,10 +163,10 @@ export default function LiveViewPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end gap-4 justify-between">
         <div>
-          <h2 className="text-3xl font-bold flex items-center gap-2">
+          <h2 className="text-2xl font-semibold flex items-center gap-2">
             <Smartphone className="text-blue-400" /> Live View
           </h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-mute text-sm mt-1">
             Streams JPEG frames only while this page is subscribed (~{fps} fps). Nothing is stored.
           </p>
         </div>
@@ -174,7 +174,7 @@ export default function LiveViewPage() {
           <label className="text-sm">
             Device
             <select
-              className="block mt-1 bg-gray-800 border border-gray-600 rounded px-3 py-2"
+              className="block mt-1 bg-surface border border-line rounded px-3 py-2"
               value={deviceId}
               onChange={(e) => setDeviceId(e.target.value)}
             >
@@ -194,7 +194,7 @@ export default function LiveViewPage() {
               max={8}
               value={fps}
               onChange={(e) => setFps(Number(e.target.value))}
-              className="block mt-1 w-20 bg-gray-800 border border-gray-600 rounded px-2 py-2"
+              className="block mt-1 w-20 bg-surface border border-line rounded px-2 py-2"
             />
           </label>
           <label className="text-sm">
@@ -205,20 +205,20 @@ export default function LiveViewPage() {
               max={85}
               value={quality}
               onChange={(e) => setQuality(Number(e.target.value))}
-              className="block mt-1 w-20 bg-gray-800 border border-gray-600 rounded px-2 py-2"
+              className="block mt-1 w-20 bg-surface border border-line rounded px-2 py-2"
             />
           </label>
           {!connected ? (
             <button
               onClick={connect}
-              className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg flex items-center gap-2"
+              className="bg-accent hover:bg-blue-700 px-4 py-2 rounded-lg flex items-center gap-2"
             >
               <Play size={16} /> Start stream
             </button>
           ) : (
             <button
               onClick={disconnect}
-              className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
+              className="bg-surface-elev hover:bg-gray-600 px-4 py-2 rounded-lg flex items-center gap-2"
             >
               <Square size={16} /> Stop stream
             </button>
@@ -229,8 +229,8 @@ export default function LiveViewPage() {
       <div className="grid lg:grid-cols-[320px_1fr] gap-6">
         {/* Phone frame */}
         <div className="mx-auto">
-          <div className="relative bg-black rounded-[2rem] border-[10px] border-gray-700 shadow-2xl overflow-hidden w-[300px] aspect-[9/19]">
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-24 h-5 bg-gray-800 rounded-full z-10" />
+          <div className="relative bg-black rounded-[2rem] border-[10px] border-line shadow-2xl overflow-hidden w-[300px] aspect-[9/19]">
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 w-24 h-5 bg-surface rounded-full z-10" />
             {frameUrl ? (
               <img
                 ref={imgRef}
@@ -273,7 +273,7 @@ export default function LiveViewPage() {
               </svg>
             )}
           </div>
-          <label className="flex items-center gap-2 mt-3 text-sm text-gray-400">
+          <label className="flex items-center gap-2 mt-3 text-sm text-mute">
             <input
               type="checkbox"
               checked={manualInput}
@@ -283,18 +283,18 @@ export default function LiveViewPage() {
           </label>
         </div>
 
-        <div className="space-y-4">
-          <div className="bg-gray-800 rounded-lg p-4 grid grid-cols-3 gap-3 text-sm">
+        <div className="mr-page space-y-4">
+          <div className="bg-surface rounded-lg p-4 grid grid-cols-3 gap-3 text-sm">
             <div>
-              <div className="text-gray-400">Current app</div>
+              <div className="text-mute">Current app</div>
               <div className="font-medium truncate">{meta.app}</div>
             </div>
             <div>
-              <div className="text-gray-400">Step</div>
+              <div className="text-mute">Step</div>
               <div className="font-medium">{meta.step}</div>
             </div>
             <div>
-              <div className="text-gray-400">Action</div>
+              <div className="text-mute">Action</div>
               <div className="font-medium truncate">{meta.action}</div>
             </div>
           </div>
@@ -316,8 +316,8 @@ export default function LiveViewPage() {
             </button>
           </div>
 
-          <div className="bg-gray-800 rounded-lg p-4 h-72 overflow-y-auto font-mono text-xs space-y-1">
-            <div className="text-gray-400 mb-2">Live log</div>
+          <div className="bg-surface rounded-lg p-4 h-72 overflow-y-auto font-mono text-xs space-y-1">
+            <div className="text-mute mb-2">Live log</div>
             {logs.length === 0 && <div className="text-gray-600">No events yet</div>}
             {logs.map((line, i) => (
               <div key={i} className="text-gray-200">

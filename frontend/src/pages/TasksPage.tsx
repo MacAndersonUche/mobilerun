@@ -128,10 +128,10 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="mr-page space-y-6">
       <div>
-        <h2 className="text-3xl font-bold">Run Automation Task</h2>
-        <p className="text-gray-400 text-sm mt-1">
+        <h2 className="text-2xl font-semibold">Run Automation Task</h2>
+        <p className="text-mute text-sm mt-1">
           Normal mode: general-purpose phone agent (open apps, navigate, type, multi-step).
         </p>
       </div>
@@ -173,13 +173,13 @@ export default function TasksPage() {
           </p>
         </div>
       ) : (
-        <form onSubmit={submitTask} className="bg-gray-800 rounded-lg p-6 space-y-4">
+        <form onSubmit={submitTask} className="bg-surface rounded-lg p-6 space-y-4">
           <div>
             <label className="block text-sm font-medium mb-2">Select Device</label>
             <select
               value={selectedDevice}
               onChange={(e) => setSelectedDevice(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
             >
               {devices.map((device) => (
                 <option key={device.device_id} value={device.device_id}>
@@ -198,7 +198,7 @@ export default function TasksPage() {
               onChange={(e) => setInstruction(e.target.value)}
               placeholder="Open Settings and turn on dark mode"
               rows={4}
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
             />
           </div>
 
@@ -241,7 +241,7 @@ export default function TasksPage() {
           <button
             type="submit"
             disabled={submitting || mode === 'dating' || mode === 'social'}
-            className="w-full flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
+            className="w-full flex items-center justify-center space-x-2 bg-accent hover:bg-accent-soft px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
           >
             {submitting ? (
               <>

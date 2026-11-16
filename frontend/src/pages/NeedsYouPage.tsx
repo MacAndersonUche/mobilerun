@@ -70,10 +70,10 @@ export default function NeedsYouPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="mr-page space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold flex items-center gap-2">
+          <h2 className="text-2xl font-semibold flex items-center gap-2">
             <AlertTriangle className="text-amber-400" /> Needs you
             {badge > 0 && (
               <span className="ml-2 text-sm bg-amber-600 text-white px-2 py-0.5 rounded-full">
@@ -81,21 +81,21 @@ export default function NeedsYouPage() {
               </span>
             )}
           </h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-mute text-sm mt-1">
             Escalated Social + Dating drafts — approve, edit, or reject before send.
           </p>
         </div>
       </div>
 
       {items.length === 0 ? (
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-400">
+        <div className="bg-surface border border-line rounded-lg p-8 text-center text-mute">
           Nothing waiting. Auto-send handles the rest (with humanizer pacing).
         </div>
       ) : (
         items.map((item) => (
           <div
             key={item.id}
-            className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3"
+            className="bg-surface border border-line rounded-lg p-4 space-y-3"
           >
             <div className="flex justify-between text-sm">
               <span>
@@ -104,15 +104,15 @@ export default function NeedsYouPage() {
                 </span>
                 {item.app_name} · {item.contact_name}
               </span>
-              <span className="text-gray-500">
+              <span className="text-mute">
                 conf {(item.confidence * 100).toFixed(0)}%
               </span>
             </div>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-mute">
               Reasons: {(item.reasons || []).join(', ') || '—'}
             </p>
             {item.inbound_preview && (
-              <p className="text-sm text-gray-300 bg-gray-900 rounded p-2">
+              <p className="text-sm text-mute bg-canvas-elev rounded p-2">
                 Inbound: {item.inbound_preview}
               </p>
             )}
@@ -120,7 +120,7 @@ export default function NeedsYouPage() {
               id={`ny-${item.id}`}
               defaultValue={item.draft_reply}
               rows={3}
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+              className="w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
             />
             <div className="flex gap-2">
               <button

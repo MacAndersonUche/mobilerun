@@ -49,14 +49,14 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-3xl font-bold">Task History</h2>
+    <div className="mr-page space-y-6">
+      <h2 className="text-2xl font-semibold">Task History</h2>
 
       <div className="space-y-3">
         {tasks.length === 0 ? (
-          <div className="bg-gray-800 rounded-lg p-8 text-center">
+          <div className="bg-surface rounded-lg p-8 text-center">
             <Clock size={48} className="mx-auto text-gray-600 mb-4" />
-            <p className="text-gray-400">No task history yet</p>
+            <p className="text-mute">No task history yet</p>
           </div>
         ) : (
           tasks.map((task) => <TaskCard key={task.task_id} task={task} />)
@@ -80,11 +80,11 @@ function TaskCard({ task }: { task: Task }) {
   }[task.status];
 
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+    <div className="bg-surface rounded-lg p-4 border border-line">
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1">
           <p className="font-medium mb-1">{task.instruction}</p>
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-mute">
             Started {formatDistanceToNow(new Date(task.started_at), { addSuffix: true })}
           </p>
         </div>
@@ -98,18 +98,18 @@ function TaskCard({ task }: { task: Task }) {
 
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div>
-          <span className="text-gray-400">Progress:</span>{' '}
+          <span className="text-mute">Progress:</span>{' '}
           <span>{task.current_step} / {task.max_steps}</span>
         </div>
         <div>
-          <span className="text-gray-400">Device:</span>{' '}
+          <span className="text-mute">Device:</span>{' '}
           <span>{task.device_id}</span>
         </div>
       </div>
 
       {task.result && (
         <div className="mt-3 p-3 bg-gray-900 rounded text-sm">
-          <span className="text-gray-400">Result: </span>
+          <span className="text-mute">Result: </span>
           {task.result}
         </div>
       )}

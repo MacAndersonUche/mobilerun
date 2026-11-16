@@ -109,12 +109,12 @@ export default function SocialPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="mr-page space-y-6">
       <div>
-        <h2 className="text-3xl font-bold flex items-center gap-2">
+        <h2 className="text-2xl font-semibold flex items-center gap-2">
           <MessageCircle className="text-emerald-400" /> Social Mode
         </h2>
-        <p className="text-gray-400 mt-1 text-sm">
+        <p className="text-mute mt-1 text-sm">
           WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + replies in
           Mac&apos;s tone with humanizer pacing. Sensitive drafts go to{' '}
           <Link to="/needs-you" className="text-amber-300 underline">
@@ -153,12 +153,12 @@ export default function SocialPage() {
         >
           <Square size={16} /> Stop
         </button>
-        <span className="text-sm text-gray-400 ml-auto">
+        <span className="text-sm text-mute ml-auto">
           Unread · {unread}
         </span>
       </div>
 
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="font-semibold">Apps</h3>
         <div className="flex flex-wrap gap-2">
           {apps.map((app) => (
@@ -177,7 +177,7 @@ export default function SocialPage() {
               className={`px-3 py-1 rounded text-sm border ${
                 app.enabled
                   ? 'bg-emerald-900/50 border-emerald-600 text-emerald-100'
-                  : 'bg-gray-900 border-gray-600 text-gray-500'
+                  : 'bg-canvas-elev border-line text-mute'
               }`}
             >
               {app.name}
@@ -186,7 +186,7 @@ export default function SocialPage() {
         </div>
       </div>
 
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="font-semibold">Signature</h3>
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -199,15 +199,15 @@ export default function SocialPage() {
         <input
           value={sigText}
           onChange={(e) => setSigText(e.target.value)}
-          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+          className="w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
         />
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-mute">
           Per-app / per-contact overrides are stored with config; toggle apps above,
           then use API or chat for contact-level overrides.
         </p>
       </div>
 
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="font-semibold">Escalation</h3>
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -225,7 +225,7 @@ export default function SocialPage() {
           />
           Email notify (SES → macandersonuche@yahoo.com, off by default)
         </label>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-mute">
           Money, commitments, plans/times, personal info, and low confidence always
           escalate to Needs you (UI badge + APK push).
         </p>
@@ -234,7 +234,7 @@ export default function SocialPage() {
       <button
         onClick={save}
         disabled={loading}
-        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+        className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
       >
         Save config
       </button>

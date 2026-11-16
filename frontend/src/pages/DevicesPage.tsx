@@ -77,9 +77,9 @@ export default function DevicesPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="mr-page space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-bold">Connected Devices</h2>
+        <h2 className="text-2xl font-semibold">Connected Devices</h2>
         <button
           onClick={() => {
             setShowPairing(false);
@@ -88,7 +88,7 @@ export default function DevicesPage() {
             const modal = document.getElementById('pair-modal');
             if (modal) (modal as any).showModal();
           }}
-          className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-colors"
+          className="flex items-center space-x-2 bg-accent hover:bg-accent-soft px-4 py-2 rounded-lg transition-colors"
         >
           <Plus size={20} />
           <span>Pair Device</span>
@@ -98,10 +98,10 @@ export default function DevicesPage() {
       {/* Devices Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {devices.length === 0 ? (
-          <div className="col-span-full bg-gray-800 rounded-lg p-8 text-center">
-            <Smartphone size={48} className="mx-auto text-gray-600 mb-4" />
-            <p className="text-gray-400 mb-2">No devices connected</p>
-            <p className="text-sm text-gray-500">
+          <div className="col-span-full bg-surface rounded-lg p-8 text-center">
+            <Smartphone size={48} className="mx-auto text-mute mb-4" />
+            <p className="text-mute mb-2">No devices connected</p>
+            <p className="text-sm text-mute">
               Click "Pair Device" to add your phone
             </p>
           </div>
@@ -113,7 +113,7 @@ export default function DevicesPage() {
       </div>
 
       {/* Pairing Modal */}
-      <dialog id="pair-modal" className="modal bg-gray-800 rounded-lg p-6 max-w-md">
+      <dialog id="pair-modal" className="modal bg-surface rounded-lg p-6 max-w-md">
         <div className="space-y-4">
           <h3 className="text-xl font-bold">Pair New Device</h3>
 
@@ -128,7 +128,7 @@ export default function DevicesPage() {
                   value={deviceName}
                   onChange={(e) => setDeviceName(e.target.value)}
                   placeholder="My Phone"
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
@@ -138,14 +138,14 @@ export default function DevicesPage() {
                     const modal = document.getElementById('pair-modal');
                     if (modal) (modal as any).close();
                   }}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                  className="px-4 py-2 bg-surface-elev hover:bg-gray-600 rounded-lg"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={startPairing}
                   disabled={loading}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 bg-accent hover:bg-accent-soft rounded-lg disabled:opacity-50"
                 >
                   {loading ? 'Starting...' : 'Start Pairing'}
                 </button>
@@ -155,12 +155,12 @@ export default function DevicesPage() {
             pairingInfo && (
               <>
                 <div className="text-center space-y-4">
-                  <p className="text-gray-300">
+                  <p className="text-mute">
                     Scan once — stores LAN + cloud WebSocket endpoints. No USB
                     cable. Phone prefers Wi‑Fi/mDNS, then falls back to AWS.
                   </p>
                   {(pairingInfo.lan_ws || pairingInfo.cloud_ws) && (
-                    <p className="text-xs text-gray-500 break-all">
+                    <p className="text-xs text-mute break-all">
                       {pairingInfo.lan_ws && (
                         <>
                           LAN: {pairingInfo.lan_ws}
@@ -179,12 +179,12 @@ export default function DevicesPage() {
                     />
                   </div>
 
-                  <p className="text-sm text-gray-400">
+                  <p className="text-sm text-mute">
                     Expires in {Math.floor(pairingInfo.expires_in / 60)} minutes
                   </p>
 
                   <details className="text-left">
-                    <summary className="text-sm text-gray-500 cursor-pointer">
+                    <summary className="text-sm text-mute cursor-pointer">
                       Manual pairing URL
                     </summary>
                     <code className="text-xs bg-gray-900 p-2 rounded block mt-2 break-all">
@@ -200,7 +200,7 @@ export default function DevicesPage() {
                     setShowPairing(false);
                     setPairingInfo(null);
                   }}
-                  className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                  className="w-full px-4 py-2 bg-surface-elev hover:bg-gray-600 rounded-lg"
                 >
                   Close
                 </button>
@@ -215,13 +215,13 @@ export default function DevicesPage() {
 
 function DeviceCard({ device }: { device: Device }) {
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+    <div className="bg-surface rounded-lg p-4 border border-line">
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center space-x-3">
-          <Smartphone className="text-blue-400" size={24} />
+          <Smartphone className="text-accent" size={24} />
           <div>
             <h3 className="font-semibold">{device.name}</h3>
-            <p className="text-sm text-gray-400">{device.device_id}</p>
+            <p className="text-sm text-mute">{device.device_id}</p>
           </div>
         </div>
         {device.connected ? (
@@ -233,17 +233,17 @@ function DeviceCard({ device }: { device: Device }) {
 
       <div className="space-y-1 text-sm">
         <div className="flex justify-between">
-          <span className="text-gray-400">Platform:</span>
+          <span className="text-mute">Platform:</span>
           <span className="capitalize">{device.platform}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-400">Route:</span>
+          <span className="text-mute">Route:</span>
           <span className="uppercase">
             {device.route || device.connection_type || '—'}
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-400">Latency:</span>
+          <span className="text-mute">Latency:</span>
           <span>
             {device.latency_ms != null
               ? `${Math.round(device.latency_ms)} ms`
@@ -251,7 +251,7 @@ function DeviceCard({ device }: { device: Device }) {
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-400">Status:</span>
+          <span className="text-mute">Status:</span>
           <span
             className={
               device.connected ? 'text-green-400' : 'text-red-400'

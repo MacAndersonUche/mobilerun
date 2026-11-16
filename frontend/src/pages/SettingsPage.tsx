@@ -100,12 +100,12 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <h2 className="text-3xl font-bold">Settings</h2>
+    <div className="mr-page space-y-6">
+      <h2 className="text-2xl font-semibold">Settings</h2>
 
       <form onSubmit={saveSettings} className="space-y-6">
         {/* Backend Configuration */}
-        <section className="bg-gray-800 rounded-lg p-6 space-y-4">
+        <section className="bg-surface rounded-lg p-6 space-y-4">
           <h3 className="text-xl font-semibold mb-4">Backend Connection</h3>
 
           <div>
@@ -117,9 +117,9 @@ export default function SettingsPage() {
               value={backendUrl}
               onChange={(e) => setBackendUrlState(e.target.value)}
               placeholder="http://localhost:8000"
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
             />
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-mute mt-1">
               Use localhost for local backend or your Lambda API URL for cloud
             </p>
           </div>
@@ -133,13 +133,13 @@ export default function SettingsPage() {
               value={authToken}
               onChange={(e) => setAuthTokenState(e.target.value)}
               placeholder="Optional for local, required for cloud"
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
             />
           </div>
         </section>
 
         {/* LLM Configuration */}
-        <section className="bg-gray-800 rounded-lg p-6 space-y-4">
+        <section className="bg-surface rounded-lg p-6 space-y-4">
           <h3 className="text-xl font-semibold mb-4">LLM Provider</h3>
 
           <div>
@@ -147,14 +147,14 @@ export default function SettingsPage() {
             <select
               value={provider}
               onChange={(e) => onProviderChange(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
             >
               <option value="gemini">Gemini</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="xai">xAI (Grok)</option>
             </select>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-mute mt-1">
               Self-hosted: you pay AWS + LLM tokens only. xAI uses{' '}
               <code className="text-gray-300">XAI_API_KEY</code> at{' '}
               <code className="text-gray-300">https://api.x.ai/v1</code>.
@@ -170,9 +170,9 @@ export default function SettingsPage() {
               placeholder={
                 defaultModels[provider] || 'e.g., grok-4.7'
               }
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
             />
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-mute mt-1">
               Configurable. xAI default is current docs flagship (
               {defaultModels.xai || 'grok-4.7'}); also try grok-4.6.
             </p>
@@ -189,7 +189,7 @@ export default function SettingsPage() {
                   ? 'XAI_API_KEY (leave empty to keep current)'
                   : 'Leave empty to keep current key'
               }
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
             />
           </div>
 
@@ -205,7 +205,7 @@ export default function SettingsPage() {
                 max="2"
                 value={temperature}
                 onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+                className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
               />
             </div>
 
@@ -217,7 +217,7 @@ export default function SettingsPage() {
                 type="number"
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
+                className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
               />
             </div>
           </div>
@@ -225,9 +225,9 @@ export default function SettingsPage() {
 
         {/* Android APK */}
         {latestApkQr && (
-          <section className="bg-gray-800 rounded-lg p-6">
+          <section className="bg-surface rounded-lg p-6">
             <h3 className="text-xl font-semibold mb-4">Install Android App</h3>
-            <p className="text-sm text-gray-400 mb-4">
+            <p className="text-sm text-mute mb-4">
               Scan this QR code on your Android device to download and install the
               latest Mobilerun app
             </p>
@@ -247,7 +247,7 @@ export default function SettingsPage() {
         <button
           type="submit"
           disabled={saving}
-          className="w-full flex items-center justify-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
+          className="w-full flex items-center justify-center space-x-2 bg-accent hover:bg-accent-soft px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
         >
           <Save size={20} />
           <span>{saving ? 'Saving...' : 'Save Settings'}</span>

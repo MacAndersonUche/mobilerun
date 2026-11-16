@@ -1,15 +1,19 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom';
 import {
-  Smartphone,
-  Settings,
-  History,
-  Play,
-  Heart,
-  MonitorPlay,
+  Home,
   MessageSquare,
+  Smartphone,
+  Heart,
   MessageCircle,
   AlertTriangle,
+  MonitorPlay,
+  Settings,
+  History,
 } from 'lucide-react';
+import { AuthProvider, useAuth } from './auth';
+import LoginPage from './pages/LoginPage';
+import HomePage from './pages/HomePage';
+import AccountPage from './pages/AccountPage';
 import DevicesPage from './pages/DevicesPage';
 import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
@@ -19,76 +23,108 @@ import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
 import NeedsYouPage from './pages/NeedsYouPage';
+import { cn } from './lib/cn';
 
-function App() {
+function Shell() {
+  const { token } = useAuth();
+  if (!token) return <LoginPage />;
+
+  const tabs = [
+    { to: '/', icon: Home, label: 'Home', end: true },
+    { to: '/chat', icon: MessageSquare, label: 'Chat' },
+    { to: '/devices', icon: Smartphone, label: 'Devices' },
+    { to: '/needs-you', icon: AlertTriangle, label: 'Needs' },
+    { to: '/settings', icon: Settings, label: 'More' },
+  ];
+
   return (
-    <BrowserRouter>
-      <div className="min-h-screen bg-gray-900 text-gray-100">
-        <header className="bg-gray-800 border-b border-gray-700">
-          <div className="container mx-auto px-4 py-4">
-            <div className="flex items-center justify-between">
-              <h1 className="text-2xl font-bold text-blue-400">
-                Mobilerun Control Center
-              </h1>
-              <div className="text-sm text-gray-400">Self-Hosted Edition</div>
-            </div>
+    <div className="min-h-screen bg-canvas text-white">
+      <div className="mx-auto flex min-h-screen max-w-6xl">
+        {/* Desktop sidebar */}
+        <aside className="hidden w-56 shrink-0 border-r border-line bg-canvas-elev p-4 md:block">
+          <div className="mb-6 px-2">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-mute">MacAI</p>
+            <p className="text-lg font-semibold">MobileRun</p>
           </div>
-        </header>
-
-        <div className="flex">
-          <nav className="w-64 bg-gray-800 min-h-[calc(100vh-73px)] p-4 border-r border-gray-700">
-            <ul className="space-y-2">
-              <NavItem to="/" icon={<Smartphone />} label="Devices" />
-              <NavItem to="/live" icon={<MonitorPlay />} label="Live View" />
-              <NavItem to="/chat" icon={<MessageSquare />} label="AI Chat" />
-              <NavItem to="/tasks" icon={<Play />} label="Run Task" />
-              <NavItem to="/dating" icon={<Heart />} label="Dating Mode" />
-              <NavItem to="/social" icon={<MessageCircle />} label="Social Mode" />
-              <NavItem to="/needs-you" icon={<AlertTriangle />} label="Needs you" />
-              <NavItem to="/history" icon={<History />} label="History" />
-              <NavItem to="/settings" icon={<Settings />} label="Settings" />
-            </ul>
+          <nav className="space-y-1">
+            {[
+              ...tabs,
+              { to: '/live', icon: MonitorPlay, label: 'Live' },
+              { to: '/dating', icon: Heart, label: 'Dating' },
+              { to: '/social', icon: MessageCircle, label: 'Social' },
+              { to: '/tasks', icon: Smartphone, label: 'Tasks' },
+              { to: '/history', icon: History, label: 'Activity' },
+              { to: '/account', icon: Settings, label: 'Account' },
+            ].map((t) => (
+              <NavLink
+                key={t.to}
+                to={t.to}
+                end={'end' in t ? t.end : false}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm',
+                    isActive
+                      ? 'bg-accent/20 text-accent'
+                      : 'text-mute hover:bg-surface hover:text-white'
+                  )
+                }
+              >
+                <t.icon size={18} />
+                {t.label}
+              </NavLink>
+            ))}
           </nav>
+        </aside>
 
-          <main className="flex-1 p-6">
-            <Routes>
-              <Route path="/" element={<DevicesPage />} />
-              <Route path="/live" element={<LiveViewPage />} />
-              <Route path="/chat" element={<ChatPage />} />
-              <Route path="/tasks" element={<TasksPage />} />
-              <Route path="/dating" element={<DatingPage />} />
-              <Route path="/social" element={<SocialPage />} />
-              <Route path="/needs-you" element={<NeedsYouPage />} />
-              <Route path="/history" element={<HistoryPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
-          </main>
-        </div>
+        <main className="relative min-w-0 flex-1">
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/devices" element={<DevicesPage />} />
+            <Route path="/live" element={<LiveViewPage />} />
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/dating" element={<DatingPage />} />
+            <Route path="/social" element={<SocialPage />} />
+            <Route path="/needs-you" element={<NeedsYouPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/account" element={<AccountPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
       </div>
-    </BrowserRouter>
+
+      {/* Mobile bottom nav */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden">
+        <div className="mx-auto flex max-w-content justify-around px-1 pb-[env(safe-area-inset-bottom)]">
+          {tabs.map((t) => (
+            <NavLink
+              key={t.to}
+              to={t.to}
+              end={'end' in t ? t.end : false}
+              className={({ isActive }) =>
+                cn(
+                  'flex flex-1 flex-col items-center gap-1 py-2 text-[10px]',
+                  isActive ? 'text-accent' : 'text-mute'
+                )
+              }
+            >
+              <t.icon size={20} />
+              {t.label}
+            </NavLink>
+          ))}
+        </div>
+      </nav>
+    </div>
   );
 }
 
-function NavItem({
-  to,
-  icon,
-  label,
-}: {
-  to: string;
-  icon: React.ReactNode;
-  label: string;
-}) {
+export default function App() {
   return (
-    <li>
-      <Link
-        to={to}
-        className="flex items-center space-x-3 px-4 py-3 rounded-lg hover:bg-gray-700 transition-colors"
-      >
-        <span className="text-blue-400">{icon}</span>
-        <span>{label}</span>
-      </Link>
-    </li>
+    <AuthProvider>
+      <BrowserRouter>
+        <Shell />
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
-
-export default App;

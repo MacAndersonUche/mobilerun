@@ -24,15 +24,15 @@ export default function ModeSpeedPicker({
   hideMode = false,
 }: Props) {
   return (
-    <div className="space-y-3 bg-gray-800/80 border border-gray-700 rounded-lg p-4">
+    <div className="space-y-3 bg-surface border border-line rounded-lg p-4">
       {!hideMode && onModeChange && (
         <div>
           <label className="block text-sm font-medium mb-2">Mode</label>
-          <div className="flex rounded-lg overflow-hidden border border-gray-600">
+          <div className="flex rounded-lg overflow-hidden border border-line">
             <button
               type="button"
               className={`flex-1 px-2 py-2 text-sm ${
-                mode === 'normal' ? 'bg-blue-600' : 'bg-gray-700'
+                mode === 'normal' ? 'bg-accent' : 'bg-surface-elev'
               }`}
               onClick={() => onModeChange('normal')}
             >
@@ -44,7 +44,7 @@ export default function ModeSpeedPicker({
             <button
               type="button"
               className={`flex-1 px-2 py-2 text-sm ${
-                mode === 'dating' ? 'bg-rose-600' : 'bg-gray-700'
+                mode === 'dating' ? 'bg-rose-600' : 'bg-surface-elev'
               }`}
               onClick={() => onModeChange('dating')}
             >
@@ -56,7 +56,7 @@ export default function ModeSpeedPicker({
             <button
               type="button"
               className={`flex-1 px-2 py-2 text-sm ${
-                mode === 'social' ? 'bg-emerald-600' : 'bg-gray-700'
+                mode === 'social' ? 'bg-emerald-600' : 'bg-surface-elev'
               }`}
               onClick={() => onModeChange('social')}
             >
@@ -80,18 +80,18 @@ export default function ModeSpeedPicker({
               onClick={() => onSpeedChange(s.id)}
               className={`px-2 py-2 rounded border text-sm ${
                 speed === s.id
-                  ? 'border-blue-500 bg-blue-900/40 text-blue-100'
-                  : 'border-gray-600 bg-gray-900 text-gray-300 hover:border-gray-500'
+                  ? 'border-accent bg-accent/20 text-white'
+                  : 'border-line bg-canvas-elev text-mute hover:border-gray-500'
               }`}
             >
               {s.label}
-              <span className="block text-[11px] text-gray-400 font-normal">
+              <span className="block text-[11px] text-mute font-normal">
                 {s.hint}
               </span>
             </button>
           ))}
         </div>
-        <p className="text-xs text-gray-500 mt-2">
+        <p className="text-xs text-mute mt-2">
           Randomized delays, jittered taps, curved swipes — Balanced is default.
         </p>
       </div>
