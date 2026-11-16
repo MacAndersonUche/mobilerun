@@ -211,10 +211,9 @@ def test_configure_help_advertises_only_xai_provider_and_login_command() -> None
     xai_help = runner.invoke(cli_main.cli, ["configure", "xai", "--help"])
     removed_grok_command = runner.invoke(cli_main.cli, ["configure", "grok"])
 
+    # Self-hosted `run` is backend-driven (no --provider on that command).
     assert run_help.exit_code == 0
-    assert "XAI" in run_help.output
-    assert "xai_oauth" not in run_help.output
-    assert "grok_oauth" not in run_help.output
+    assert "backend" in run_help.output.lower()
     assert configure_help.exit_code == 0
     assert "xai" in configure_help.output.lower()
     assert "grok" not in configure_help.output.lower()
@@ -329,7 +328,9 @@ def test_provider_only_flag_does_not_auto_enter_model_flow(monkeypatch) -> None:
             run_anthropic_oauth_login=lambda **kwargs: None,
             run_gemini_oauth_login=lambda **kwargs: None,
         ),
-        provider="ollama",
+        # Use a configured family with only --provider (no auth-mode/model) so
+        # the wizard lands on the top-level menu instead of auto-entering model flow.
+        provider="gemini",
         auth_mode=None,
         model=None,
         api_key=None,
@@ -382,6 +383,6 @@ def test_fixed_provider_and_auth_model_back_returns_to_top_level_once(
         base_url=None,
     )
 
-    assert model_prompts == [(("grok-4.6",), "grok-4.6")]
+    assert model_prompts == [(("grok-4.7", "grok-4.6"), "grok-4.7")]
     assert menu_calls == ["Configure"]
     assert saved_configs == [config]

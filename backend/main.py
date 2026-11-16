@@ -462,15 +462,36 @@ async def list_tasks(
     return [TaskStatus(**t) for t in tasks[:limit]]
 
 
+# Self-hosted LLM providers (Mac pays AWS + LLM tokens only).
+SUPPORTED_LLM_PROVIDERS = ("gemini", "openai", "anthropic", "xai")
+DEFAULT_LLM_MODELS = {
+    "gemini": "gemini-3.8-flash",
+    "openai": "gpt-6-astra",
+    "anthropic": "claude-sonnet-5",
+    # Current xAI docs flagship; override with LLM_MODEL / UI model field.
+    "xai": "grok-4.7",
+}
+LLM_ENV_KEY_MAP = {
+    "gemini": "GOOGLE_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "xai": "XAI_API_KEY",
+}
+
+
 @app.get("/api/config/llm")
 async def get_llm_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get current LLM configuration."""
-    # Return config from environment
+    provider = os.environ.get("LLM_PROVIDER", "gemini")
+    default_model = DEFAULT_LLM_MODELS.get(provider, DEFAULT_LLM_MODELS["gemini"])
     return {
-        "provider": os.environ.get("LLM_PROVIDER", "gemini"),
-        "model": os.environ.get("LLM_MODEL", "gemini-3.8-flash"),
+        "provider": provider,
+        "model": os.environ.get("LLM_MODEL", default_model),
         "temperature": float(os.environ.get("LLM_TEMPERATURE", "0.7")),
         "max_tokens": int(os.environ.get("LLM_MAX_TOKENS", "2048")),
+        "supported_providers": list(SUPPORTED_LLM_PROVIDERS),
+        "default_models": dict(DEFAULT_LLM_MODELS),
+        "xai_api_base": "https://api.x.ai/v1",
     }
 
 
@@ -479,31 +500,29 @@ async def update_llm_config(
     config: LLMConfig, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """Update LLM configuration."""
-    # Validate provider
-    supported = ["gemini", "openai", "anthropic"]
-    if config.provider not in supported:
+    provider = config.provider.strip().lower()
+    if provider not in SUPPORTED_LLM_PROVIDERS:
         raise HTTPException(
             status_code=400,
-            detail=f"Provider must be one of: {', '.join(supported)}",
+            detail=f"Provider must be one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}",
         )
 
+    model = (config.model or "").strip() or DEFAULT_LLM_MODELS[provider]
+
     # Save to environment (Lambda environment variables managed via CDK)
-    os.environ["LLM_PROVIDER"] = config.provider
-    os.environ["LLM_MODEL"] = config.model
+    os.environ["LLM_PROVIDER"] = provider
+    os.environ["LLM_MODEL"] = model
     os.environ["LLM_TEMPERATURE"] = str(config.temperature)
     os.environ["LLM_MAX_TOKENS"] = str(config.max_tokens)
 
-    # Save API key
-    env_key_map = {
-        "gemini": "GOOGLE_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-    }
     if config.api_key:
-        os.environ[env_key_map[config.provider]] = config.api_key
+        os.environ[LLM_ENV_KEY_MAP[provider]] = config.api_key
 
-    return {"status": "success"}
-
+    return {
+        "status": "success",
+        "provider": provider,
+        "model": model,
+    }
 
 @app.get("/api/releases/latest")
 async def get_latest_release():

@@ -79,7 +79,7 @@ This will:
 
 - **PC:** Python 3.10+, pip
 - **Phone:** Android 7.0+ with WiFi
-- **LLM API Key:** OpenAI, Anthropic Claude, or Google Gemini
+- **LLM API Key:** OpenAI, Anthropic Claude, Google Gemini, or xAI Grok (`XAI_API_KEY`)
 
 ### Install Mobilerun
 
@@ -94,19 +94,26 @@ pip install -e ".[dev]"
 # (Optional) Install specific LLM providers
 pip install -e ".[anthropic]"  # For Claude
 pip install -e ".[gemini]"     # For Gemini
+# xAI Grok uses the OpenAI-compatible client already bundled (https://api.x.ai/v1)
 ```
 
 ### Configure LLM Provider
 
 ```bash
-# Option 1: Environment variable
+# Option 1: Environment variable (pick one or more)
 export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GOOGLE_API_KEY="..."
+export XAI_API_KEY="xai-..."          # Grok at https://api.x.ai/v1
+export LLM_PROVIDER=xai               # gemini | openai | anthropic | xai
+export LLM_MODEL=grok-4.7             # optional; defaults to current xAI docs id
 
-# Option 2: Configuration wizard
+# Option 2: Configuration wizard / CLI
 mobilerun configure
+mobilerun configure xai               # OAuth path (optional)
 
 # Option 3: Set in backend/.env file
-echo "OPENAI_API_KEY=sk-..." >> backend/.env
+echo "XAI_API_KEY=xai-..." >> backend/.env
 ```
 
 ### Install Android App
@@ -226,7 +233,16 @@ mobilerun run "your task" --backend http://192.168.1.100:8000
 
 ### LLM Providers
 
-**Supported:** OpenAI (default), Anthropic Claude, Google Gemini
+**Supported (self-hosted):** Google Gemini, OpenAI, Anthropic Claude, **xAI Grok**
+
+Goal: replica of cloud.mobilerun.ai where you only pay **AWS + LLM tokens**.
+
+| Provider | Env var | Default model (configurable) | Notes |
+|----------|---------|------------------------------|-------|
+| Gemini | `GOOGLE_API_KEY` / `GEMINI_API_KEY` | `gemini-3.8-flash` | |
+| OpenAI | `OPENAI_API_KEY` | `gpt-6-astra` | |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5` | |
+| xAI Grok | `XAI_API_KEY` | `grok-4.7` | OpenAI-compatible at `https://api.x.ai/v1` |
 
 **Configuration:**
 
@@ -235,12 +251,17 @@ mobilerun run "your task" --backend http://192.168.1.100:8000
 export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GOOGLE_API_KEY="..."
+export XAI_API_KEY="xai-..."
+export LLM_PROVIDER=xai
+export LLM_MODEL=grok-4.7   # or grok-4.6, etc.
 
 # Or in backend/.env
-OPENAI_API_KEY=sk-...
-DEFAULT_PROVIDER=openai
-DEFAULT_MODEL=gpt-4
+XAI_API_KEY=xai-...
+LLM_PROVIDER=xai
+LLM_MODEL=grok-4.7
 ```
+
+UI Settings → Provider picker includes **xAI (Grok)**. Lambda deploy accepts optional GitHub secret `XAI_API_KEY`.
 
 ### Backend Options
 
@@ -255,10 +276,11 @@ PORT=8000
 JWT_SECRET=your-secret-here
 ALLOW_UNAUTHENTICATED=true  # For local use
 
-# LLM
+# LLM (gemini | openai | anthropic | xai)
 OPENAI_API_KEY=sk-...
-DEFAULT_PROVIDER=openai
-DEFAULT_MODEL=gpt-4
+XAI_API_KEY=xai-...
+LLM_PROVIDER=gemini
+# LLM_MODEL=grok-4.7
 
 # Pairing
 PAIRING_TOKEN=auto-generated
@@ -354,7 +376,7 @@ cd android-app
 4. **GitHub Secrets** (for CI/CD):
    - `AWS_ACCESS_KEY_ID`
    - `AWS_SECRET_ACCESS_KEY`
-   - Optional: `JWT_SECRET`, `OPENAI_API_KEY`, etc.
+   - Optional: `JWT_SECRET`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `XAI_API_KEY`
 
 ### Deploy Manually
 
@@ -578,7 +600,7 @@ This fork includes performance optimization infrastructure:
 - **Parallel State Fetching:** Screenshot and UI tree captured simultaneously
 - **Smart Caching:** Reduces redundant screenshot/tree fetches with TTL-based cache
 - **Profiling Infrastructure:** Built-in performance metrics for measuring agent loop latency
-- **Streamlined LLM Calls:** Only Gemini/Claude/OpenAI supported, reducing overhead
+- **Streamlined LLM Calls:** Gemini / Claude / OpenAI / xAI Grok (no unused provider sprawl)
 
 These optimizations are designed to reduce per-step latency. Benchmarking against baseline will be available after full integration testing.
 

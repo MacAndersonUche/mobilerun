@@ -3,6 +3,13 @@ import { Save } from 'lucide-react';
 import { getBackendUrl, setBackendUrl, getAuthToken, setAuthToken } from '../config';
 import axios from 'axios';
 
+const DEFAULT_LLM_MODELS: Record<string, string> = {
+  gemini: 'gemini-3.8-flash',
+  openai: 'gpt-6-astra',
+  anthropic: 'claude-sonnet-5',
+  xai: 'grok-4.7', // current xAI docs flagship; configurable
+};
+
 export default function SettingsPage() {
   const [backendUrl, setBackendUrlState] = useState(getBackendUrl());
   const [authToken, setAuthTokenState] = useState(getAuthToken() || '');
@@ -11,6 +18,7 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
+  const [defaultModels, setDefaultModels] = useState(DEFAULT_LLM_MODELS);
   const [latestApkQr, setLatestApkQr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -28,8 +36,19 @@ export default function SettingsPage() {
       setModel(response.data.model);
       setTemperature(response.data.temperature);
       setMaxTokens(response.data.max_tokens);
+      if (response.data.default_models) {
+        setDefaultModels(response.data.default_models);
+      }
     } catch (error) {
       console.error('Failed to load LLM config:', error);
+    }
+  };
+
+  const onProviderChange = (next: string) => {
+    setProvider(next);
+    const suggested = defaultModels[next];
+    if (suggested) {
+      setModel(suggested);
     }
   };
 
@@ -127,13 +146,19 @@ export default function SettingsPage() {
             <label className="block text-sm font-medium mb-2">Provider</label>
             <select
               value={provider}
-              onChange={(e) => setProvider(e.target.value)}
+              onChange={(e) => onProviderChange(e.target.value)}
               className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
             >
               <option value="gemini">Gemini</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic (Claude)</option>
+              <option value="xai">xAI (Grok)</option>
             </select>
+            <p className="text-xs text-gray-400 mt-1">
+              Self-hosted: you pay AWS + LLM tokens only. xAI uses{' '}
+              <code className="text-gray-300">XAI_API_KEY</code> at{' '}
+              <code className="text-gray-300">https://api.x.ai/v1</code>.
+            </p>
           </div>
 
           <div>
@@ -142,9 +167,15 @@ export default function SettingsPage() {
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="e.g., gemini-3.8-flash"
+              placeholder={
+                defaultModels[provider] || 'e.g., grok-4.7'
+              }
               className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
             />
+            <p className="text-xs text-gray-400 mt-1">
+              Configurable. xAI default is current docs flagship (
+              {defaultModels.xai || 'grok-4.7'}); also try grok-4.6.
+            </p>
           </div>
 
           <div>
@@ -153,7 +184,11 @@ export default function SettingsPage() {
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="Leave empty to keep current key"
+              placeholder={
+                provider === 'xai'
+                  ? 'XAI_API_KEY (leave empty to keep current)'
+                  : 'Leave empty to keep current key'
+              }
               className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg"
             />
           </div>

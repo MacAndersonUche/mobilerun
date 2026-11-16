@@ -104,8 +104,8 @@ def gemini_model_omits_sampling_params(model: object) -> bool:
     )
 
 
-# Self-hosted local version: only Gemini, Claude (Anthropic), and OpenAI are enabled.
-# Other providers are commented out but preserved for future re-enabling.
+# Self-hosted: Gemini, OpenAI, Anthropic (Claude), and xAI (Grok).
+# Other providers remain commented out for optional re-enabling.
 PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
     ProviderFamilySpec(
         id="gemini",
@@ -196,30 +196,33 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
             ),
         ),
     ),
-    # # Commented out for self-hosted local version - can be re-enabled later
-    # ProviderFamilySpec(
-    #     id="xai",
-    #     display_name="XAI",
-    #     variants=(
-    #         ProviderVariantSpec(
-    #             id="XAI",
-    #             runtime_provider_name="XAI",
-    #             auth_mode="api_key",
-    #             default_model=GROK_API_DEFAULT_MODEL,
-    #             models=GROK_API_MODELS,
-    #             requires_api_key=True,
-    #             base_url=XAI_API_BASE,
-    #         ),
-    #         ProviderVariantSpec(
-    #             id="xai_oauth",
-    #             runtime_provider_name="xai_oauth",
-    #             auth_mode="oauth",
-    #             default_model=GROK_OAUTH_DEFAULT_MODEL,
-    #             models=GROK_OAUTH_MODELS,
-    #             credential_path=str(GROK_OAUTH_CREDENTIAL_PATH),
-    #         ),
-    #     ),
-    # ),
+    ProviderFamilySpec(
+        id="xai",
+        display_name="XAI",
+        variants=(
+            ProviderVariantSpec(
+                id="XAI",
+                runtime_provider_name="XAI",
+                auth_mode="api_key",
+                default_model=GROK_API_DEFAULT_MODEL,
+                models=GROK_API_MODELS,
+                requires_api_key=True,
+                base_url=XAI_API_BASE,
+            ),
+            ProviderVariantSpec(
+                id="xai_oauth",
+                runtime_provider_name="xai_oauth",
+                auth_mode="oauth",
+                default_model=GROK_OAUTH_DEFAULT_MODEL,
+                models=GROK_OAUTH_MODELS,
+                credential_path=str(GROK_OAUTH_CREDENTIAL_PATH),
+            ),
+        ),
+        notes=(
+            "xAI Grok — OpenAI-compatible API at https://api.x.ai/v1 (XAI_API_KEY).",
+            "Default model follows current xAI docs (grok-4.7); override with --model / LLM_MODEL.",
+        ),
+    ),
     # ProviderFamilySpec(
     #     id="ollama",
     #     display_name="Ollama",

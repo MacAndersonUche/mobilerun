@@ -225,6 +225,10 @@ export class MobilerunStack extends cdk.Stack {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
       GOOGLE_API_KEY: process.env.GOOGLE_API_KEY || '',
       GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+      // Optional — xAI Grok (OpenAI-compatible at https://api.x.ai/v1)
+      XAI_API_KEY: process.env.XAI_API_KEY || '',
+      LLM_PROVIDER: process.env.LLM_PROVIDER || 'gemini',
+      LLM_MODEL: process.env.LLM_MODEL || '',
       ALLOW_UNAUTHENTICATED: 'false',
       HISTORY_TABLE: historyTable.tableName,
       SETTINGS_TABLE: settingsTable.tableName,

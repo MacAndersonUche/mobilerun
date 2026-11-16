@@ -92,8 +92,8 @@ def test_grok_api_key_variant_is_first_class_xai_responses_provider() -> None:
 
     assert variant.id == "XAI"
     assert variant.runtime_provider_name == "XAI"
-    assert variant.default_model == "grok-4.6"
-    assert list_models_for_variant("xai", "api_key") == ("grok-4.6",)
+    assert variant.default_model == "grok-4.7"
+    assert list_models_for_variant("xai", "api_key") == ("grok-4.7", "grok-4.6")
     assert variant.models == GROK_API_MODELS
     assert variant.requires_api_key is True
     assert variant.base_url == XAI_API_BASE
@@ -109,7 +109,7 @@ def test_grok_oauth_variant_defaults_to_the_grok_build_proxy_model() -> None:
     assert variant.default_model == "grok-4.7"
     assert variant.models == ("grok-4.7", "grok-4.6")
     assert variant.models == GROK_OAUTH_MODELS
-    assert "grok-4.7" not in GROK_API_MODELS
+    assert "grok-4.7" in GROK_API_MODELS
     assert variant.credential_path
 
 
@@ -314,7 +314,7 @@ def test_xai_sync_chat_pins_final_sdk_wire_body() -> None:
     request = requests[0]
     assert str(request.url) == f"{XAI_API_BASE}/responses"
     payload = json.loads(request.content)
-    assert payload["model"] == "grok-4.6"
+    assert payload["model"] == GROK_API_DEFAULT_MODEL
     assert payload["store"] is False
     assert payload["metadata"] == {"safe": "value"}
     assert {"reasoning", "presence_penalty"}.isdisjoint(payload)
@@ -553,7 +553,7 @@ def test_xai_runtime_aliases_default_to_canonical_model(
 
     llm = load_llm(alias)
 
-    assert llm.model == "grok-4.6"
+    assert llm.model == "grok-4.7"
 
 
 def test_xai_oauth_runtime_uses_grok_oauth_adapter(tmp_path) -> None:

@@ -51,7 +51,7 @@ export ALLOW_UNAUTHENTICATED=false
 ### What is NOT in APK or Frontend
 
 ✅ **Verified Clean:**
-- ❌ No API keys (OpenAI, Anthropic, Gemini, AWS)
+- ❌ No API keys (OpenAI, Anthropic, Gemini, xAI/Grok, AWS)
 - ❌ No JWT secrets
 - ❌ No AWS credentials
 - ❌ No hardcoded passwords
