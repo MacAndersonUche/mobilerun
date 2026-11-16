@@ -55,6 +55,7 @@ device_websockets: Dict[str, WebSocket] = {}
 
 # === Models ===
 
+
 class DeviceInfo(BaseModel):
     device_id: str
     name: str
@@ -105,11 +106,14 @@ class LoginRequest(BaseModel):
 
 # === Auth Endpoints ===
 
+
 @app.post("/api/auth/login")
 async def login(request: LoginRequest):
     """Simple login endpoint (for development)."""
     # In production, verify against a user database
-    if request.username == "admin" and request.password == os.environ.get("ADMIN_PASSWORD", "admin"):
+    if request.username == "admin" and request.password == os.environ.get(
+        "ADMIN_PASSWORD", "admin"
+    ):
         token = create_access_token({"sub": request.username})
         return {"access_token": token, "token_type": "bearer"}
 
@@ -118,6 +122,7 @@ async def login(request: LoginRequest):
 
 # === Main Endpoints ===
 
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
@@ -125,7 +130,9 @@ async def root():
         "service": "Mobilerun Backend",
         "version": "1.0.0",
         "status": "running",
-        "devices_connected": len([d for d in connected_devices.values() if d.get("connected", False)]),
+        "devices_connected": len(
+            [d for d in connected_devices.values() if d.get("connected", False)]
+        ),
         "active_runs": len(active_runs),
     }
 
@@ -150,8 +157,7 @@ async def list_devices(auth: Optional[dict] = Depends(optional_verify_token)):
 
 @app.post("/api/devices/pair")
 async def initiate_pairing(
-    request: PairingRequest,
-    auth: Optional[dict] = Depends(optional_verify_token)
+    request: PairingRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """
     Initiate device pairing. Returns QR code with backend URL and token.
@@ -233,10 +239,12 @@ async def device_websocket(websocket: WebSocket):
 
         device_websockets[device_id] = websocket
 
-        await websocket.send_json({
-            "status": "connected",
-            "device_id": device_id,
-        })
+        await websocket.send_json(
+            {
+                "status": "connected",
+                "device_id": device_id,
+            }
+        )
 
         logger.info(f"Device {device_id} connected")
 
@@ -283,8 +291,7 @@ async def handle_device_message(device_id: str, message: dict):
 
 @app.post("/api/tasks", response_model=TaskStatus)
 async def submit_task(
-    request: TaskRequest,
-    auth: Optional[dict] = Depends(optional_verify_token)
+    request: TaskRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """Submit a new automation task to a device."""
     if request.device_id not in connected_devices:
@@ -316,14 +323,16 @@ async def submit_task(
     ws = device_websockets.get(request.device_id)
     if ws:
         try:
-            await ws.send_json({
-                "type": "run_task",
-                "task_id": task_id,
-                "instruction": request.instruction,
-                "max_steps": request.max_steps,
-                "reasoning": request.reasoning,
-                "vision": request.vision,
-            })
+            await ws.send_json(
+                {
+                    "type": "run_task",
+                    "task_id": task_id,
+                    "instruction": request.instruction,
+                    "max_steps": request.max_steps,
+                    "reasoning": request.reasoning,
+                    "vision": request.vision,
+                }
+            )
             task["status"] = "running"
         except Exception as e:
             logger.error(f"Failed to send task to device: {e}")
@@ -335,8 +344,7 @@ async def submit_task(
 
 @app.get("/api/tasks/{task_id}", response_model=TaskStatus)
 async def get_task_status(
-    task_id: str,
-    auth: Optional[dict] = Depends(optional_verify_token)
+    task_id: str, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """Get status of a specific task."""
     if task_id in active_runs:
@@ -351,8 +359,7 @@ async def get_task_status(
 
 @app.get("/api/tasks", response_model=List[TaskStatus])
 async def list_tasks(
-    limit: int = 50,
-    auth: Optional[dict] = Depends(optional_verify_token)
+    limit: int = 50, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """List recent tasks."""
     tasks = list(active_runs.values()) + run_history
@@ -374,8 +381,7 @@ async def get_llm_config(auth: Optional[dict] = Depends(optional_verify_token)):
 
 @app.post("/api/config/llm")
 async def update_llm_config(
-    config: LLMConfig,
-    auth: Optional[dict] = Depends(optional_verify_token)
+    config: LLMConfig, auth: Optional[dict] = Depends(optional_verify_token)
 ):
     """Update LLM configuration."""
     # Validate provider
@@ -436,6 +442,7 @@ async def get_latest_release():
 # Lambda handler (for AWS deployment)
 try:
     from mangum import Mangum
+
     handler = Mangum(app, lifespan="off")
 except ImportError:
     handler = None
@@ -443,5 +450,6 @@ except ImportError:
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
