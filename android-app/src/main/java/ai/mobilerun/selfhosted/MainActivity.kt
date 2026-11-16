@@ -305,7 +305,7 @@ fun MainScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            Spacer(Modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
@@ -338,7 +338,7 @@ private fun PermRow(label: String, ok: Boolean, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.bodyMedium)
             Text(
                 if (ok) "Ready" else "Tap to enable",

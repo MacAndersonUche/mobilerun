@@ -168,8 +168,12 @@ export default function ChatPage() {
   return (
     <div className="mx-auto flex h-[100dvh] w-full max-w-content flex-col bg-canvas md:h-screen">
       <header className="flex shrink-0 items-center gap-3 border-b border-line px-4 py-3">
-        <Link to="/" className="rounded-lg p-1 text-mute hover:bg-surface">
-          <ArrowLeft size={20} />
+        <Link
+          to="/"
+          aria-label="Back to home"
+          className="rounded-lg p-1 text-mute hover:bg-surface"
+        >
+          <ArrowLeft size={20} aria-hidden />
         </Link>
         <PixelAvatar name={agentName} color={agentColor} size={36} />
         <div className="min-w-0 flex-1">
@@ -302,6 +306,7 @@ export default function ChatPage() {
             <input
               className="mr-input pl-9"
               placeholder={`Ask ${agentName}…`}
+              aria-label={`Ask ${agentName}`}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={busy}

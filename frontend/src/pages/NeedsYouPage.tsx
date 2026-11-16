@@ -113,11 +113,15 @@ export default function NeedsYouPage() {
                 Inbound: {item.inbound_preview}
               </p>
             )}
+            <label htmlFor={`ny-${item.id}`} className="block text-sm text-mute">
+              Draft reply
+            </label>
             <textarea
               id={`ny-${item.id}`}
               defaultValue={item.draft_reply}
               rows={3}
               className="mr-input"
+              aria-label="Draft reply"
             />
             <div className="flex flex-wrap gap-2">
               <button

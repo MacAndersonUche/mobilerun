@@ -83,7 +83,7 @@ export default function HomePage() {
       </header>
 
       <Card className="border-accent/40 bg-accent/10">
-        <p className="text-sm font-medium text-blue-200">
+        <p className="text-sm font-medium text-white">
           Getting started · {progress} of 3
         </p>
         <p className="mt-1 text-sm text-mute">
@@ -119,7 +119,7 @@ export default function HomePage() {
         <p className="text-xs font-medium uppercase tracking-wide text-mute">Coming up</p>
         <p className="mt-2 text-sm text-mute">
           No routine planned yet — Build one with{' '}
-          <Link to="/chat" className="text-accent">
+          <Link to="/chat" className="text-accent underline underline-offset-2">
             Mac
           </Link>
           .

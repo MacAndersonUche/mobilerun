@@ -196,10 +196,15 @@ export default function SocialPage() {
           />
           Append signature (default ON)
         </label>
+        <label htmlFor="social-signature-text" className="block text-sm text-mute">
+          Signature text
+        </label>
         <input
+          id="social-signature-text"
           value={sigText}
           onChange={(e) => setSigText(e.target.value)}
-          className="w-full bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
+          className="mr-input"
+          aria-label="Signature text"
         />
         <p className="text-xs text-mute">
           Per-app / per-contact overrides are stored with config; toggle apps above,

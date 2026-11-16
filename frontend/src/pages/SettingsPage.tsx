@@ -66,15 +66,10 @@ export default function SettingsPage() {
     setSaving(true);
 
     try {
-      // Save backend URL
       setBackendUrl(backendUrl);
-
-      // Save auth token
       if (authToken) {
         setAuthToken(authToken);
       }
-
-      // Save LLM config
       await axios.post(
         `${backendUrl}/api/config/llm`,
         {
@@ -88,7 +83,6 @@ export default function SettingsPage() {
           headers: { Authorization: `Bearer ${authToken}` },
         }
       );
-
       alert('Settings saved successfully!');
       window.location.reload();
     } catch (error) {
@@ -104,83 +98,90 @@ export default function SettingsPage() {
       <h2 className="text-2xl font-semibold">Settings</h2>
 
       <form onSubmit={saveSettings} className="space-y-6">
-        {/* Backend Configuration */}
-        <section className="bg-surface rounded-lg p-6 space-y-4">
-          <h3 className="text-xl font-semibold mb-4">Backend Connection</h3>
+        <section className="mr-card space-y-4">
+          <h3 className="text-xl font-semibold">Backend Connection</h3>
 
           <div>
-            <label className="block text-sm font-medium mb-2">
+            <label htmlFor="settings-backend-url" className="mb-2 block text-sm font-medium">
               Backend URL
             </label>
             <input
+              id="settings-backend-url"
               type="url"
               value={backendUrl}
               onChange={(e) => setBackendUrlState(e.target.value)}
               placeholder="http://localhost:8000"
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+              className="mr-input"
             />
-            <p className="text-xs text-mute mt-1">
+            <p className="mt-1 text-xs text-mute">
               Use localhost for local backend or your Lambda API URL for cloud
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">
+            <label htmlFor="settings-auth-token" className="mb-2 block text-sm font-medium">
               Auth Token (JWT)
             </label>
             <input
+              id="settings-auth-token"
               type="password"
               value={authToken}
               onChange={(e) => setAuthTokenState(e.target.value)}
               placeholder="Optional for local, required for cloud"
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+              className="mr-input"
             />
           </div>
         </section>
 
-        {/* LLM Configuration */}
-        <section className="bg-surface rounded-lg p-6 space-y-4">
-          <h3 className="text-xl font-semibold mb-4">LLM Provider</h3>
+        <section className="mr-card space-y-4">
+          <h3 className="text-xl font-semibold">LLM Provider</h3>
 
           <div>
-            <label className="block text-sm font-medium mb-2">Provider</label>
+            <label htmlFor="settings-provider" className="mb-2 block text-sm font-medium">
+              Provider
+            </label>
             <select
+              id="settings-provider"
               value={provider}
               onChange={(e) => onProviderChange(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+              className="mr-input"
             >
               <option value="gemini">Gemini</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="xai">xAI (Grok)</option>
             </select>
-            <p className="text-xs text-mute mt-1">
+            <p className="mt-1 text-xs text-mute">
               Self-hosted: you pay AWS + LLM tokens only. xAI uses{' '}
-              <code className="text-gray-300">XAI_API_KEY</code> at{' '}
-              <code className="text-gray-300">https://api.x.ai/v1</code>.
+              <code className="text-white/80">XAI_API_KEY</code> at{' '}
+              <code className="text-white/80">https://api.x.ai/v1</code>.
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">Model</label>
+            <label htmlFor="settings-model" className="mb-2 block text-sm font-medium">
+              Model
+            </label>
             <input
+              id="settings-model"
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder={
-                defaultModels[provider] || 'e.g., grok-4.7'
-              }
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+              placeholder={defaultModels[provider] || 'e.g., grok-4.7'}
+              className="mr-input"
             />
-            <p className="text-xs text-mute mt-1">
+            <p className="mt-1 text-xs text-mute">
               Configurable. xAI default is current docs flagship (
               {defaultModels.xai || 'grok-4.7'}); also try grok-4.6.
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">API Key</label>
+            <label htmlFor="settings-api-key" className="mb-2 block text-sm font-medium">
+              API Key
+            </label>
             <input
+              id="settings-api-key"
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
@@ -189,57 +190,58 @@ export default function SettingsPage() {
                   ? 'XAI_API_KEY (leave empty to keep current)'
                   : 'Leave empty to keep current key'
               }
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+              className="mr-input"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label htmlFor="settings-temperature" className="mb-2 block text-sm font-medium">
                 Temperature
               </label>
               <input
+                id="settings-temperature"
                 type="number"
                 step="0.1"
                 min="0"
                 max="2"
                 value={temperature}
                 onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+                className="mr-input"
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
+              <label htmlFor="settings-max-tokens" className="mb-2 block text-sm font-medium">
                 Max Tokens
               </label>
               <input
+                id="settings-max-tokens"
                 type="number"
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+                className="mr-input"
               />
             </div>
           </div>
         </section>
 
-        {/* Android APK */}
         {latestApkQr && (
-          <section className="bg-surface rounded-lg p-6">
-            <h3 className="text-xl font-semibold mb-4">Install Android App</h3>
-            <p className="text-sm text-mute mb-4">
+          <section className="mr-card">
+            <h3 className="mb-4 text-xl font-semibold">Install Android App</h3>
+            <p className="mb-4 text-sm text-mute">
               QR is download-only — scan to install the latest GitHub release APK.
               Then open the app, finish the permissions checklist, and sign in with
               the same Cognito account as this UI (no pairing QR).
             </p>
-            <div className="bg-white p-4 rounded-lg inline-block">
+            <div className="inline-block rounded-lg bg-white p-4">
               <img
                 src={`data:image/png;base64,${latestApkQr}`}
                 alt="APK Download QR"
-                className="w-48 h-48"
+                className="h-48 w-48"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="mt-2 text-xs text-mute">
               After install: Accessibility (+ Android 13 restricted settings) →
               notifications → screen capture → battery unrestricted → Sign in and
               link phone
@@ -250,7 +252,7 @@ export default function SettingsPage() {
         <button
           type="submit"
           disabled={saving}
-          className="w-full flex items-center justify-center space-x-2 bg-accent hover:bg-accent-soft px-4 py-3 rounded-lg disabled:opacity-50 transition-colors"
+          className="mr-btn-primary w-full"
         >
           <Save size={20} />
           <span>{saving ? 'Saving...' : 'Save Settings'}</span>

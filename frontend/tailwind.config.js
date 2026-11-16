@@ -21,7 +21,8 @@ export default {
           DEFAULT: '#4ADE80',
           bg: '#14532D',
         },
-        mute: '#A1A1AA',
+        // Slightly brighter than #A1A1AA for WCAG AA on #0A0A0A / #1C1C1E
+        mute: '#C4C4CC',
       },
       fontFamily: {
         sans: [

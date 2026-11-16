@@ -171,10 +171,11 @@ export default function LiveViewPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2 items-end">
-          <label className="text-sm">
+          <label htmlFor="live-device" className="text-sm">
             Device
             <select
-              className="block mt-1 bg-surface border border-line rounded px-3 py-2"
+              id="live-device"
+              className="mr-input mt-1 block"
               value={deviceId}
               onChange={(e) => setDeviceId(e.target.value)}
             >
@@ -186,26 +187,28 @@ export default function LiveViewPage() {
               ))}
             </select>
           </label>
-          <label className="text-sm">
+          <label htmlFor="live-fps" className="text-sm">
             FPS
             <input
+              id="live-fps"
               type="number"
               min={1}
               max={8}
               value={fps}
               onChange={(e) => setFps(Number(e.target.value))}
-              className="block mt-1 w-20 bg-surface border border-line rounded px-2 py-2"
+              className="mr-input mt-1 block w-20"
             />
           </label>
-          <label className="text-sm">
+          <label htmlFor="live-quality" className="text-sm">
             Quality
             <input
+              id="live-quality"
               type="number"
               min={20}
               max={85}
               value={quality}
               onChange={(e) => setQuality(Number(e.target.value))}
-              className="block mt-1 w-20 bg-surface border border-line rounded px-2 py-2"
+              className="mr-input mt-1 block w-20"
             />
           </label>
           {!connected ? (

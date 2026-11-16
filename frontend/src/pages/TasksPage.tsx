@@ -175,11 +175,14 @@ export default function TasksPage() {
       ) : (
         <form onSubmit={submitTask} className="bg-surface rounded-lg p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-2">Select Device</label>
+            <label htmlFor="task-device" className="mb-2 block text-sm font-medium">
+              Select Device
+            </label>
             <select
+              id="task-device"
               value={selectedDevice}
               onChange={(e) => setSelectedDevice(e.target.value)}
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg"
+              className="mr-input"
             >
               {devices.map((device) => (
                 <option key={device.device_id} value={device.device_id}>
@@ -190,23 +193,25 @@ export default function TasksPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">
+            <label htmlFor="task-instruction" className="mb-2 block text-sm font-medium">
               Instruction
             </label>
             <textarea
+              id="task-instruction"
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
               placeholder="Open Settings and turn on dark mode"
               rows={4}
-              className="w-full px-3 py-2 bg-surface-elev border border-line rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
+              className="mr-input"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-2">
+            <label htmlFor="task-max-steps" className="mb-2 block text-sm font-medium">
               Max Steps: {maxSteps}
             </label>
             <input
+              id="task-max-steps"
               type="range"
               min="5"
               max="50"
