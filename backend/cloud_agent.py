@@ -824,23 +824,30 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 pkg_l = (after.get("package") or "").lower()
                 tree_l = (after.get("tree") or "").lower()
                 tokens = []
+                pkg_tokens = []
                 if "setting" in app_l:
                     tokens.append("settings")
+                    pkg_tokens.append("com.android.settings")
                 if "whatsapp" in app_l or app_l == "wa":
                     tokens.append("whatsapp")
+                    pkg_tokens.append("com.whatsapp")
                 if "chrome" in app_l:
                     tokens.append("chrome")
+                    pkg_tokens.append("com.android.chrome")
                 if "snap" in app_l:
                     tokens.append("snapchat")
+                    pkg_tokens.append("com.snapchat.android")
                 opened = bool(pkg_l) and (
-                    any(tok in pkg_l for tok in tokens)
+                    any(tok in pkg_l for tok in tokens + pkg_tokens)
                     or app_l.replace(" ", "") in pkg_l.replace(".", "")
-                    or app_l in tree_l
+                    or any(tok in tree_l for tok in tokens)
+                    or any(p in tree_l for p in pkg_tokens)
                 )
                 if (
                     not opened
                     and after.get("package")
                     and after["package"] != tree_info.get("package")
+                    and after["package"] not in ("android", "com.android.systemui")
                 ):
                     opened = True
                     verify_msg = f"package→{after['package']}"
@@ -873,17 +880,38 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if verify_msg:
                 job["result"] += f" · {verify_msg}"
 
-        # Pure open_app goal → complete once launched
+        # Pure open_app goal → complete once PackageManager launched
         open_target = _trivial_open_app_target(instruction)
-        if (
-            open_target
-            and kind in ("open_app", "start_app")
-            and "open_unconfirmed" not in verify_msg
-        ):
-            job["status"] = "completed"
-            job["result"] = f"Opened {open_target} ({verify_msg or summary})"
-            job["completed_at"] = int(time.time())
-            return job
+        if open_target and kind in ("open_app", "start_app"):
+            # Prefer RPC package in summary: open_app(X)[com.foo]
+            rpc_pkg = ""
+            m = re.search(r"\[([a-zA-Z0-9._]+)\]\s*$", summary or "")
+            if m:
+                rpc_pkg = m.group(1).lower()
+            known = {
+                "settings": ("com.android.settings", "settings"),
+                "whatsapp": ("com.whatsapp", "whatsapp"),
+                "chrome": ("com.android.chrome", "chrome"),
+                "snapchat": ("com.snapchat.android", "snap"),
+            }
+            tokens = []
+            for key, (pkg, tok) in known.items():
+                if key in open_target.lower():
+                    tokens.extend([pkg, tok])
+            rpc_ok = bool(rpc_pkg) and (
+                any(t in rpc_pkg for t in tokens) or open_target.lower() in rpc_pkg
+            )
+            verify_ok = "open_unconfirmed" not in verify_msg and bool(verify_msg)
+            # Overlays (ANR / permission) may report package=android briefly;
+            # trust PackageManager launch result for trivial open goals.
+            if rpc_ok or verify_ok:
+                job["status"] = "completed"
+                job["result"] = (
+                    f"Opened {open_target} "
+                    f"(pkg={rpc_pkg or 'n/a'}; {verify_msg or summary})"
+                )
+                job["completed_at"] = int(time.time())
+                return job
 
         job["next_run_at"] = int(time.time()) + 2
         job["updated_at"] = int(time.time())
