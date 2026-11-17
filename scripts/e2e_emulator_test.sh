@@ -1123,15 +1123,33 @@ import os
 print("mobilerun://pair?" + urlencode({"c": os.environ["CODE"]}))
 PY
 )
+# Snapshot existing prod device ids so we can detect THIS claim (APK uses Build.MODEL,
+# not the pair create device_name — so name filters like emu-cloud miss the new row).
+BEFORE_IDS=$(PROD_API="$PROD_API" PROD_TOKEN="$PROD_TOKEN" python3 - <<'PY'
+import json, os, urllib.request
+prod = os.environ["PROD_API"]
+token = os.environ["PROD_TOKEN"]
+req = urllib.request.Request(
+    prod + "/api/devices", headers={"Authorization": f"Bearer {token}"}
+)
+ids = [
+    str(d.get("device_id") or "")
+    for d in (json.load(urllib.request.urlopen(req)) or [])
+    if d.get("device_id")
+]
+print(",".join(ids))
+PY
+)
 adb logcat -c || true
 adb shell "am start -a android.intent.action.VIEW -d '$CLOUD_ONLY_URL'" || true
-# Wait until the device appears on the prod ci-e2e account
-python3 - <<PY
+# Wait until a new device_id appears on the prod ci-e2e account
+BEFORE_IDS="$BEFORE_IDS" python3 - <<PY
 import json, os, time, urllib.request
 prod = os.environ.get("PROD_API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
 token = """$PROD_TOKEN"""
 code = """$PROD_CODE"""
 artifacts = os.environ["ARTIFACTS_DIR"]
+before = {x for x in os.environ.get("BEFORE_IDS", "").split(",") if x}
 device_id = None
 for i in range(40):
     req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
@@ -1140,15 +1158,14 @@ for i in range(40):
         json.dumps(devices, indent=2, default=str)
     )
     for d in devices or []:
-        name = str(d.get("name") or d.get("device_name") or "")
-        # Only match this job's cloud-only pair — ignore concurrent ci-e2e leftovers
-        if "emu-cloud" in name.lower():
-            device_id = d.get("device_id") or d.get("id")
+        did = d.get("device_id") or d.get("id")
+        if did and str(did) not in before:
+            device_id = str(did)
             break
     if device_id:
         break
     time.sleep(2)
-assert device_id, f"cloud-only short-code {code} did not register on prod"
+assert device_id, f"cloud-only short-code {code} did not register on prod (before={sorted(before)})"
 open(os.path.join(artifacts, "prod_cloud_device_id.txt"), "w").write(device_id)
 print("prod_cloud_only_device", device_id)
 # Remove device (mirrors Devices Remove button)
