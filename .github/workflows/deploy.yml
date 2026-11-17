@@ -289,6 +289,11 @@ jobs:
             -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           curl -sfS "$API_URL/api/auth/me" -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json
           python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d; assert 'ci-e2e' in (d.get('email') or '')"
+          echo "LLM key presence + real provider probe..."
+          curl -sfS "$API_URL/api/config/llm" -H "Authorization: Bearer $TOKEN" | tee /tmp/llm.json
+          curl -sfS -X POST "$API_URL/api/config/llm/probe" \
+            -H "Authorization: Bearer $TOKEN" | tee /tmp/llm-probe.json
+          python3 -c "import json; d=json.load(open('/tmp/llm-probe.json')); print('llm_probe', d); assert 'keys_present' in d and 'openai' in d and 'gemini' in d, d; print('OPENAI_present=', d['keys_present'].get('openai'), 'openai_ok=', (d.get('openai') or {}).get('ok'), 'openai_http=', (d.get('openai') or {}).get('http_status')); print('GEMINI_present=', d['keys_present'].get('gemini'), 'gemini_ok=', (d.get('gemini') or {}).get('ok'), 'gemini_http=', (d.get('gemini') or {}).get('http_status'))"
           # Legacy device-code (still supported)
           curl -sfS -X POST "$API_URL/api/auth/device/code" \
             -H 'Content-Type: application/json' \

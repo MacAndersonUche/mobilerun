@@ -196,6 +196,7 @@ async def handle_chat(
         if (
             llm is None
             and not os.environ.get("GOOGLE_API_KEY")
+            and not os.environ.get("GEMINI_API_KEY")
             and not os.environ.get("OPENAI_API_KEY")
         ):
             # Make missing LLM keys explicit for free-form questions

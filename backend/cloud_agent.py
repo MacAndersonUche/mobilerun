@@ -12,7 +12,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("mobilerun.cloud_agent")
 
@@ -30,6 +30,9 @@ Coordinates are screen pixels from node bounds centers. Prefer clickable nodes
 matching the goal. Never invent coordinates outside the tree. Reply with JSON only.
 """
 
+# Shown in Tasks/Chat UI when Gemini/OpenAI cannot plan.
+LLM_UNAVAILABLE_LABEL = "LLM unavailable: quota"
+
 
 def _llm_keys_present() -> bool:
     return bool(
@@ -38,6 +41,17 @@ def _llm_keys_present() -> bool:
         or os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
     )
+
+
+def _key_presence() -> Dict[str, bool]:
+    return {
+        "gemini": bool(
+            os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        ),
+        "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "xai": bool(os.environ.get("XAI_API_KEY")),
+    }
 
 
 def _compress_tree(tree: str, limit: int = 12000) -> str:
@@ -121,11 +135,19 @@ def _call_gemini(user_prompt: str) -> str:
     raise RuntimeError(f"All Gemini models failed: {last_err}")
 
 
+def _openai_model() -> str:
+    """Use LLM_MODEL only when it looks like an OpenAI chat model."""
+    preferred = (os.environ.get("LLM_MODEL") or "").strip()
+    if preferred and not preferred.lower().startswith(("gemini", "claude", "grok")):
+        return preferred
+    return "gpt-4o-mini"
+
+
 def _call_openai(user_prompt: str) -> str:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("No OpenAI API key")
-    model = os.environ.get("LLM_MODEL") or "gpt-4o-mini"
+    model = _openai_model()
     body = {
         "model": model,
         "messages": [
@@ -148,11 +170,86 @@ def _call_openai(user_prompt: str) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+def probe_llm_providers() -> Dict[str, Any]:
+    """Real HTTP probes for Gemini/OpenAI. Never returns secret values."""
+    out: Dict[str, Any] = {
+        "keys_present": _key_presence(),
+        "gemini": None,
+        "openai": None,
+    }
+    prompt = 'Reply with JSON only: {"action":"done","reason":"probe"}'
+
+    if out["keys_present"]["gemini"]:
+        try:
+            text = _call_gemini(SYSTEM_PROMPT + "\n\n" + prompt)
+            out["gemini"] = {
+                "ok": True,
+                "http_status": 200,
+                "preview": (text or "")[:80],
+            }
+        except Exception as e:
+            msg = str(e)
+            code_m = re.search(r"HTTP (\d{3})", msg)
+            out["gemini"] = {
+                "ok": False,
+                "http_status": int(code_m.group(1)) if code_m else None,
+                "error": msg[:400],
+            }
+    else:
+        out["gemini"] = {
+            "ok": False,
+            "http_status": None,
+            "error": "GEMINI_API_KEY / GOOGLE_API_KEY not set on Lambda",
+        }
+
+    if out["keys_present"]["openai"]:
+        try:
+            text = _call_openai(prompt)
+            out["openai"] = {
+                "ok": True,
+                "http_status": 200,
+                "model": _openai_model(),
+                "preview": (text or "")[:80],
+            }
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode(errors="replace")[:300]
+            out["openai"] = {
+                "ok": False,
+                "http_status": e.code,
+                "model": _openai_model(),
+                "error": f"OpenAI HTTP {e.code}: {err_body}",
+            }
+        except Exception as e:
+            out["openai"] = {
+                "ok": False,
+                "http_status": None,
+                "model": _openai_model(),
+                "error": str(e)[:400],
+            }
+    else:
+        out["openai"] = {
+            "ok": False,
+            "http_status": None,
+            "error": "OPENAI_API_KEY not set (empty) on Lambda",
+        }
+
+    out["any_ok"] = bool(
+        (out["gemini"] or {}).get("ok") or (out["openai"] or {}).get("ok")
+    )
+    return out
+
+
 def plan_next_action(
     instruction: str,
     ui_tree: str,
     history: List[str],
 ) -> Dict[str, Any]:
+    """Plan one action. Multi-step goals require a real LLM (Gemini or OpenAI).
+
+    A non-LLM heuristic may only emit open_app for trivial \"open X\" intents,
+    and is always labelled LLM unavailable: quota. It must never complete
+    multi-step verification tasks.
+    """
     hist = "\n".join(history[-8:]) or "(none)"
     user = (
         f"GOAL: {instruction}\n\n"
@@ -162,24 +259,124 @@ def plan_next_action(
     )
     raw = None
     errors: List[str] = []
+    provider_used: Optional[str] = None
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
         try:
             raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
+            provider_used = "gemini"
         except Exception as e:
             errors.append(f"gemini: {e}")
             logger.warning("Gemini failed, trying OpenAI if configured: %s", e)
     if raw is None and os.environ.get("OPENAI_API_KEY"):
         try:
             raw = _call_openai(user)
+            provider_used = "openai"
         except Exception as e:
             errors.append(f"openai: {e}")
     if raw is None:
         detail = "; ".join(errors) or "no keys"
+        # Trivial open-app only — never multi-step navigation/toggles
+        heur = _heuristic_open_app_only(instruction, history)
+        if heur:
+            logger.warning(
+                "Using open-app heuristic (%s); LLM errors: %s",
+                LLM_UNAVAILABLE_LABEL,
+                detail,
+            )
+            heur["planner"] = "heuristic"
+            heur["llm_provider"] = None
+            # Force UI-visible label
+            reason = str(heur.get("reason") or "")
+            if LLM_UNAVAILABLE_LABEL not in reason:
+                heur["reason"] = f"{LLM_UNAVAILABLE_LABEL} — {reason}".strip(" —")
+            return heur
         raise RuntimeError(
-            "No working LLM on backend (need GEMINI_API_KEY / GOOGLE_API_KEY / "
-            f"OPENAI_API_KEY). Last errors: {detail}"
+            f"{LLM_UNAVAILABLE_LABEL} — No working LLM on backend "
+            f"(need GEMINI_API_KEY / GOOGLE_API_KEY / OPENAI_API_KEY). "
+            f"Last errors: {detail}"
         )
-    return _parse_action_json(raw)
+    action = _parse_action_json(raw)
+    action["planner"] = "llm"
+    action["llm_provider"] = provider_used
+    return action
+
+
+def _heuristic_open_app_only(
+    instruction: str, history: List[str]
+) -> Optional[Dict[str, Any]]:
+    """Only handle trivial intents like 'open Settings' / 'open app Chrome'.
+
+    Multi-step goals (navigate, toggle, type, Display, dark theme, …) return None
+    so the caller fails with an explicit LLM-unavailable error.
+    """
+    text = (instruction or "").strip()
+    if not text:
+        return None
+    # Reject anything that looks multi-step
+    low = text.lower()
+    multi_markers = (
+        " and ",
+        " then ",
+        ",",
+        "go to",
+        "goto",
+        "navigate",
+        "turn on",
+        "turn off",
+        "enable",
+        "disable",
+        "tap",
+        "type ",
+        "enter ",
+        "swipe",
+        "scroll",
+        "dark",
+        "display",
+        "wifi",
+        "settings,",
+    )
+    # Allow "open Settings" but not "open Settings and …"
+    if any(m in low for m in multi_markers if m != "settings,"):
+        # "open Settings" alone is ok — check via regex below
+        if re.search(
+            r"\b(and|then|go to|turn on|turn off|enable|disable|tap|type|swipe)\b",
+            low,
+        ):
+            return None
+        if "," in text:
+            return None
+
+    m = re.match(
+        r"^\s*(?:please\s+)?(?:open(?:\s+app)?|launch|start)\s+(.+?)\s*$",
+        text,
+        re.I,
+    )
+    if not m:
+        return None
+    app = m.group(1).strip().strip("\"'")
+    # Strip trailing filler
+    app = re.sub(r"\s+(please|now|for me)\s*$", "", app, flags=re.I).strip()
+    if not app or len(app) > 40:
+        return None
+    # Already opened?
+    hist_blob = " ".join(history).lower()
+    if f"open_app({app.lower()})" in hist_blob or f"open_app({app})" in hist_blob:
+        return {
+            "action": "done",
+            "reason": f"{LLM_UNAVAILABLE_LABEL} — already opened {app}",
+        }
+    return {
+        "action": "open_app",
+        "app": app,
+        "reason": f"{LLM_UNAVAILABLE_LABEL} — open_app({app})",
+    }
+
+
+# Back-compat alias used by older tests / imports
+def _heuristic_action(
+    instruction: str, ui_tree: str, history: List[str]
+) -> Optional[Dict[str, Any]]:
+    return _heuristic_open_app_only(instruction, history)
 
 
 def _parse_action_json(raw: str) -> Dict[str, Any]:
@@ -281,8 +478,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         return job
     if not _llm_keys_present():
         job["status"] = "failed"
-        job["error"] = "No LLM API key configured on the AWS backend"
+        job["error"] = (
+            f"{LLM_UNAVAILABLE_LABEL} — No LLM API key configured on the AWS backend"
+        )
         state["last_action"] = "no_llm_key"
+        state["planner"] = None
         job["state"] = state
         return job
     if step >= max_steps:
@@ -309,6 +509,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         action = plan_next_action(instruction, ui_tree, history)
         kind = str(action.get("action") or "").lower()
         reason = str(action.get("reason") or "")
+        planner = action.get("planner") or "llm"
+        llm_provider = action.get("llm_provider")
+        state["planner"] = planner
+        if llm_provider:
+            state["llm_provider"] = llm_provider
         if kind == "done":
             state["steps"] = step + 1
             state["last_action"] = f"done: {reason}"
@@ -335,7 +540,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         history.append(f"{summary} — {reason}".strip(" —"))
         state["history"] = history
         job["state"] = state
-        job["result"] = f"Step {step + 1}: {summary}"
+        # Surface heuristic label in the result line for Tasks UI
+        if planner == "heuristic":
+            job["result"] = f"Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
+        else:
+            job["result"] = f"Step {step + 1}: {summary}"
         # Schedule next tick soon (EventBridge also picks up due jobs)
         import time
 
@@ -358,6 +567,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             for t in (
                 "no llm",
                 "no working llm",
+                "llm unavailable",
                 "offline",
                 "api key",
                 "failed to push",
@@ -366,18 +576,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         rate_limited = any(t in low for t in ("429", "503", "quota", "high demand"))
         if hard or step + 1 >= max_steps:
             job["status"] = "failed"
-            job["error"] = msg
+            # Ensure Tasks UI shows the standard label
+            if LLM_UNAVAILABLE_LABEL.lower() in low or "no working llm" in low:
+                if LLM_UNAVAILABLE_LABEL not in msg:
+                    job["error"] = f"{LLM_UNAVAILABLE_LABEL} — {msg}"
+                else:
+                    job["error"] = msg
+            else:
+                job["error"] = msg
         else:
             import time
 
             # Rate limits: wait longer and do not burn a step slot
             if rate_limited:
                 job["next_run_at"] = int(time.time()) + 20
+                job["error"] = f"{LLM_UNAVAILABLE_LABEL} — {msg}"
             else:
                 state["steps"] = step + 1
                 job["next_run_at"] = int(time.time()) + 5
+                job["error"] = msg
             job["updated_at"] = int(time.time())
-            job["error"] = msg
             _kick_self(job.get("job_id"))
         return job
 

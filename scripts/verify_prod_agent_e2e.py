@@ -202,6 +202,10 @@ def main() -> int:
         or result.get("max_steps")
     )
     status = (result.get("status") or "").lower()
+    planner = result.get("planner") or (result.get("state") or {}).get("planner")
+    llm_provider = result.get("llm_provider") or (result.get("state") or {}).get(
+        "llm_provider"
+    )
     print(
         "TASK_RESULT",
         json.dumps(
@@ -211,6 +215,8 @@ def main() -> int:
                 "task_id": task_id,
                 "status": status,
                 "steps": steps,
+                "planner": planner,
+                "llm_provider": llm_provider,
                 "result": result.get("result"),
                 "error": result.get("error"),
                 "state": result.get("state"),
@@ -221,6 +227,23 @@ def main() -> int:
         print(
             f"RESULT FAIL Tasks instruction={INSTRUCTION!r} status={status} "
             f"steps={steps} error={result.get('error')!r}"
+        )
+        return 1
+    # Real verification must use an actual LLM — never heuristic
+    if planner == "heuristic" or (
+        isinstance(result.get("result"), str)
+        and "LLM unavailable: quota" in result.get("result", "")
+        and not llm_provider
+    ):
+        print(
+            "RESULT FAIL Tasks used heuristic planner — not valid verification "
+            f"(planner={planner!r} llm_provider={llm_provider!r})"
+        )
+        return 1
+    if llm_provider not in ("gemini", "openai"):
+        print(
+            "RESULT FAIL Tasks missing real LLM provider "
+            f"(planner={planner!r} llm_provider={llm_provider!r})"
         )
         return 1
 
@@ -272,6 +295,12 @@ def main() -> int:
     chat_steps = chat_result.get("current_step") or (
         chat_result.get("state") or {}
     ).get("steps")
+    chat_planner = chat_result.get("planner") or (chat_result.get("state") or {}).get(
+        "planner"
+    )
+    chat_llm = chat_result.get("llm_provider") or (chat_result.get("state") or {}).get(
+        "llm_provider"
+    )
     print(
         "CHAT_RESULT",
         json.dumps(
@@ -281,17 +310,28 @@ def main() -> int:
                 "task_id": chat_task_id,
                 "status": chat_status,
                 "steps": chat_steps,
+                "planner": chat_planner,
+                "llm_provider": chat_llm,
                 "result": chat_result.get("result"),
                 "error": chat_result.get("error"),
             }
         ),
     )
 
-    ok = status == "completed" and chat_status == "completed"
+    ok = (
+        status == "completed"
+        and chat_status == "completed"
+        and llm_provider in ("gemini", "openai")
+        and chat_llm in ("gemini", "openai")
+        and planner != "heuristic"
+        and chat_planner != "heuristic"
+    )
     print(
         f"RESULT {'OK' if ok else 'FAIL'} "
-        f"Tasks: {INSTRUCTION!r} status={status} steps={steps}; "
-        f"Chat: {chat_instr!r} status={chat_status} steps={chat_steps}"
+        f"Tasks: {INSTRUCTION!r} status={status} steps={steps} "
+        f"llm={llm_provider}; "
+        f"Chat: {chat_instr!r} status={chat_status} steps={chat_steps} "
+        f"llm={chat_llm}"
     )
     return 0 if ok else 1
 

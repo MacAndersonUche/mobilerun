@@ -169,6 +169,9 @@ class TaskStatus(BaseModel):
     error: Optional[str] = None
     started_at: datetime
     completed_at: Optional[datetime] = None
+    # llm | heuristic | None — heuristic is open-app-only + labelled in UI
+    planner: Optional[str] = None
+    llm_provider: Optional[str] = None
 
 
 class LLMConfig(BaseModel):
@@ -1427,6 +1430,7 @@ async def get_task_status(
                 mem["result"] = result
             if completed_at is not None:
                 mem["completed_at"] = completed_at
+        st = job.get("state") or {}
         return TaskStatus(
             task_id=task_id,
             device_id=str(job.get("device_id") or (mem or {}).get("device_id") or ""),
@@ -1434,12 +1438,14 @@ async def get_task_status(
                 job.get("instruction") or (mem or {}).get("instruction") or ""
             ),
             status=status,
-            current_step=int((job.get("state") or {}).get("steps") or 0),
+            current_step=int(st.get("steps") or 0),
             max_steps=int(job.get("max_steps") or (mem or {}).get("max_steps") or 15),
             result=result if result is not None else (mem or {}).get("result"),
             error=job.get("error") or (mem or {}).get("error"),
             started_at=started_at,
             completed_at=completed_at,
+            planner=st.get("planner") or (mem or {}).get("planner"),
+            llm_provider=st.get("llm_provider") or (mem or {}).get("llm_provider"),
         )
 
     if mem:
@@ -1480,6 +1486,11 @@ async def get_llm_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get current LLM configuration."""
     provider = os.environ.get("LLM_PROVIDER", "gemini")
     default_model = DEFAULT_LLM_MODELS.get(provider, DEFAULT_LLM_MODELS["gemini"])
+    try:
+        from cloud_agent import _key_presence
+    except ImportError:
+        from backend.cloud_agent import _key_presence  # type: ignore
+
     return {
         "provider": provider,
         "model": os.environ.get("LLM_MODEL", default_model),
@@ -1488,7 +1499,19 @@ async def get_llm_config(auth: Optional[dict] = Depends(optional_verify_token)):
         "supported_providers": list(SUPPORTED_LLM_PROVIDERS),
         "default_models": dict(DEFAULT_LLM_MODELS),
         "xai_api_base": "https://api.x.ai/v1",
+        "keys_present": _key_presence(),
     }
+
+
+@app.post("/api/config/llm/probe")
+async def probe_llm_config(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Real Gemini/OpenAI HTTP probes from this Lambda (no secret values)."""
+    try:
+        from cloud_agent import probe_llm_providers
+    except ImportError:
+        from backend.cloud_agent import probe_llm_providers  # type: ignore
+
+    return probe_llm_providers()
 
 
 @app.post("/api/config/llm")
