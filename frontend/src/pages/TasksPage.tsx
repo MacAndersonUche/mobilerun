@@ -44,10 +44,13 @@ export default function TasksPage() {
         );
         if (cancelled) return;
         const d = res.data;
-        setTaskStatus(`${d.status} · step ${d.current_step || 0}/${d.max_steps || '?'}`);
-        setTaskLog(
-          [d.result, d.error].filter(Boolean).join(' — ') || 'Running…'
+        const planner = d.planner ? ` · ${d.planner}` : '';
+        const provider = d.llm_provider ? `/${d.llm_provider}` : '';
+        setTaskStatus(
+          `${d.status} · step ${d.current_step || 0}/${d.max_steps || '?'}${planner}${provider}`
         );
+        const blob = [d.result, d.error].filter(Boolean).join(' — ') || 'Running…';
+        setTaskLog(blob);
         if (['completed', 'failed', 'stopped'].includes(d.status)) {
           setActiveTaskId(null);
           setSubmitting(false);
@@ -220,6 +223,14 @@ export default function TasksPage() {
           data-testid="task-progress"
         >
           <p className="font-medium text-white">{taskStatus || '…'}</p>
+          {/LLM unavailable:\s*quota/i.test(taskLog) && (
+            <p
+              className="mt-2 rounded border border-amber-700/60 bg-amber-950/40 px-2 py-1 text-amber-200"
+              data-testid="llm-unavailable-banner"
+            >
+              LLM unavailable: quota
+            </p>
+          )}
           {taskLog && <p className="mt-1 text-mute whitespace-pre-wrap">{taskLog}</p>}
         </div>
       )}
