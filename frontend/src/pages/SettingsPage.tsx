@@ -237,8 +237,9 @@ export default function SettingsPage() {
             <h3 className="mb-4 text-xl font-semibold">Install Android App</h3>
             <p className="mb-4 text-sm text-mute">
               QR is download-only — scan to install the latest GitHub release APK.
-              Then open the app, finish the permissions checklist, and sign in with
-              this UI. Pair via Devices → Connect phone QR (no in-app login).
+              Then open the app, pair via Devices → Connect phone QR, and enable
+              Accessibility (the only manual step). Notifications and battery are
+              requested automatically.
             </p>
             <div className="inline-block rounded-lg bg-white p-4">
               <img
@@ -248,9 +249,9 @@ export default function SettingsPage() {
               />
             </div>
             <p className="mt-2 text-xs text-mute">
-              After install: Accessibility (+ Android 13 restricted settings) →
-              notifications → screen capture → battery unrestricted → Sign in and
-              link phone
+              After install: pair → Enable Accessibility (deep-linked) → accept the
+              automatic notification + battery prompts. Live view capture is optional
+              and only asked when you open Live View.
             </p>
           </section>
         )}

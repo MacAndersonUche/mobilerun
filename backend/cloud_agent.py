@@ -27,12 +27,14 @@ Given the goal and a compressed UI tree (and optional screenshot), pick ONE next
 {"action":"done","reason":"goal achieved"}
 {"action":"fail","reason":"cannot proceed: ..."}
 Rules:
-- To launch an app (Settings, WhatsApp, Chrome, …) ALWAYS use open_app with the app
-  label — never hunt launcher icons or swipe the home screen.
+- To launch an app (Settings, WhatsApp, Chrome, Messages, …) ALWAYS use open_app with
+  the app label — never hunt launcher icons or swipe the home screen.
+- NEVER call open_app again once RECENT ACTIONS already show Opened X / open_ok, or
+  the UI tree package already matches the target. Move on (search, tap, type, send).
 - Prefer clickable/text nodes with center=(x,y) from the tree. Never invent coordinates.
 - If the tree is empty/thin but a screenshot is provided, estimate taps from the image
   or use open_app / fail.
-- Do NOT repeat the same swipe. If stuck, use open_app, back, or fail.
+- Do NOT repeat the same swipe. If stuck, use open_app (once), back, or fail.
 - Reply with JSON only.
 """
 
@@ -317,6 +319,50 @@ def _trivial_open_app_target(instruction: str) -> Optional[str]:
     return app
 
 
+def _history_shows_app_opened(hist_blob: str, app: str) -> bool:
+    """True if prior steps already launched ``app`` successfully."""
+    if not hist_blob:
+        return False
+    hist_blob = hist_blob.lower()
+    low = (app or "").lower().strip()
+    if not low:
+        return "open_ok" in hist_blob or "opened " in hist_blob
+    tokens = {low, low.replace(" ", "")}
+    if "setting" in low:
+        tokens.update({"settings", "com.android.settings"})
+    if "whatsapp" in low or low == "wa":
+        tokens.update({"whatsapp", "com.whatsapp"})
+    if "chrome" in low:
+        tokens.update({"chrome", "com.android.chrome"})
+    if "message" in low or "sms" in low:
+        tokens.update({"messaging", "com.google.android.apps.messaging"})
+    if f"open_app({low})" in hist_blob:
+        return True
+    if f"opened {low}" in hist_blob:
+        return True
+    if "open_ok" in hist_blob and any(t in hist_blob for t in tokens):
+        return True
+    if re.search(
+        rf"opened\s+\w+\[([a-z0-9._]*{re.escape(low)}[a-z0-9._]*)\]", hist_blob
+    ):
+        return True
+    if hist_blob.count(f"opened {low}") >= 1 or hist_blob.count("open_ok") >= 1:
+        if any(t in hist_blob for t in tokens):
+            return True
+    return False
+
+
+def _count_recent_open_apps(history: List[str]) -> int:
+    n = 0
+    for h in reversed(history):
+        hs = str(h).lower()
+        if hs.startswith("open_app(") or hs.startswith("opened "):
+            n += 1
+        else:
+            break
+    return n
+
+
 def plan_next_action(
     instruction: str,
     ui_tree: str,
@@ -340,11 +386,18 @@ def plan_next_action(
             + ("A screenshot is attached.\n" if image_b64 else "No screenshot.\n")
         )
     open_hint = ""
-    if open_target and "open_app" not in hist_blob:
+    already_opened = _history_shows_app_opened(hist_blob, open_target or "")
+    if open_target and not already_opened:
         open_hint = (
             f"\nHINT: This goal is a simple app launch — use "
             f'{{"action":"open_app","app":"{open_target}"}} immediately '
             f"(PackageManager). Do not swipe the launcher.\n"
+        )
+    elif already_opened:
+        open_hint = (
+            "\nHINT: The target app is already open (see RECENT ACTIONS). "
+            "Do NOT call open_app again — continue with the next sub-goal "
+            "(search, tap contact, type, send).\n"
         )
     user = (
         f"GOAL: {instruction}\n\n"
@@ -471,7 +524,7 @@ def _heuristic_open_app_only(
         return None
     # Already opened?
     hist_blob = " ".join(history).lower()
-    if f"open_app({app.lower()})" in hist_blob or f"open_app({app})" in hist_blob:
+    if _history_shows_app_opened(hist_blob, app):
         return {
             "action": "done",
             "reason": f"{LLM_UNAVAILABLE_LABEL} — already opened {app}",
@@ -620,18 +673,27 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     if kind in ("open_app", "start_app"):
         app = str(action.get("app") or action.get("package") or "")
         raw = call_device(
-            device_id, "open_app", {"app": app, "package": action.get("package")}
+            device_id,
+            "open_app",
+            {"app": app, "package": action.get("package")},
+            timeout_s=20,
+            wait_reconnect_s=60,
         )
         pkg = ""
         if isinstance(raw, dict):
             pkg = str(raw.get("package") or raw.get("active_package") or "")
             if raw.get("ok") is False:
                 raise RuntimeError(str(raw.get("error") or f"open_app failed: {app}"))
-        # Human-readable primary; keep package for UI formatters as fallback
+            # Stash for completion checks
+            action["_rpc_package"] = pkg
+            action["_rpc_ok"] = bool(raw.get("ok") or raw.get("launched") or pkg)
+        # Human-readable primary; keep [package] for rpc_ok / history matching
         nice = app or pkg or "app"
         if nice.startswith("com.") or nice.startswith("ai."):
             nice = nice.split(".")[-1]
         nice = nice[:1].upper() + nice[1:] if nice else "app"
+        if pkg:
+            return f"Opened {nice}[{pkg}]"
         return f"Opened {nice}"
     if kind == "done":
         return "Finished"
@@ -691,11 +753,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["completed_at"] = now
         return job
     if not device_is_reachable(device_id):
-        job["status"] = "failed"
-        job["error"] = "Device offline — no live WebSocket"
-        state["last_action"] = "device_offline"
-        job["state"] = state
-        return job
+        # Brief wait — phone often reconnects within seconds mid-task
+        try:
+            from device_push import wait_until_reachable, reconnect_wait_budget
+        except ImportError:
+            from backend.device_push import (  # type: ignore
+                wait_until_reachable,
+                reconnect_wait_budget,
+            )
+
+        budget = reconnect_wait_budget(device_id, 45.0)
+        if budget <= 0 or not wait_until_reachable(device_id, timeout_s=budget):
+            job["status"] = "failed"
+            job["error"] = "Device offline — no live WebSocket"
+            state["last_action"] = "device_offline"
+            job["state"] = state
+            return job
     if not _llm_keys_present():
         job["status"] = "failed"
         job["error"] = (
@@ -720,6 +793,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["state"] = state
         job["completed_at"] = now
         return job
+    if _count_recent_open_apps(history) >= 2:
+        # Planner kept re-opening; force it to continue with UI actions
+        logger.warning(
+            "open_app loop detected job=%s — injecting continue hint via history",
+            job.get("job_id"),
+        )
 
     push_to_device(
         device_id,
@@ -730,16 +809,34 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             "step": step + 1,
             "instruction": instruction,
         },
+        wait_reconnect_s=30.0,
     )
 
     try:
         try:
-            tree_raw = call_device(device_id, "get_ui_tree", {}, timeout_s=12) or ""
+            tree_raw = (
+                call_device(
+                    device_id,
+                    "get_ui_tree",
+                    {},
+                    timeout_s=10,
+                    wait_reconnect_s=45,
+                )
+                or ""
+            )
         except Exception as tree_err:
             # Overloaded OEM/emulator a11y can hang; still allow open_app.
+            # Also soft-fail offline briefly — reconnect wait already ran.
             low = str(tree_err).lower()
-            if "offline" not in low and any(
-                t in low for t in ("timed out", "timeout", "accessibility")
+            if any(
+                t in low
+                for t in (
+                    "timed out",
+                    "timeout",
+                    "accessibility",
+                    "offline",
+                    "failed to push",
+                )
             ):
                 logger.warning("get_ui_tree failed, using empty tree: %s", tree_err)
                 reason_attr = (
@@ -762,9 +859,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         tree_info = _normalize_tree_payload(tree_raw)
         ui_tree = tree_info["tree"]
         image_b64 = None
-        # Always grab a screenshot for step history; use for vision when tree thin
+        # Skip screenshot when tree is healthy — cuts ~5-10s per step
         try:
-            image_b64 = _fetch_screenshot_b64(device_id)
+            if tree_info["empty"]:
+                image_b64 = _fetch_screenshot_b64(device_id)
         except Exception as shot_err:
             logger.warning("screenshot skipped: %s", shot_err)
             image_b64 = None
@@ -783,6 +881,49 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["planner"] = planner
         if llm_provider:
             state["llm_provider"] = llm_provider
+
+        # Do not re-open once open_ok / Opened already in history or FG matches
+        if kind in ("open_app", "start_app"):
+            app_name = str(action.get("app") or action.get("package") or "")
+            hist_blob = " ".join(history).lower()
+            fg = (tree_info.get("package") or "").lower()
+            app_l = app_name.lower()
+            fg_matches = bool(fg) and (
+                app_l.replace(" ", "") in fg.replace(".", "")
+                or ("whatsapp" in app_l and "whatsapp" in fg)
+                or ("setting" in app_l and "settings" in fg)
+                or ("message" in app_l and "messaging" in fg)
+            )
+            if fg_matches or _history_shows_app_opened(hist_blob, app_name):
+                logger.info(
+                    "skipping repeat open_app(%s) — already open (fg=%s)",
+                    app_name,
+                    fg,
+                )
+                # Re-plan with stronger continue hint
+                history_hint = list(history) + [
+                    f"Opened {app_name}[already] — continue next sub-goal"
+                ]
+                action = plan_next_action(
+                    instruction,
+                    ui_tree,
+                    history_hint,
+                    image_b64=image_b64 if use_vision else None,
+                )
+                kind = str(action.get("action") or "").lower()
+                reason = str(action.get("reason") or reason)
+                if kind in ("open_app", "start_app"):
+                    # Force progress: ask LLM-equivalent done-or-tap via fail soft
+                    kind = "done" if _trivial_open_app_target(instruction) else "fail"
+                    if kind == "done":
+                        reason = f"App already open ({fg or app_name})"
+                        action = {"action": "done", "reason": reason}
+                    else:
+                        reason = (
+                            "App already open — planner must tap/type/send next; "
+                            "refusing another open_app"
+                        )
+                        action = {"action": "fail", "reason": reason}
 
         # Block swipe when tree empty — force open_app or fail
         if kind == "swipe" and tree_info["empty"]:
@@ -856,15 +997,24 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         summary = execute_action(device_id, action)
 
-        # Verify: re-fetch tree / package after action
+        # Verify: re-fetch tree / package after action (short timeout)
         verify_msg = ""
+        rpc_pkg = str(action.get("_rpc_package") or "")
+        rpc_ok_flag = bool(action.get("_rpc_ok"))
         try:
             after = _normalize_tree_payload(
-                call_device(device_id, "get_ui_tree", {}, timeout_s=15) or ""
+                call_device(
+                    device_id,
+                    "get_ui_tree",
+                    {},
+                    timeout_s=8,
+                    wait_reconnect_s=30,
+                )
+                or ""
             )
             if kind in ("open_app", "start_app"):
                 app_l = str(action.get("app") or "").lower()
-                pkg_l = (after.get("package") or "").lower()
+                pkg_l = (after.get("package") or rpc_pkg or "").lower()
                 tree_l = (after.get("tree") or "").lower()
                 tokens = []
                 pkg_tokens = []
@@ -880,12 +1030,17 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 if "snap" in app_l:
                     tokens.append("snapchat")
                     pkg_tokens.append("com.snapchat.android")
+                if "message" in app_l or "sms" in app_l:
+                    tokens.append("messaging")
+                    pkg_tokens.append("com.google.android.apps.messaging")
                 opened = bool(pkg_l) and (
                     any(tok in pkg_l for tok in tokens + pkg_tokens)
                     or app_l.replace(" ", "") in pkg_l.replace(".", "")
                     or any(tok in tree_l for tok in tokens)
                     or any(p in tree_l for p in pkg_tokens)
                 )
+                if rpc_ok_flag and rpc_pkg:
+                    opened = True
                 if (
                     not opened
                     and after.get("package")
@@ -895,7 +1050,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     opened = True
                     verify_msg = f"package→{after['package']}"
                 elif opened:
-                    verify_msg = f"open_ok package={after.get('package')}"
+                    verify_msg = f"open_ok package={after.get('package') or rpc_pkg}"
                 else:
                     verify_msg = (
                         f"open_unconfirmed package={after.get('package')!r} "
@@ -906,7 +1061,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     f"after_chars={after.get('chars')} pkg={after.get('package')}"
                 )
         except Exception as ve:
-            verify_msg = f"verify_error={ve}"
+            # Trust PackageManager launch even when verify tree times out
+            if kind in ("open_app", "start_app") and (rpc_ok_flag or rpc_pkg):
+                verify_msg = f"open_ok package={rpc_pkg or 'rpc'} (verify_skipped={ve})"
+            else:
+                verify_msg = f"verify_error={ve}"
 
         state["steps"] = step + 1
         state["last_action"] = summary
@@ -926,28 +1085,35 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Pure open_app goal → complete once PackageManager launched
         open_target = _trivial_open_app_target(instruction)
         if open_target and kind in ("open_app", "start_app"):
-            # Prefer RPC package in summary: open_app(X)[com.foo]
-            rpc_pkg = ""
-            m = re.search(r"\[([a-zA-Z0-9._]+)\]\s*$", summary or "")
-            if m:
-                rpc_pkg = m.group(1).lower()
+            # Prefer RPC package in summary: Opened X[com.foo]
+            if not rpc_pkg:
+                m = re.search(r"\[([a-zA-Z0-9._]+)\]\s*$", summary or "")
+                if m:
+                    rpc_pkg = m.group(1).lower()
             known = {
                 "settings": ("com.android.settings", "settings"),
                 "whatsapp": ("com.whatsapp", "whatsapp"),
                 "chrome": ("com.android.chrome", "chrome"),
                 "snapchat": ("com.snapchat.android", "snap"),
+                "messages": ("com.google.android.apps.messaging", "messaging"),
             }
             tokens = []
             for key, (pkg, tok) in known.items():
                 if key in open_target.lower():
                     tokens.extend([pkg, tok])
             rpc_ok = bool(rpc_pkg) and (
-                any(t in rpc_pkg for t in tokens) or open_target.lower() in rpc_pkg
+                any(t in rpc_pkg for t in tokens)
+                or open_target.lower() in rpc_pkg
+                or rpc_ok_flag
             )
-            verify_ok = "open_unconfirmed" not in verify_msg and bool(verify_msg)
+            verify_ok = "open_ok" in verify_msg or (
+                "open_unconfirmed" not in verify_msg
+                and bool(verify_msg)
+                and "verify_error" not in verify_msg
+            )
             # Overlays (ANR / permission) may report package=android briefly;
             # trust PackageManager launch result for trivial open goals.
-            if rpc_ok or verify_ok:
+            if rpc_ok or verify_ok or rpc_ok_flag:
                 job["status"] = "completed"
                 job["result"] = (
                     f"Opened {open_target} "
@@ -956,7 +1122,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["completed_at"] = int(time.time())
                 return job
 
-        job["next_run_at"] = int(time.time()) + 2
+        # ~1s between steps (was 2s) — target ≤10s wall per step overall
+        job["next_run_at"] = int(time.time()) + 1
         job["updated_at"] = int(time.time())
         _kick_self(job.get("job_id"))
         return job

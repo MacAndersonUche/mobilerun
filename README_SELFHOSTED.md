@@ -22,7 +22,7 @@ This will:
 **Then install the APK and link with the same Cognito account:**
 
 1. Scan the **APK download QR** on Devices / Settings (or grab it from [Releases](https://github.com/MacAndersonUche/mobilerun/releases)) — QR is **download-only**, never for pairing
-2. Open MobileRun → complete the **permissions checklist** (Accessibility incl. Android 13+ *Allow restricted settings*, notifications, screen capture, battery unrestricted, overlay, packages, foreground service)
+2. Open MobileRun → pair → **Enable Accessibility** (only manual step; Android 13+ may need *Allow restricted settings*). Notifications and battery unrestricted are requested automatically. Live-view MediaProjection is optional and only prompted when you open Live View.
 3. Tap **Sign in & link phone** → enter the code on the hosted **Account** page while signed in
 4. Hosted UI = management (dashboard, live view, chat, modes, Needs you). APK = wireless executor.
 

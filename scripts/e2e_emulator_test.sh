@@ -860,12 +860,16 @@ echo "== Permissions onboarding surface =="
 adb shell am start -n ai.mobilerun.selfhosted/.MainActivity
 sleep 2
 adb exec-out screencap -p > "$ARTIFACTS_DIR/09_permissions.png" || true
-# Accessibility already enabled above; note other grants cannot be fully auto-approved on API 34 CI
+# Slim setup: Accessibility is the only manual toggle (already enabled above).
+# Notifications + battery are auto system dialogs; MediaProjection is live-view only;
+# overlay is no longer requested.
 {
   echo "accessibility=enabled"
-  echo "media_projection=manual_grant_required"
-  echo "overlay=manual_grant_required"
-  echo "battery=manual_grant_required"
+  echo "notifications=auto_system_dialog"
+  echo "battery=auto_system_dialog"
+  echo "media_projection=on_demand_live_view_only"
+  echo "overlay=dropped_not_requested"
+  echo "agent_screenshots=a11y_api30"
 } | tee "$ARTIFACTS_DIR/permissions_status.txt"
 
 echo "== Normal mode tasks via API (open/tap/type/swipe/scroll/device info) =="
