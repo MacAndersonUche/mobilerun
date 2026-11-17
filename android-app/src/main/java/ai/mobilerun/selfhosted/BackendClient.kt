@@ -961,14 +961,25 @@ class BackendClient(private val context: Context) {
 
         scope.launch {
             try {
+                // open_app uses PackageManager — must work even if a11y unbound
+                // (Samsung One UI / emulator overload can drop the service briefly).
                 val a11yService = MobilerunAccessibilityService.instance
-                    ?: throw Exception("Accessibility service not connected")
+                val needsA11y = command !in setOf(
+                    "open_app",
+                    "start_app",
+                    "get_device_info",
+                    "get_ui_tree",
+                    "screenshot",
+                )
+                if (needsA11y && a11yService == null) {
+                    throw Exception("Accessibility service not connected")
+                }
 
                 val result = when (command) {
                     "tap" -> {
                         val x = (params?.get("x") as? Number)?.toInt() ?: 0
                         val y = (params?.get("y") as? Number)?.toInt() ?: 0
-                        a11yService.tapAsync(x, y)
+                        a11yService!!.tapAsync(x, y)
                         sendAgentEvent(null, null, "tap", "tap($x,$y)")
                         "OK"
                     }
@@ -978,16 +989,16 @@ class BackendClient(private val context: Context) {
                         val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
                         val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
                         val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
-                        a11yService.swipeAsync(x1, y1, x2, y2, duration)
+                        a11yService!!.swipeAsync(x1, y1, x2, y2, duration)
                         sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
                         "OK"
                     }
                     "press_button" -> {
                         val button = params?.get("button") as? String
                         when (button) {
-                            "back" -> a11yService.pressBack()
-                            "home" -> a11yService.pressHome()
-                            "recents" -> a11yService.pressRecents()
+                            "back" -> a11yService!!.pressBack()
+                            "home" -> a11yService!!.pressHome()
+                            "recents" -> a11yService!!.pressRecents()
                             else -> false
                         }
                         "OK"
@@ -995,7 +1006,7 @@ class BackendClient(private val context: Context) {
                     "input_text", "type_text" -> {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
-                        val ok = a11yService.inputText(text, clear)
+                        val ok = a11yService!!.inputText(text, clear)
                         sendAgentEvent(null, null, "type", "type(${text.take(40)})")
                         if (!ok) throw Exception("input_text failed — focus a text field")
                         "OK"
@@ -1008,34 +1019,45 @@ class BackendClient(private val context: Context) {
                         val launched = openAppByNameOrPackage(app, pkg)
                         sendAgentEvent(null, null, "open_app", "open_app($app)")
                         if (launched == null) throw Exception("Could not open app: $app")
-                        // Brief settle so a11y tree reflects the new activity
                         Thread.sleep(900)
-                        val activePkg = a11yService.activePackageName().orEmpty()
+                        val activePkg = a11yService?.activePackageName().orEmpty()
                         mapOf(
                             "ok" to true,
                             "requested" to app,
                             "package" to launched,
                             "active_package" to activePkg,
                             "launched" to true,
+                            "a11y" to (a11yService != null),
                         )
                     }
                     "get_ui_tree" -> {
-                        val tree = a11yService.getUITree()
-                        val pkg = a11yService.activePackageName().orEmpty()
-                        mapOf(
-                            "tree" to tree,
-                            "package" to pkg,
-                            "empty" to (tree.contains("empty=\"true\"") || tree.length < 40),
-                            "chars" to tree.length,
-                        )
+                        if (a11yService == null) {
+                            mapOf(
+                                "tree" to """<hierarchy windows="0" nodes="0" empty="true" reason="a11y_unbound"/>""",
+                                "package" to "",
+                                "empty" to true,
+                                "chars" to 0,
+                                "a11y" to false,
+                            )
+                        } else {
+                            val tree = a11yService.getUITree()
+                            val pkg = a11yService.activePackageName().orEmpty()
+                            mapOf(
+                                "tree" to tree,
+                                "package" to pkg,
+                                "empty" to (tree.contains("empty=\"true\"") || tree.length < 40),
+                                "chars" to tree.length,
+                                "a11y" to true,
+                            )
+                        }
                     }
                     "screenshot" -> {
-                        val b64 = a11yService.takeScreenshotJpegBase64(
+                        val b64 = a11yService?.takeScreenshotJpegBase64(
                             maxWidth = 720,
                             quality = 42,
                         )
                         if (b64.isNullOrBlank()) {
-                            mapOf("ok" to false, "error" to "screenshot unavailable")
+                            mapOf("ok" to false, "error" to "screenshot unavailable", "a11y" to (a11yService != null))
                         } else {
                             mapOf(
                                 "ok" to true,
@@ -1052,7 +1074,8 @@ class BackendClient(private val context: Context) {
                             "stream" to _streamFlow.value,
                             "route" to activeRoute,
                             "latency_ms" to lastLatencyMs,
-                            "active_package" to a11yService.activePackageName(),
+                            "active_package" to a11yService?.activePackageName(),
+                            "a11y" to (a11yService != null),
                         )
                     }
                     else -> throw Exception("Unknown command: $command")

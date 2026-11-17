@@ -9,7 +9,7 @@ from backend.cloud_agent import (
 
 
 def test_normalize_tree_string():
-    fat = "<hierarchy nodes=\"3\">" + ("x" * 100) + "</hierarchy>"
+    fat = '<hierarchy nodes="3">' + ("x" * 100) + "</hierarchy>"
     info = _normalize_tree_payload(fat)
     assert info["empty"] is False
     assert info["chars"] > 80
@@ -22,7 +22,7 @@ def test_normalize_tree_empty_flag():
 
 
 def test_normalize_tree_dict_payload():
-    tree = "<hierarchy>" + ("<node text=\"Hi\"/>" * 20) + "</hierarchy>"
+    tree = "<hierarchy>" + ('<node text="Hi"/>' * 20) + "</hierarchy>"
     info = _normalize_tree_payload(
         {
             "tree": tree,

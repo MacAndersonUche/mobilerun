@@ -907,6 +907,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["state"] = state
         msg = str(e)
         low = msg.lower()
+        a11y_fail = "accessibility service not connected" in low
         hard = any(
             t in low
             for t in (
@@ -918,6 +919,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 "failed to push",
                 "swipe loop",
             )
+        ) or (
+            a11y_fail
+            and sum(
+                1
+                for h in history
+                if "accessibility service not connected" in str(h).lower()
+            )
+            >= 2
         )
         rate_limited = any(t in low for t in ("429", "503", "quota", "high demand"))
         if hard or step + 1 >= max_steps:
