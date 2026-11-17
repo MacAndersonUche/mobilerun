@@ -88,6 +88,7 @@ class BackendClient(private val context: Context) {
 
     private var activeRoute: String = "none"
     private var lastLatencyMs: Double? = null
+    @Volatile private var lastHeartbeatAckAtMs: Long = 0L
     private val reconnectAttempt = AtomicInteger(0)
     private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -728,22 +729,39 @@ class BackendClient(private val context: Context) {
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
+        lastHeartbeatAckAtMs = System.currentTimeMillis()
         heartbeatJob = scope.launch {
             while (isActive && webSocket != null) {
                 val t0 = System.nanoTime()
+                val now = System.currentTimeMillis()
+                // Force reconnect if server stopped acking (half-open socket)
+                if (lastHeartbeatAckAtMs > 0 && now - lastHeartbeatAckAtMs > 45_000) {
+                    Log.w(tag, "heartbeat ack stale ${now - lastHeartbeatAckAtMs}ms — reconnect")
+                    _statusFlow.value = "Connection stale — reconnecting…"
+                    try {
+                        webSocket?.cancel()
+                    } catch (_: Exception) {
+                    }
+                    webSocket = null
+                    scheduleReconnect()
+                    break
+                }
                 val hb = mutableMapOf<String, Any?>(
                     "type" to "heartbeat",
                     "device_id" to deviceId,
-                    "client_ts" to System.currentTimeMillis(),
+                    "client_ts" to now,
                     "route" to activeRoute,
                     "latency_ms" to lastLatencyMs,
                 )
                 sessionToken?.let { hb["session_token"] = it }
                 authToken?.let { hb["auth_token"] = it }
                 val sent = webSocket?.send(gson.toJson(hb)) == true
-                if (!sent) break
-                delay(15_000)
-                // Rough RTT estimate from last ack handled in handleMessage
+                if (!sent) {
+                    _statusFlow.value = "Disconnected — reconnecting…"
+                    scheduleReconnect()
+                    break
+                }
+                delay(12_000)
                 if (lastLatencyMs != null) {
                     webSocket?.send(
                         gson.toJson(
@@ -756,7 +774,6 @@ class BackendClient(private val context: Context) {
                         ),
                     )
                 }
-                // Keep t0 referenced for future precise RTT if server echoes
                 Log.v(tag, "heartbeat tick ${(System.nanoTime() - t0) / 1e6}")
             }
         }
@@ -767,10 +784,11 @@ class BackendClient(private val context: Context) {
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             val attempt = reconnectAttempt.getAndIncrement()
-            val base = min(60.0, 1.0 * Math.pow(2.0, attempt.toDouble()))
-            val jitter = base * 0.2
-            val delaySec = (base + Random.nextDouble(-jitter, jitter)).coerceAtLeast(0.5)
-            _statusFlow.value = "Reconnecting in ${delaySec.toInt()}s…"
+            // Fast first reconnects — phone drops mid-task need <5s recovery
+            val base = min(15.0, 0.5 * Math.pow(2.0, attempt.toDouble()))
+            val jitter = base * 0.25
+            val delaySec = (base + Random.nextDouble(-jitter, jitter)).coerceAtLeast(0.3)
+            _statusFlow.value = "Reconnecting in ${"%.1f".format(delaySec)}s…"
             delay((delaySec * 1000).toLong())
             connectBest(force = true)
         }
@@ -806,8 +824,11 @@ class BackendClient(private val context: Context) {
                     }
                 }
                 "heartbeat_ack" -> {
-                    // Refresh displayed latency lightly
+                    lastHeartbeatAckAtMs = System.currentTimeMillis()
                     lastLatencyMs = lastLatencyMs ?: 20.0
+                    if (_statusFlow.value != "Connected") {
+                        _statusFlow.value = "Connected"
+                    }
                     updateRouteUi()
                 }
                 "command" -> handleCommand(message)
@@ -1040,7 +1061,13 @@ class BackendClient(private val context: Context) {
                                 "a11y" to false,
                             )
                         } else {
-                            val tree = a11yService.getUITree()
+                            // Cap for API Gateway WS (~128KB); dump already soft-caps
+                            val treeRaw = a11yService.getUITree()
+                            val tree = if (treeRaw.length > 70_000) {
+                                treeRaw.take(70_000) + "\n<!-- ws_truncated -->\n</hierarchy>"
+                            } else {
+                                treeRaw
+                            }
                             val pkg = a11yService.activePackageName().orEmpty()
                             mapOf(
                                 "tree" to tree,
@@ -1048,6 +1075,7 @@ class BackendClient(private val context: Context) {
                                 "empty" to (tree.contains("empty=\"true\"") || tree.length < 40),
                                 "chars" to tree.length,
                                 "a11y" to true,
+                                "truncated" to (treeRaw.length > 70_000 || tree.contains("truncated=\"true\"")),
                             )
                         }
                     }
@@ -1093,8 +1121,52 @@ class BackendClient(private val context: Context) {
             "type" to "response",
             "request_id" to requestId,
         )
-        if (error != null) response["error"] = error else response["result"] = result
-        webSocket?.send(gson.toJson(response))
+        if (error != null) {
+            response["error"] = error
+        } else {
+            // Shrink oversized tree payloads so send() is not silently dropped
+            val safe: Any? = when (result) {
+                is Map<*, *> -> {
+                    val tree = result["tree"]
+                    if (tree is String && tree.length > 80_000) {
+                        @Suppress("UNCHECKED_CAST")
+                        val m = (result as Map<String, Any?>).toMutableMap()
+                        m["tree"] = tree.take(60_000) + "\n<!-- force_truncated -->\n"
+                        m["truncated"] = true
+                        m["chars"] = (m["tree"] as String).length
+                        m
+                    } else {
+                        result
+                    }
+                }
+                else -> result
+            }
+            response["result"] = safe
+        }
+        val json = gson.toJson(response)
+        if (json.length > 110_000) {
+            Log.w(tag, "response $requestId too large (${json.length}); sending error stub")
+            val stub = gson.toJson(
+                mapOf(
+                    "type" to "response",
+                    "request_id" to requestId,
+                    "result" to mapOf(
+                        "tree" to """<hierarchy empty="true" reason="payload_too_large" chars="${json.length}"/>""",
+                        "empty" to true,
+                        "chars" to 0,
+                        "package" to ((result as? Map<*, *>)?.get("package") ?: ""),
+                        "a11y" to true,
+                    ),
+                ),
+            )
+            val ok = webSocket?.send(stub) == true
+            if (!ok) Log.e(tag, "failed to send truncated response $requestId")
+            return
+        }
+        val ok = webSocket?.send(json) == true
+        if (!ok) {
+            Log.e(tag, "webSocket.send failed for response $requestId (len=${json.length})")
+        }
     }
 
     private fun sendTaskUpdate(taskId: String, status: String, result: String) {

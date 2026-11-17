@@ -385,16 +385,75 @@ def list_owned_devices(owner: str) -> List[Dict[str, Any]]:
     return list((blob.get("devices") or {}).values())
 
 
-def device_is_ws_connected(device_id: str) -> bool:
-    """True if Dynamo connections table has a non-UI socket for this device."""
+def device_is_ws_connected(
+    device_id: str, *, max_age_s: int = 90
+) -> bool:
+    """True if Dynamo has a fresh authed non-UI socket for this device.
+
+    Ignores pending_* placeholders and sockets whose connected_at is older
+    than ``max_age_s`` (heartbeat should refresh within ~15s).
+    """
     try:
         conns = get_device_connections(device_id)
     except Exception:
         return False
+    now = int(time.time())
     for c in conns:
-        if c.get("role") != "ui":
+        if c.get("role") == "ui":
+            continue
+        did = str(c.get("device_id") or "")
+        if did.startswith("pending_"):
+            continue
+        # Prefer authed phone sockets; allow unauthed only if very fresh
+        authed = bool(c.get("authed"))
+        connected_at = int(c.get("connected_at") or 0)
+        age = now - connected_at if connected_at else 10_000
+        if age > max_age_s:
+            continue
+        if authed or age <= 30:
             return True
     return False
+
+
+def cleanup_stale_connections(
+    *, pending_max_age_s: int = 120, stale_max_age_s: int = 300
+) -> int:
+    """Delete pending_* and aged-out connection rows. Best-effort."""
+    table = _table("CONNECTIONS_TABLE")
+    if table is None:
+        return 0
+    removed = 0
+    now = int(time.time())
+    try:
+        # Scan is OK for small connection tables; TTL also cleans eventually
+        resp = table.scan(Limit=200)
+        items = list(resp.get("Items") or [])
+        while resp.get("LastEvaluatedKey") and len(items) < 500:
+            resp = table.scan(
+                Limit=200, ExclusiveStartKey=resp["LastEvaluatedKey"]
+            )
+            items.extend(resp.get("Items") or [])
+    except Exception:
+        return 0
+    for c in items:
+        cid = str(c.get("connection_id") or "")
+        did = str(c.get("device_id") or "")
+        connected_at = int(c.get("connected_at") or 0)
+        age = now - connected_at if connected_at else 10_000
+        drop = False
+        if did.startswith("pending_") and age > pending_max_age_s:
+            drop = True
+        elif c.get("role") != "ui" and age > stale_max_age_s and not c.get("authed"):
+            drop = True
+        elif age > max(stale_max_age_s * 2, 600):
+            drop = True
+        if drop and cid:
+            try:
+                delete_connection(cid)
+                removed += 1
+            except Exception:
+                pass
+    return removed
 
 
 # --- Device-code linking (survive Lambda cold starts) ---

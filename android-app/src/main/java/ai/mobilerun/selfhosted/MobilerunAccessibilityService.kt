@@ -26,8 +26,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "MobilerunA11y"
-        private const val MAX_NODES = 400
-        private const val MAX_DEPTH = 28
+        // Keep dumps small enough for API Gateway WS (~128KB) after JSON wrap
+        private const val MAX_NODES = 220
+        private const val MAX_DEPTH = 22
+        private const val MAX_TREE_CHARS = 55_000
+        private const val DUMP_TIMEOUT_MS = 8_000L
 
         @Volatile
         var instance: MobilerunAccessibilityService? = null
@@ -116,9 +119,39 @@ class MobilerunAccessibilityService : AccessibilityService() {
     /**
      * Dump UI across interactive windows (Samsung One UI often leaves
      * [rootInActiveWindow] empty/stale for the launcher or overlays).
-     * Includes non-clickable nodes that carry text/content-desc/resource-id.
+     * Runs on the main thread with a hard timeout — OEM a11y walks off the
+     * main thread hang for 15s+ and trip cloud RPC timeouts.
      */
     fun getUITree(): String {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return dumpUITreeOnMain()
+        }
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<String?>(null)
+        val err = AtomicReference<Exception?>(null)
+        mainHandler.post {
+            try {
+                result.set(dumpUITreeOnMain())
+            } catch (e: Exception) {
+                err.set(e)
+            } finally {
+                latch.countDown()
+            }
+        }
+        val ok = latch.await(DUMP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (!ok) {
+            Log.w(TAG, "getUITree main-thread dump timed out after ${DUMP_TIMEOUT_MS}ms")
+            return """<hierarchy windows="0" nodes="0" empty="true" reason="dump_timeout"/>"""
+        }
+        err.get()?.let {
+            Log.w(TAG, "getUITree failed: ${it.message}")
+            return """<hierarchy windows="0" nodes="0" empty="true" reason="dump_error"/>"""
+        }
+        return result.get()
+            ?: """<hierarchy windows="0" nodes="0" empty="true" reason="dump_null"/>"""
+    }
+
+    private fun dumpUITreeOnMain(): String {
         val sb = StringBuilder()
         val counter = intArrayOf(0)
         val pkgs = linkedSetOf<String>()
@@ -163,7 +196,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     root.recycle()
                 } catch (_: Exception) {
                 }
-                if (counter[0] >= MAX_NODES) break
+                if (counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
             }
         }
 
@@ -192,10 +225,17 @@ class MobilerunAccessibilityService : AccessibilityService() {
             Log.w(TAG, "getUITree empty windows=$windowCount rootNull=${rootInActiveWindow == null}")
             return "<hierarchy windows=\"0\" nodes=\"0\" empty=\"true\"/>"
         }
+        val truncated = body.length >= MAX_TREE_CHARS || counter[0] >= MAX_NODES
+        val clipped = if (body.length > MAX_TREE_CHARS) {
+            body.take(MAX_TREE_CHARS) + "\n<!-- truncated -->\n"
+        } else {
+            body
+        }
         return buildString {
             append("<hierarchy windows=\"$windowCount\" nodes=\"${counter[0]}\" ")
+            append("truncated=\"$truncated\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
-            append(body)
+            append(clipped)
             append("</hierarchy>")
         }
     }
@@ -208,6 +248,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         depth: Int,
     ) {
         if (node == null || counter[0] >= MAX_NODES || depth > MAX_DEPTH) return
+        if (sb.length >= MAX_TREE_CHARS) return
         counter[0]++
 
         val className = node.className?.toString() ?: "unknown"
@@ -219,6 +260,27 @@ class MobilerunAccessibilityService : AccessibilityService() {
         node.getBoundsInScreen(bounds)
         val cx = (bounds.left + bounds.right) / 2
         val cy = (bounds.top + bounds.bottom) / 2
+        val interactive = node.isClickable || node.isEditable || node.isCheckable ||
+            node.isScrollable || text.isNotEmpty() || contentDesc.isNotEmpty() ||
+            viewId.isNotEmpty()
+        // Skip inert layout wrappers once we are near the budget
+        if (!interactive && depth > 4 && counter[0] > MAX_NODES / 2) {
+            val childCountSkip = node.childCount
+            for (i in 0 until childCountSkip) {
+                if (counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
+                val child = try {
+                    node.getChild(i)
+                } catch (_: Exception) {
+                    null
+                }
+                buildUITreeXml(child, indent, sb, counter, depth + 1)
+                try {
+                    child?.recycle()
+                } catch (_: Exception) {
+                }
+            }
+            return
+        }
 
         sb.append(indent).append("<node ")
         sb.append("class=\"${xmlEsc(className)}\" ")
@@ -229,12 +291,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
         sb.append("bounds=\"[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]\" ")
         sb.append("center=\"($cx,$cy)\" ")
         sb.append("clickable=\"${node.isClickable}\" ")
-        sb.append("long-clickable=\"${node.isLongClickable}\" ")
-        sb.append("scrollable=\"${node.isScrollable}\" ")
-        sb.append("focusable=\"${node.isFocusable}\" ")
-        sb.append("enabled=\"${node.isEnabled}\" ")
-        sb.append("checkable=\"${node.isCheckable}\" ")
-        sb.append("checked=\"${node.isChecked}\"")
+        if (node.isLongClickable) sb.append("long-clickable=\"true\" ")
+        if (node.isScrollable) sb.append("scrollable=\"true\" ")
+        if (node.isFocusable) sb.append("focusable=\"true\" ")
+        sb.append("enabled=\"${node.isEnabled}\"")
+        if (node.isCheckable) {
+            sb.append(" checkable=\"true\" checked=\"${node.isChecked}\"")
+        }
 
         val childCount = node.childCount
         if (childCount == 0) {
@@ -242,7 +305,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } else {
             sb.append(">\n")
             for (i in 0 until childCount) {
-                if (counter[0] >= MAX_NODES) break
+                if (counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
                 val child = try {
                     node.getChild(i)
                 } catch (_: Exception) {
