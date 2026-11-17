@@ -165,11 +165,13 @@ class TaskStep(BaseModel):
     reason: Optional[str] = None
     ok: Optional[bool] = True
     package: Optional[str] = None
+    screen: Optional[str] = None
     tree_chars: Optional[int] = None
     screenshot_key: Optional[str] = None
     screenshot_url: Optional[str] = None
     verify: Optional[str] = None
     ts: Optional[int] = None
+    dry_run: Optional[bool] = None
 
 
 class TaskStatus(BaseModel):
@@ -1527,11 +1529,13 @@ def _task_steps_from_state(st: Dict[str, Any]) -> List[TaskStep]:
                 reason=s.get("reason"),
                 ok=s.get("ok", True),
                 package=s.get("package"),
+                screen=s.get("screen") or s.get("package"),
                 tree_chars=s.get("tree_chars"),
                 screenshot_key=key,
                 screenshot_url=url,
                 verify=s.get("verify"),
                 ts=s.get("ts"),
+                dry_run=s.get("dry_run"),
             )
         )
     # Fallback: derive from flat history strings
@@ -1561,8 +1565,8 @@ async def list_tasks(
         # Skip dating loop jobs from Normal history unless mode matches
         kind = str(job.get("kind") or "agent")
         if kind not in ("agent", "task"):
-            # Still include dating as history entries with mode label
-            if kind != "dating":
+            # Include dating/social loop jobs in History with mode label
+            if kind not in ("dating", "social"):
                 continue
         st = job.get("state") or {}
         started = job.get("created_at") or job.get("started_at")
@@ -1732,6 +1736,7 @@ social_mode_state = {
     "current_app": None,
     "speed_preset": "balanced",
     "unread": {"total_unread": 0, "by_app": {}},
+    "job_id": None,
 }
 
 # Global agent mode selection (UI / CLI / chat)
@@ -1816,6 +1821,27 @@ def get_needs_you_queue(auth: Optional[dict] = None):
     return _needs_you_queue
 
 
+def _active_mode_job(kind: str, job_id: Optional[str]) -> bool:
+    """True only if Dynamo still has a running/paused job for this id."""
+    if not job_id:
+        return False
+    try:
+        from storage import get_job
+    except ImportError:
+        from backend.storage import get_job  # type: ignore
+    try:
+        job = get_job(job_id)
+    except Exception:
+        return False
+    if not job:
+        return False
+    if kind and str(job.get("kind") or "") not in ("", kind):
+        # Allow missing kind for older rows
+        if str(job.get("kind") or "") != kind:
+            pass
+    return str(job.get("status") or "") in ("running", "paused")
+
+
 def _load_dating_runtime(auth: Optional[dict] = None) -> None:
     """Hydrate dating_mode_state prefs/review_queue from Dynamo when present."""
     try:
@@ -1844,6 +1870,15 @@ def _load_dating_runtime(auth: Optional[dict] = None) -> None:
         dating_mode_state["paused"] = bool(prefs["paused"])
     if prefs.get("job_id"):
         dating_mode_state["job_id"] = prefs["job_id"]
+    # Reconcile stale "running" after job completed/stopped (or Lambda cold start)
+    jid = dating_mode_state.get("job_id")
+    if dating_mode_state.get("running") and not _active_mode_job("dating", jid):
+        dating_mode_state["running"] = False
+        dating_mode_state["paused"] = False
+        try:
+            _save_dating_runtime(auth)
+        except Exception:
+            pass
 
 
 def _save_dating_runtime(auth: Optional[dict] = None) -> None:
@@ -1865,6 +1900,60 @@ def _save_dating_runtime(auth: Optional[dict] = None) -> None:
             "paused": bool(dating_mode_state.get("paused")),
             "job_id": dating_mode_state.get("job_id"),
             "current_app": dating_mode_state.get("current_app"),
+        },
+    )
+
+
+def _load_social_runtime(auth: Optional[dict] = None) -> None:
+    """Hydrate social_mode_state from Dynamo so Stop works across Lambda instances."""
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        user_id = _dating_user_id(auth)
+        prefs = get_user_setting(user_id, "social_runtime") or {}
+    except Exception:
+        prefs = {}
+    if not isinstance(prefs, dict):
+        prefs = {}
+    if prefs.get("job_id"):
+        social_mode_state["job_id"] = prefs["job_id"]
+    if "running" in prefs:
+        social_mode_state["running"] = bool(prefs["running"])
+    if "paused" in prefs:
+        social_mode_state["paused"] = bool(prefs["paused"])
+    if prefs.get("speed_preset"):
+        social_mode_state["speed_preset"] = prefs["speed_preset"]
+    jid = social_mode_state.get("job_id")
+    if social_mode_state.get("running") and not _active_mode_job("social", jid):
+        social_mode_state["running"] = False
+        social_mode_state["paused"] = False
+        try:
+            _save_social_runtime(auth)
+        except Exception:
+            pass
+    elif (not social_mode_state.get("running")) and _active_mode_job("social", jid):
+        # Recover running flag when another Lambda started the job
+        social_mode_state["running"] = True
+
+
+def _save_social_runtime(auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    save_user_setting(
+        user_id,
+        "social_runtime",
+        {
+            "running": bool(social_mode_state.get("running")),
+            "paused": bool(social_mode_state.get("paused")),
+            "job_id": social_mode_state.get("job_id"),
+            "speed_preset": social_mode_state.get("speed_preset", "balanced"),
+            "current_app": social_mode_state.get("current_app"),
         },
     )
 
@@ -3076,68 +3165,140 @@ async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)
     return stats.get_summary()
 
 
+class ModeStartBody(BaseModel):
+    device_id: Optional[str] = None
+    dry_run: bool = True
+    stand_in_package: Optional[str] = None
+    max_steps: Optional[int] = None
+
+
+def _kick_job(job_id: str) -> None:
+    step_arn = os.environ.get("STEP_WORKER_ARN")
+    if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
+        import boto3
+
+        boto3.client("lambda").invoke(
+            FunctionName=step_arn,
+            InvocationType="Event",
+            Payload=json.dumps({"job_id": job_id}).encode(),
+        )
+
+
+def _activity_for_mode(kind: str, job_id: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        from activity_log import activity_payload_from_job
+    except ImportError:
+        from backend.activity_log import activity_payload_from_job  # type: ignore
+    try:
+        from storage import get_job, list_recent_jobs
+    except ImportError:
+        from backend.storage import get_job, list_recent_jobs  # type: ignore
+
+    job = None
+    if job_id:
+        try:
+            job = get_job(job_id)
+        except Exception:
+            job = None
+    if not job:
+        try:
+            for j in list_recent_jobs(limit=40):
+                if str(j.get("kind") or "") == kind:
+                    job = j
+                    break
+        except Exception:
+            job = None
+    return activity_payload_from_job(job)
+
+
 @app.post("/api/dating/start")
 async def start_dating_mode(
+    body: Optional[ModeStartBody] = None,
     auth: Optional[dict] = Depends(optional_verify_token),
     device_id: str = "default",
-    dry_run: bool = False,
+    dry_run: bool = True,
+    stand_in_package: Optional[str] = None,
 ):
     """
     Start dating mode as a step-driven cloud job (EventBridge ticks).
     Safe for Lambda — does not hold a long loop in one invocation.
+    Defaults to dry_run=True so no real likes/messages are sent.
     """
-    if dating_mode_state["running"]:
+    _load_dating_runtime(auth)
+    existing = dating_mode_state.get("job_id")
+    if dating_mode_state.get("running") and _active_mode_job("dating", existing):
         raise HTTPException(status_code=400, detail="Dating mode already running")
+    # Stale in-memory flag after Lambda reuse / stopped job — allow restart
+    dating_mode_state["running"] = False
+    dating_mode_state.pop("job_id", None)
+
+    if body:
+        device_id = body.device_id or device_id
+        dry_run = body.dry_run if body.dry_run is not None else dry_run
+        stand_in_package = body.stand_in_package or stand_in_package
 
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
 
     job_id = f"dating_{secrets.token_hex(8)}"
     dating_mode_state["job_id"] = job_id
+    # Cap dry-run jobs so emulator E2E finishes quickly
+    caps = {
+        "opener_target": 3 if dry_run else secrets.randbelow(51) + 50,
+        "global_message_max": 6 if dry_run else secrets.randbelow(401) + 100,
+        "swipe_cap": 2 if dry_run else 50,
+        "reply_cap": 2 if dry_run else 50,
+    }
+    stand_in = stand_in_package or "ai.mobilerun.mockdating"
     job = {
         "job_id": job_id,
         "kind": "dating",
         "status": "running",
         "device_id": device_id,
         "dry_run": dry_run,
+        "stand_in_package": stand_in,
         "created_at": int(datetime.now().timestamp()),
         "next_run_at": int(datetime.now().timestamp()),
         "speed_preset": dating_mode_state.get("speed_preset")
         or agent_mode_state.get("speed_preset", "balanced"),
-        "caps": {
-            "opener_target": secrets.randbelow(51) + 50,  # 50-100
-            "global_message_max": secrets.randbelow(401) + 100,  # 100-500
-            "swipe_cap": 50,
-            "reply_cap": 50,
-        },
+        "caps": caps,
         "state": {
             "openers_sent": 0,
             "replies_sent": 0,
             "swipes_done": 0,
             "steps": 0,
+            "steps_detail": [],
+            "stand_in_package": stand_in,
+            "current_app": stand_in,
         },
         "ttl": int(datetime.now().timestamp()) + 7 * 86400,
     }
     agent_mode_state["mode"] = "dating"
     try:
-        from storage import put_job
-
+        from storage import get_job, put_job
+    except ImportError:
+        from backend.storage import get_job, put_job  # type: ignore
+    try:
         put_job(job)
-        # Kick first step immediately if step worker ARN available
-        step_arn = os.environ.get("STEP_WORKER_ARN")
-        if step_arn and os.environ.get("USE_AWS_STORAGE") == "true":
-            import boto3
-
-            boto3.client("lambda").invoke(
-                FunctionName=step_arn,
-                InvocationType="Event",
-                Payload=json.dumps({"job_id": job_id}).encode(),
-            )
+        persisted = get_job(job_id)
+        if not persisted and os.environ.get("USE_AWS_STORAGE", "").lower() == "true":
+            raise RuntimeError(f"dating job {job_id} not readable after put_job")
+        _kick_job(job_id)
     except Exception as e:
-        logger.warning("Could not persist dating job (local mode ok): %s", e)
+        dating_mode_state["running"] = False
+        dating_mode_state.pop("job_id", None)
+        logger.exception("Could not persist dating job: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"Could not persist dating job: {e}"
+        ) from e
 
     _save_dating_runtime(auth)
-    return {"status": "started", "state": dating_mode_state, "job": job}
+    return {
+        "status": "started",
+        "state": dating_mode_state,
+        "job": job,
+        "activity": _activity_for_mode("dating", job_id),
+    }
 
 
 @app.post("/api/dating/stop")
@@ -3179,9 +3340,52 @@ async def pause_dating_mode(auth: Optional[dict] = Depends(optional_verify_token
 
 @app.get("/api/dating/status")
 async def get_dating_status(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Get dating mode status."""
+    """Get dating mode status + live activity steps."""
     _load_dating_runtime(auth)
-    return dating_mode_state
+    activity = _activity_for_mode("dating", dating_mode_state.get("job_id"))
+    return {
+        **dating_mode_state,
+        "activity": activity,
+        "job_id": dating_mode_state.get("job_id") or activity.get("job_id"),
+    }
+
+
+@app.get("/api/dating/activity")
+async def get_dating_activity(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Live step list for the current/recent dating job."""
+    _load_dating_runtime(auth)
+    return _activity_for_mode("dating", dating_mode_state.get("job_id"))
+
+
+@app.post("/api/jobs/{job_id}/tick")
+async def tick_job(job_id: str, auth: Optional[dict] = Depends(optional_verify_token)):
+    """Advance one dating/social/agent step (used by live-activity E2E + dry-run)."""
+    try:
+        from storage import get_job, put_job
+    except ImportError:
+        from backend.storage import get_job, put_job  # type: ignore
+    try:
+        from step_worker import process_job
+    except ImportError:
+        from backend.step_worker import process_job  # type: ignore
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    if str(job.get("status") or "") not in ("running", "paused"):
+        return {"status": job.get("status"), "job_id": job_id, "skipped": True}
+    # Force due now
+    job["next_run_at"] = int(time.time()) - 1
+    job["status"] = "running"
+    put_job(job)
+    process_job(job)
+    updated = get_job(job_id) or job
+    kind = str(updated.get("kind") or "agent")
+    return {
+        "status": updated.get("status"),
+        "job_id": job_id,
+        "activity": _activity_for_mode(kind, job_id),
+    }
 
 
 @app.get("/api/dating/review-queue")
@@ -3352,30 +3556,135 @@ async def update_social_config(
 
 @app.get("/api/social/status")
 async def get_social_status(auth: Optional[dict] = Depends(optional_verify_token)):
+    _load_social_runtime(auth)
+    activity = _activity_for_mode("social", social_mode_state.get("job_id"))
     return {
         **social_mode_state,
         "needs_you_badge": get_needs_you_queue().pending_count(),
+        "activity": activity,
+        "job_id": social_mode_state.get("job_id") or activity.get("job_id"),
     }
 
 
+@app.get("/api/social/activity")
+async def get_social_activity(auth: Optional[dict] = Depends(optional_verify_token)):
+    return _activity_for_mode("social", social_mode_state.get("job_id"))
+
+
 @app.post("/api/social/start")
-async def start_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+async def start_social_mode(
+    body: Optional[ModeStartBody] = None,
+    auth: Optional[dict] = Depends(optional_verify_token),
+    device_id: str = "default",
+    dry_run: bool = True,
+    stand_in_package: Optional[str] = None,
+):
+    """Start social mode as a step-driven job (defaults to dry_run)."""
+    _load_social_runtime(auth)
+    existing = social_mode_state.get("job_id")
+    if social_mode_state.get("running") and _active_mode_job("social", existing):
+        raise HTTPException(status_code=400, detail="Social mode already running")
+    social_mode_state["running"] = False
+    social_mode_state.pop("job_id", None)
+    if body:
+        device_id = body.device_id or device_id
+        dry_run = body.dry_run if body.dry_run is not None else dry_run
+        stand_in_package = body.stand_in_package or stand_in_package
+
     social_mode_state["running"] = True
     social_mode_state["paused"] = False
     agent_mode_state["mode"] = "social"
-    return {"status": "started", "state": social_mode_state}
+
+    job_id = f"social_{secrets.token_hex(8)}"
+    social_mode_state["job_id"] = job_id
+    stand_in = stand_in_package or "com.google.android.apps.messaging"
+    max_steps = int(
+        (body.max_steps if body and body.max_steps else None) or (6 if dry_run else 40)
+    )
+    job = {
+        "job_id": job_id,
+        "kind": "social",
+        "status": "running",
+        "device_id": device_id,
+        "dry_run": dry_run,
+        "stand_in_package": stand_in,
+        "max_steps": max_steps,
+        "created_at": int(datetime.now().timestamp()),
+        "next_run_at": int(datetime.now().timestamp()),
+        "speed_preset": social_mode_state.get("speed_preset")
+        or agent_mode_state.get("speed_preset", "balanced"),
+        "state": {
+            "steps": 0,
+            "steps_detail": [],
+            "stand_in_package": stand_in,
+            "current_app": stand_in,
+            "drafts_prepared": 0,
+        },
+        "ttl": int(datetime.now().timestamp()) + 7 * 86400,
+    }
+    try:
+        from storage import get_job, put_job
+    except ImportError:
+        from backend.storage import get_job, put_job  # type: ignore
+    try:
+        put_job(job)
+        persisted = get_job(job_id)
+        if not persisted and os.environ.get("USE_AWS_STORAGE", "").lower() == "true":
+            raise RuntimeError(f"social job {job_id} not readable after put_job")
+        _kick_job(job_id)
+    except Exception as e:
+        social_mode_state["running"] = False
+        social_mode_state.pop("job_id", None)
+        logger.exception("Could not persist social job: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"Could not persist social job: {e}"
+        ) from e
+
+    _save_social_runtime(auth)
+    return {
+        "status": "started",
+        "state": social_mode_state,
+        "job": job,
+        "activity": _activity_for_mode("social", job_id),
+    }
 
 
 @app.post("/api/social/stop")
 async def stop_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+    _load_social_runtime(auth)
     social_mode_state["running"] = False
     social_mode_state["paused"] = False
+    job_id = social_mode_state.pop("job_id", None)
+    if job_id:
+        try:
+            from storage import get_job, put_job
+
+            job = get_job(job_id)
+            if job:
+                job["status"] = "stopped"
+                put_job(job)
+        except Exception as e:
+            logger.warning("Could not stop social job: %s", e)
+    _save_social_runtime(auth)
     return {"status": "stopped", "state": social_mode_state}
 
 
 @app.post("/api/social/pause")
 async def pause_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     social_mode_state["paused"] = not social_mode_state.get("paused", False)
+    job_id = social_mode_state.get("job_id")
+    if job_id:
+        try:
+            from storage import get_job, put_job
+
+            job = get_job(job_id)
+            if job:
+                job["status"] = "paused" if social_mode_state["paused"] else "running"
+                put_job(job)
+                if not social_mode_state["paused"]:
+                    _kick_job(job_id)
+        except Exception as e:
+            logger.warning("Could not pause social job: %s", e)
     return {
         "status": "paused" if social_mode_state["paused"] else "resumed",
         "state": social_mode_state,

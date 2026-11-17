@@ -8,6 +8,8 @@ export type AgentStep = {
   subtext?: string;
   duration?: string;
   done?: boolean;
+  /** Optional explicit status for live/expanding chat steps */
+  status?: 'done' | 'running' | 'failed';
 };
 
 export type AgentPayload = {
@@ -100,29 +102,52 @@ export default function AgentMessageCard({
           </div>
         )}
 
-        {payload.steps?.map((s, i) => (
-          <div
-            key={i}
-            className="flex items-start gap-2 rounded-xl border border-line bg-canvas-elev px-3 py-2"
-          >
+        {payload.steps?.map((s, i) => {
+          const status =
+            s.status ||
+            (s.done === false ? 'failed' : s.done === true ? 'done' : 'running');
+          return (
             <div
-              className={cn(
-                'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
-                s.done !== false ? 'bg-ok-bg text-ok' : 'bg-surface-elev text-mute'
-              )}
+              key={i}
+              className="flex items-start gap-2 rounded-xl border border-line bg-canvas-elev px-3 py-2"
             >
-              <Check size={12} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-sm font-medium">{s.title}</p>
-                <Badge tone="ok">Done</Badge>
-                {s.duration && <span className="text-xs text-mute">{s.duration}</span>}
+              <div
+                className={cn(
+                  'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
+                  status === 'done'
+                    ? 'bg-ok-bg text-ok'
+                    : status === 'failed'
+                      ? 'bg-red-950 text-red-300'
+                      : 'bg-surface-elev text-mute'
+                )}
+              >
+                <Check size={12} />
               </div>
-              {s.subtext && <p className="mt-0.5 text-xs text-mute">{s.subtext}</p>}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-medium">{s.title}</p>
+                  <Badge
+                    tone={
+                      status === 'done' ? 'ok' : status === 'failed' ? 'warn' : 'mute'
+                    }
+                  >
+                    {status === 'done'
+                      ? 'Done'
+                      : status === 'failed'
+                        ? 'Failed'
+                        : 'Running'}
+                  </Badge>
+                  {s.duration && (
+                    <span className="text-xs text-mute">{s.duration}</span>
+                  )}
+                </div>
+                {s.subtext && (
+                  <p className="mt-0.5 text-xs text-mute">{s.subtext}</p>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         <p className="whitespace-pre-wrap text-sm leading-relaxed">{payload.answer}</p>
       </Card>

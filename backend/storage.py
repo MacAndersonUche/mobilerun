@@ -145,16 +145,22 @@ def get_device_connections(device_id: str) -> List[Dict[str, Any]]:
 def put_job(job: Dict[str, Any]) -> None:
     table = _table("JOBS_TABLE")
     if table is None:
+        # Local / unit-test fallback: keep an in-process map so tick/activity work
+        store = globals().setdefault("_LOCAL_JOBS", {})
+        store[str(job.get("job_id") or "")] = dict(job)
         return
-    table.put_item(Item=job)
+    table.put_item(Item=_dynamo_safe(job))
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     table = _table("JOBS_TABLE")
     if table is None:
-        return None
-    resp = table.get_item(Key={"job_id": job_id})
-    return resp.get("Item")
+        store = globals().get("_LOCAL_JOBS") or {}
+        item = store.get(job_id)
+        return dict(item) if item else None
+    resp = table.get_item(Key={"job_id": job_id}, ConsistentRead=True)
+    item = resp.get("Item")
+    return _from_dynamo(item) if item else None
 
 
 def list_due_jobs(

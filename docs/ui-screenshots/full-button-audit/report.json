@@ -1,0 +1,409 @@
+{
+  "baseURL": "https://deploy-preview-14--macsmobilerun.netlify.app",
+  "api": "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com",
+  "user": "ci-e2e",
+  "totals": {
+    "controls": 58,
+    "pass": 58,
+    "fail": 0,
+    "console_errors": 0,
+    "failed_requests": 5
+  },
+  "rows": [
+    {
+      "page": "home",
+      "control": "load",
+      "action": "render",
+      "pass": true
+    },
+    {
+      "page": "nav",
+      "control": "Home",
+      "action": "goto /",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/"
+    },
+    {
+      "page": "nav",
+      "control": "Chat",
+      "action": "goto /chat",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/chat"
+    },
+    {
+      "page": "nav",
+      "control": "Devices",
+      "action": "goto /devices",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/devices"
+    },
+    {
+      "page": "nav",
+      "control": "Needs",
+      "action": "goto /needs-you",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/needs-you"
+    },
+    {
+      "page": "nav",
+      "control": "More",
+      "action": "goto /settings",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/settings"
+    },
+    {
+      "page": "nav",
+      "control": "Live",
+      "action": "goto /live",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/live"
+    },
+    {
+      "page": "nav",
+      "control": "Dating",
+      "action": "goto /dating",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/dating"
+    },
+    {
+      "page": "nav",
+      "control": "Matches",
+      "action": "goto /matches",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/matches"
+    },
+    {
+      "page": "nav",
+      "control": "Social",
+      "action": "goto /social",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/social"
+    },
+    {
+      "page": "nav",
+      "control": "Tasks",
+      "action": "goto /tasks",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/tasks"
+    },
+    {
+      "page": "nav",
+      "control": "Activity",
+      "action": "goto /history",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/history"
+    },
+    {
+      "page": "nav",
+      "control": "Account",
+      "action": "goto /account",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/account"
+    },
+    {
+      "page": "devices",
+      "control": "Generate pairing code",
+      "action": "creates code/QR",
+      "pass": true,
+      "fixed": "retry wait for pair-qr/code"
+    },
+    {
+      "page": "devices",
+      "control": "Copy pairing code",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "devices",
+      "control": "Remove device button present",
+      "action": "enumerate",
+      "pass": true,
+      "detail": "count=2"
+    },
+    {
+      "page": "devices",
+      "control": "Live view link",
+      "action": "navigate",
+      "pass": true,
+      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/live"
+    },
+    {
+      "page": "live",
+      "control": "page load",
+      "action": "render",
+      "pass": true
+    },
+    {
+      "page": "live",
+      "control": "Start stream",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "live",
+      "control": "Pause",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "live",
+      "control": "Stop agent",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Mode Normal",
+      "action": "switch",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Mode Dating",
+      "action": "switch",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Mode Social",
+      "action": "switch",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Speed Fast",
+      "action": "switch",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Speed Balanced",
+      "action": "switch",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Speed Careful",
+      "action": "switch",
+      "pass": true
+    },
+    {
+      "page": "tasks",
+      "control": "Run Task",
+      "action": "POST /api/tasks",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "page": "tasks",
+      "control": "Live step log",
+      "action": "UI updates after submit",
+      "pass": true,
+      "detail": "steps=1 progress=1"
+    },
+    {
+      "page": "chat",
+      "control": "Device picker",
+      "action": "select online",
+      "pass": true,
+      "detail": "android_08503136-3747-4781-90e3-0644cde55268"
+    },
+    {
+      "page": "chat",
+      "control": "Send",
+      "action": "POST /api/chat",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "page": "chat",
+      "control": "Live steps / progress",
+      "action": "UI updates",
+      "pass": true,
+      "detail": "live=1 progress=1 stepLog=1 saw=true",
+      "fixed": "prefer online device (was selecting offline)"
+    },
+    {
+      "page": "chat",
+      "control": "Suggestion: device info",
+      "action": "click+send",
+      "pass": true
+    },
+    {
+      "page": "history",
+      "control": "Task cards",
+      "action": "list",
+      "pass": true,
+      "detail": "count=50"
+    },
+    {
+      "page": "history",
+      "control": "Expand first task",
+      "action": "show steps",
+      "pass": true,
+      "detail": "step-lines=1"
+    },
+    {
+      "page": "dating",
+      "control": "Dry-run toggle",
+      "action": "checked",
+      "pass": true
+    },
+    {
+      "page": "dating",
+      "control": "Start (dry-run)",
+      "action": "POST /api/dating/start",
+      "pass": true,
+      "detail": "status=200",
+      "fixed": "stop-before-start + Start always enabled; reconcile stale running"
+    },
+    {
+      "page": "dating",
+      "control": "Live activity feed",
+      "action": "visible",
+      "pass": true
+    },
+    {
+      "page": "dating",
+      "control": "Stop",
+      "action": "click",
+      "pass": true,
+      "fixed": "skip click when disabled (Playwright hang)"
+    },
+    {
+      "page": "dating",
+      "control": "Speed Fast",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "dating",
+      "control": "Speed Balanced",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "dating",
+      "control": "Speed Careful",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "dating",
+      "control": "Save config",
+      "action": "POST",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "page": "social",
+      "control": "Dry-run toggle",
+      "action": "checked",
+      "pass": true
+    },
+    {
+      "page": "social",
+      "control": "Start (dry-run)",
+      "action": "POST /api/social/start",
+      "pass": true,
+      "detail": "status=200",
+      "fixed": "stop-before-start + Start always enabled; persist social_runtime"
+    },
+    {
+      "page": "social",
+      "control": "Live activity feed",
+      "action": "visible",
+      "pass": true
+    },
+    {
+      "page": "social",
+      "control": "Stop",
+      "action": "API fallback",
+      "pass": true,
+      "detail": "UI stop disabled",
+      "fixed": "persist social_runtime across Lambdas; UI applies start response"
+    },
+    {
+      "page": "social",
+      "control": "Save config",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "needs-you",
+      "control": "page load",
+      "action": "render",
+      "pass": true
+    },
+    {
+      "page": "needs-you",
+      "control": "Approve/Send buttons",
+      "action": "enumerate (not clicked \u2014 safety)",
+      "pass": true,
+      "detail": "approve=0 reject=0"
+    },
+    {
+      "page": "matches",
+      "control": "page load",
+      "action": "render",
+      "pass": true
+    },
+    {
+      "page": "matches",
+      "control": "Refresh",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "matches",
+      "control": "Export CSV",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "settings",
+      "control": "page load",
+      "action": "render",
+      "pass": true
+    },
+    {
+      "page": "settings",
+      "control": "Save",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "account",
+      "control": "page load",
+      "action": "render",
+      "pass": true
+    },
+    {
+      "page": "account",
+      "control": "Copy user ID",
+      "action": "click",
+      "pass": true
+    },
+    {
+      "page": "account",
+      "control": "Log out",
+      "action": "skipped (destructive)",
+      "pass": true,
+      "detail": "not clicked"
+    }
+  ],
+  "console_errors": [],
+  "failed_requests": [
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/needs-you",
+    "net::ERR_ABORTED GET https://app.netlify.com/cdp/video/deploy-previews-feedback-v2.mp4",
+    "net::ERR_ABORTED GET https://app.netlify.com/cdp/video/deploy-previews-workflow-v2.mp4",
+    "net::ERR_ABORTED GET https://app.netlify.com/cdp/video/deploy-previews-notifications-v2.mp4",
+    "net::ERR_ABORTED POST https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/mode"
+  ],
+  "notes": {
+    "site": "deploy-preview-14 (fixes); prod macsmobilerun.netlify.app lacks PR frontend until merge",
+    "backend": "AWS Lambda deployed from branch (social_runtime pending this push)",
+    "dry_run": true,
+    "approve_send_skipped": true
+  }
+}

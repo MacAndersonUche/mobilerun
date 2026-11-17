@@ -711,7 +711,42 @@ assert states[-1]["openers_sent"] + states[-1]["replies_sent"] + states[-1]["swi
 # Caps / sequential: first steps prefer openers until opener_target
 assert states[0]["openers_sent"] >= 1, states
 assert states[-1]["openers_sent"] <= 3, states
+# Live activity: each tick records action/reason/package/timestamp
+detail = states[-1].get("steps_detail") or []
+assert len(detail) >= 1, states[-1]
+assert detail[0].get("action"), detail
+assert detail[0].get("ts"), detail
+assert "dry_run" in (detail[0].get("reason") or "") or detail[0].get("dry_run") is True, detail
 print("dating dry-run ok", states[-1])
+PY
+
+echo "== Social mode dry-run live activity (stand-in Messages) =="
+python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ.get("GITHUB_WORKSPACE", os.getcwd()))
+os.environ.setdefault("USE_AWS_STORAGE", "false")
+from backend.step_worker import run_social_step
+artifacts = os.environ.get("ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+job = {
+  "job_id": "e2e_social",
+  "kind": "social",
+  "status": "running",
+  "device_id": "emulator",
+  "dry_run": True,
+  "stand_in_package": "com.google.android.apps.messaging",
+  "max_steps": 4,
+  "state": {"steps": 0, "steps_detail": []},
+}
+states = []
+for _ in range(3):
+    job["status"] = "running"
+    job = run_social_step(job)
+    states.append(dict(job["state"]))
+path = os.path.join(artifacts, "social_dry_run.json")
+open(path, "w").write(json.dumps(states, indent=2))
+assert states[-1]["steps"] >= 1, states
+assert len(states[-1].get("steps_detail") or []) >= 1, states
+print("social dry-run ok", states[-1])
 PY
 
 echo "== Live view frame relay + chat agent =="
@@ -1088,15 +1123,33 @@ import os
 print("mobilerun://pair?" + urlencode({"c": os.environ["CODE"]}))
 PY
 )
+# Snapshot existing prod device ids so we can detect THIS claim (APK uses Build.MODEL,
+# not the pair create device_name — so name filters like emu-cloud miss the new row).
+BEFORE_IDS=$(PROD_API="$PROD_API" PROD_TOKEN="$PROD_TOKEN" python3 - <<'PY'
+import json, os, urllib.request
+prod = os.environ["PROD_API"]
+token = os.environ["PROD_TOKEN"]
+req = urllib.request.Request(
+    prod + "/api/devices", headers={"Authorization": f"Bearer {token}"}
+)
+ids = [
+    str(d.get("device_id") or "")
+    for d in (json.load(urllib.request.urlopen(req)) or [])
+    if d.get("device_id")
+]
+print(",".join(ids))
+PY
+)
 adb logcat -c || true
 adb shell "am start -a android.intent.action.VIEW -d '$CLOUD_ONLY_URL'" || true
-# Wait until the device appears on the prod ci-e2e account
-python3 - <<PY
+# Wait until a new device_id appears on the prod ci-e2e account
+BEFORE_IDS="$BEFORE_IDS" python3 - <<PY
 import json, os, time, urllib.request
 prod = os.environ.get("PROD_API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
 token = """$PROD_TOKEN"""
 code = """$PROD_CODE"""
 artifacts = os.environ["ARTIFACTS_DIR"]
+before = {x for x in os.environ.get("BEFORE_IDS", "").split(",") if x}
 device_id = None
 for i in range(40):
     req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
@@ -1105,14 +1158,14 @@ for i in range(40):
         json.dumps(devices, indent=2, default=str)
     )
     for d in devices or []:
-        name = str(d.get("name") or d.get("device_name") or "")
-        if "emu-cloud" in name.lower() or d.get("device_id"):
-            device_id = d.get("device_id") or d.get("id")
+        did = d.get("device_id") or d.get("id")
+        if did and str(did) not in before:
+            device_id = str(did)
             break
     if device_id:
         break
     time.sleep(2)
-assert device_id, f"cloud-only short-code {code} did not register on prod"
+assert device_id, f"cloud-only short-code {code} did not register on prod (before={sorted(before)})"
 open(os.path.join(artifacts, "prod_cloud_device_id.txt"), "w").write(device_id)
 print("prod_cloud_only_device", device_id)
 # Remove device (mirrors Devices Remove button)
@@ -1124,7 +1177,8 @@ req = urllib.request.Request(
 print("prod_remove", json.load(urllib.request.urlopen(req)))
 req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
 left = json.load(urllib.request.urlopen(req))
-assert left == [] or len(left) == 0, left
+# Shared prod ci-e2e may retain other concurrent jobs' devices — only assert ours is gone
+assert not any(d.get("device_id") == device_id for d in left), left
 open(os.path.join(artifacts, "prod_cloud_only_ok.txt"), "w").write(f"{code}\n{device_id}\n")
 print("PROD_CLOUD_ONLY_OK", code)
 PY
@@ -1167,6 +1221,7 @@ check("safety_verify_pause", "safety_pause.json")
 check("safety_needs_you", "safety_needs_you.json")
 check("safety_resume", "safety_resume.json")
 check("dating_dry_run", "dating_dry_run.json")
+check("social_dry_run", "social_dry_run.json")
 check("dating_caps_pause_stop", "dating_caps.json")
 check("chat_device_info", "chat_device_info.json")
 check("chat_run_task", "chat_run_task.json")

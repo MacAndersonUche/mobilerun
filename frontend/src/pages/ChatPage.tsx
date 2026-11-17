@@ -10,6 +10,8 @@ import AgentMessageCard, {
   parseAgentContent,
   type AgentPayload,
 } from '../components/AgentMessageCard';
+import TaskStepLog, { type RawStep } from '../components/TaskStepLog';
+import { formatStepLine } from '../lib/formatStep';
 
 type Mode = 'normal' | 'dating' | 'social';
 type Speed = 'fast' | 'balanced' | 'careful';
@@ -55,6 +57,11 @@ export default function ChatPage() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
+  const [taskSteps, setTaskSteps] = useState<RawStep[]>([]);
+  const [taskInstruction, setTaskInstruction] = useState<string>('');
+  const [taskResult, setTaskResult] = useState<string>('');
+  const [taskError, setTaskError] = useState<string>('');
+  const [liveStepsOpen, setLiveStepsOpen] = useState(true);
   const [mode, setMode] = useState<Mode>('normal');
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -119,9 +126,16 @@ export default function ChatPage() {
         });
         if (cancelled) return;
         const st = String(res.data.status || '');
-        const result = res.data.result || res.data.error || '';
-        setTaskStatus(`${st}${result ? ` · ${result}` : ''}`);
-        if (['completed', 'failed', 'stopped'].includes(st)) {
+        const result = String(res.data.result || '');
+        const err = String(res.data.error || '');
+        const steps: RawStep[] = Array.isArray(res.data.steps) ? res.data.steps : [];
+        setTaskStatus(st);
+        setTaskResult(result);
+        setTaskError(err);
+        setTaskSteps(steps);
+        if (res.data.instruction) setTaskInstruction(String(res.data.instruction));
+        if (['completed', 'failed', 'stopped', 'cancelled'].includes(st)) {
+          const tid = activeTaskId;
           setActiveTaskId(null);
           setMessages((m) => [
             ...m,
@@ -130,12 +144,28 @@ export default function ChatPage() {
               content:
                 st === 'completed'
                   ? `Done: ${result || st}`
-                  : `Task ${st}: ${result || 'see phone'}`,
+                  : `Task ${st}: ${err || result || 'see phone'}`,
               meta: {
-                answer: st === 'completed' ? `Done: ${result || st}` : `Task ${st}: ${result}`,
+                answer:
+                  st === 'completed'
+                    ? `Done: ${result || st}`
+                    : `Task ${st}: ${err || result}`,
+                task_id: tid,
                 steps: [
-                  { title: 'Dispatched', done: true },
-                  { title: 'Executed on phone', done: st === 'completed', subtext: String(result || st) },
+                  { title: 'Task submitted', done: true },
+                  ...steps.map((s) => ({
+                    title: formatStepLine(s),
+                    done: s.ok !== false,
+                    subtext: s.package || s.screen || undefined,
+                  })),
+                  {
+                    title:
+                      st === 'completed'
+                        ? `Result: ${result || 'ok'}`
+                        : `Ended: ${err || result || st}`,
+                    done: st === 'completed',
+                    subtext: tid,
+                  },
                 ],
               },
             },
@@ -199,7 +229,12 @@ export default function ChatPage() {
         res.data.result?.task?.task_id;
       if (tid) {
         setActiveTaskId(String(tid));
-        setTaskStatus('running · dispatched');
+        setTaskStatus('running');
+        setTaskSteps([]);
+        setTaskResult('');
+        setTaskError('');
+        setTaskInstruction(text || 'phone task');
+        setLiveStepsOpen(true);
       }
       if (res.data.needs_confirm) {
         setPendingConfirm({ intent: res.data.intent, params: res.data.params });
@@ -324,9 +359,38 @@ export default function ChatPage() {
           {taskStatus && (
             <p className="text-xs text-accent" data-testid="chat-task-progress">
               Task: {taskStatus}
+              {activeTaskId ? ` · ${activeTaskId}` : ''}
             </p>
           )}
         </div>
+
+        {(activeTaskId || taskSteps.length > 0) && (
+          <div className="space-y-2" data-testid="chat-live-steps">
+            <button
+              type="button"
+              className="text-xs text-mute underline"
+              onClick={() => setLiveStepsOpen((v) => !v)}
+            >
+              {liveStepsOpen ? 'Collapse live steps' : 'Expand live steps'}
+            </button>
+            {liveStepsOpen && (
+              <TaskStepLog
+                title="Live task steps"
+                status={taskStatus || 'running'}
+                taskId={activeTaskId}
+                instruction={taskInstruction}
+                result={taskError ? undefined : taskResult}
+                error={taskError || undefined}
+                steps={taskSteps}
+                loading={!!activeTaskId}
+                emptyText="Task submitted — each phone action will appear here in plain words."
+                showScreenshots
+                linkToHistory
+                testId="chat-task-step-log"
+              />
+            )}
+          </div>
+        )}
 
         {messages.length === 0 && (
           <AgentMessageCard
