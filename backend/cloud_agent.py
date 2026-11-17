@@ -52,22 +52,24 @@ def _compress_tree(tree: str, limit: int = 12000) -> str:
 
 
 def _gemini_models() -> List[str]:
-    """Prefer env model, then known-good Gemini flash IDs (404-safe fallbacks)."""
+    """Stable Gemini flash IDs first; env LLM_MODEL included but not exclusively."""
     preferred = (os.environ.get("LLM_MODEL") or "").strip()
+    # Prefer versioned IDs — aliases like gemini-flash-latest often 503 under load
     defaults = [
-        "gemini-2.0-flash",
         "gemini-2.0-flash-001",
+        "gemini-1.5-flash-002",
+        "gemini-2.0-flash",
         "gemini-1.5-flash",
         "gemini-1.5-flash-latest",
-        "gemini-1.5-flash-002",
         "gemini-flash-latest",
     ]
     out: List[str] = []
-    if preferred and preferred.startswith("gemini"):
-        out.append(preferred)
     for m in defaults:
         if m not in out:
             out.append(m)
+    if preferred and preferred.lower().startswith("gemini") and preferred not in out:
+        # Try preferred last so a flaky alias does not block stable IDs
+        out.append(preferred)
     return out
 
 
@@ -97,7 +99,8 @@ def _call_gemini(user_prompt: str) -> str:
         except urllib.error.HTTPError as e:
             err_body = e.read().decode(errors="replace")[:300]
             last_err = RuntimeError(f"Gemini {model} HTTP {e.code}: {err_body}")
-            if e.code in (404, 400):
+            # Missing, bad request, rate-limit, or overloaded → try next model
+            if e.code in (404, 400, 429, 503):
                 logger.warning(
                     "Gemini model %s failed (%s); trying next", model, e.code
                 )
@@ -105,6 +108,7 @@ def _call_gemini(user_prompt: str) -> str:
             raise last_err from e
         except Exception as e:
             last_err = e
+            logger.warning("Gemini model %s error: %s; trying next", model, e)
             continue
         parts = (data.get("candidates") or [{}])[0].get("content", {}).get(
             "parts"
