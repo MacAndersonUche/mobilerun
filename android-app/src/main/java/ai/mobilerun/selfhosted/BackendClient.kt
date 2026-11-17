@@ -1198,15 +1198,7 @@ class BackendClient(private val context: Context) {
      */
     private fun startUiActivity(intent: Intent): Boolean {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        // Overlay permission is a documented BAL exemption on Android 10+
-        try {
-            if (android.provider.Settings.canDrawOverlays(context)) {
-                context.startActivity(intent)
-                return true
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "overlay launch failed: ${e.message}")
-        }
+        // Prefer move-to-front + PendingIntent BAL allow — we no longer request overlay
         try {
             val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             am.appTasks.firstOrNull()?.moveToFront()

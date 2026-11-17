@@ -424,14 +424,12 @@ function DeviceCard({
   onRevoke: () => void;
 }) {
   const perms = device.permissions || {};
+  // Slim surface: only what onboarding still cares about.
+  // MediaProjection / overlay / FGS are optional or automatic — omit from the card.
   const rows: [string, boolean | undefined][] = [
     ['Accessibility', perms.accessibility],
     ['Notifications', perms.notifications],
-    ['Screen capture', perms.media_projection],
     ['Battery unrestricted', perms.battery_optimization],
-    ['Overlay', perms.overlay],
-    ['Query packages', perms.query_packages],
-    ['Foreground service', perms.foreground_service],
   ];
 
   return (

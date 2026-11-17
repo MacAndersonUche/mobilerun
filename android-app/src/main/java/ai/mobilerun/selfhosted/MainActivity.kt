@@ -20,15 +20,33 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+/**
+ * Pairing + minimal setup.
+ *
+ * Manual: Accessibility (system toggle) — deep-linked to this service.
+ * Automatic (system dialogs): POST_NOTIFICATIONS, battery unrestricted.
+ * On-demand only: MediaProjection when Live View starts (API 30+ screenshots
+ * for agent steps use AccessibilityService.takeScreenshot instead).
+ */
 class MainActivity : ComponentActivity() {
     private lateinit var backendClient: BackendClient
     private var pendingFps: Int = 3
     private var pendingQuality: Int = 45
     private var mediaProjectionGranted = false
+    private var autoGrantRunning = false
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* refreshed on resume */ }
+    ) {
+        // Continue chain regardless of grant/deny
+        runAutoGrantChain(fromCallback = true)
+    }
+
+    private val batteryExemptionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        runAutoGrantChain(fromCallback = true)
+    }
 
     private val projectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -59,6 +77,7 @@ class MainActivity : ComponentActivity() {
 
         backendClient = BackendClient(this)
         backendClient.onStreamPermissionNeeded = { fps, quality ->
+            // Live View only — not part of onboarding checklist
             pendingFps = fps
             pendingQuality = quality
             if (ScreenCaptureService.isStreaming()) {
@@ -78,10 +97,11 @@ class MainActivity : ComponentActivity() {
                     activity = this,
                     backendClient = backendClient,
                     mediaProjectionGranted = mediaProjectionGranted,
-                    onRequestNotifications = {
-                        if (Build.VERSION.SDK_INT >= 33) {
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
+                    onEnableAccessibility = {
+                        PermissionStatus.openAccessibilitySettings(this)
+                    },
+                    onOpenRestrictedSettings = {
+                        PermissionStatus.openAppDetails(this)
                     },
                     onRequestLiveView = {
                         pendingFps = 3
@@ -95,6 +115,9 @@ class MainActivity : ComponentActivity() {
                     onPermissionsChanged = {
                         backendClient.reportPermissions(mediaProjectionGranted)
                     },
+                    onEnsureAutoGrants = {
+                        runAutoGrantChain(fromCallback = false)
+                    },
                 )
             }
         }
@@ -104,12 +127,45 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (::backendClient.isInitialized) {
             backendClient.reportPermissions(mediaProjectionGranted)
+            if (backendClient.isPaired()) {
+                runAutoGrantChain(fromCallback = false)
+            }
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.data?.let { handleDeepLink(it) }
+    }
+
+    /**
+     * Fire one system dialog at a time for everything that is not Accessibility.
+     * Skips already-granted items. Safe to call repeatedly from onResume.
+     */
+    private fun runAutoGrantChain(fromCallback: Boolean) {
+        if (!::backendClient.isInitialized) return
+        if (!backendClient.isPaired()) return
+        if (autoGrantRunning && !fromCallback) return
+
+        ConnectionService.start(this)
+
+        if (!PermissionStatus.hasNotifications(this) && Build.VERSION.SDK_INT >= 33) {
+            autoGrantRunning = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        if (!PermissionStatus.isIgnoringBatteryOptimizations(this)) {
+            autoGrantRunning = true
+            try {
+                batteryExemptionLauncher.launch(PermissionStatus.batteryExemptionIntent(this))
+            } catch (_: Exception) {
+                PermissionStatus.openBatterySettings(this)
+                autoGrantRunning = false
+            }
+            return
+        }
+        autoGrantRunning = false
+        backendClient.reportPermissions(mediaProjectionGranted)
     }
 
     private fun handleDeepLink(uri: Uri) {
@@ -128,10 +184,12 @@ fun MainScreen(
     activity: ComponentActivity,
     backendClient: BackendClient,
     mediaProjectionGranted: Boolean,
-    onRequestNotifications: () -> Unit,
+    onEnableAccessibility: () -> Unit,
+    onOpenRestrictedSettings: () -> Unit,
     onRequestLiveView: () -> Unit,
     onScanQr: () -> Unit,
     onPermissionsChanged: () -> Unit,
+    onEnsureAutoGrants: () -> Unit,
 ) {
     var connectionStatus by remember { mutableStateOf("Disconnected") }
     var routeStatus by remember { mutableStateOf("Route: —") }
@@ -166,9 +224,31 @@ fun MainScreen(
         backendClient.streamFlow.collect { streamStatus = it }
     }
     LaunchedEffect(Unit) {
-        backendClient.pairedFlow.collect { paired = it }
+        backendClient.pairedFlow.collect {
+            paired = it
+            if (it) onEnsureAutoGrants()
+        }
     }
     LaunchedEffect(mediaProjectionGranted) { refreshPerms() }
+    LaunchedEffect(paired) {
+        if (paired) {
+            refreshPerms()
+            onEnsureAutoGrants()
+        }
+    }
+
+    // Poll a11y after user returns from Settings
+    LaunchedEffect(paired) {
+        if (!paired) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(1500)
+            val next = PermissionStatus.snapshot(activity, mediaProjectionGranted)
+            if (next != snap) {
+                snap = next
+                onPermissionsChanged()
+            }
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -270,49 +350,97 @@ fun MainScreen(
                 StatusCard("Last Task", lastTask, true)
                 StatusCard("Live stream", streamStatus, streamStatus == "streaming")
 
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text("Permissions checklist", style = MaterialTheme.typography.titleMedium)
-                        if (PermissionStatus.restrictedSettingsNeeded(activity)) {
-                            AssistCard(
-                                title = "Android 13+ · Allow restricted settings",
-                                body = "Settings → Apps → MobileRun → ⋮ → Allow restricted settings. Then enable Accessibility.",
-                                actionLabel = "Open app settings",
-                                onClick = {
-                                    PermissionStatus.openAppDetails(activity)
-                                    refreshPerms()
+                // Slim setup: hide everything already granted
+                val showRestricted = PermissionStatus.restrictedSettingsNeeded(activity) && !snap.accessibility
+                val showA11y = !snap.accessibility
+                val showNotifs = !snap.notifications
+                val showBattery = !snap.batteryOptimization
+                val setupDone = snap.accessibility && snap.notifications && snap.batteryOptimization
+
+                if (!setupDone || showRestricted) {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("Setup", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                if (showA11y) {
+                                    "One manual step: turn on Accessibility. Notifications and battery are requested automatically."
+                                } else {
+                                    "Finishing automatic system prompts…"
                                 },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            if (showRestricted) {
+                                AssistCard(
+                                    title = "Allow restricted settings (Android 13+)",
+                                    body = "Sideloaded apps need this before Accessibility can turn on. Apps → MobileRun → ⋮ → Allow restricted settings.",
+                                    actionLabel = "Open app settings",
+                                    onClick = {
+                                        onOpenRestrictedSettings()
+                                        refreshPerms()
+                                    },
+                                )
+                            }
+                            if (showA11y) {
+                                Button(
+                                    onClick = {
+                                        onEnableAccessibility()
+                                        refreshPerms()
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Enable Accessibility")
+                                }
+                            }
+                            if (showNotifs) {
+                                Text(
+                                    "Waiting for notification permission dialog…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (showBattery) {
+                                Text(
+                                    "Waiting for battery unrestricted prompt…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    refreshPerms()
+                                    onEnsureAutoGrants()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Re-check / retry prompts")
+                            }
                         }
-                        PermRow("Accessibility service", snap.accessibility) {
-                            PermissionStatus.openAccessibilitySettings(activity)
-                            refreshPerms()
-                        }
-                        PermRow("Notifications", snap.notifications, onClick = {
-                            onRequestNotifications()
-                            refreshPerms()
-                        })
-                        PermRow("Screen capture (live view)", snap.mediaProjection || mediaProjectionGranted) {
-                            onRequestLiveView()
-                        }
-                        PermRow("Battery unrestricted", snap.batteryOptimization) {
-                            PermissionStatus.openBatterySettings(activity)
-                            refreshPerms()
-                        }
-                        PermRow("Draw over other apps", snap.overlay) {
-                            PermissionStatus.openOverlaySettings(activity)
-                            refreshPerms()
-                        }
-                        PermRow("Foreground connection", snap.foregroundService) {
-                            ConnectionService.start(activity)
-                            refreshPerms()
-                        }
-                        TextButton(onClick = { refreshPerms() }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Re-check permissions")
-                        }
+                    }
+                } else {
+                    StatusCard(
+                        "Setup",
+                        "Ready — Accessibility on · notifications + battery OK",
+                        true,
+                    )
+                }
+
+                // Live view is optional / on-demand, not onboarding
+                if (showAdvanced || streamStatus == "streaming" || mediaProjectionGranted) {
+                    TextButton(
+                        onClick = onRequestLiveView,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (mediaProjectionGranted || streamStatus == "streaming") {
+                                "Live view capture OK"
+                            } else {
+                                "Enable live view capture (optional)"
+                            },
+                        )
                     }
                 }
             }
@@ -361,7 +489,6 @@ fun MainScreen(
         }
     }
 
-    // Observe pair failures from client
     LaunchedEffect(Unit) {
         backendClient.pairErrorFlow.collect {
             pairError = it
@@ -390,28 +517,6 @@ private fun AssistCard(
             Text(title, style = MaterialTheme.typography.titleSmall)
             Text(body, style = MaterialTheme.typography.bodySmall)
             Button(onClick = onClick) { Text(actionLabel) }
-        }
-    }
-}
-
-@Composable
-private fun PermRow(label: String, ok: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                if (ok) "Ready" else "Tap to enable",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (ok) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.error,
-            )
-        }
-        TextButton(onClick = onClick, enabled = !ok || label.contains("Foreground") || label.contains("Screen")) {
-            Text(if (ok) "OK" else "Fix")
         }
     }
 }

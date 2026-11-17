@@ -55,7 +55,7 @@ Architecture: **hosted UI** = management (dashboard, live view, chat, modes, Nee
 1. **QR codes are download-only** — `/api/releases/latest` returns a QR pointing at the GitHub release APK URL (shown on Devices + Settings + README). Never used for pairing.
 2. **APK → Sign in & link phone** → 6-character device code → Mac approves on Account while signed in → phone gets `session_token` + JWT and appears under his account.
 3. **Cognito Hosted UI / Custom Tabs:** same user pool; APK sends `auth_token` on WebSocket register and auto-binds to the account.
-4. **Permissions onboarding (APK):** Accessibility (Android 13+ “Allow restricted settings” for sideloads), notifications, MediaProjection, battery unrestricted, overlay, query packages, foreground connection service. Checklist re-checks on resume and reports `permission_status` to the hosted Devices page.
+4. **Permissions onboarding (APK):** Accessibility is the only manual toggle (deep-linked to this service; Android 13+ “Allow restricted settings” for sideloads). `POST_NOTIFICATIONS` and battery unrestricted are requested via system dialogs automatically. MediaProjection is on-demand for Live View only — agent screenshots use AccessibilityService on API 30+. Overlay / notification-listener are not requested. Status re-checks on resume and reports `permission_status` to the hosted Devices page.
 
 ### WebSocket Authentication
 

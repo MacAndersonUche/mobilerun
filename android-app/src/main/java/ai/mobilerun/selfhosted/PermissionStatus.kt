@@ -2,6 +2,7 @@ package ai.mobilerun.selfhosted
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,8 +14,12 @@ import android.view.accessibility.AccessibilityManager
 import androidx.core.content.ContextCompat
 
 /**
- * First-run / resume permission checklist for the executor APK.
- * Reports status to the hosted UI over WebSocket.
+ * Minimal permission surface for the executor APK.
+ *
+ * Required for agent work: Accessibility (manual).
+ * Auto-prompted once: POST_NOTIFICATIONS, battery unrestricted.
+ * Not in onboarding: overlay, MediaProjection (live-view only, on demand),
+ * QUERY_ALL_PACKAGES (install-time), foreground service (started by app).
  */
 object PermissionStatus {
     data class Snapshot(
@@ -31,25 +36,32 @@ object PermissionStatus {
             "notifications" to notifications,
             "media_projection" to mediaGranted,
             "battery_optimization" to batteryOptimization,
+            // Kept in wire format for older portal rows; always optional now
             "overlay" to overlay,
             "query_packages" to queryPackages,
             "foreground_service" to foregroundService,
             "updated_at" to System.currentTimeMillis(),
         )
 
-        val allCritical: Boolean
-            get() = accessibility && notifications && batteryOptimization && foregroundService
+        /** Ready for automation tasks (live view is optional). */
+        val readyForAgent: Boolean
+            get() = accessibility
+
+        val needsAutoGrant: Boolean
+            get() = !notifications || !batteryOptimization
     }
 
     fun snapshot(context: Context, mediaProjectionGranted: Boolean = false): Snapshot {
         return Snapshot(
             accessibility = isAccessibilityEnabled(context),
             notifications = hasNotifications(context),
-            mediaProjection = mediaProjectionGranted,
+            mediaProjection = mediaProjectionGranted ||
+                context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
+                    .getBoolean("media_projection_granted", false),
             batteryOptimization = isIgnoringBatteryOptimizations(context),
-            overlay = canDrawOverlays(context),
+            overlay = false, // no longer requested; report false so portal does not nag
             queryPackages = canQueryPackages(context),
-            foregroundService = true, // declared; ConnectionService starts after login
+            foregroundService = true,
         )
     }
 
@@ -74,14 +86,7 @@ object PermissionStatus {
         return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
-    fun canDrawOverlays(context: Context): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Settings.canDrawOverlays(context)
-        } else true
-    }
-
     fun canQueryPackages(context: Context): Boolean {
-        // QUERY_ALL_PACKAGES is install-time; verify we can resolve a known launcher
         return try {
             val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             context.packageManager.queryIntentActivities(intent, 0).isNotEmpty()
@@ -90,8 +95,37 @@ object PermissionStatus {
         }
     }
 
+    /** Deep-link to this app's AccessibilityService details when possible. */
     fun openAccessibilitySettings(context: Context) {
-        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val cn = ComponentName(context, MobilerunAccessibilityService::class.java)
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                context.startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                        putExtra(Intent.EXTRA_COMPONENT_NAME, cn)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
+                return
+            } catch (_: Exception) {
+            }
+            try {
+                context.startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                        putExtra(Intent.EXTRA_COMPONENT_NAME, cn)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
+                return
+            } catch (_: Exception) {
+            }
+        }
+        // Fallback: general Accessibility list (user picks MobileRun)
+        context.startActivity(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     /** Android 13+ sideload: Apps → MobileRun → ⋮ → Allow restricted settings */
@@ -103,13 +137,21 @@ object PermissionStatus {
         context.startActivity(intent)
     }
 
+    fun batteryExemptionIntent(context: Context): Intent {
+        return try {
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+        } catch (_: Exception) {
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        }
+    }
+
     fun openBatterySettings(context: Context) {
         try {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:${context.packageName}")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
+            context.startActivity(
+                batteryExemptionIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
         } catch (_: Exception) {
             context.startActivity(
                 Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
@@ -118,19 +160,7 @@ object PermissionStatus {
         }
     }
 
-    fun openOverlaySettings(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            context.startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:${context.packageName}"),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
-    }
-
     fun restrictedSettingsNeeded(context: Context): Boolean {
-        // Heuristic: accessibility off on API 33+ for sideloaded apps often needs restricted settings
         return Build.VERSION.SDK_INT >= 33 && !isAccessibilityEnabled(context)
     }
 }
