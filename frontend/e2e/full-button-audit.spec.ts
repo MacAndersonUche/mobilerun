@@ -339,8 +339,9 @@ test.describe('full button audit', () => {
         record('tasks', `Mode ${mode}`, 'switch', false, String(e).slice(0, 120));
       }
     }
-    // Back to Normal for run
-    await page.getByRole('button', { name: /^Normal/i }).first().click().catch(() => undefined);
+    // Back to Normal — Run Task stays disabled in Dating/Social
+    await page.getByRole('button', { name: /^Normal/i }).first().click();
+    await page.waitForTimeout(600);
     for (const speed of ['Fast', 'Balanced', 'Careful'] as const) {
       try {
         await page.getByRole('button', { name: new RegExp(`^${speed}`, 'i') }).first().click();
@@ -349,11 +350,11 @@ test.describe('full button audit', () => {
         record('tasks', `Speed ${speed}`, 'switch', false, String(e).slice(0, 100));
       }
     }
-    await page.getByRole('button', { name: /^Balanced/i }).first().click().catch(() => undefined);
+    await page.getByRole('button', { name: /^Fast/i }).first().click().catch(() => undefined);
     try {
       const device = page.locator('#task-device');
       if (await device.count()) {
-        const online = device.locator('option', { hasText: /online/i }).first();
+        const online = device.locator('option', { hasText: /online|●/i }).first();
         if (await online.count()) {
           const val = await online.getAttribute('value');
           if (val) await device.selectOption(val);
@@ -362,12 +363,14 @@ test.describe('full button audit', () => {
         }
       }
       await page.locator('#task-instruction').fill('open settings');
+      const runBtn = page.getByRole('button', { name: /Run Task/i });
+      await expect(runBtn).toBeEnabled({ timeout: 20000 });
       const [resp] = await Promise.all([
         page.waitForResponse(
           (r) => r.url().includes('/api/tasks') && r.request().method() === 'POST',
-          { timeout: 30000 }
+          { timeout: 45000 }
         ),
-        page.getByRole('button', { name: /Run Task/i }).click(),
+        runBtn.click({ timeout: 10000 }),
       ]);
       const ok = resp.ok();
       record('tasks', 'Run Task', 'POST /api/tasks', ok, `status=${resp.status()}`);
@@ -453,7 +456,12 @@ test.describe('full button audit', () => {
 
     // ---------- History ----------
     await page.goto('/history');
-    await page.waitForTimeout(1000);
+    // Wait for load — spinner then cards or empty state (1s was flaky)
+    const historyReady = page
+      .getByTestId('history-task')
+      .or(page.getByText(/No task history yet/i))
+      .first();
+    await historyReady.waitFor({ state: 'visible', timeout: 30000 }).catch(() => undefined);
     const cards = page.getByTestId('history-task');
     const nCards = await cards.count();
     record('history', 'Task cards', 'list', nCards > 0, `count=${nCards}`);

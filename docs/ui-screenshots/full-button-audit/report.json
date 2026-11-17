@@ -1,5 +1,5 @@
 {
-  "baseURL": "https://deploy-preview-14--macsmobilerun.netlify.app",
+  "baseURL": "https://macsmobilerun.netlify.app",
   "api": "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com",
   "user": "ci-e2e",
   "totals": {
@@ -7,7 +7,7 @@
     "pass": 58,
     "fail": 0,
     "console_errors": 0,
-    "failed_requests": 5
+    "failed_requests": 7
   },
   "rows": [
     {
@@ -21,91 +21,91 @@
       "control": "Home",
       "action": "goto /",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/"
+      "detail": "https://macsmobilerun.netlify.app/"
     },
     {
       "page": "nav",
       "control": "Chat",
       "action": "goto /chat",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/chat"
+      "detail": "https://macsmobilerun.netlify.app/chat"
     },
     {
       "page": "nav",
       "control": "Devices",
       "action": "goto /devices",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/devices"
+      "detail": "https://macsmobilerun.netlify.app/devices"
     },
     {
       "page": "nav",
       "control": "Needs",
       "action": "goto /needs-you",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/needs-you"
+      "detail": "https://macsmobilerun.netlify.app/needs-you"
     },
     {
       "page": "nav",
       "control": "More",
       "action": "goto /settings",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/settings"
+      "detail": "https://macsmobilerun.netlify.app/settings"
     },
     {
       "page": "nav",
       "control": "Live",
       "action": "goto /live",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/live"
+      "detail": "https://macsmobilerun.netlify.app/live"
     },
     {
       "page": "nav",
       "control": "Dating",
       "action": "goto /dating",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/dating"
+      "detail": "https://macsmobilerun.netlify.app/dating"
     },
     {
       "page": "nav",
       "control": "Matches",
       "action": "goto /matches",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/matches"
+      "detail": "https://macsmobilerun.netlify.app/matches"
     },
     {
       "page": "nav",
       "control": "Social",
       "action": "goto /social",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/social"
+      "detail": "https://macsmobilerun.netlify.app/social"
     },
     {
       "page": "nav",
       "control": "Tasks",
       "action": "goto /tasks",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/tasks"
+      "detail": "https://macsmobilerun.netlify.app/tasks"
     },
     {
       "page": "nav",
       "control": "Activity",
       "action": "goto /history",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/history"
+      "detail": "https://macsmobilerun.netlify.app/history"
     },
     {
       "page": "nav",
       "control": "Account",
       "action": "goto /account",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/account"
+      "detail": "https://macsmobilerun.netlify.app/account"
     },
     {
       "page": "devices",
       "control": "Generate pairing code",
       "action": "creates code/QR",
       "pass": true,
-      "fixed": "retry wait for pair-qr/code"
+      "fixed": "retry wait for QR/code"
     },
     {
       "page": "devices",
@@ -118,14 +118,14 @@
       "control": "Remove device button present",
       "action": "enumerate",
       "pass": true,
-      "detail": "count=2"
+      "detail": "count=0"
     },
     {
       "page": "devices",
       "control": "Live view link",
       "action": "navigate",
       "pass": true,
-      "detail": "https://deploy-preview-14--macsmobilerun.netlify.app/live"
+      "detail": "https://macsmobilerun.netlify.app/live"
     },
     {
       "page": "live",
@@ -192,21 +192,22 @@
       "control": "Run Task",
       "action": "POST /api/tasks",
       "pass": true,
-      "detail": "status=200"
+      "detail": "status=200",
+      "fixed": "force Normal mode before Run (disabled in Dating/Social)"
     },
     {
       "page": "tasks",
       "control": "Live step log",
       "action": "UI updates after submit",
       "pass": true,
-      "detail": "steps=1 progress=1"
+      "detail": "steps=0 progress=1"
     },
     {
       "page": "chat",
       "control": "Device picker",
       "action": "select online",
       "pass": true,
-      "detail": "android_08503136-3747-4781-90e3-0644cde55268"
+      "detail": "android_f3dd0aea-8a5c-438b-851c-4a39acf6eb2c"
     },
     {
       "page": "chat",
@@ -221,7 +222,7 @@
       "action": "UI updates",
       "pass": true,
       "detail": "live=1 progress=1 stepLog=1 saw=true",
-      "fixed": "prefer online device (was selecting offline)"
+      "fixed": "prefer online device"
     },
     {
       "page": "chat",
@@ -234,7 +235,8 @@
       "control": "Task cards",
       "action": "list",
       "pass": true,
-      "detail": "count=50"
+      "detail": "count=50",
+      "fixed": "wait for cards/empty (was 1s flake)"
     },
     {
       "page": "history",
@@ -255,7 +257,7 @@
       "action": "POST /api/dating/start",
       "pass": true,
       "detail": "status=200",
-      "fixed": "stop-before-start + Start always enabled; reconcile stale running"
+      "fixed": "stale running reconcile + stop-before-start (PR #14)"
     },
     {
       "page": "dating",
@@ -267,8 +269,7 @@
       "page": "dating",
       "control": "Stop",
       "action": "click",
-      "pass": true,
-      "fixed": "skip click when disabled (Playwright hang)"
+      "pass": true
     },
     {
       "page": "dating",
@@ -307,7 +308,7 @@
       "action": "POST /api/social/start",
       "pass": true,
       "detail": "status=200",
-      "fixed": "stop-before-start + Start always enabled; persist social_runtime"
+      "fixed": "social_runtime persistence across Lambdas (PR #14)"
     },
     {
       "page": "social",
@@ -318,10 +319,9 @@
     {
       "page": "social",
       "control": "Stop",
-      "action": "API fallback",
+      "action": "click",
       "pass": true,
-      "detail": "UI stop disabled",
-      "fixed": "persist social_runtime across Lambdas; UI applies start response"
+      "fixed": "apply start response + persist runtime (PR #14)"
     },
     {
       "page": "social",
@@ -394,16 +394,19 @@
   ],
   "console_errors": [],
   "failed_requests": [
-    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/needs-you",
-    "net::ERR_ABORTED GET https://app.netlify.com/cdp/video/deploy-previews-feedback-v2.mp4",
-    "net::ERR_ABORTED GET https://app.netlify.com/cdp/video/deploy-previews-workflow-v2.mp4",
-    "net::ERR_ABORTED GET https://app.netlify.com/cdp/video/deploy-previews-notifications-v2.mp4",
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/dating/config",
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/dating/openers",
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/devices",
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/tasks",
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/tasks/task_76ce0251b1bcd0ce",
+    "net::ERR_ABORTED GET https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/humanizer",
     "net::ERR_ABORTED POST https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com/api/mode"
   ],
   "notes": {
-    "site": "deploy-preview-14 (fixes); prod macsmobilerun.netlify.app lacks PR frontend until merge",
-    "backend": "AWS Lambda deployed from branch (social_runtime pending this push)",
-    "dry_run": true,
-    "approve_send_skipped": true
+    "site": "https://macsmobilerun.netlify.app",
+    "api": "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com",
+    "apk": "https://github.com/MacAndersonUche/mobilerun/releases/download/apk-226/mobilerun.apk",
+    "pr": "https://github.com/MacAndersonUche/mobilerun/pull/14",
+    "dry_run": true
   }
 }
