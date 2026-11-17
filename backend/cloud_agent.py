@@ -51,34 +51,74 @@ def _compress_tree(tree: str, limit: int = 12000) -> str:
     return compact[:limit] + "\n...[truncated]"
 
 
+def _gemini_models() -> List[str]:
+    """Stable Gemini flash IDs first; env LLM_MODEL included but not exclusively."""
+    preferred = (os.environ.get("LLM_MODEL") or "").strip()
+    # Prefer versioned IDs — aliases like gemini-flash-latest often 503 under load
+    defaults = [
+        "gemini-2.0-flash-001",
+        "gemini-1.5-flash-002",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-flash-latest",
+    ]
+    out: List[str] = []
+    for m in defaults:
+        if m not in out:
+            out.append(m)
+    if preferred and preferred.lower().startswith("gemini") and preferred not in out:
+        # Try preferred last so a flaky alias does not block stable IDs
+        out.append(preferred)
+    return out
+
+
 def _call_gemini(user_prompt: str) -> str:
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not key:
         raise RuntimeError("No Gemini/Google API key configured on the backend")
-    model = os.environ.get("LLM_MODEL") or "gemini-2.0-flash"
-    if not model.startswith("gemini"):
-        model = "gemini-2.0-flash"
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={key}"
-    )
     body = {
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512},
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=40) as resp:
-        data = json.load(resp)
-    parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-    if not text.strip():
-        raise RuntimeError(f"Empty LLM response: {data}")
-    return text
+    last_err: Optional[Exception] = None
+    for model in _gemini_models():
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={key}"
+        )
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=40) as resp:
+                data = json.load(resp)
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode(errors="replace")[:300]
+            last_err = RuntimeError(f"Gemini {model} HTTP {e.code}: {err_body}")
+            # Missing, bad request, rate-limit, or overloaded → try next model
+            if e.code in (404, 400, 429, 503):
+                logger.warning(
+                    "Gemini model %s failed (%s); trying next", model, e.code
+                )
+                continue
+            raise last_err from e
+        except Exception as e:
+            last_err = e
+            logger.warning("Gemini model %s error: %s; trying next", model, e)
+            continue
+        parts = (data.get("candidates") or [{}])[0].get("content", {}).get(
+            "parts"
+        ) or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not text.strip():
+            last_err = RuntimeError(f"Empty LLM response from {model}: {data}")
+            continue
+        return text
+    raise RuntimeError(f"All Gemini models failed: {last_err}")
 
 
 def _call_openai(user_prompt: str) -> str:
@@ -120,13 +160,24 @@ def plan_next_action(
         f"UI TREE:\n{_compress_tree(ui_tree)}\n\n"
         "JSON action:"
     )
+    raw = None
+    errors: List[str] = []
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-        raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
-    elif os.environ.get("OPENAI_API_KEY"):
-        raw = _call_openai(user)
-    else:
+        try:
+            raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
+        except Exception as e:
+            errors.append(f"gemini: {e}")
+            logger.warning("Gemini failed, trying OpenAI if configured: %s", e)
+    if raw is None and os.environ.get("OPENAI_API_KEY"):
+        try:
+            raw = _call_openai(user)
+        except Exception as e:
+            errors.append(f"openai: {e}")
+    if raw is None:
+        detail = "; ".join(errors) or "no keys"
         raise RuntimeError(
-            "No LLM key on backend (set GEMINI_API_KEY / GOOGLE_API_KEY / OPENAI_API_KEY)"
+            "No working LLM on backend (need GEMINI_API_KEY / GOOGLE_API_KEY / "
+            f"OPENAI_API_KEY). Last errors: {detail}"
         )
     return _parse_action_json(raw)
 
@@ -301,19 +352,33 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["state"] = state
         # Soft fail a single step (retry) unless hard errors
         msg = str(e)
+        low = msg.lower()
         hard = any(
-            t in msg.lower() for t in ("no llm", "offline", "api key", "failed to push")
+            t in low
+            for t in (
+                "no llm",
+                "no working llm",
+                "offline",
+                "api key",
+                "failed to push",
+            )
         )
+        rate_limited = any(t in low for t in ("429", "503", "quota", "high demand"))
         if hard or step + 1 >= max_steps:
             job["status"] = "failed"
             job["error"] = msg
         else:
             import time
 
-            state["steps"] = step + 1
-            job["next_run_at"] = int(time.time()) + 5
+            # Rate limits: wait longer and do not burn a step slot
+            if rate_limited:
+                job["next_run_at"] = int(time.time()) + 20
+            else:
+                state["steps"] = step + 1
+                job["next_run_at"] = int(time.time()) + 5
             job["updated_at"] = int(time.time())
             job["error"] = msg
+            _kick_self(job.get("job_id"))
         return job
 
 
