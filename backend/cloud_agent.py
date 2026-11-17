@@ -719,12 +719,41 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        tree_raw = call_device(device_id, "get_ui_tree", {}, timeout_s=20) or ""
+        try:
+            tree_raw = call_device(device_id, "get_ui_tree", {}, timeout_s=12) or ""
+        except Exception as tree_err:
+            # Overloaded OEM/emulator a11y can hang; still allow open_app.
+            low = str(tree_err).lower()
+            if any(
+                t in low for t in ("timed out", "timeout", "accessibility", "offline")
+            ):
+                logger.warning("get_ui_tree failed, using empty tree: %s", tree_err)
+                reason_attr = (
+                    str(tree_err)[:80]
+                    .replace("&", "&amp;")
+                    .replace('"', "&quot;")
+                    .replace("<", "&lt;")
+                )
+                tree_raw = {
+                    "tree": (
+                        '<hierarchy windows="0" nodes="0" empty="true" '
+                        f'reason="{reason_attr}"/>'
+                    ),
+                    "empty": True,
+                    "chars": 0,
+                    "package": "",
+                }
+            else:
+                raise
         tree_info = _normalize_tree_payload(tree_raw)
         ui_tree = tree_info["tree"]
         image_b64 = None
         # Always grab a screenshot for step history; use for vision when tree thin
-        image_b64 = _fetch_screenshot_b64(device_id)
+        try:
+            image_b64 = _fetch_screenshot_b64(device_id)
+        except Exception as shot_err:
+            logger.warning("screenshot skipped: %s", shot_err)
+            image_b64 = None
         use_vision = bool(image_b64) and tree_info["empty"]
 
         action = plan_next_action(
