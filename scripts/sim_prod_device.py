@@ -187,9 +187,19 @@ SCREENS = {
 state = {"screen": "home", "dark": False, "about_seen": False}
 
 
+def screen_package() -> str:
+    scr = state["screen"]
+    if scr in ("settings", "about", "display", "display_dark"):
+        return "com.android.settings"
+    if scr == "home":
+        return "com.android.launcher3"
+    return "android"
+
+
 def tree_xml() -> str:
     screen = SCREENS[state["screen"]]
-    lines = [f'<hierarchy screen="{state["screen"]}">']
+    pkg = screen_package()
+    lines = [f'<hierarchy screen="{state["screen"]}" package="{pkg}">']
     for n in screen["nodes"]:
         rid = n.get("resourceId", "")
         lines.append(
@@ -199,6 +209,16 @@ def tree_xml() -> str:
         )
     lines.append("</hierarchy>")
     return "\n".join(lines)
+
+
+def tree_payload() -> Dict[str, Any]:
+    tree = tree_xml()
+    return {
+        "tree": tree,
+        "package": screen_package(),
+        "empty": False,
+        "chars": len(tree),
+    }
 
 
 def nearest_node(x: int, y: int) -> Optional[Dict[str, Any]]:
@@ -216,7 +236,7 @@ def nearest_node(x: int, y: int) -> Optional[Dict[str, Any]]:
 def handle_command(cmd: str, params: Dict[str, Any]) -> Any:
     cmd = (cmd or "").lower()
     if cmd == "get_ui_tree":
-        return tree_xml()
+        return tree_payload()
     if cmd == "tap":
         x = int(params.get("x") or 0)
         y = int(params.get("y") or 0)
@@ -245,7 +265,18 @@ def handle_command(cmd: str, params: Dict[str, Any]) -> Any:
         print(f"  open_app({app})", flush=True)
         if "setting" in app:
             state["screen"] = "settings"
-        return "OK"
+            return {
+                "ok": True,
+                "launched": True,
+                "package": "com.android.settings",
+            }
+        if "chrome" in app:
+            return {
+                "ok": True,
+                "launched": True,
+                "package": "com.android.chrome",
+            }
+        return {"ok": True, "launched": True, "package": app or "android"}
     if cmd == "press_button":
         btn = str(params.get("button") or "")
         if btn == "back":
