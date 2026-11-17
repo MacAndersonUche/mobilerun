@@ -160,13 +160,24 @@ def plan_next_action(
         f"UI TREE:\n{_compress_tree(ui_tree)}\n\n"
         "JSON action:"
     )
+    raw = None
+    errors: List[str] = []
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-        raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
-    elif os.environ.get("OPENAI_API_KEY"):
-        raw = _call_openai(user)
-    else:
+        try:
+            raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
+        except Exception as e:
+            errors.append(f"gemini: {e}")
+            logger.warning("Gemini failed, trying OpenAI if configured: %s", e)
+    if raw is None and os.environ.get("OPENAI_API_KEY"):
+        try:
+            raw = _call_openai(user)
+        except Exception as e:
+            errors.append(f"openai: {e}")
+    if raw is None:
+        detail = "; ".join(errors) or "no keys"
         raise RuntimeError(
-            "No LLM key on backend (set GEMINI_API_KEY / GOOGLE_API_KEY / OPENAI_API_KEY)"
+            "No working LLM on backend (need GEMINI_API_KEY / GOOGLE_API_KEY / "
+            f"OPENAI_API_KEY). Last errors: {detail}"
         )
     return _parse_action_json(raw)
 
@@ -341,19 +352,33 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["state"] = state
         # Soft fail a single step (retry) unless hard errors
         msg = str(e)
+        low = msg.lower()
         hard = any(
-            t in msg.lower() for t in ("no llm", "offline", "api key", "failed to push")
+            t in low
+            for t in (
+                "no llm",
+                "no working llm",
+                "offline",
+                "api key",
+                "failed to push",
+            )
         )
+        rate_limited = any(t in low for t in ("429", "503", "quota", "high demand"))
         if hard or step + 1 >= max_steps:
             job["status"] = "failed"
             job["error"] = msg
         else:
             import time
 
-            state["steps"] = step + 1
-            job["next_run_at"] = int(time.time()) + 5
+            # Rate limits: wait longer and do not burn a step slot
+            if rate_limited:
+                job["next_run_at"] = int(time.time()) + 20
+            else:
+                state["steps"] = step + 1
+                job["next_run_at"] = int(time.time()) + 5
             job["updated_at"] = int(time.time())
             job["error"] = msg
+            _kick_self(job.get("job_id"))
         return job
 
 
