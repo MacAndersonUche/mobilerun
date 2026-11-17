@@ -323,6 +323,7 @@ def _history_shows_app_opened(hist_blob: str, app: str) -> bool:
     """True if prior steps already launched ``app`` successfully."""
     if not hist_blob:
         return False
+    hist_blob = hist_blob.lower()
     low = (app or "").lower().strip()
     if not low:
         return "open_ok" in hist_blob or "opened " in hist_blob
