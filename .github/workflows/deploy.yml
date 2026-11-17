@@ -320,26 +320,7 @@ jobs:
           DID=$(python3 -c "import json; print(json.load(open('/tmp/claim.json'))['device_id'])")
           curl -sfS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
           curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
-          python3 -c "
-import json, urllib.request
-api = '''$API_URL'''.rstrip('/')
-token = '''$TOKEN'''
-ds = json.load(open('/tmp/ci_devices.json'))
-for d in ds or []:
-    did = d.get('device_id') or ''
-    if not did:
-        continue
-    req = urllib.request.Request(
-        api + '/api/devices/' + did,
-        method='DELETE',
-        headers={'Authorization': 'Bearer ' + token},
-    )
-    try:
-        urllib.request.urlopen(req, timeout=30).read()
-        print('deleted', did)
-    except Exception as e:
-        print('delete_failed', did, e)
-"
+          API_URL="$API_URL" TOKEN="$TOKEN" python3 scripts/smoke_cleanup_ci_devices.py /tmp/ci_devices.json
           curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
           python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); assert d==[] or len(d)==0, d"
           # /health alias
