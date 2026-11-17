@@ -144,9 +144,23 @@ export default function SocialPage() {
               max_steps: 6,
             }
           : {};
-      await axios.post(`${getBackendUrl()}/api/social/${action}`, body, {
-        headers: headers(),
-      });
+      const res = await axios.post(
+        `${getBackendUrl()}/api/social/${action}`,
+        body,
+        { headers: headers() }
+      );
+      // Apply start/stop response immediately — status may hit another Lambda
+      const st = res.data?.state;
+      if (st && typeof st === 'object') {
+        setRunning(!!st.running);
+        setPaused(!!st.paused);
+      } else if (action === 'start') {
+        setRunning(true);
+      } else if (action === 'stop') {
+        setRunning(false);
+        setPaused(false);
+      }
+      if (res.data?.activity) setActivity(res.data.activity);
       await load();
     } catch (e) {
       const detail = axios.isAxiosError(e)

@@ -1904,6 +1904,60 @@ def _save_dating_runtime(auth: Optional[dict] = None) -> None:
     )
 
 
+def _load_social_runtime(auth: Optional[dict] = None) -> None:
+    """Hydrate social_mode_state from Dynamo so Stop works across Lambda instances."""
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        user_id = _dating_user_id(auth)
+        prefs = get_user_setting(user_id, "social_runtime") or {}
+    except Exception:
+        prefs = {}
+    if not isinstance(prefs, dict):
+        prefs = {}
+    if prefs.get("job_id"):
+        social_mode_state["job_id"] = prefs["job_id"]
+    if "running" in prefs:
+        social_mode_state["running"] = bool(prefs["running"])
+    if "paused" in prefs:
+        social_mode_state["paused"] = bool(prefs["paused"])
+    if prefs.get("speed_preset"):
+        social_mode_state["speed_preset"] = prefs["speed_preset"]
+    jid = social_mode_state.get("job_id")
+    if social_mode_state.get("running") and not _active_mode_job("social", jid):
+        social_mode_state["running"] = False
+        social_mode_state["paused"] = False
+        try:
+            _save_social_runtime(auth)
+        except Exception:
+            pass
+    elif (not social_mode_state.get("running")) and _active_mode_job("social", jid):
+        # Recover running flag when another Lambda started the job
+        social_mode_state["running"] = True
+
+
+def _save_social_runtime(auth: Optional[dict] = None) -> None:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+
+    user_id = _dating_user_id(auth)
+    save_user_setting(
+        user_id,
+        "social_runtime",
+        {
+            "running": bool(social_mode_state.get("running")),
+            "paused": bool(social_mode_state.get("paused")),
+            "job_id": social_mode_state.get("job_id"),
+            "speed_preset": social_mode_state.get("speed_preset", "balanced"),
+            "current_app": social_mode_state.get("current_app"),
+        },
+    )
+
+
 class DatingModeConfig(BaseModel):
     """Dating mode configuration."""
 
@@ -3502,10 +3556,7 @@ async def update_social_config(
 
 @app.get("/api/social/status")
 async def get_social_status(auth: Optional[dict] = Depends(optional_verify_token)):
-    jid = social_mode_state.get("job_id")
-    if social_mode_state.get("running") and not _active_mode_job("social", jid):
-        social_mode_state["running"] = False
-        social_mode_state["paused"] = False
+    _load_social_runtime(auth)
     activity = _activity_for_mode("social", social_mode_state.get("job_id"))
     return {
         **social_mode_state,
@@ -3529,6 +3580,7 @@ async def start_social_mode(
     stand_in_package: Optional[str] = None,
 ):
     """Start social mode as a step-driven job (defaults to dry_run)."""
+    _load_social_runtime(auth)
     existing = social_mode_state.get("job_id")
     if social_mode_state.get("running") and _active_mode_job("social", existing):
         raise HTTPException(status_code=400, detail="Social mode already running")
@@ -3588,6 +3640,7 @@ async def start_social_mode(
             status_code=503, detail=f"Could not persist social job: {e}"
         ) from e
 
+    _save_social_runtime(auth)
     return {
         "status": "started",
         "state": social_mode_state,
@@ -3598,6 +3651,7 @@ async def start_social_mode(
 
 @app.post("/api/social/stop")
 async def stop_social_mode(auth: Optional[dict] = Depends(optional_verify_token)):
+    _load_social_runtime(auth)
     social_mode_state["running"] = False
     social_mode_state["paused"] = False
     job_id = social_mode_state.pop("job_id", None)
@@ -3611,6 +3665,7 @@ async def stop_social_mode(auth: Optional[dict] = Depends(optional_verify_token)
                 put_job(job)
         except Exception as e:
             logger.warning("Could not stop social job: %s", e)
+    _save_social_runtime(auth)
     return {"status": "stopped", "state": social_mode_state}
 
 
