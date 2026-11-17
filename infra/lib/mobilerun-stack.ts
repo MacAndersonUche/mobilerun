@@ -240,6 +240,8 @@ export class MobilerunStack extends cdk.Stack {
       XAI_API_KEY: process.env.XAI_API_KEY || '',
       LLM_PROVIDER: process.env.LLM_PROVIDER || 'gemini',
       LLM_MODEL: process.env.LLM_MODEL || '',
+      // Prefer OpenAI when Gemini is quota'd (429); also try OpenAI first when set
+      PREFER_OPENAI: process.env.PREFER_OPENAI || 'true',
       ALLOW_UNAUTHENTICATED: 'false',
       HISTORY_TABLE: historyTable.tableName,
       SETTINGS_TABLE: settingsTable.tableName,

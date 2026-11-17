@@ -113,8 +113,16 @@ def _call_gemini(user_prompt: str) -> str:
         except urllib.error.HTTPError as e:
             err_body = e.read().decode(errors="replace")[:300]
             last_err = RuntimeError(f"Gemini {model} HTTP {e.code}: {err_body}")
-            # Missing, bad request, rate-limit, or overloaded → try next model
-            if e.code in (404, 400, 429, 503):
+            # Quota / rate-limit is account-wide — stop immediately so OpenAI can run
+            if e.code == 429 or (e.code == 503 and "high demand" in err_body.lower()):
+                logger.warning(
+                    "Gemini model %s failed (%s); skipping remaining Gemini models",
+                    model,
+                    e.code,
+                )
+                break
+            # Missing / bad request → try next model
+            if e.code in (404, 400, 503):
                 logger.warning(
                     "Gemini model %s failed (%s); trying next", model, e.code
                 )
@@ -179,29 +187,7 @@ def probe_llm_providers() -> Dict[str, Any]:
     }
     prompt = 'Reply with JSON only: {"action":"done","reason":"probe"}'
 
-    if out["keys_present"]["gemini"]:
-        try:
-            text = _call_gemini(SYSTEM_PROMPT + "\n\n" + prompt)
-            out["gemini"] = {
-                "ok": True,
-                "http_status": 200,
-                "preview": (text or "")[:80],
-            }
-        except Exception as e:
-            msg = str(e)
-            code_m = re.search(r"HTTP (\d{3})", msg)
-            out["gemini"] = {
-                "ok": False,
-                "http_status": int(code_m.group(1)) if code_m else None,
-                "error": msg[:400],
-            }
-    else:
-        out["gemini"] = {
-            "ok": False,
-            "http_status": None,
-            "error": "GEMINI_API_KEY / GOOGLE_API_KEY not set on Lambda",
-        }
-
+    # Probe OpenAI first (fast, and preferred when Gemini is quota'd)
     if out["keys_present"]["openai"]:
         try:
             text = _call_openai(prompt)
@@ -233,6 +219,29 @@ def probe_llm_providers() -> Dict[str, Any]:
             "error": "OPENAI_API_KEY not set (empty) on Lambda",
         }
 
+    if out["keys_present"]["gemini"]:
+        try:
+            text = _call_gemini(SYSTEM_PROMPT + "\n\n" + prompt)
+            out["gemini"] = {
+                "ok": True,
+                "http_status": 200,
+                "preview": (text or "")[:80],
+            }
+        except Exception as e:
+            msg = str(e)
+            code_m = re.search(r"HTTP (\d{3})", msg)
+            out["gemini"] = {
+                "ok": False,
+                "http_status": int(code_m.group(1)) if code_m else None,
+                "error": msg[:400],
+            }
+    else:
+        out["gemini"] = {
+            "ok": False,
+            "http_status": None,
+            "error": "GEMINI_API_KEY / GOOGLE_API_KEY not set on Lambda",
+        }
+
     out["any_ok"] = bool(
         (out["gemini"] or {}).get("ok") or (out["openai"] or {}).get("ok")
     )
@@ -260,19 +269,40 @@ def plan_next_action(
     raw = None
     errors: List[str] = []
     provider_used: Optional[str] = None
+    # Prefer OpenAI first when LLM_PROVIDER=openai, or when Gemini is known-unusable
+    # via prior 429 (caller still falls through). Default: Gemini then OpenAI.
+    prefer_openai = (
+        os.environ.get("LLM_PROVIDER") or ""
+    ).strip().lower() == "openai" or (
+        os.environ.get("PREFER_OPENAI") or ""
+    ).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    providers: List[str] = []
+    if prefer_openai and os.environ.get("OPENAI_API_KEY"):
+        providers.append("openai")
     if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        providers.append("gemini")
+    if "openai" not in providers and os.environ.get("OPENAI_API_KEY"):
+        providers.append("openai")
+
+    for prov in providers:
+        if raw is not None:
+            break
         try:
-            raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
-            provider_used = "gemini"
+            if prov == "gemini":
+                raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
+                provider_used = "gemini"
+            else:
+                raw = _call_openai(user)
+                provider_used = "openai"
         except Exception as e:
-            errors.append(f"gemini: {e}")
-            logger.warning("Gemini failed, trying OpenAI if configured: %s", e)
-    if raw is None and os.environ.get("OPENAI_API_KEY"):
-        try:
-            raw = _call_openai(user)
-            provider_used = "openai"
-        except Exception as e:
-            errors.append(f"openai: {e}")
+            errors.append(f"{prov}: {e}")
+            logger.warning("%s failed, trying next provider: %s", prov, e)
+            # On Gemini quota, immediately continue to OpenAI (already next in list)
+            continue
     if raw is None:
         detail = "; ".join(errors) or "no keys"
         # Trivial open-app only — never multi-step navigation/toggles

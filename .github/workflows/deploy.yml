@@ -171,6 +171,8 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
+          # Prefer OpenAI while Gemini quota is exhausted (429)
+          PREFER_OPENAI: 'true'
           LAMBDA_ASSET_DIR: /tmp/lambda-asset
           SKIP_BUNDLING: '1'
 
