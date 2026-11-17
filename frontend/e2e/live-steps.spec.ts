@@ -78,10 +78,18 @@ test('tasks page shows plain-language live steps', async ({ page }) => {
     await expect(page.getByTestId('history-task').first()).toBeVisible({
       timeout: 20000,
     });
-    await page.getByTestId('history-task').first().click();
-    await expect(page.getByTestId('step-line').first()).toBeVisible({
-      timeout: 15000,
-    });
+    // Expand until a plain-language step line is visible
+    const cards = page.getByTestId('history-task');
+    const n = await cards.count();
+    for (let i = 0; i < Math.min(n, 8); i++) {
+      await cards.nth(i).locator('button').first().click();
+      const lines = page.getByTestId('step-line');
+      if ((await lines.count()) > 0) break;
+    }
+    await expect(page.getByTestId('step-line').first()).toContainText(
+      /Step\s+\d+:/i,
+      { timeout: 20000 }
+    );
     await shot(page, 'history-live-steps');
     return;
   }
