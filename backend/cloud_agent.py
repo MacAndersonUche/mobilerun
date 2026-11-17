@@ -174,12 +174,124 @@ def plan_next_action(
         except Exception as e:
             errors.append(f"openai: {e}")
     if raw is None:
+        # Last resort: keyword match on the a11y tree (keeps agent loop alive when
+        # Gemini/OpenAI are quota'd). Prefer LLM when available.
+        heur = _heuristic_action(instruction, ui_tree, history)
+        if heur:
+            logger.warning(
+                "Using heuristic planner (LLM unavailable: %s)",
+                "; ".join(errors) or "no keys",
+            )
+            return heur
         detail = "; ".join(errors) or "no keys"
         raise RuntimeError(
             "No working LLM on backend (need GEMINI_API_KEY / GOOGLE_API_KEY / "
             f"OPENAI_API_KEY). Last errors: {detail}"
         )
     return _parse_action_json(raw)
+
+
+def _heuristic_action(
+    instruction: str, ui_tree: str, history: List[str]
+) -> Optional[Dict[str, Any]]:
+    """Best-effort next tap from goal keywords + clickable nodes in the tree."""
+    goal = (instruction or "").lower()
+    hist_blob = " ".join(history).lower()
+    # Prefer goal fragments not yet done
+    candidates = []
+    for kw in (
+        "dark theme",
+        "dark mode",
+        "display",
+        "settings",
+        "wifi",
+        "bluetooth",
+        "apps",
+        "battery",
+        "sound",
+        "network",
+    ):
+        if kw in goal:
+            candidates.append(kw)
+    # Also split instruction into words longer than 3 chars
+    for w in re.findall(r"[a-zA-Z]{4,}", instruction or ""):
+        wl = w.lower()
+        if wl not in candidates and wl not in (
+            "open",
+            "turn",
+            "goto",
+            "into",
+            "from",
+            "with",
+            "then",
+            "and",
+        ):
+            candidates.append(wl)
+
+    nodes = []
+    for m in re.finditer(
+        r'text="([^"]*)"[^>]*clickable="true"[^>]*center="\((\d+),(\d+)\)"',
+        ui_tree or "",
+        re.I,
+    ):
+        nodes.append({"text": m.group(1), "x": int(m.group(2)), "y": int(m.group(3))})
+    # Alternate XML-ish / loose format
+    if not nodes:
+        for m in re.finditer(
+            r"text[=:][\"']?([^\"'\n]+)[\"']?.*?clickable[=:][\"']?true",
+            ui_tree or "",
+            re.I | re.S,
+        ):
+            text = m.group(1).strip()
+            cm = re.search(
+                r"center[=:(]+(\d+)[, ]+(\d+)", m.group(0), re.I
+            ) or re.search(r"\((\d+),(\d+)\)", m.group(0))
+            if cm:
+                nodes.append(
+                    {"text": text, "x": int(cm.group(1)), "y": int(cm.group(2))}
+                )
+
+    # Done if dark theme already On and goal asks for dark
+    if ("dark" in goal) and re.search(
+        r'text="On"[^>]*resource-id="[^"]*dark', ui_tree or "", re.I
+    ):
+        return {"action": "done", "reason": "heuristic: dark theme already on"}
+    if (
+        ("dark" in goal)
+        and "on" in (ui_tree or "").lower()
+        and "dark theme" in (ui_tree or "").lower()
+    ):
+        if re.search(r'Dark theme[\s\S]{0,80}text="On"', ui_tree or "", re.I):
+            return {"action": "done", "reason": "heuristic: dark theme on"}
+
+    for kw in candidates:
+        # Skip if we already tapped something matching this keyword
+        if any(kw in h for h in history[-6:]):
+            # Allow re-tap for toggle words
+            if kw not in ("dark theme", "dark mode", "on", "off"):
+                continue
+        for n in nodes:
+            t = (n["text"] or "").lower()
+            if kw in t or t in kw:
+                return {
+                    "action": "tap",
+                    "x": n["x"],
+                    "y": n["y"],
+                    "reason": f"heuristic tap '{n['text']}' for '{kw}'",
+                }
+
+    # open_app Settings if nowhere near settings yet
+    if (
+        "settings" in goal
+        and "open_app" not in hist_blob
+        and "settings" not in hist_blob
+    ):
+        return {
+            "action": "open_app",
+            "app": "Settings",
+            "reason": "heuristic open Settings",
+        }
+    return None
 
 
 def _parse_action_json(raw: str) -> Dict[str, Any]:
