@@ -140,41 +140,46 @@ test('dating and social live activity views', async ({ page }) => {
       body: JSON.stringify({ status: 'ok', apps: [], config: {} }),
     });
   });
-  await page.route('**/api/social/status', async (route) => {
+  await page.route('**/api/needs-you**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        running: true,
-        paused: false,
-        job_id: 'social_demo',
-        needs_you_badge: 0,
-        activity: {
-          job_id: 'social_demo',
-          status: 'running',
-          dry_run: true,
-          current_step: 1,
-          package: 'com.google.android.apps.messaging',
-          last_action: 'open_app',
-          steps: [
-            {
-              n: 1,
-              action: 'open_app',
-              reason: 'dry_run — open stand-in messaging app',
-              package: 'com.google.android.apps.messaging',
-              screen: 'com.google.android.apps.messaging',
-              ok: true,
-              dry_run: true,
-              ts: Math.floor(Date.now() / 1000),
-            },
-          ],
-        },
-      }),
+      body: JSON.stringify({ items: [], badge: 0 }),
     });
   });
   await page.route('**/api/social/**', async (route) => {
-    if (route.request().url().includes('/status')) {
-      await route.fallback();
+    const url = route.request().url();
+    if (url.includes('/status')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          running: true,
+          paused: false,
+          job_id: 'social_demo',
+          needs_you_badge: 0,
+          activity: {
+            job_id: 'social_demo',
+            status: 'running',
+            dry_run: true,
+            current_step: 1,
+            package: 'com.google.android.apps.messaging',
+            last_action: 'open_app',
+            steps: [
+              {
+                n: 1,
+                action: 'open_app',
+                reason: 'dry_run — open stand-in messaging app',
+                package: 'com.google.android.apps.messaging',
+                screen: 'com.google.android.apps.messaging',
+                ok: true,
+                dry_run: true,
+                ts: Math.floor(Date.now() / 1000),
+              },
+            ],
+          },
+        }),
+      });
       return;
     }
     await route.fulfill({
@@ -182,8 +187,17 @@ test('dating and social live activity views', async ({ page }) => {
       contentType: 'application/json',
       body: JSON.stringify({
         status: 'ok',
-        apps: [],
-        config: { apps: [], signature: {}, escalation: {} },
+        apps: [
+          {
+            name: 'Messages',
+            package_name: 'com.google.android.apps.messaging',
+            enabled: true,
+            signature_enabled: true,
+          },
+        ],
+        signature: { enabled_global: true, text: '— from MacAI' },
+        escalation: { always_ask_new_contacts: true },
+        speed_preset: 'balanced',
       }),
     });
   });

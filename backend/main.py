@@ -3186,12 +3186,22 @@ async def start_dating_mode(
     }
     agent_mode_state["mode"] = "dating"
     try:
-        from storage import put_job
-
+        from storage import get_job, put_job
+    except ImportError:
+        from backend.storage import get_job, put_job  # type: ignore
+    try:
         put_job(job)
+        persisted = get_job(job_id)
+        if not persisted and os.environ.get("USE_AWS_STORAGE", "").lower() == "true":
+            raise RuntimeError(f"dating job {job_id} not readable after put_job")
         _kick_job(job_id)
     except Exception as e:
-        logger.warning("Could not persist dating job (local mode ok): %s", e)
+        dating_mode_state["running"] = False
+        dating_mode_state.pop("job_id", None)
+        logger.exception("Could not persist dating job: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"Could not persist dating job: {e}"
+        ) from e
 
     _save_dating_runtime(auth)
     return {
@@ -3519,12 +3529,22 @@ async def start_social_mode(
         "ttl": int(datetime.now().timestamp()) + 7 * 86400,
     }
     try:
-        from storage import put_job
-
+        from storage import get_job, put_job
+    except ImportError:
+        from backend.storage import get_job, put_job  # type: ignore
+    try:
         put_job(job)
+        persisted = get_job(job_id)
+        if not persisted and os.environ.get("USE_AWS_STORAGE", "").lower() == "true":
+            raise RuntimeError(f"social job {job_id} not readable after put_job")
         _kick_job(job_id)
     except Exception as e:
-        logger.warning("Could not persist social job: %s", e)
+        social_mode_state["running"] = False
+        social_mode_state.pop("job_id", None)
+        logger.exception("Could not persist social job: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"Could not persist social job: {e}"
+        ) from e
 
     return {
         "status": "started",
