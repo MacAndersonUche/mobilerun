@@ -98,10 +98,13 @@ object PermissionStatus {
     /** Deep-link to this app's AccessibilityService details when possible. */
     fun openAccessibilitySettings(context: Context) {
         val cn = ComponentName(context, MobilerunAccessibilityService::class.java)
+        // String constant — Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS is API 31+
+        // and may be missing from older compileSdk stubs.
+        val detailsAction = "android.settings.ACCESSIBILITY_DETAILS_SETTINGS"
         if (Build.VERSION.SDK_INT >= 31) {
             try {
                 context.startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                    Intent(detailsAction).apply {
                         putExtra(Intent.EXTRA_COMPONENT_NAME, cn)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     },
@@ -111,7 +114,7 @@ object PermissionStatus {
             }
             try {
                 context.startActivity(
-                    Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS).apply {
+                    Intent(detailsAction).apply {
                         data = Uri.fromParts("package", context.packageName, null)
                         putExtra(Intent.EXTRA_COMPONENT_NAME, cn)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
