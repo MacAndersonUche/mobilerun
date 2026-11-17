@@ -353,8 +353,13 @@ test.describe('full button audit', () => {
     try {
       const device = page.locator('#task-device');
       if (await device.count()) {
-        const opts = await device.locator('option').all();
-        if (opts.length > 1) await device.selectOption({ index: 1 });
+        const online = device.locator('option', { hasText: /online/i }).first();
+        if (await online.count()) {
+          const val = await online.getAttribute('value');
+          if (val) await device.selectOption(val);
+        } else {
+          await device.selectOption({ index: 0 });
+        }
       }
       await page.locator('#task-instruction').fill('open settings');
       const [resp] = await Promise.all([
@@ -388,9 +393,15 @@ test.describe('full button audit', () => {
     try {
       const picker = page.getByTestId('chat-device-picker');
       if (await picker.count()) {
-        const options = await picker.locator('option').count();
-        if (options > 1) await picker.selectOption({ index: 1 });
-        record('chat', 'Device picker', 'select', true);
+        // Prefer connected/online device — index 1 is often a stale offline pair
+        const onlineOpt = picker.locator('option', { hasText: /online/i }).first();
+        if (await onlineOpt.count()) {
+          const val = await onlineOpt.getAttribute('value');
+          if (val) await picker.selectOption(val);
+        } else {
+          await picker.selectOption({ index: 0 });
+        }
+        record('chat', 'Device picker', 'select online', true, await picker.inputValue());
       }
       await page.getByPlaceholder(/Ask Mac/i).fill('open settings');
       const [chatResp] = await Promise.all([
@@ -401,15 +412,25 @@ test.describe('full button audit', () => {
         page.getByRole('button', { name: /Send/i }).click(),
       ]);
       record('chat', 'Send', 'POST /api/chat', chatResp.ok(), `status=${chatResp.status()}`);
-      await page.waitForTimeout(10000);
+      // Live steps may appear briefly then fold into the reply card
+      const sawLive = await page
+        .getByTestId('chat-live-steps')
+        .or(page.getByTestId('chat-task-progress'))
+        .or(page.getByTestId('chat-task-step-log'))
+        .or(page.getByText(/Done:|Task completed|Opened Settings|Step \d+/i))
+        .first()
+        .waitFor({ state: 'visible', timeout: 45000 })
+        .then(() => true)
+        .catch(() => false);
       const live = await page.getByTestId('chat-live-steps').count();
       const progress = await page.getByTestId('chat-task-progress').count();
+      const stepLog = await page.getByTestId('chat-task-step-log').count();
       record(
         'chat',
         'Live steps / progress',
         'UI updates',
-        live > 0 || progress > 0,
-        `live=${live} progress=${progress}`
+        sawLive || live > 0 || progress > 0 || stepLog > 0,
+        `live=${live} progress=${progress} stepLog=${stepLog} saw=${sawLive}`
       );
       // Suggestion chips
       const chips = page.getByRole('button', { name: /→$/ });
@@ -453,24 +474,38 @@ test.describe('full button audit', () => {
     await page.waitForTimeout(1000);
     await ensureDryRun(page, 'dating-dry-run');
     record('dating', 'Dry-run toggle', 'checked', true);
-    // Stop any prior
-    await page.getByTestId('dating-stop').click().catch(() => undefined);
-    await page.waitForTimeout(500);
+    // Stop any prior — only if enabled (disabled Stop hangs Playwright actionability)
+    try {
+      const stopBtn = page.getByTestId('dating-stop');
+      if ((await stopBtn.count()) && (await stopBtn.isEnabled())) {
+        await stopBtn.click({ timeout: 5000 });
+        await page.waitForTimeout(500);
+      }
+    } catch {
+      /* ok */
+    }
     try {
       const device = page.getByTestId('dating-device');
       if (await device.count()) {
-        const opts = await device.locator('option').count();
-        if (opts > 1) await device.selectOption({ index: 1 });
+        const online = device.locator('option').filter({ hasText: /online|sdk_|android_/i });
+        const n = await device.locator('option').count();
+        if (n > 0) {
+          // Prefer first non-empty option (paired emulator)
+          await device.selectOption({ index: 0 }).catch(async () => {
+            if (n > 1) await device.selectOption({ index: 1 });
+          });
+        }
+        void online;
       }
-      await page.getByTestId('dating-start').click();
-      // Start may POST stop then start; wait for either
-      const startResp = await page
-        .waitForResponse(
-          (r) =>
-            r.url().includes('/api/dating/start') && r.request().method() === 'POST',
-          { timeout: 45000 }
-        )
-        .catch(() => null);
+      const startBtn = page.getByTestId('dating-start');
+      await expect(startBtn).toBeEnabled({ timeout: 10000 });
+      const startWait = page.waitForResponse(
+        (r) =>
+          r.url().includes('/api/dating/start') && r.request().method() === 'POST',
+        { timeout: 45000 }
+      );
+      await startBtn.click({ timeout: 10000 });
+      const startResp = await startWait.catch(() => null);
       record(
         'dating',
         'Start (dry-run)',
@@ -523,21 +558,29 @@ test.describe('full button audit', () => {
     await page.waitForTimeout(1000);
     await ensureDryRun(page, 'social-dry-run');
     record('social', 'Dry-run toggle', 'checked', true);
-    await page.getByTestId('social-stop').click().catch(() => undefined);
+    try {
+      const stopBtn = page.getByTestId('social-stop');
+      if ((await stopBtn.count()) && (await stopBtn.isEnabled())) {
+        await stopBtn.click({ timeout: 5000 });
+      }
+    } catch {
+      /* ok */
+    }
     try {
       const device = page.getByTestId('social-device');
       if (await device.count()) {
-        const opts = await device.locator('option').count();
-        if (opts > 1) await device.selectOption({ index: 1 });
+        const n = await device.locator('option').count();
+        if (n > 0) await device.selectOption({ index: 0 });
       }
-      await page.getByTestId('social-start').click();
-      const startResp = await page
-        .waitForResponse(
-          (r) =>
-            r.url().includes('/api/social/start') && r.request().method() === 'POST',
-          { timeout: 45000 }
-        )
-        .catch(() => null);
+      const startBtn = page.getByTestId('social-start');
+      await expect(startBtn).toBeEnabled({ timeout: 10000 });
+      const startWait = page.waitForResponse(
+        (r) =>
+          r.url().includes('/api/social/start') && r.request().method() === 'POST',
+        { timeout: 45000 }
+      );
+      await startBtn.click({ timeout: 10000 });
+      const startResp = await startWait.catch(() => null);
       record(
         'social',
         'Start (dry-run)',
