@@ -27,6 +27,16 @@ export default function TasksPage() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string>('');
   const [taskLog, setTaskLog] = useState<string>('');
+  const [taskSteps, setTaskSteps] = useState<
+    Array<{
+      n: number;
+      action: string;
+      reason?: string;
+      ok?: boolean;
+      screenshot_url?: string;
+      verify?: string;
+    }>
+  >([]);
 
   useEffect(() => {
     loadDevices();
@@ -51,6 +61,7 @@ export default function TasksPage() {
         );
         const blob = [d.result, d.error].filter(Boolean).join(' — ') || 'Running…';
         setTaskLog(blob);
+        if (Array.isArray(d.steps)) setTaskSteps(d.steps);
         if (['completed', 'failed', 'stopped'].includes(d.status)) {
           setActiveTaskId(null);
           setSubmitting(false);
@@ -141,6 +152,7 @@ export default function TasksPage() {
     setSubmitting(true);
     setTaskStatus('starting…');
     setTaskLog('');
+    setTaskSteps([]);
     try {
       const res = await axios.post(
         `${getBackendUrl()}/api/tasks`,
@@ -217,7 +229,7 @@ export default function TasksPage() {
         </div>
       )}
 
-      {(taskStatus || taskLog) && (
+      {(taskStatus || taskLog || taskSteps.length > 0) && (
         <div
           className="rounded-lg border border-line bg-canvas-elev p-4 text-sm"
           data-testid="task-progress"
@@ -232,6 +244,38 @@ export default function TasksPage() {
             </p>
           )}
           {taskLog && <p className="mt-1 text-mute whitespace-pre-wrap">{taskLog}</p>}
+          {taskSteps.length > 0 && (
+            <ol className="mt-3 space-y-2" data-testid="task-steps">
+              {taskSteps.map((s) => (
+                <li
+                  key={s.n}
+                  className="rounded border border-line/60 bg-canvas px-3 py-2"
+                >
+                  <div className="flex gap-3">
+                    <span className="text-mute shrink-0">#{s.n}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className={s.ok === false ? 'text-red-300' : 'text-white'}>
+                        {s.action}
+                      </p>
+                      {s.reason && (
+                        <p className="text-mute text-xs mt-0.5">{s.reason}</p>
+                      )}
+                      {s.verify && (
+                        <p className="text-mute text-xs mt-0.5">{s.verify}</p>
+                      )}
+                    </div>
+                    {s.screenshot_url && (
+                      <img
+                        src={s.screenshot_url}
+                        alt={`Step ${s.n}`}
+                        className="h-16 w-10 object-cover rounded border border-line"
+                      />
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       )}
 

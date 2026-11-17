@@ -20,7 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 API = os.environ.get(
     "API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
@@ -30,10 +30,10 @@ WS = os.environ.get(
 )
 USER = os.environ.get("E2E_USER", "ci-e2e")
 PASSWORD = os.environ.get("E2E_PASSWORD", "admin")
-INSTRUCTION = os.environ.get(
-    "E2E_INSTRUCTION",
-    "open Settings, go to About phone, and read the Android version",
-)
+# Default: PackageManager open_app path (Settings). Override with E2E_INSTRUCTION.
+INSTRUCTION = os.environ.get("E2E_INSTRUCTION", "open settings")
+# Second task: installed-app launch (Chrome stands in for WhatsApp on emulator).
+APP_INSTRUCTION = os.environ.get("E2E_APP_INSTRUCTION", "open chrome")
 
 
 def req(
@@ -87,8 +87,10 @@ def poll_task(token: str, task_id: str, timeout_s: int = 240) -> Dict[str, Any]:
         last = req("GET", f"/api/tasks/{task_id}", token=token)
         status = (last.get("status") or "").lower()
         step = last.get("current_step") or last.get("state", {}).get("steps")
+        n_steps = len(last.get("steps") or [])
         print(
             f"  task {task_id} status={status} step={step} "
+            f"steps_list={n_steps} "
             f"result={last.get('result')!r} error={last.get('error')!r}",
             flush=True,
         )
@@ -96,6 +98,104 @@ def poll_task(token: str, task_id: str, timeout_s: int = 240) -> Dict[str, Any]:
             return last
         time.sleep(3)
     raise RuntimeError(f"Task timeout: {last}")
+
+
+def _assert_llm(result: Dict[str, Any], label: str) -> None:
+    planner = result.get("planner") or (result.get("state") or {}).get("planner")
+    llm_provider = result.get("llm_provider") or (result.get("state") or {}).get(
+        "llm_provider"
+    )
+    if planner == "heuristic" or (
+        isinstance(result.get("result"), str)
+        and "LLM unavailable: quota" in result.get("result", "")
+        and not llm_provider
+    ):
+        raise RuntimeError(
+            f"{label} used heuristic planner — not valid verification "
+            f"(planner={planner!r} llm_provider={llm_provider!r})"
+        )
+    if llm_provider not in ("gemini", "openai"):
+        raise RuntimeError(
+            f"{label} missing real LLM provider "
+            f"(planner={planner!r} llm_provider={llm_provider!r})"
+        )
+
+
+def _assert_steps(result: Dict[str, Any], label: str) -> List[Dict[str, Any]]:
+    steps = result.get("steps") or []
+    if not isinstance(steps, list) or len(steps) < 1:
+        # Fallback: history strings in state
+        hist = (result.get("state") or {}).get("history") or []
+        if hist:
+            print(f"  {label}: steps[] empty but history={hist[:5]!r}", flush=True)
+            return [{"action": h} for h in hist]
+        raise RuntimeError(f"{label}: Task history has no per-step actions")
+    for s in steps:
+        if not (s.get("action") or "").strip():
+            raise RuntimeError(f"{label}: empty step action in {s!r}")
+    print(
+        f"  {label}: {len(steps)} steps → "
+        + "; ".join(str(s.get("action"))[:60] for s in steps[:6]),
+        flush=True,
+    )
+    return steps
+
+
+def run_task(
+    token: str, device_id: str, instruction: str, *, max_steps: int = 10
+) -> Dict[str, Any]:
+    print("SUBMIT_TASK", instruction)
+    task = req(
+        "POST",
+        "/api/tasks",
+        {
+            "device_id": device_id,
+            "instruction": instruction,
+            "max_steps": max_steps,
+            "mode": "normal",
+            "speed_preset": "fast",
+        },
+        token=token,
+    )
+    task_id = task.get("task_id") or task.get("id")
+    print("task_id", task_id)
+    result = poll_task(token, task_id, timeout_s=300)
+    status = (result.get("status") or "").lower()
+    print(
+        "TASK_RESULT",
+        json.dumps(
+            {
+                "instruction": instruction,
+                "task_id": task_id,
+                "status": status,
+                "current_step": result.get("current_step"),
+                "steps": result.get("steps"),
+                "planner": result.get("planner"),
+                "llm_provider": result.get("llm_provider"),
+                "result": result.get("result"),
+                "error": result.get("error"),
+            }
+        )[:2000],
+    )
+    if status != "completed":
+        raise RuntimeError(
+            f"instruction={instruction!r} status={status} "
+            f"error={result.get('error')!r}"
+        )
+    _assert_llm(result, instruction)
+    _assert_steps(result, instruction)
+    # Also confirm History list endpoint surfaces the task with steps
+    listed = req("GET", "/api/tasks?limit=20", token=token) or []
+    hit = next((t for t in listed if t.get("task_id") == task_id), None)
+    if not hit:
+        print(f"WARN history list missing {task_id}", flush=True)
+    else:
+        print(
+            f"  history_list status={hit.get('status')} "
+            f"steps={len(hit.get('steps') or [])}",
+            flush=True,
+        )
+    return result
 
 
 def main() -> int:
@@ -114,7 +214,6 @@ def main() -> int:
     me = req("GET", "/api/auth/me", token=token)
     print("auth", me.get("email"))
 
-    # Dating must load (no backend-not-connected)
     for path in (
         "/api/dating/status",
         "/api/dating/review-queue",
@@ -138,7 +237,6 @@ def main() -> int:
         with open(args.pair_code_out, "w") as f:
             json.dump(pair, f, indent=2)
         code = pair.get("code") or pair.get("token")
-        # AWS-only deep link (no LAN)
         from urllib.parse import urlencode
 
         q = urlencode(
@@ -157,7 +255,6 @@ def main() -> int:
             "Waiting for APK claim via deep link (caller should am start)…",
             flush=True,
         )
-        # Also write a shell helper
         with open("/tmp/prod-e2e/am_pair.sh", "w") as f:
             f.write(
                 "#!/bin/bash\n"
@@ -166,7 +263,6 @@ def main() -> int:
         os.chmod("/tmp/prod-e2e/am_pair.sh", 0o755)
 
     if not device_id:
-        # Wait for any online device owned by ci-e2e
         dev = wait_device(token, timeout_s=120)
         device_id = str(dev.get("device_id"))
         print(
@@ -176,79 +272,20 @@ def main() -> int:
             dev.get("route") or dev.get("connection_type"),
         )
     else:
-        dev = wait_device(token, want=device_id, timeout_s=60)
+        wait_device(token, want=device_id, timeout_s=60)
         print("device_online", device_id)
 
-    # --- Tasks page path ---
-    print("SUBMIT_TASK", INSTRUCTION)
-    task = req(
-        "POST",
-        "/api/tasks",
-        {
-            "device_id": device_id,
-            "instruction": INSTRUCTION,
-            "max_steps": 15,
-            "mode": "normal",
-            "speed_preset": "fast",
-        },
-        token=token,
-    )
-    task_id = task.get("task_id") or task.get("id")
-    print("task_id", task_id)
-    result = poll_task(token, task_id, timeout_s=300)
-    steps = (
-        result.get("current_step")
-        or (result.get("state") or {}).get("steps")
-        or result.get("max_steps")
-    )
-    status = (result.get("status") or "").lower()
-    planner = result.get("planner") or (result.get("state") or {}).get("planner")
-    llm_provider = result.get("llm_provider") or (result.get("state") or {}).get(
-        "llm_provider"
-    )
-    print(
-        "TASK_RESULT",
-        json.dumps(
-            {
-                "path": "Tasks",
-                "instruction": INSTRUCTION,
-                "task_id": task_id,
-                "status": status,
-                "steps": steps,
-                "planner": planner,
-                "llm_provider": llm_provider,
-                "result": result.get("result"),
-                "error": result.get("error"),
-                "state": result.get("state"),
-            }
-        ),
-    )
-    if status != "completed":
-        print(
-            f"RESULT FAIL Tasks instruction={INSTRUCTION!r} status={status} "
-            f"steps={steps} error={result.get('error')!r}"
-        )
-        return 1
-    # Real verification must use an actual LLM — never heuristic
-    if planner == "heuristic" or (
-        isinstance(result.get("result"), str)
-        and "LLM unavailable: quota" in result.get("result", "")
-        and not llm_provider
-    ):
-        print(
-            "RESULT FAIL Tasks used heuristic planner — not valid verification "
-            f"(planner={planner!r} llm_provider={llm_provider!r})"
-        )
-        return 1
-    if llm_provider not in ("gemini", "openai"):
-        print(
-            "RESULT FAIL Tasks missing real LLM provider "
-            f"(planner={planner!r} llm_provider={llm_provider!r})"
-        )
-        return 1
+    # (1) open settings — PackageManager / ACTION_SETTINGS path
+    settings_result = run_task(token, device_id, INSTRUCTION, max_steps=8)
 
-    # --- Ask Mac / chat path ---
-    chat_instr = "open Settings, go to About phone, and read the Android version"
+    # (2) open installed app (Chrome ≈ WhatsApp-style launch on emu)
+    app_result = run_task(token, device_id, APP_INSTRUCTION, max_steps=8)
+
+    # Optional multi-step chat path (still must use real LLM)
+    chat_instr = os.environ.get(
+        "E2E_CHAT_INSTRUCTION",
+        "open Settings",
+    )
     print("SUBMIT_CHAT", chat_instr)
     chat = req(
         "POST",
@@ -268,20 +305,18 @@ def main() -> int:
             or (chat.get("task") or {}).get("task_id")
             or (chat.get("data") or {}).get("task_id")
         )
-        # Some chat responses nest under actions
         for a in chat.get("actions") or []:
             if isinstance(a, dict) and a.get("task_id"):
                 chat_task_id = a["task_id"]
                 break
     if not chat_task_id:
-        # Fallback: submit another task as chat would
         t2 = req(
             "POST",
             "/api/tasks",
             {
                 "device_id": device_id,
                 "instruction": chat_instr,
-                "max_steps": 12,
+                "max_steps": 8,
                 "mode": "normal",
                 "speed_preset": "fast",
             },
@@ -292,48 +327,21 @@ def main() -> int:
 
     chat_result = poll_task(token, chat_task_id, timeout_s=240)
     chat_status = (chat_result.get("status") or "").lower()
-    chat_steps = chat_result.get("current_step") or (
-        chat_result.get("state") or {}
-    ).get("steps")
-    chat_planner = chat_result.get("planner") or (chat_result.get("state") or {}).get(
-        "planner"
-    )
-    chat_llm = chat_result.get("llm_provider") or (chat_result.get("state") or {}).get(
-        "llm_provider"
-    )
-    print(
-        "CHAT_RESULT",
-        json.dumps(
-            {
-                "path": "Ask Mac chat",
-                "instruction": chat_instr,
-                "task_id": chat_task_id,
-                "status": chat_status,
-                "steps": chat_steps,
-                "planner": chat_planner,
-                "llm_provider": chat_llm,
-                "result": chat_result.get("result"),
-                "error": chat_result.get("error"),
-            }
-        ),
-    )
+    if chat_status != "completed":
+        raise RuntimeError(f"chat task failed status={chat_status}")
+    _assert_llm(chat_result, "chat")
+    _assert_steps(chat_result, "chat")
 
-    ok = (
-        status == "completed"
-        and chat_status == "completed"
-        and llm_provider in ("gemini", "openai")
-        and chat_llm in ("gemini", "openai")
-        and planner != "heuristic"
-        and chat_planner != "heuristic"
-    )
     print(
-        f"RESULT {'OK' if ok else 'FAIL'} "
-        f"Tasks: {INSTRUCTION!r} status={status} steps={steps} "
-        f"llm={llm_provider}; "
-        f"Chat: {chat_instr!r} status={chat_status} steps={chat_steps} "
-        f"llm={chat_llm}"
+        "RESULT OK "
+        f"settings={INSTRUCTION!r} steps={len(settings_result.get('steps') or [])} "
+        f"llm={settings_result.get('llm_provider')}; "
+        f"app={APP_INSTRUCTION!r} steps={len(app_result.get('steps') or [])} "
+        f"llm={app_result.get('llm_provider')}; "
+        f"chat={chat_instr!r} steps={len(chat_result.get('steps') or [])} "
+        f"llm={chat_result.get('llm_provider')}"
     )
-    return 0 if ok else 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -961,14 +961,25 @@ class BackendClient(private val context: Context) {
 
         scope.launch {
             try {
+                // open_app uses PackageManager — must work even if a11y unbound
+                // (Samsung One UI / emulator overload can drop the service briefly).
                 val a11yService = MobilerunAccessibilityService.instance
-                    ?: throw Exception("Accessibility service not connected")
+                val needsA11y = command !in setOf(
+                    "open_app",
+                    "start_app",
+                    "get_device_info",
+                    "get_ui_tree",
+                    "screenshot",
+                )
+                if (needsA11y && a11yService == null) {
+                    throw Exception("Accessibility service not connected")
+                }
 
                 val result = when (command) {
                     "tap" -> {
                         val x = (params?.get("x") as? Number)?.toInt() ?: 0
                         val y = (params?.get("y") as? Number)?.toInt() ?: 0
-                        a11yService.tapAsync(x, y)
+                        a11yService!!.tapAsync(x, y)
                         sendAgentEvent(null, null, "tap", "tap($x,$y)")
                         "OK"
                     }
@@ -978,16 +989,16 @@ class BackendClient(private val context: Context) {
                         val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
                         val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
                         val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
-                        a11yService.swipeAsync(x1, y1, x2, y2, duration)
+                        a11yService!!.swipeAsync(x1, y1, x2, y2, duration)
                         sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
                         "OK"
                     }
                     "press_button" -> {
                         val button = params?.get("button") as? String
                         when (button) {
-                            "back" -> a11yService.pressBack()
-                            "home" -> a11yService.pressHome()
-                            "recents" -> a11yService.pressRecents()
+                            "back" -> a11yService!!.pressBack()
+                            "home" -> a11yService!!.pressHome()
+                            "recents" -> a11yService!!.pressRecents()
                             else -> false
                         }
                         "OK"
@@ -995,7 +1006,7 @@ class BackendClient(private val context: Context) {
                     "input_text", "type_text" -> {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
-                        val ok = a11yService.inputText(text, clear)
+                        val ok = a11yService!!.inputText(text, clear)
                         sendAgentEvent(null, null, "type", "type(${text.take(40)})")
                         if (!ok) throw Exception("input_text failed — focus a text field")
                         "OK"
@@ -1005,13 +1016,57 @@ class BackendClient(private val context: Context) {
                             ?: (params?.get("package") as? String)
                             ?: ""
                         val pkg = params?.get("package") as? String
-                        val ok = openAppByNameOrPackage(app, pkg)
+                        val launched = openAppByNameOrPackage(app, pkg)
                         sendAgentEvent(null, null, "open_app", "open_app($app)")
-                        if (!ok) throw Exception("Could not open app: $app")
-                        "OK"
+                        if (launched == null) throw Exception("Could not open app: $app")
+                        Thread.sleep(900)
+                        val activePkg = a11yService?.activePackageName().orEmpty()
+                        mapOf(
+                            "ok" to true,
+                            "requested" to app,
+                            "package" to launched,
+                            "active_package" to activePkg,
+                            "launched" to true,
+                            "a11y" to (a11yService != null),
+                        )
                     }
-                    "get_ui_tree" -> a11yService.getUITree()
-                    "screenshot" -> ""
+                    "get_ui_tree" -> {
+                        if (a11yService == null) {
+                            mapOf(
+                                "tree" to """<hierarchy windows="0" nodes="0" empty="true" reason="a11y_unbound"/>""",
+                                "package" to "",
+                                "empty" to true,
+                                "chars" to 0,
+                                "a11y" to false,
+                            )
+                        } else {
+                            val tree = a11yService.getUITree()
+                            val pkg = a11yService.activePackageName().orEmpty()
+                            mapOf(
+                                "tree" to tree,
+                                "package" to pkg,
+                                "empty" to (tree.contains("empty=\"true\"") || tree.length < 40),
+                                "chars" to tree.length,
+                                "a11y" to true,
+                            )
+                        }
+                    }
+                    "screenshot" -> {
+                        val b64 = a11yService?.takeScreenshotJpegBase64(
+                            maxWidth = 720,
+                            quality = 42,
+                        )
+                        if (b64.isNullOrBlank()) {
+                            mapOf("ok" to false, "error" to "screenshot unavailable", "a11y" to (a11yService != null))
+                        } else {
+                            mapOf(
+                                "ok" to true,
+                                "mime" to "image/jpeg",
+                                "encoding" to "base64",
+                                "data" to b64,
+                            )
+                        }
+                    }
                     "get_device_info" -> {
                         mapOf(
                             "device_id" to deviceId,
@@ -1019,6 +1074,8 @@ class BackendClient(private val context: Context) {
                             "stream" to _streamFlow.value,
                             "route" to activeRoute,
                             "latency_ms" to lastLatencyMs,
+                            "active_package" to a11yService?.activePackageName(),
+                            "a11y" to (a11yService != null),
                         )
                     }
                     else -> throw Exception("Unknown command: $command")
@@ -1140,42 +1197,96 @@ class BackendClient(private val context: Context) {
         }
     }
 
-    /** Launch an app by friendly name (Settings, Chrome, …) or package id. */
-    private fun openAppByNameOrPackage(app: String, pkg: String?): Boolean {
+    /**
+     * Launch via PackageManager.getLaunchIntentForPackage — never by hunting
+     * launcher icons. Returns the package that was launched, or null.
+     */
+    private fun openAppByNameOrPackage(app: String, pkg: String?): String? {
         val name = app.trim()
-        val lower = name.lowercase()
-        if (lower.contains("setting") || pkg == "com.android.settings") {
-            return startUiActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
+        val lower = name.lowercase().removePrefix("open ").trim()
+        val pm = context.packageManager
+
+        // Explicit system Settings intents (more reliable than package on OEM skins)
+        if (lower == "settings" || lower.contains("setting") || pkg == "com.android.settings") {
+            if (startUiActivity(Intent(android.provider.Settings.ACTION_SETTINGS))) {
+                return "com.android.settings"
+            }
         }
         if (lower.contains("wifi") || lower.contains("wi-fi")) {
-            return startUiActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))
-        }
-        val packageName = pkg?.takeIf { it.contains('.') }
-            ?: when {
-                lower.contains("chrome") -> "com.android.chrome"
-                lower.contains("gmail") -> "com.google.android.gm"
-                lower.contains("maps") -> "com.google.android.apps.maps"
-                lower.contains("youtube") -> "com.google.android.youtube"
-                lower.contains("camera") -> "com.android.camera"
-                else -> null
+            if (startUiActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))) {
+                return "com.android.settings"
             }
-        if (packageName != null) {
-            val launch = context.packageManager.getLaunchIntentForPackage(packageName)
-            if (launch != null) return startUiActivity(launch)
         }
-        // Fallback: search installed apps by label
+
+        val resolved = resolvePackageName(lower, pkg) ?: return null
+        val launch = pm.getLaunchIntentForPackage(resolved)
+            ?: Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                setPackage(resolved)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        return if (startUiActivity(launch)) resolved else null
+    }
+
+    /** Map friendly labels / known aliases → installed package name. */
+    private fun resolvePackageName(lower: String, pkg: String?): String? {
+        pkg?.takeIf { it.contains('.') }?.let { candidate ->
+            return try {
+                context.packageManager.getPackageInfo(candidate, 0)
+                candidate
+            } catch (_: Exception) {
+                null
+            }
+        }
+        val aliases = mapOf(
+            "settings" to "com.android.settings",
+            "chrome" to "com.android.chrome",
+            "gmail" to "com.google.android.gm",
+            "maps" to "com.google.android.apps.maps",
+            "youtube" to "com.google.android.youtube",
+            "camera" to "com.android.camera",
+            "whatsapp" to "com.whatsapp",
+            "wa" to "com.whatsapp",
+            "snapchat" to "com.snapchat.android",
+            "snap" to "com.snapchat.android",
+            "instagram" to "com.instagram.android",
+            "facebook" to "com.facebook.katana",
+            "messenger" to "com.facebook.orca",
+            "telegram" to "org.telegram.messenger",
+            "twitter" to "com.twitter.android",
+            "x" to "com.twitter.android",
+            "phone" to "com.samsung.android.dialer",
+            "messages" to "com.google.android.apps.messaging",
+            "photos" to "com.google.android.apps.photos",
+            "play store" to "com.android.vending",
+            "playstore" to "com.android.vending",
+        )
+        for ((key, packageName) in aliases) {
+            if (lower == key || lower.contains(key)) {
+                try {
+                    context.packageManager.getPackageInfo(packageName, 0)
+                    return packageName
+                } catch (_: Exception) {
+                    // try next / label scan
+                }
+            }
+        }
+        // Exact / contains label match against launchable apps only
         val pm = context.packageManager
-        val apps = pm.getInstalledApplications(0)
-        for (info in apps) {
-            val label = pm.getApplicationLabel(info)?.toString() ?: continue
-            if (label.equals(name, ignoreCase = true) ||
-                label.lowercase().contains(lower)
-            ) {
-                val launch = pm.getLaunchIntentForPackage(info.packageName) ?: continue
-                return startUiActivity(launch)
+        val main = Intent(Intent.ACTION_MAIN, null).addCategory(Intent.CATEGORY_LAUNCHER)
+        val launchables = pm.queryIntentActivities(main, 0)
+        var containsHit: String? = null
+        for (ri in launchables) {
+            val label = ri.loadLabel(pm)?.toString() ?: continue
+            val p = ri.activityInfo?.packageName ?: continue
+            if (label.equals(lower, ignoreCase = true)) {
+                return p
+            }
+            if (containsHit == null && label.lowercase().contains(lower) && lower.length >= 3) {
+                containsHit = p
             }
         }
-        return false
+        return containsHit
     }
 
     /**

@@ -315,10 +315,12 @@ jobs:
             -H 'Content-Type: application/json' \
             -d "{\"token\":\"$(python3 -c "import json; print(json.load(open('/tmp/pair.json'))['code'])")\",\"device_name\":\"smoke-phone\",\"device_id\":\"device_ci_smoke\"}" | tee /tmp/claim.json
           python3 -c "import json; d=json.load(open('/tmp/claim.json')); assert d.get('session_token') and d.get('device_id'), d"
-          # Cleanup — never leave CI devices on the account
+          # Cleanup — never leave CI devices on the account (including any
+          # concurrent real-APK/emulator sessions under ci-e2e).
           DID=$(python3 -c "import json; print(json.load(open('/tmp/claim.json'))['device_id'])")
           curl -sfS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
-          # Assert ci-e2e list empty after revoke
+          curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
+          API_URL="$API_URL" TOKEN="$TOKEN" python3 scripts/smoke_cleanup_ci_devices.py /tmp/ci_devices.json
           curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
           python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); assert d==[] or len(d)==0, d"
           # /health alias
