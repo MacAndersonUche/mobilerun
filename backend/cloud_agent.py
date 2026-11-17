@@ -219,7 +219,20 @@ def probe_llm_providers() -> Dict[str, Any]:
             "error": "OPENAI_API_KEY not set (empty) on Lambda",
         }
 
-    if out["keys_present"]["gemini"]:
+    # Skip Gemini probe when OpenAI already works — avoids HTTP API 29s timeout
+    # while Gemini is quota'd / high-demand (each model attempt can take seconds).
+    skip_gemini = bool((out.get("openai") or {}).get("ok")) and (
+        (os.environ.get("PREFER_OPENAI") or "").strip().lower() in ("1", "true", "yes")
+        or (os.environ.get("LLM_PROVIDER") or "").strip().lower() == "openai"
+    )
+    if skip_gemini:
+        out["gemini"] = {
+            "ok": False,
+            "http_status": None,
+            "skipped": True,
+            "error": "skipped — OpenAI probe ok (PREFER_OPENAI)",
+        }
+    elif out["keys_present"]["gemini"]:
         try:
             text = _call_gemini(SYSTEM_PROMPT + "\n\n" + prompt)
             out["gemini"] = {
