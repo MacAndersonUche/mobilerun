@@ -1141,7 +1141,8 @@ for i in range(40):
     )
     for d in devices or []:
         name = str(d.get("name") or d.get("device_name") or "")
-        if "emu-cloud" in name.lower() or d.get("device_id"):
+        # Only match this job's cloud-only pair — ignore concurrent ci-e2e leftovers
+        if "emu-cloud" in name.lower():
             device_id = d.get("device_id") or d.get("id")
             break
     if device_id:
@@ -1159,7 +1160,8 @@ req = urllib.request.Request(
 print("prod_remove", json.load(urllib.request.urlopen(req)))
 req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
 left = json.load(urllib.request.urlopen(req))
-assert left == [] or len(left) == 0, left
+# Shared prod ci-e2e may retain other concurrent jobs' devices — only assert ours is gone
+assert not any(d.get("device_id") == device_id for d in left), left
 open(os.path.join(artifacts, "prod_cloud_only_ok.txt"), "w").write(f"{code}\n{device_id}\n")
 print("PROD_CLOUD_ONLY_OK", code)
 PY
