@@ -678,7 +678,7 @@ class BackendClient(private val context: Context) {
                     "route" to candidate.route,
                     "latency_ms" to latencyMs,
                     "name" to android.os.Build.MODEL,
-                    "permissions" to snap.toMap(mediaProjectionGranted = false),
+                    "permissions" to snap.toMap(mediaGranted = false),
                 )
                 val sess = sessionToken
                 val pair = pairingToken
@@ -758,7 +758,7 @@ class BackendClient(private val context: Context) {
                     "route" to activeRoute,
                     "latency_ms" to lastLatencyMs,
                     // Keep portal online + permission rows honest across reconnects
-                    "permissions" to snap.toMap(mediaProjectionGranted = false),
+                    "permissions" to snap.toMap(mediaGranted = false),
                 )
                 sessionToken?.let { hb["session_token"] = it }
                 authToken?.let { hb["auth_token"] = it }
