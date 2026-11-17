@@ -579,6 +579,15 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             "tap",
             {"x": int(action["x"]), "y": int(action["y"])},
         )
+        label = str(
+            action.get("label")
+            or action.get("text")
+            or action.get("element")
+            or action.get("target")
+            or ""
+        ).strip()
+        if label:
+            return f'Tapped "{label[:60]}"'
         return f"tap({action.get('x')},{action.get('y')})"
     if kind == "swipe":
         call_device(
@@ -592,23 +601,22 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                 "duration_ms": int(action.get("duration_ms") or 300),
             },
         )
-        return (
-            f"swipe({action.get('x1')},{action.get('y1')}->"
-            f"{action.get('x2')},{action.get('y2')})"
-        )
+        return "Swiped"
     if kind in ("type", "type_text", "input_text"):
+        text = str(action.get("text") or "")
         call_device(
             device_id,
             "input_text",
-            {"text": str(action.get("text") or ""), "clear": bool(action.get("clear"))},
+            {"text": text, "clear": bool(action.get("clear"))},
         )
-        return f"type({action.get('text')!r})"
+        preview = text[:48]
+        return f'Typed "{preview}"' if preview else "Typed text"
     if kind == "back":
         call_device(device_id, "press_button", {"button": "back"})
-        return "back"
+        return "Went back"
     if kind == "home":
         call_device(device_id, "press_button", {"button": "home"})
-        return "home"
+        return "Went home"
     if kind in ("open_app", "start_app"):
         app = str(action.get("app") or action.get("package") or "")
         raw = call_device(
@@ -619,9 +627,14 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             pkg = str(raw.get("package") or raw.get("active_package") or "")
             if raw.get("ok") is False:
                 raise RuntimeError(str(raw.get("error") or f"open_app failed: {app}"))
-        return f"open_app({app})" + (f"[{pkg}]" if pkg else "")
+        # Human-readable primary; keep package for UI formatters as fallback
+        nice = app or pkg or "app"
+        if nice.startswith("com.") or nice.startswith("ai."):
+            nice = nice.split(".")[-1]
+        nice = nice[:1].upper() + nice[1:] if nice else "app"
+        return f"Opened {nice}"
     if kind == "done":
-        return "done"
+        return "Finished"
     if kind == "fail":
         raise RuntimeError(str(action.get("reason") or "agent failed"))
     raise RuntimeError(f"Unknown action: {kind}")
@@ -630,7 +643,8 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
 def _count_recent_swipes(history: List[str]) -> int:
     n = 0
     for h in reversed(history):
-        if str(h).startswith("swipe("):
+        hs = str(h)
+        if hs.startswith("swipe(") or hs.startswith("Swiped"):
             n += 1
         else:
             break

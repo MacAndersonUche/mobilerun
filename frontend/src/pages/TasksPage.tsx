@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
+import TaskStepLog, { type RawStep } from '../components/TaskStepLog';
 
 interface Device {
   device_id: string;
@@ -25,18 +26,12 @@ export default function TasksPage() {
   const [mode, setMode] = useState<Mode>('normal');
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [lastTaskId, setLastTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string>('');
   const [taskLog, setTaskLog] = useState<string>('');
-  const [taskSteps, setTaskSteps] = useState<
-    Array<{
-      n: number;
-      action: string;
-      reason?: string;
-      ok?: boolean;
-      screenshot_url?: string;
-      verify?: string;
-    }>
-  >([]);
+  const [taskError, setTaskError] = useState<string>('');
+  const [taskInstruction, setTaskInstruction] = useState<string>('');
+  const [taskSteps, setTaskSteps] = useState<RawStep[]>([]);
 
   useEffect(() => {
     loadDevices();
@@ -56,13 +51,16 @@ export default function TasksPage() {
         const d = res.data;
         const planner = d.planner ? ` · ${d.planner}` : '';
         const provider = d.llm_provider ? `/${d.llm_provider}` : '';
-        setTaskStatus(
-          `${d.status} · step ${d.current_step || 0}/${d.max_steps || '?'}${planner}${provider}`
+        setTaskStatus(String(d.status || 'running'));
+        setTaskLog(
+          [d.result, planner || provider ? `${planner}${provider}`.trim() : '']
+            .filter(Boolean)
+            .join(' — ') || 'Running…'
         );
-        const blob = [d.result, d.error].filter(Boolean).join(' — ') || 'Running…';
-        setTaskLog(blob);
+        setTaskError(d.error || '');
+        if (d.instruction) setTaskInstruction(String(d.instruction));
         if (Array.isArray(d.steps)) setTaskSteps(d.steps);
-        if (['completed', 'failed', 'stopped'].includes(d.status)) {
+        if (['completed', 'failed', 'stopped', 'cancelled'].includes(d.status)) {
           setActiveTaskId(null);
           setSubmitting(false);
         }
@@ -150,9 +148,11 @@ export default function TasksPage() {
     }
 
     setSubmitting(true);
-    setTaskStatus('starting…');
-    setTaskLog('');
+    setTaskStatus('running');
+    setTaskLog('Submitted — waiting for first step…');
+    setTaskError('');
     setTaskSteps([]);
+    setTaskInstruction(instruction.trim());
     try {
       const res = await axios.post(
         `${getBackendUrl()}/api/tasks`,
@@ -170,8 +170,10 @@ export default function TasksPage() {
       const tid = res.data?.task_id;
       if (tid) {
         setActiveTaskId(tid);
+        setLastTaskId(tid);
         setTaskStatus(res.data.status || 'running');
-        setTaskLog(res.data.result || res.data.error || 'Cloud agent started');
+        setTaskLog(res.data.result || 'Cloud agent started');
+        if (Array.isArray(res.data.steps)) setTaskSteps(res.data.steps);
       } else {
         setSubmitting(false);
         alert('Task submitted but no task_id returned');
@@ -184,7 +186,8 @@ export default function TasksPage() {
           ? String(error.response?.data?.detail || error.message)
           : 'Failed to submit task';
       setTaskStatus('failed');
-      setTaskLog(detail);
+      setTaskError(detail);
+      setTaskLog('');
       setSubmitting(false);
       alert(detail);
     }
@@ -229,53 +232,29 @@ export default function TasksPage() {
         </div>
       )}
 
-      {(taskStatus || taskLog || taskSteps.length > 0) && (
-        <div
-          className="rounded-lg border border-line bg-canvas-elev p-4 text-sm"
-          data-testid="task-progress"
-        >
-          <p className="font-medium text-white">{taskStatus || '…'}</p>
-          {/LLM unavailable:\s*quota/i.test(taskLog) && (
+      {(taskStatus || taskLog || taskSteps.length > 0 || lastTaskId) && (
+        <div data-testid="task-progress">
+          {/LLM unavailable:\s*quota/i.test(`${taskLog} ${taskError}`) && (
             <p
-              className="mt-2 rounded border border-amber-700/60 bg-amber-950/40 px-2 py-1 text-amber-200"
+              className="mb-3 rounded border border-amber-700/60 bg-amber-950/40 px-2 py-1 text-sm text-amber-200"
               data-testid="llm-unavailable-banner"
             >
               LLM unavailable: quota
             </p>
           )}
-          {taskLog && <p className="mt-1 text-mute whitespace-pre-wrap">{taskLog}</p>}
-          {taskSteps.length > 0 && (
-            <ol className="mt-3 space-y-2" data-testid="task-steps">
-              {taskSteps.map((s) => (
-                <li
-                  key={s.n}
-                  className="rounded border border-line/60 bg-canvas px-3 py-2"
-                >
-                  <div className="flex gap-3">
-                    <span className="text-mute shrink-0">#{s.n}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className={s.ok === false ? 'text-red-300' : 'text-white'}>
-                        {s.action}
-                      </p>
-                      {s.reason && (
-                        <p className="text-mute text-xs mt-0.5">{s.reason}</p>
-                      )}
-                      {s.verify && (
-                        <p className="text-mute text-xs mt-0.5">{s.verify}</p>
-                      )}
-                    </div>
-                    {s.screenshot_url && (
-                      <img
-                        src={s.screenshot_url}
-                        alt={`Step ${s.n}`}
-                        className="h-16 w-10 object-cover rounded border border-line"
-                      />
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
+          <TaskStepLog
+            title="Task live steps"
+            status={taskStatus || 'idle'}
+            taskId={activeTaskId || lastTaskId}
+            instruction={taskInstruction}
+            result={taskError ? undefined : taskLog}
+            error={taskError || undefined}
+            steps={taskSteps}
+            loading={!!activeTaskId}
+            emptyText="Task submitted — steps will appear here as soon as the agent acts."
+            showScreenshots
+            linkToHistory
+          />
         </div>
       )}
 

@@ -3,15 +3,7 @@ import { Clock, CheckCircle, XCircle, Loader } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import { formatDistanceToNow } from 'date-fns';
 import axios from 'axios';
-
-interface TaskStep {
-  n: number;
-  action: string;
-  reason?: string;
-  ok?: boolean;
-  screenshot_url?: string;
-  verify?: string;
-}
+import TaskStepLog, { type RawStep } from '../components/TaskStepLog';
 
 interface Task {
   task_id: string;
@@ -27,7 +19,7 @@ interface Task {
   planner?: string;
   llm_provider?: string;
   mode?: string;
-  steps?: TaskStep[];
+  steps?: RawStep[];
 }
 
 export default function HistoryPage() {
@@ -66,7 +58,7 @@ export default function HistoryPage() {
     <div className="mr-page space-y-6">
       <h2 className="text-2xl font-semibold">Task History</h2>
       <p className="text-mute text-sm">
-        Live step list for Normal / Dating / Social agent jobs (polls every 3s).
+        Plain-language step log for Normal / Dating / Social jobs (live while running).
       </p>
 
       <div className="space-y-3">
@@ -152,48 +144,30 @@ function TaskCard({
         </div>
       </div>
 
-      {task.result && (
-        <div className="mt-3 p-3 bg-gray-900 rounded text-sm">
-          <span className="text-mute">Result: </span>
-          {task.result}
+      {task.status === 'running' || open ? (
+        <div className="mt-3" data-testid="history-steps">
+          <TaskStepLog
+            title={task.status === 'running' ? 'Live steps' : 'Steps'}
+            status={task.status}
+            taskId={task.task_id}
+            instruction={undefined}
+            result={task.result}
+            error={task.error}
+            steps={steps}
+            loading={task.status === 'running'}
+            emptyText="No per-step log yet."
+            showScreenshots
+            testId={`history-step-log-${task.task_id}`}
+          />
         </div>
-      )}
-
-      {task.error && (
-        <div className="mt-3 p-3 bg-red-900/20 border border-red-700 rounded text-sm text-red-400">
-          {task.error}
-        </div>
-      )}
-
-      {(open || task.status === 'running' || steps.length > 0) && steps.length > 0 && (
-        <ol className="mt-3 space-y-2" data-testid="history-steps">
-          {steps.map((s) => (
-            <li
-              key={`${task.task_id}-${s.n}`}
-              className="rounded border border-line/60 bg-canvas px-3 py-2 text-sm"
-            >
-              <div className="flex gap-3">
-                <span className="text-mute shrink-0">#{s.n}</span>
-                <div className="min-w-0 flex-1">
-                  <p className={s.ok === false ? 'text-red-300' : ''}>{s.action}</p>
-                  {s.reason && <p className="text-mute text-xs mt-0.5">{s.reason}</p>}
-                  {s.verify && <p className="text-mute text-xs mt-0.5">{s.verify}</p>}
-                </div>
-                {s.screenshot_url && (
-                  <img
-                    src={s.screenshot_url}
-                    alt={`Step ${s.n}`}
-                    className="h-16 w-10 object-cover rounded border border-line"
-                  />
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
-      {open && steps.length === 0 && (
-        <p className="mt-3 text-mute text-sm">No per-step log yet.</p>
-      )}
+      ) : steps.length > 0 ? (
+        <p className="mt-2 text-xs text-mute" data-testid="history-steps-summary">
+          {steps.length} step{steps.length === 1 ? '' : 's'} — expand for the
+          plain-language log
+          {task.result ? ` · ${task.result}` : ''}
+          {task.error ? ` · error: ${task.error}` : ''}
+        </p>
+      ) : null}
     </div>
   );
 }
