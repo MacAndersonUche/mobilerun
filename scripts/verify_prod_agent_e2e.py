@@ -32,7 +32,7 @@ USER = os.environ.get("E2E_USER", "ci-e2e")
 PASSWORD = os.environ.get("E2E_PASSWORD", "admin")
 INSTRUCTION = os.environ.get(
     "E2E_INSTRUCTION",
-    "open Settings, go to Display, and turn on dark theme",
+    "open Settings, go to About phone, and read the Android version",
 )
 
 
@@ -248,7 +248,7 @@ def main() -> int:
         return 1
 
     # --- Ask Mac / chat path ---
-    chat_instr = "open Settings and go to Display"
+    chat_instr = "open Settings, go to About phone, and read the Android version"
     print("SUBMIT_CHAT", chat_instr)
     chat = req(
         "POST",

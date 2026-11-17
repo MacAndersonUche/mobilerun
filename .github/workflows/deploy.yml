@@ -171,6 +171,8 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
+          # Prefer OpenAI while Gemini quota is exhausted (429)
+          PREFER_OPENAI: 'true'
           LAMBDA_ASSET_DIR: /tmp/lambda-asset
           SKIP_BUNDLING: '1'
 
@@ -291,9 +293,13 @@ jobs:
           python3 -c "import json; d=json.load(open('/tmp/me.json')); assert d.get('authenticated') is True, d; assert 'ci-e2e' in (d.get('email') or '')"
           echo "LLM key presence + real provider probe..."
           curl -sfS "$API_URL/api/config/llm" -H "Authorization: Bearer $TOKEN" | tee /tmp/llm.json
-          curl -sfS -X POST "$API_URL/api/config/llm/probe" \
-            -H "Authorization: Bearer $TOKEN" | tee /tmp/llm-probe.json
-          python3 -c "import json; d=json.load(open('/tmp/llm-probe.json')); print('llm_probe', d); assert 'keys_present' in d and 'openai' in d and 'gemini' in d, d; print('OPENAI_present=', d['keys_present'].get('openai'), 'openai_ok=', (d.get('openai') or {}).get('ok'), 'openai_http=', (d.get('openai') or {}).get('http_status')); print('GEMINI_present=', d['keys_present'].get('gemini'), 'gemini_ok=', (d.get('gemini') or {}).get('ok'), 'gemini_http=', (d.get('gemini') or {}).get('http_status'))"
+          python3 -c "import json; d=json.load(open('/tmp/llm.json')); assert d.get('keys_present',{}).get('openai') is True, ('OPENAI_API_KEY missing on Lambda', d)"
+          # Probe: do not use curl -f — Gemini-only timeouts must not mask OpenAI success
+          code=$(curl -sS -o /tmp/llm-probe.json -w '%{http_code}' -X POST "$API_URL/api/config/llm/probe" \
+            -H "Authorization: Bearer $TOKEN")
+          echo "probe HTTP $code"
+          head -c 1200 /tmp/llm-probe.json; echo
+          python3 -c "import json; d=json.load(open('/tmp/llm-probe.json')); print('llm_probe', d); assert d.get('keys_present',{}).get('openai') is True, d; assert (d.get('openai') or {}).get('ok') is True and (d.get('openai') or {}).get('http_status')==200, ('OpenAI probe must return 200', d); print('OPENAI_present=True openai_ok=True openai_http=200 model=', (d.get('openai') or {}).get('model'))"
           # Legacy device-code (still supported)
           curl -sfS -X POST "$API_URL/api/auth/device/code" \
             -H 'Content-Type: application/json' \
