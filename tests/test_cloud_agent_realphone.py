@@ -115,3 +115,64 @@ def test_device_ws_freshness(monkeypatch):
 
     monkeypatch.setattr(storage, "get_device_connections", fresh)
     assert storage.device_is_ws_connected("android_x") is True
+
+
+def test_reconnect_wait_budget_fast_local(monkeypatch):
+    import backend.device_push as push
+
+    monkeypatch.delenv("WEBSOCKET_MANAGEMENT_ENDPOINT", raising=False)
+    monkeypatch.setattr(push, "device_is_reachable", lambda _d: False)
+    assert push.reconnect_wait_budget("android_x", 60) <= 1.5
+
+
+def test_reconnect_wait_budget_full_after_recent_socket(monkeypatch):
+    import backend.device_push as push
+    import backend.storage as storage
+
+    now = 1_700_000_000
+    monkeypatch.setenv(
+        "WEBSOCKET_MANAGEMENT_ENDPOINT", "https://example.execute-api/prod"
+    )
+    monkeypatch.setattr(push, "device_is_reachable", lambda _d: False)
+    monkeypatch.setattr(push.time, "time", lambda: now)
+    monkeypatch.setattr(
+        storage,
+        "get_device_connections",
+        lambda _d: [
+            {
+                "connection_id": "gone",
+                "device_id": "android_x",
+                "role": "device",
+                "authed": True,
+                "connected_at": now - 30,
+            }
+        ],
+    )
+    # device_push imports get_device_connections inside the helper — patch module attr used
+    monkeypatch.setattr(
+        "backend.storage.get_device_connections",
+        lambda _d: [
+            {
+                "connection_id": "gone",
+                "device_id": "android_x",
+                "role": "device",
+                "authed": True,
+                "connected_at": now - 30,
+            }
+        ],
+    )
+    assert push.reconnect_wait_budget("android_x", 60) == 60
+
+
+def test_reconnect_wait_budget_cold_device(monkeypatch):
+    import backend.device_push as push
+
+    monkeypatch.setenv(
+        "WEBSOCKET_MANAGEMENT_ENDPOINT", "https://example.execute-api/prod"
+    )
+    monkeypatch.setattr(push, "device_is_reachable", lambda _d: False)
+    monkeypatch.setattr(
+        "backend.storage.get_device_connections",
+        lambda _d: [],
+    )
+    assert push.reconnect_wait_budget("android_x", 60) <= 3.0

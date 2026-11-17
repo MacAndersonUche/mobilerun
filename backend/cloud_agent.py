@@ -755,11 +755,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     if not device_is_reachable(device_id):
         # Brief wait — phone often reconnects within seconds mid-task
         try:
-            from device_push import wait_until_reachable
+            from device_push import wait_until_reachable, reconnect_wait_budget
         except ImportError:
-            from backend.device_push import wait_until_reachable  # type: ignore
+            from backend.device_push import (  # type: ignore
+                wait_until_reachable,
+                reconnect_wait_budget,
+            )
 
-        if not wait_until_reachable(device_id, timeout_s=45.0):
+        budget = reconnect_wait_budget(device_id, 45.0)
+        if budget <= 0 or not wait_until_reachable(device_id, timeout_s=budget):
             job["status"] = "failed"
             job["error"] = "Device offline — no live WebSocket"
             state["last_action"] = "device_offline"

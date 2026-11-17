@@ -669,6 +669,7 @@ class BackendClient(private val context: Context) {
                 _statusFlow.value = "Connected"
                 _pairErrorFlow.value = null
                 prefs().edit().putString("last_pair_error", "").apply()
+                val snap = PermissionStatus.snapshot(context, mediaProjectionGranted = false)
                 val msg = mutableMapOf<String, Any?>(
                     "device_id" to deviceId,
                     "platform" to "android",
@@ -677,6 +678,7 @@ class BackendClient(private val context: Context) {
                     "route" to candidate.route,
                     "latency_ms" to latencyMs,
                     "name" to android.os.Build.MODEL,
+                    "permissions" to snap.toMap(mediaProjectionGranted = false),
                 )
                 val sess = sessionToken
                 val pair = pairingToken
@@ -688,6 +690,8 @@ class BackendClient(private val context: Context) {
                 }
                 webSocket.send(gson.toJson(msg))
                 startHeartbeat()
+                // Explicit permission_status so Devices page updates immediately
+                reportPermissions(mediaProjectionGranted = false)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -746,12 +750,15 @@ class BackendClient(private val context: Context) {
                     scheduleReconnect()
                     break
                 }
+                val snap = PermissionStatus.snapshot(context, mediaProjectionGranted = false)
                 val hb = mutableMapOf<String, Any?>(
                     "type" to "heartbeat",
                     "device_id" to deviceId,
                     "client_ts" to now,
                     "route" to activeRoute,
                     "latency_ms" to lastLatencyMs,
+                    // Keep portal online + permission rows honest across reconnects
+                    "permissions" to snap.toMap(mediaProjectionGranted = false),
                 )
                 sessionToken?.let { hb["session_token"] = it }
                 authToken?.let { hb["auth_token"] = it }
