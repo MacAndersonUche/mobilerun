@@ -14,66 +14,83 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
-
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger
-          sudo apt-get update -y
-          sudo apt-get install -y qemu-kvm || true
-          ls -l /dev/kvm || true
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Android SDK
-        run: |
-          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
-          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools" >> "$GITHUB_PATH"
-          yes | ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+      - name: Install deps
+        run: pip install -q websockets
 
-      - name: Download published APK (apk-165+)
+      - name: Probe LLM (require OpenAI 200)
+        env:
+          API_URL: https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
         run: |
-          mkdir -p /tmp/apk
-          curl -fsSL -L -o /tmp/apk/mobilerun.apk \
-            https://github.com/MacAndersonUche/mobilerun/releases/latest/download/mobilerun.apk
-          ls -la /tmp/apk/mobilerun.apk
+          set -euo pipefail
+          TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"ci-e2e","password":"admin"}' \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          curl -sfS -X POST "$API_URL/api/config/llm/probe" \
+            -H "Authorization: Bearer $TOKEN" | tee /tmp/llm-probe.json
+          python3 -c "import json; d=json.load(open('/tmp/llm-probe.json')); assert d.get('keys_present',{}).get('openai') is True, d; assert (d.get('openai') or {}).get('ok') is True, d; print('openai_ok', (d.get('openai') or {}).get('model'))"
 
-      - name: Run emulator + prod AWS-only agent E2E
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          profile: pixel_6
-          force-avd-creation: true
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          emulator-boot-timeout: 900
-          script: |
-            export APK_PATH=/tmp/apk/mobilerun.apk
-            export ARTIFACTS_DIR=$GITHUB_WORKSPACE/prod-agent-artifacts
-            export API_URL=https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
-            export WS_URL=wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod
-            chmod +x scripts/prod_emu_agent_e2e.sh
-            bash scripts/prod_emu_agent_e2e.sh
+      - name: AWS-paired sim + multi-step agent E2E (Tasks + Ask Mac)
+        env:
+          API_URL: https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
+          WS_URL: wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod
+          E2E_USER: ci-e2e
+          E2E_PASSWORD: admin
+          E2E_INSTRUCTION: open Settings, go to About phone, and read the Android version
+          ARTIFACTS_DIR: ${{ github.workspace }}/prod-agent-artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACTS_DIR" /tmp/prod-e2e
+          # Purge leftover CI devices
+          TOKEN=$(curl -sfS -X POST "$API_URL/api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"ci-e2e","password":"admin"}' \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          python3 - <<PY
+          import json, urllib.request, os
+          api=os.environ["API_URL"]; token="""$TOKEN"""
+          req=urllib.request.Request(api+"/api/devices", headers={"Authorization":f"Bearer {token}"})
+          for d in json.load(urllib.request.urlopen(req)):
+              did=d["device_id"]
+              r=urllib.request.Request(api+f"/api/devices/{did}", method="DELETE", headers={"Authorization":f"Bearer {token}"})
+              try: urllib.request.urlopen(r)
+              except Exception: pass
+          PY
+          # Start WS device sim (code-pairs to prod AWS, no LAN/emulator)
+          python3 scripts/sim_prod_device.py > "$ARTIFACTS_DIR/sim.log" 2>&1 &
+          SIM_PID=$!
+          echo "SIM_PID=$SIM_PID"
+          for i in $(seq 1 30); do
+            if [ -f /tmp/prod-e2e/sim_device.json ]; then break; fi
+            sleep 1
+          done
+          test -f /tmp/prod-e2e/sim_device.json
+          DID=$(python3 -c "import json; print(json.load(open('/tmp/prod-e2e/sim_device.json'))['device_id'])")
+          echo "DEVICE_ID=$DID" | tee "$ARTIFACTS_DIR/device.txt"
+          cp /tmp/prod-e2e/sim_device.json "$ARTIFACTS_DIR/" || true
+          # Dating must load (no backend-not-connected)
+          for path in /api/dating/status /api/dating/openers /api/selectors/status; do
+            code=$(curl -sS -o /tmp/dating.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$API_URL$path")
+            echo "HTTP $code $path"
+            test "$code" = "200"
+          done
+          # Real LLM multi-step via Tasks + Ask Mac
+          python3 scripts/verify_prod_agent_e2e.py --device-id "$DID" --skip-pair \
+            | tee "$ARTIFACTS_DIR/e2e.log"
+          kill "$SIM_PID" 2>/dev/null || true
+          # Cleanup sim device
+          curl -sfS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
 
       - name: Upload artifacts
         if: always()
