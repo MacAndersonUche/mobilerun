@@ -6,6 +6,7 @@ progress on the Dynamo job so Tasks/Chat can poll.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -35,6 +36,10 @@ Rules:
 - If the tree is empty/thin but a screenshot is provided, estimate taps from the image
   or use open_app / fail.
 - Do NOT repeat the same swipe. If stuck, use open_app (once), back, or fail.
+- Do NOT repeat the same tap (same x,y) when the UI did not change. If NO PROGRESS is
+  noted, change strategy: different node, swipe, back, type, done, or fail.
+- If the goal is to READ a value (version, name, status) and that value is already
+  visible in the UI tree, call done immediately with the value — do not keep tapping.
 - Reply with JSON only.
 """
 
@@ -42,6 +47,10 @@ Rules:
 TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "300")
 # Max identical swipe summaries before hard-fail
 MAX_SWIPE_LOOPS = 2
+# Same tree fingerprint after an action → no-progress streak before forcing strategy
+MAX_NO_PROGRESS = 2
+# Same tap coords with unchanged tree → force strategy change
+MAX_SAME_TAP = 2
 
 # Shown in Tasks/Chat UI when Gemini/OpenAI cannot plan.
 LLM_UNAVAILABLE_LABEL = "LLM unavailable: quota"
@@ -363,11 +372,93 @@ def _count_recent_open_apps(history: List[str]) -> int:
     return n
 
 
+def _tree_fingerprint(tree: str, package: str = "") -> str:
+    """Stable short hash of the visible UI so we can detect no-progress taps."""
+    compact = re.sub(r"\s+", " ", (tree or "").strip().lower())
+    # Drop volatile noise that does not indicate navigation progress
+    compact = re.sub(r"\b\d{10,}\b", "", compact)  # timestamps / epoch ids
+    payload = f"{(package or '').lower().strip()}|{compact[:6000]}"
+    return hashlib.sha1(payload.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def _extract_android_version(tree: str) -> Optional[str]:
+    """Pull a readable Android version string from a Settings About tree."""
+    if not tree:
+        return None
+    # Prefer explicit "Android 14" / "Android version" + nearby number
+    m = re.search(r"Android\s+(\d+(?:\.\d+)?)", tree, re.I)
+    if m:
+        return m.group(1)
+    # text="Android version" then a nearby digit node
+    m = re.search(
+        r'android\s*version[^0-9]{0,120}?["\s>](\d{1,2}(?:\.\d+)?)',
+        tree,
+        re.I | re.S,
+    )
+    if m:
+        return m.group(1)
+    m = re.search(
+        r'text="(\d{1,2}(?:\.\d+)?)"[^>]*(?:android_version|version)',
+        tree,
+        re.I,
+    )
+    if m:
+        return m.group(1)
+    return None
+
+
+def _goal_satisfied_from_tree(
+    instruction: str, tree: str, package: str = ""
+) -> Optional[str]:
+    """If the UI already shows the goal answer, return a done reason string."""
+    low = (instruction or "").lower()
+    tl = (tree or "").lower()
+    if not tl or len(tl) < 40:
+        return None
+    # Read Android version (Settings → About phone)
+    if ("android version" in low or ("version" in low and "about" in low)) and (
+        "android version" in tl or "android_version" in tl or "android 1" in tl
+    ):
+        ver = _extract_android_version(tree)
+        if ver:
+            return f"Android version is {ver}"
+        if "android version" in tl and re.search(r"\b\d{1,2}\b", tl):
+            return "Android version is visible on About phone"
+    # Dark theme already on
+    if "dark" in low and ("theme" in low or "mode" in low):
+        if re.search(r'dark\s*theme[^>]*(text="on"|checked="true")', tl) or (
+            'resource-id="dark_toggle"' in tl and 'text="on"' in tl
+        ):
+            return "Dark theme is already On"
+        if "display_dark" in tl or ("dark theme" in tl and 'text="on"' in tl):
+            return "Dark theme is On"
+    # Messaging-style: message already typed/sent markers
+    if any(k in low for k in ("send", "message", "whatsapp", "sms")):
+        if "message sent" in tl or "delivered" in tl:
+            return "Message appears sent"
+    _ = package  # reserved for package-gated goals
+    return None
+
+
+def _same_tap_key(action: Dict[str, Any]) -> Optional[str]:
+    kind = str(action.get("action") or "").lower()
+    if kind != "tap":
+        return None
+    try:
+        return f"tap:{int(action['x'])},{int(action['y'])}"
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def plan_next_action(
     instruction: str,
     ui_tree: str,
     history: List[str],
     image_b64: Optional[str] = None,
+    *,
+    no_progress_streak: int = 0,
+    last_tap_key: Optional[str] = None,
+    package: str = "",
 ) -> Dict[str, Any]:
     """Plan one action. Multi-step goals require a real LLM (Gemini or OpenAI).
 
@@ -375,6 +466,16 @@ def plan_next_action(
     and is always labelled LLM unavailable: quota. It must never complete
     multi-step verification tasks.
     """
+    # Deterministic short-circuit: goal already visible → done (avoids tap loops)
+    satisfied = _goal_satisfied_from_tree(instruction, ui_tree, package)
+    if satisfied:
+        return {
+            "action": "done",
+            "reason": satisfied,
+            "planner": "goal_visible",
+            "llm_provider": None,
+        }
+
     open_target = _trivial_open_app_target(instruction)
     hist_blob = " ".join(history).lower()
     hist = "\n".join(history[-8:]) or "(none)"
@@ -399,10 +500,23 @@ def plan_next_action(
             "Do NOT call open_app again — continue with the next sub-goal "
             "(search, tap contact, type, send).\n"
         )
+    progress_hint = ""
+    if no_progress_streak >= 1:
+        ban = (
+            f" Do NOT emit {last_tap_key.replace('tap:', 'tap(') + ')'}"
+            if last_tap_key and last_tap_key.startswith("tap:")
+            else ""
+        )
+        progress_hint = (
+            f"\nNO PROGRESS: UI tree fingerprint unchanged after the last "
+            f"{no_progress_streak} action(s). Change strategy — different "
+            f"coordinates/node, swipe, back, type, done (if the answer is "
+            f"already in the tree), or fail.{ban}\n"
+        )
     user = (
         f"GOAL: {instruction}\n\n"
         f"RECENT ACTIONS:\n{hist}\n\n"
-        f"{tree_note}{open_hint}"
+        f"{tree_note}{open_hint}{progress_hint}"
         f"UI TREE:\n{_compress_tree(ui_tree)}\n\n"
         "JSON action:"
     )
@@ -868,19 +982,55 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             image_b64 = None
         use_vision = bool(image_b64) and tree_info["empty"]
 
+        np_streak = int(state.get("no_progress_streak") or 0)
         action = plan_next_action(
             instruction,
             ui_tree,
             history,
             image_b64=image_b64 if use_vision else None,
+            no_progress_streak=np_streak,
+            last_tap_key=state.get("last_tap_key"),
+            package=str(tree_info.get("package") or ""),
         )
         kind = str(action.get("action") or "").lower()
         reason = str(action.get("reason") or "")
         planner = action.get("planner") or "llm"
         llm_provider = action.get("llm_provider")
-        state["planner"] = planner
+        # goal_visible is a safety rail after LLM steps — keep prior provider
+        if planner == "goal_visible":
+            llm_provider = llm_provider or state.get("llm_provider")
+            state["planner"] = "llm" if llm_provider else "goal_visible"
+        else:
+            state["planner"] = planner
         if llm_provider:
             state["llm_provider"] = llm_provider
+
+        # Same tap + unchanged UI → refuse to re-tap; done/back instead
+        pending_tap = _same_tap_key(action)
+        if (
+            kind == "tap"
+            and pending_tap
+            and pending_tap == state.get("last_tap_key")
+            and np_streak >= 1
+        ):
+            sat = _goal_satisfied_from_tree(
+                instruction, ui_tree, str(tree_info.get("package") or "")
+            )
+            if sat:
+                kind = "done"
+                reason = sat
+                action = {"action": "done", "reason": reason}
+                logger.info(
+                    "no-progress: goal visible, forcing done job=%s", job.get("job_id")
+                )
+            elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
+                kind = "back"
+                reason = "no-progress: refused repeated tap on unchanged UI"
+                action = {"action": "back", "reason": reason}
+                logger.info(
+                    "no-progress: forcing back after repeated tap job=%s",
+                    job.get("job_id"),
+                )
 
         # Do not re-open once open_ok / Opened already in history or FG matches
         if kind in ("open_app", "start_app"):
@@ -909,6 +1059,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     ui_tree,
                     history_hint,
                     image_b64=image_b64 if use_vision else None,
+                    no_progress_streak=np_streak,
+                    last_tap_key=state.get("last_tap_key"),
+                    package=str(tree_info.get("package") or ""),
                 )
                 kind = str(action.get("action") or "").lower()
                 reason = str(action.get("reason") or reason)
@@ -924,6 +1077,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             "refusing another open_app"
                         )
                         action = {"action": "fail", "reason": reason}
+
+        # Hard-stop after too many no-progress steps (same tree forever)
+        if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
+            sat = _goal_satisfied_from_tree(
+                instruction, ui_tree, str(tree_info.get("package") or "")
+            )
+            if sat:
+                kind = "done"
+                reason = sat
+                action = {"action": "done", "reason": reason}
+            else:
+                kind = "fail"
+                reason = (
+                    f"No UI progress after {np_streak} actions "
+                    "(same screen/tree hash) — changing strategy failed"
+                )
+                action = {"action": "fail", "reason": reason}
 
         # Block swipe when tree empty — force open_app or fail
         if kind == "swipe" and tree_info["empty"]:
@@ -1060,7 +1230,38 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 verify_msg = (
                     f"after_chars={after.get('chars')} pkg={after.get('package')}"
                 )
+            # Track tree fingerprint — same hash after an action = no progress
+            after_tree = str(after.get("tree") or "")
+            after_pkg = str(after.get("package") or "")
+            fp = _tree_fingerprint(after_tree, after_pkg)
+            prev_fp = state.get("last_tree_fp")
+            if prev_fp and prev_fp == fp:
+                state["no_progress_streak"] = (
+                    int(state.get("no_progress_streak") or 0) + 1
+                )
+                verify_msg = (verify_msg + " · no_progress").strip(" ·")
+            else:
+                state["no_progress_streak"] = 0
+            state["last_tree_fp"] = fp
+            tap_key = _same_tap_key(action)
+            if tap_key:
+                if tap_key == state.get("last_tap_key") and state.get(
+                    "no_progress_streak"
+                ):
+                    state["same_tap_streak"] = (
+                        int(state.get("same_tap_streak") or 0) + 1
+                    )
+                else:
+                    state["same_tap_streak"] = 1
+                state["last_tap_key"] = tap_key
+            else:
+                state["same_tap_streak"] = 0
+            # Goal became visible after this action → finish now (no tap loop)
+            sat_after = _goal_satisfied_from_tree(instruction, after_tree, after_pkg)
         except Exception as ve:
+            after_tree = ""
+            after_pkg = ""
+            sat_after = None
             # Trust PackageManager launch even when verify tree times out
             if kind in ("open_app", "start_app") and (rpc_ok_flag or rpc_pkg):
                 verify_msg = f"open_ok package={rpc_pkg or 'rpc'} (verify_skipped={ve})"
@@ -1121,6 +1322,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 job["completed_at"] = int(time.time())
                 return job
+
+        # Multi-step goals: if the answer is now on screen, complete
+        if sat_after and kind not in ("fail",):
+            job["status"] = "completed"
+            job["result"] = sat_after
+            if verify_msg:
+                job["result"] += f" · {verify_msg}"
+            job["completed_at"] = int(time.time())
+            return job
 
         # ~1s between steps (was 2s) — target ≤10s wall per step overall
         job["next_run_at"] = int(time.time()) + 1

@@ -4,9 +4,14 @@ from backend.cloud_agent import (
     MAX_SWIPE_LOOPS,
     _count_recent_open_apps,
     _count_recent_swipes,
+    _extract_android_version,
+    _goal_satisfied_from_tree,
     _history_shows_app_opened,
     _normalize_tree_payload,
+    _same_tap_key,
+    _tree_fingerprint,
     _trivial_open_app_target,
+    plan_next_action,
 )
 
 
@@ -70,6 +75,89 @@ def test_recent_open_app_counter():
     ]
     assert _count_recent_open_apps(hist) == 2
     assert _count_recent_open_apps(["Opened X", "Typed hi"]) == 0
+
+
+def test_tree_fingerprint_stable_and_sensitive():
+    a = _tree_fingerprint('<hierarchy><node text="About phone"/></hierarchy>', "pkg")
+    b = _tree_fingerprint('<hierarchy><node text="About phone"/></hierarchy>', "pkg")
+    c = _tree_fingerprint('<hierarchy><node text="Display"/></hierarchy>', "pkg")
+    assert a == b
+    assert a != c
+
+
+def test_extract_android_version_from_about_tree():
+    tree = (
+        '<hierarchy screen="about">'
+        '<node text="Android version"/>'
+        '<node text="14" resource-id="android_version"/>'
+        '<node text="Android 14"/>'
+        "</hierarchy>"
+    )
+    assert _extract_android_version(tree) == "14"
+
+
+def test_goal_satisfied_android_version_read():
+    tree = (
+        '<hierarchy screen="about" package="com.android.settings">'
+        '<node text="Android version" clickable="true" center="(520,350)"/>'
+        '<node text="14" resource-id="android_version"/>'
+        '<node text="Android 14"/>'
+        "</hierarchy>"
+    )
+    reason = _goal_satisfied_from_tree(
+        "Open Settings, go to About phone, and read the Android version",
+        tree,
+        "com.android.settings",
+    )
+    assert reason is not None
+    assert "14" in reason
+
+
+def test_goal_not_satisfied_on_settings_list():
+    tree = (
+        '<hierarchy screen="settings">'
+        '<node text="About phone" center="(520,490)"/>'
+        '<node text="Display" center="(520,370)"/>'
+        "</hierarchy>"
+    )
+    assert (
+        _goal_satisfied_from_tree(
+            "Open Settings, go to About phone, and read the Android version",
+            tree,
+        )
+        is None
+    )
+
+
+def test_plan_short_circuits_when_version_visible(monkeypatch):
+    tree = (
+        '<hierarchy screen="about">'
+        '<node text="Android version"/>'
+        '<node text="Android 14"/>'
+        "</hierarchy>"
+    )
+    # Must not call LLM when goal is already on screen
+    monkeypatch.setattr(
+        "backend.cloud_agent._call_gemini",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("should not call LLM")),
+    )
+    monkeypatch.setattr(
+        "backend.cloud_agent._call_openai",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("should not call LLM")),
+    )
+    action = plan_next_action(
+        "Open Settings, go to About phone, and read the Android version",
+        tree,
+        ["Opened Settings — launch", "tap(520,490) — About"],
+    )
+    assert action["action"] == "done"
+    assert "14" in action["reason"]
+    assert action["planner"] == "goal_visible"
+
+
+def test_same_tap_key():
+    assert _same_tap_key({"action": "tap", "x": 520, "y": 350}) == "tap:520,350"
+    assert _same_tap_key({"action": "back"}) is None
 
 
 def test_device_ws_freshness(monkeypatch):
