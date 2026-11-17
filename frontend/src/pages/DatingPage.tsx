@@ -306,6 +306,18 @@ export default function DatingPage() {
   const control = async (action: 'start' | 'stop' | 'pause') => {
     setLoading(true);
     try {
+      if (action === 'start') {
+        // Clear stale "running" from a stopped job so Start is never stuck
+        try {
+          await axios.post(
+            `${getBackendUrl()}/api/dating/stop`,
+            {},
+            { headers: authHeaders() }
+          );
+        } catch {
+          /* ok */
+        }
+      }
       const body =
         action === 'start'
           ? {
@@ -320,7 +332,10 @@ export default function DatingPage() {
       await loadAll();
     } catch (e) {
       console.error(e);
-      alert(`Failed to ${action} dating mode`);
+      const detail = axios.isAxiosError(e)
+        ? String(e.response?.data?.detail || e.message)
+        : `Failed to ${action} dating mode`;
+      alert(detail);
     } finally {
       setLoading(false);
     }
@@ -543,12 +558,13 @@ export default function DatingPage() {
       {/* Controls */}
       <div className="flex flex-wrap gap-3 items-center">
         <button
-          disabled={loading || status?.running}
+          disabled={loading}
           onClick={() => control('start')}
           className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded"
           data-testid="dating-start"
+          title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
         >
-          <Play size={16} /> Start
+          <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
         </button>
         <button
           disabled={loading || !status?.running}

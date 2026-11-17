@@ -124,6 +124,17 @@ export default function SocialPage() {
   const control = async (action: 'start' | 'stop' | 'pause') => {
     setLoading(true);
     try {
+      if (action === 'start') {
+        try {
+          await axios.post(
+            `${getBackendUrl()}/api/social/stop`,
+            {},
+            { headers: headers() }
+          );
+        } catch {
+          /* ok */
+        }
+      }
       const body =
         action === 'start'
           ? {
@@ -138,7 +149,10 @@ export default function SocialPage() {
       });
       await load();
     } catch (e) {
-      alert(`Failed to ${action}`);
+      const detail = axios.isAxiosError(e)
+        ? String(e.response?.data?.detail || e.message)
+        : `Failed to ${action}`;
+      alert(detail);
     } finally {
       setLoading(false);
     }
@@ -169,12 +183,13 @@ export default function SocialPage() {
 
       <div className="flex flex-wrap gap-3 items-center">
         <button
-          disabled={loading || running}
+          disabled={loading}
           onClick={() => control('start')}
           className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded"
           data-testid="social-start"
+          title={running ? 'Restarts social mode (stops current job first)' : 'Start social mode'}
         >
-          <Play size={16} /> Start
+          <Play size={16} /> {running ? 'Restart' : 'Start'}
         </button>
         <button
           disabled={loading || !running}

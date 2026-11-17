@@ -1821,6 +1821,27 @@ def get_needs_you_queue(auth: Optional[dict] = None):
     return _needs_you_queue
 
 
+def _active_mode_job(kind: str, job_id: Optional[str]) -> bool:
+    """True only if Dynamo still has a running/paused job for this id."""
+    if not job_id:
+        return False
+    try:
+        from storage import get_job
+    except ImportError:
+        from backend.storage import get_job  # type: ignore
+    try:
+        job = get_job(job_id)
+    except Exception:
+        return False
+    if not job:
+        return False
+    if kind and str(job.get("kind") or "") not in ("", kind):
+        # Allow missing kind for older rows
+        if str(job.get("kind") or "") != kind:
+            pass
+    return str(job.get("status") or "") in ("running", "paused")
+
+
 def _load_dating_runtime(auth: Optional[dict] = None) -> None:
     """Hydrate dating_mode_state prefs/review_queue from Dynamo when present."""
     try:
@@ -1849,6 +1870,15 @@ def _load_dating_runtime(auth: Optional[dict] = None) -> None:
         dating_mode_state["paused"] = bool(prefs["paused"])
     if prefs.get("job_id"):
         dating_mode_state["job_id"] = prefs["job_id"]
+    # Reconcile stale "running" after job completed/stopped (or Lambda cold start)
+    jid = dating_mode_state.get("job_id")
+    if dating_mode_state.get("running") and not _active_mode_job("dating", jid):
+        dating_mode_state["running"] = False
+        dating_mode_state["paused"] = False
+        try:
+            _save_dating_runtime(auth)
+        except Exception:
+            pass
 
 
 def _save_dating_runtime(auth: Optional[dict] = None) -> None:
@@ -3140,8 +3170,13 @@ async def start_dating_mode(
     Safe for Lambda — does not hold a long loop in one invocation.
     Defaults to dry_run=True so no real likes/messages are sent.
     """
-    if dating_mode_state["running"]:
+    _load_dating_runtime(auth)
+    existing = dating_mode_state.get("job_id")
+    if dating_mode_state.get("running") and _active_mode_job("dating", existing):
         raise HTTPException(status_code=400, detail="Dating mode already running")
+    # Stale in-memory flag after Lambda reuse / stopped job — allow restart
+    dating_mode_state["running"] = False
+    dating_mode_state.pop("job_id", None)
 
     if body:
         device_id = body.device_id or device_id
@@ -3467,6 +3502,10 @@ async def update_social_config(
 
 @app.get("/api/social/status")
 async def get_social_status(auth: Optional[dict] = Depends(optional_verify_token)):
+    jid = social_mode_state.get("job_id")
+    if social_mode_state.get("running") and not _active_mode_job("social", jid):
+        social_mode_state["running"] = False
+        social_mode_state["paused"] = False
     activity = _activity_for_mode("social", social_mode_state.get("job_id"))
     return {
         **social_mode_state,
@@ -3490,8 +3529,11 @@ async def start_social_mode(
     stand_in_package: Optional[str] = None,
 ):
     """Start social mode as a step-driven job (defaults to dry_run)."""
-    if social_mode_state.get("running"):
+    existing = social_mode_state.get("job_id")
+    if social_mode_state.get("running") and _active_mode_job("social", existing):
         raise HTTPException(status_code=400, detail="Social mode already running")
+    social_mode_state["running"] = False
+    social_mode_state.pop("job_id", None)
     if body:
         device_id = body.device_id or device_id
         dry_run = body.dry_run if body.dry_run is not None else dry_run
