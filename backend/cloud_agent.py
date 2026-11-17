@@ -1102,13 +1102,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or open_target.lower() in rpc_pkg
                 or rpc_ok_flag
             )
-            verify_ok = (
-                "open_ok" in verify_msg
-                or (
-                    "open_unconfirmed" not in verify_msg
-                    and bool(verify_msg)
-                    and "verify_error" not in verify_msg
-                )
+            verify_ok = "open_ok" in verify_msg or (
+                "open_unconfirmed" not in verify_msg
+                and bool(verify_msg)
+                and "verify_error" not in verify_msg
             )
             # Overlays (ANR / permission) may report package=android briefly;
             # trust PackageManager launch result for trivial open goals.

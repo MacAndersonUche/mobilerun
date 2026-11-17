@@ -24,6 +24,7 @@ def _sorted_device_conns(device_id: str) -> List[Dict[str, Any]]:
         and c.get("connection_id")
         and not str(c.get("device_id") or "").startswith("pending_")
     ]
+
     # Authed + newest first — prefer live reconnect over stale sockets
     def _key(c: Dict[str, Any]) -> tuple:
         return (

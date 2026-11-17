@@ -130,7 +130,9 @@ def main() -> int:
         ],
     }
     # Success: ≥10 steps OR completed, and not a permanent offline after drop
-    ok = (len(steps) >= 10 or (last.get("status") or "").lower() == "completed") and not (
+    ok = (
+        len(steps) >= 10 or (last.get("status") or "").lower() == "completed"
+    ) and not (
         dropped
         and (last.get("status") or "").lower() == "failed"
         and "offline" in str(last.get("error") or "").lower()

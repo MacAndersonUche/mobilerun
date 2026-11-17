@@ -385,9 +385,7 @@ def list_owned_devices(owner: str) -> List[Dict[str, Any]]:
     return list((blob.get("devices") or {}).values())
 
 
-def device_is_ws_connected(
-    device_id: str, *, max_age_s: int = 90
-) -> bool:
+def device_is_ws_connected(device_id: str, *, max_age_s: int = 90) -> bool:
     """True if Dynamo has a fresh authed non-UI socket for this device.
 
     Ignores pending_* placeholders and sockets whose connected_at is older
@@ -429,9 +427,7 @@ def cleanup_stale_connections(
         resp = table.scan(Limit=200)
         items = list(resp.get("Items") or [])
         while resp.get("LastEvaluatedKey") and len(items) < 500:
-            resp = table.scan(
-                Limit=200, ExclusiveStartKey=resp["LastEvaluatedKey"]
-            )
+            resp = table.scan(Limit=200, ExclusiveStartKey=resp["LastEvaluatedKey"])
             items.extend(resp.get("Items") or [])
     except Exception:
         return 0
