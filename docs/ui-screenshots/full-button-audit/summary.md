@@ -1,30 +1,30 @@
-# Full button audit
+# Full button audit (prod)
 
-Base: https://deploy-preview-14--macsmobilerun.netlify.app
+Base: https://macsmobilerun.netlify.app
 Pass: 58/58
 Fail: 0
 Console errors: 0
-Failed requests: 5
+Failed requests: 7
 
 | Page | Control | Action | Result | Detail | Fixed |
 |---|---|---|---|---|---|
 | home | load | render | PASS |  |  |
-| nav | Home | goto / | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/ |  |
-| nav | Chat | goto /chat | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/chat |  |
-| nav | Devices | goto /devices | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/devices |  |
-| nav | Needs | goto /needs-you | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/needs-you |  |
-| nav | More | goto /settings | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/settings |  |
-| nav | Live | goto /live | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/live |  |
-| nav | Dating | goto /dating | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/dating |  |
-| nav | Matches | goto /matches | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/matches |  |
-| nav | Social | goto /social | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/social |  |
-| nav | Tasks | goto /tasks | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/tasks |  |
-| nav | Activity | goto /history | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/history |  |
-| nav | Account | goto /account | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/account |  |
-| devices | Generate pairing code | creates code/QR | PASS |  | retry wait for pair-qr/code |
+| nav | Home | goto / | PASS | https://macsmobilerun.netlify.app/ |  |
+| nav | Chat | goto /chat | PASS | https://macsmobilerun.netlify.app/chat |  |
+| nav | Devices | goto /devices | PASS | https://macsmobilerun.netlify.app/devices |  |
+| nav | Needs | goto /needs-you | PASS | https://macsmobilerun.netlify.app/needs-you |  |
+| nav | More | goto /settings | PASS | https://macsmobilerun.netlify.app/settings |  |
+| nav | Live | goto /live | PASS | https://macsmobilerun.netlify.app/live |  |
+| nav | Dating | goto /dating | PASS | https://macsmobilerun.netlify.app/dating |  |
+| nav | Matches | goto /matches | PASS | https://macsmobilerun.netlify.app/matches |  |
+| nav | Social | goto /social | PASS | https://macsmobilerun.netlify.app/social |  |
+| nav | Tasks | goto /tasks | PASS | https://macsmobilerun.netlify.app/tasks |  |
+| nav | Activity | goto /history | PASS | https://macsmobilerun.netlify.app/history |  |
+| nav | Account | goto /account | PASS | https://macsmobilerun.netlify.app/account |  |
+| devices | Generate pairing code | creates code/QR | PASS |  | retry wait for QR/code |
 | devices | Copy pairing code | click | PASS |  |  |
-| devices | Remove device button present | enumerate | PASS | count=2 |  |
-| devices | Live view link | navigate | PASS | https://deploy-preview-14--macsmobilerun.netlify.app/live |  |
+| devices | Remove device button present | enumerate | PASS | count=0 |  |
+| devices | Live view link | navigate | PASS | https://macsmobilerun.netlify.app/live |  |
 | live | page load | render | PASS |  |  |
 | live | Start stream | click | PASS |  |  |
 | live | Pause | click | PASS |  |  |
@@ -35,26 +35,26 @@ Failed requests: 5
 | tasks | Speed Fast | switch | PASS |  |  |
 | tasks | Speed Balanced | switch | PASS |  |  |
 | tasks | Speed Careful | switch | PASS |  |  |
-| tasks | Run Task | POST /api/tasks | PASS | status=200 |  |
-| tasks | Live step log | UI updates after submit | PASS | steps=1 progress=1 |  |
-| chat | Device picker | select online | PASS | android_08503136-3747-4781-90e3-0644cde55268 |  |
+| tasks | Run Task | POST /api/tasks | PASS | status=200 | force Normal mode before Run (disabled in Dating/Social) |
+| tasks | Live step log | UI updates after submit | PASS | steps=0 progress=1 |  |
+| chat | Device picker | select online | PASS | android_f3dd0aea-8a5c-438b-851c-4a39acf6eb2c |  |
 | chat | Send | POST /api/chat | PASS | status=200 |  |
-| chat | Live steps / progress | UI updates | PASS | live=1 progress=1 stepLog=1 saw=true | prefer online device (was selecting offline) |
+| chat | Live steps / progress | UI updates | PASS | live=1 progress=1 stepLog=1 saw=true | prefer online device |
 | chat | Suggestion: device info | click+send | PASS |  |  |
-| history | Task cards | list | PASS | count=50 |  |
+| history | Task cards | list | PASS | count=50 | wait for cards/empty (was 1s flake) |
 | history | Expand first task | show steps | PASS | step-lines=1 |  |
 | dating | Dry-run toggle | checked | PASS |  |  |
-| dating | Start (dry-run) | POST /api/dating/start | PASS | status=200 | stop-before-start + Start always enabled; reconcile stale running |
+| dating | Start (dry-run) | POST /api/dating/start | PASS | status=200 | stale running reconcile + stop-before-start (PR #14) |
 | dating | Live activity feed | visible | PASS |  |  |
-| dating | Stop | click | PASS |  | skip click when disabled (Playwright hang) |
+| dating | Stop | click | PASS |  |  |
 | dating | Speed Fast | click | PASS |  |  |
 | dating | Speed Balanced | click | PASS |  |  |
 | dating | Speed Careful | click | PASS |  |  |
 | dating | Save config | POST | PASS | status=200 |  |
 | social | Dry-run toggle | checked | PASS |  |  |
-| social | Start (dry-run) | POST /api/social/start | PASS | status=200 | stop-before-start + Start always enabled; persist social_runtime |
+| social | Start (dry-run) | POST /api/social/start | PASS | status=200 | social_runtime persistence across Lambdas (PR #14) |
 | social | Live activity feed | visible | PASS |  |  |
-| social | Stop | API fallback | PASS | UI stop disabled | persist social_runtime across Lambdas; UI applies start response |
+| social | Stop | click | PASS |  | apply start response + persist runtime (PR #14) |
 | social | Save config | click | PASS |  |  |
 | needs-you | page load | render | PASS |  |  |
 | needs-you | Approve/Send buttons | enumerate (not clicked — safety) | PASS | approve=0 reject=0 |  |

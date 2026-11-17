@@ -54,17 +54,24 @@ test('tasks page shows plain-language live steps', async ({ page }) => {
     await expect(page.getByRole('heading', { name: /Run Automation Task/i })).toBeVisible({
       timeout: 20000,
     });
-    // Prefer connected device if picker present
+    // Run Task is disabled while Dating/Social mode is selected
+    await page.getByRole('button', { name: /^Normal/i }).first().click().catch(() => undefined);
+    await page.getByRole('button', { name: /^Fast/i }).first().click().catch(() => undefined);
+    // Prefer connected/online device
     const device = page.locator('#task-device');
     if (await device.count()) {
-      await device.selectOption({ index: 1 }).catch(async () => {
-        const opts = await device.locator('option').allTextContents();
-        const online = opts.findIndex((o) => /online|●/i.test(o) || o.trim());
-        if (online >= 0) await device.selectOption({ index: online });
-      });
+      const online = device.locator('option', { hasText: /online|●/i }).first();
+      if (await online.count()) {
+        const val = await online.getAttribute('value');
+        if (val) await device.selectOption(val);
+      } else {
+        await device.selectOption({ index: 0 }).catch(() => undefined);
+      }
     }
     await page.locator('textarea, input[name="instruction"]').first().fill('open settings');
-    await page.getByRole('button', { name: /run|submit|start/i }).first().click();
+    const runBtn = page.getByRole('button', { name: /Run Task/i }).first();
+    await expect(runBtn).toBeEnabled({ timeout: 15000 });
+    await runBtn.click();
     await expect(page.getByTestId('task-progress')).toBeVisible({ timeout: 15000 });
     await expect
       .poll(async () => page.getByTestId('step-line').count(), { timeout: 180000 })

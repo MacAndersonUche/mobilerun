@@ -322,7 +322,8 @@ jobs:
           curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
           API_URL="$API_URL" TOKEN="$TOKEN" python3 scripts/smoke_cleanup_ci_devices.py /tmp/ci_devices.json
           curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
-          python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); assert d==[] or len(d)==0, d"
+          # Smoke device must be gone; concurrent live emulator sessions under ci-e2e may remain
+          python3 -c "import json,os; d=json.load(open('/tmp/ci_devices.json')); did=os.environ.get('DID') or '''$DID'''; assert not any((x.get('device_id')==did) for x in d), d; print('smoke_device_removed remaining', len(d))"
           # /health alias
           curl -sfS "$API_URL/health" | tee /tmp/health_alias.json
           python3 -c "import json; d=json.load(open('/tmp/health_alias.json')); assert d.get('status')=='ok', d"
