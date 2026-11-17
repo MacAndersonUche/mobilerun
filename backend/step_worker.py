@@ -210,6 +210,7 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
     # Prefer openers until target, then replies — always sequential (one per tick)
     # Randomise action choice slightly when both swipe and reply are eligible
+    dry = bool(job.get("dry_run", False))
     if openers < opener_target:
         action = "opener"
         state["openers_sent"] = openers + 1
@@ -223,6 +224,9 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["replies_sent"] = replies + 1
         gap = humanizer.sample_message_gap_seconds()
 
+    # Dry-run / emulator verification: short ticks so activity UI updates live
+    if dry:
+        gap = 2 + humanizer._rng.random() * 2
     gap_i = max(1, int(round(gap)))
     state["last_action"] = action
     state["last_gap_s"] = gap_i
@@ -248,7 +252,7 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     job["next_run_at"] = int(time.time()) + gap_i
     job["updated_at"] = int(time.time())
 
-    params: Dict[str, Any] = {"dry_run": job.get("dry_run", False)}
+    params: Dict[str, Any] = {"dry_run": dry}
     if composed:
         params["message"] = composed.get("text")
         params["source"] = composed.get("source")
@@ -256,17 +260,77 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if composed.get("template_id"):
             params["template_id"] = composed["template_id"]
 
-    _send_to_device(
-        device_id,
-        {
-            "type": "command",
-            "command": action,
-            "job_id": job.get("job_id"),
-            "params": params,
-        },
+    # Live activity: capture screen before/after command for History UI
+    try:
+        from activity_log import append_step, capture_device_context, store_screenshot
+    except ImportError:
+        from backend.activity_log import (  # type: ignore
+            append_step,
+            capture_device_context,
+            store_screenshot,
+        )
+
+    ctx = capture_device_context(str(device_id))
+    pkg = (
+        str(ctx.get("package") or "")
+        or str(state.get("current_app") or "")
+        or str(job.get("current_app") or "")
     )
+    reason_bits = [f"dating {action}"]
+    if dry:
+        reason_bits.append("dry_run — no real send/like")
+    if composed.get("text"):
+        reason_bits.append(f"msg={str(composed.get('text'))[:60]}")
+    if composed.get("source"):
+        reason_bits.append(f"source={composed.get('source')}")
+
+    if not dry:
+        _send_to_device(
+            device_id,
+            {
+                "type": "command",
+                "command": action,
+                "job_id": job.get("job_id"),
+                "params": params,
+            },
+        )
+    else:
+        # Still nudge the phone onto the stand-in / target app for screenshots
+        stand_in = job.get("stand_in_package") or state.get("stand_in_package")
+        if stand_in:
+            _send_to_device(
+                device_id,
+                {
+                    "type": "command",
+                    "command": "open_app",
+                    "job_id": job.get("job_id"),
+                    "params": {"app": stand_in, "package": stand_in},
+                },
+            )
+            time.sleep(1.2)
+            ctx = capture_device_context(str(device_id))
+            pkg = str(ctx.get("package") or pkg)
+
+    shot_key = store_screenshot(
+        str(job.get("job_id") or ""),
+        int(state.get("steps") or 1),
+        ctx.get("screenshot_b64"),
+    )
+    append_step(
+        state,
+        action=action,
+        reason=" · ".join(reason_bits),
+        package=pkg,
+        screen=pkg,
+        ok=True,
+        screenshot_key=shot_key,
+        dry_run=dry,
+        verify=f"tree_chars={ctx.get('tree_chars')}",
+    )
+    job["state"] = state
+
     logger.info(
-        "dating step job=%s action=%s openers=%s replies=%s swipes=%s next=%s gap=%s",
+        "dating step job=%s action=%s openers=%s replies=%s swipes=%s next=%s gap=%s dry=%s",
         job.get("job_id"),
         action,
         state.get("openers_sent"),
@@ -274,7 +338,10 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state.get("swipes_done"),
         job["next_run_at"],
         gap_i,
+        dry,
     )
+    if dry and job.get("status") == "running":
+        _kick_job_later(str(job.get("job_id") or ""), delay_s=gap_i)
     return job
 
 
@@ -302,12 +369,149 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     return updated
 
 
+def run_social_step(job: Dict[str, Any]) -> Dict[str, Any]:
+    """One Social-mode tick: open stand-in / messaging app, log activity (dry-run safe)."""
+    job = _to_plain(job)
+    state = job.setdefault("state", {})
+    device_id = str(job.get("device_id") or "")
+    dry = bool(job.get("dry_run", True))  # default safe
+    max_steps = int(job.get("max_steps") or 8)
+
+    if _safety_blocked(job):
+        job["status"] = "paused"
+        state["last_action"] = "safety_pause"
+        job["state"] = state
+        job["next_run_at"] = int(time.time()) + 60
+        job["updated_at"] = int(time.time())
+        return job
+
+    steps = int(state.get("steps") or 0)
+    if steps >= max_steps:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        job["result"] = state.get("last_action") or "Social dry-run finished"
+        return job
+
+    try:
+        from activity_log import append_step, capture_device_context, store_screenshot
+    except ImportError:
+        from backend.activity_log import (  # type: ignore
+            append_step,
+            capture_device_context,
+            store_screenshot,
+        )
+
+    stand_in = (
+        job.get("stand_in_package")
+        or state.get("stand_in_package")
+        or "com.google.android.apps.messaging"
+    )
+    # Rotate simple social actions for the live activity feed
+    cycle = ["open_app", "scan_unread", "draft_preview", "idle"]
+    action = cycle[steps % len(cycle)]
+    state["steps"] = steps + 1
+
+    if action == "open_app":
+        _send_to_device(
+            device_id,
+            {
+                "type": "command",
+                "command": "open_app",
+                "job_id": job.get("job_id"),
+                "params": {"app": stand_in, "package": stand_in},
+            },
+        )
+        time.sleep(1.0)
+        reason = f"open stand-in messaging app ({stand_in})"
+    elif action == "scan_unread":
+        reason = "scan unread threads (dry_run — no replies sent)"
+    elif action == "draft_preview":
+        reason = "prepare draft reply for Needs-you / dry_run (not sent)"
+        state["drafts_prepared"] = int(state.get("drafts_prepared") or 0) + 1
+    else:
+        reason = "humanizer idle tick"
+
+    if dry:
+        reason = f"dry_run — {reason}"
+
+    ctx = capture_device_context(device_id)
+    pkg = str(ctx.get("package") or stand_in)
+    state["current_app"] = pkg
+    shot_key = store_screenshot(
+        str(job.get("job_id") or ""),
+        int(state.get("steps") or 1),
+        ctx.get("screenshot_b64"),
+    )
+    append_step(
+        state,
+        action=action,
+        reason=reason,
+        package=pkg,
+        screen=pkg,
+        ok=True,
+        screenshot_key=shot_key,
+        dry_run=dry,
+        verify=f"tree_chars={ctx.get('tree_chars')}",
+    )
+
+    humanizer = _humanizer_for_job({**job, "kind": "social"})
+    gap = max(2, int(round(humanizer.sample_message_gap_seconds() * 0.25)))
+    job["state"] = state
+    job["next_run_at"] = int(time.time()) + gap
+    job["updated_at"] = int(time.time())
+    logger.info(
+        "social step job=%s action=%s steps=%s dry=%s pkg=%s",
+        job.get("job_id"),
+        action,
+        state.get("steps"),
+        dry,
+        pkg,
+    )
+    if dry and job.get("status") == "running":
+        _kick_job_later(str(job.get("job_id") or ""), delay_s=gap)
+    return job
+
+
+def _kick_job_later(job_id: str, delay_s: int = 2) -> None:
+    """Best-effort async re-invoke for dry-run live activity (no EventBridge wait)."""
+    if not job_id:
+        return
+    arn = os.environ.get("STEP_WORKER_ARN")
+    if not arn or os.environ.get("USE_AWS_STORAGE", "").lower() != "true":
+        return
+    # Schedule via next_run_at; EventBridge will pick up. Also try immediate
+    # re-invoke after a short sleep in a detached thread when delay is small.
+    if delay_s > 15:
+        return
+    try:
+        import threading
+
+        def _run():
+            time.sleep(max(1, delay_s))
+            try:
+                import boto3
+
+                boto3.client("lambda").invoke(
+                    FunctionName=arn,
+                    InvocationType="Event",
+                    Payload=json.dumps({"job_id": job_id}).encode(),
+                )
+            except Exception as e:
+                logger.warning("kick later failed: %s", e)
+
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception as e:
+        logger.warning("kick later schedule failed: %s", e)
+
+
 def process_job(job: Dict[str, Any]) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
         return
     if kind == "dating":
         updated = run_dating_step(job)
+    elif kind == "social":
+        updated = run_social_step(job)
     else:
         updated = run_agent_step(job)
     put_job(_dynamo_safe(updated))

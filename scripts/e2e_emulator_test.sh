@@ -711,7 +711,42 @@ assert states[-1]["openers_sent"] + states[-1]["replies_sent"] + states[-1]["swi
 # Caps / sequential: first steps prefer openers until opener_target
 assert states[0]["openers_sent"] >= 1, states
 assert states[-1]["openers_sent"] <= 3, states
+# Live activity: each tick records action/reason/package/timestamp
+detail = states[-1].get("steps_detail") or []
+assert len(detail) >= 1, states[-1]
+assert detail[0].get("action"), detail
+assert detail[0].get("ts"), detail
+assert "dry_run" in (detail[0].get("reason") or "") or detail[0].get("dry_run") is True, detail
 print("dating dry-run ok", states[-1])
+PY
+
+echo "== Social mode dry-run live activity (stand-in Messages) =="
+python3 - <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ.get("GITHUB_WORKSPACE", os.getcwd()))
+os.environ.setdefault("USE_AWS_STORAGE", "false")
+from backend.step_worker import run_social_step
+artifacts = os.environ.get("ARTIFACTS_DIR", "/tmp/e2e-artifacts")
+job = {
+  "job_id": "e2e_social",
+  "kind": "social",
+  "status": "running",
+  "device_id": "emulator",
+  "dry_run": True,
+  "stand_in_package": "com.google.android.apps.messaging",
+  "max_steps": 4,
+  "state": {"steps": 0, "steps_detail": []},
+}
+states = []
+for _ in range(3):
+    job["status"] = "running"
+    job = run_social_step(job)
+    states.append(dict(job["state"]))
+path = os.path.join(artifacts, "social_dry_run.json")
+open(path, "w").write(json.dumps(states, indent=2))
+assert states[-1]["steps"] >= 1, states
+assert len(states[-1].get("steps_detail") or []) >= 1, states
+print("social dry-run ok", states[-1])
 PY
 
 echo "== Live view frame relay + chat agent =="
@@ -1167,6 +1202,7 @@ check("safety_verify_pause", "safety_pause.json")
 check("safety_needs_you", "safety_needs_you.json")
 check("safety_resume", "safety_resume.json")
 check("dating_dry_run", "dating_dry_run.json")
+check("social_dry_run", "social_dry_run.json")
 check("dating_caps_pause_stop", "dating_caps.json")
 check("chat_device_info", "chat_device_info.json")
 check("chat_run_task", "chat_run_task.json")

@@ -4,6 +4,9 @@ import axios from 'axios';
 import { Link } from 'react-router-dom';
 import { getAuthToken, getBackendUrl } from '../config';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
+import LiveActivityFeed, {
+  ActivityPayload,
+} from '../components/LiveActivityFeed';
 
 type Speed = 'fast' | 'balanced' | 'careful';
 
@@ -26,6 +29,12 @@ export default function SocialPage() {
   const [unread, setUnread] = useState(0);
   const [badge, setBadge] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [activity, setActivity] = useState<ActivityPayload | null>(null);
+  const [dryRun, setDryRun] = useState(true);
+  const [deviceId, setDeviceId] = useState('');
+  const [devices, setDevices] = useState<
+    Array<{ device_id: string; name?: string; connected?: boolean }>
+  >([]);
 
   const headers = () => ({ Authorization: `Bearer ${getAuthToken()}` });
 
@@ -46,14 +55,34 @@ export default function SocialPage() {
       setPaused(!!status.data.paused);
       setUnread(status.data.unread?.total_unread || 0);
       setBadge(ny.data.badge || 0);
+      setActivity(status.data.activity || null);
     } catch (e) {
       console.error(e);
     }
   };
 
+  const loadDevices = async () => {
+    try {
+      const res = await axios.get(`${getBackendUrl()}/api/devices`, {
+        headers: headers(),
+      });
+      const list = (res.data || []) as Array<{
+        device_id: string;
+        name?: string;
+        connected?: boolean;
+      }>;
+      setDevices(list);
+      const online = list.find((d) => d.connected);
+      if (online && !deviceId) setDeviceId(online.device_id);
+    } catch {
+      /* optional */
+    }
+  };
+
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000);
+    loadDevices();
+    const t = setInterval(load, 2500);
     return () => clearInterval(t);
   }, []);
 
@@ -95,11 +124,18 @@ export default function SocialPage() {
   const control = async (action: 'start' | 'stop' | 'pause') => {
     setLoading(true);
     try {
-      await axios.post(
-        `${getBackendUrl()}/api/social/${action}`,
-        {},
-        { headers: headers() }
-      );
+      const body =
+        action === 'start'
+          ? {
+              device_id: deviceId || undefined,
+              dry_run: dryRun,
+              stand_in_package: 'com.google.android.apps.messaging',
+              max_steps: 6,
+            }
+          : {};
+      await axios.post(`${getBackendUrl()}/api/social/${action}`, body, {
+        headers: headers(),
+      });
       await load();
     } catch (e) {
       alert(`Failed to ${action}`);
@@ -131,11 +167,12 @@ export default function SocialPage() {
         onSpeedChange={setSpeed}
       />
 
-      <div className="flex gap-3 items-center">
+      <div className="flex flex-wrap gap-3 items-center">
         <button
           disabled={loading || running}
           onClick={() => control('start')}
           className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded"
+          data-testid="social-start"
         >
           <Play size={16} /> Start
         </button>
@@ -150,13 +187,43 @@ export default function SocialPage() {
           disabled={loading || !running}
           onClick={() => control('stop')}
           className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+          data-testid="social-stop"
         >
           <Square size={16} /> Stop
         </button>
-        <span className="text-sm text-mute ml-auto">
-          Unread · {unread}
-        </span>
+        <label className="flex items-center gap-2 text-sm text-mute">
+          <input
+            type="checkbox"
+            checked={dryRun}
+            onChange={(e) => setDryRun(e.target.checked)}
+            data-testid="social-dry-run"
+          />
+          Dry-run (no real messages)
+        </label>
+        {devices.length > 0 && (
+          <select
+            className="mr-input text-sm max-w-xs"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            data-testid="social-device"
+            aria-label="Social device"
+          >
+            <option value="">Select device…</option>
+            {devices.map((d) => (
+              <option key={d.device_id} value={d.device_id}>
+                {(d.connected ? '● ' : '○ ') + (d.name || d.device_id)}
+              </option>
+            ))}
+          </select>
+        )}
+        <span className="text-sm text-mute ml-auto">Unread · {unread}</span>
       </div>
+
+      <LiveActivityFeed
+        title="Social live activity"
+        activity={activity}
+        loading={running && !paused}
+      />
 
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="font-semibold">Apps</h3>

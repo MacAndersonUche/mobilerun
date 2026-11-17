@@ -3,6 +3,9 @@ import { Heart, Play, Pause, Square, RefreshCw } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
+import LiveActivityFeed, {
+  ActivityPayload,
+} from '../components/LiveActivityFeed';
 
 type Speed = 'fast' | 'balanced' | 'careful';
 
@@ -39,6 +42,8 @@ interface DatingStatus {
   paused: boolean;
   current_app: string | null;
   review_queue: ReviewMessage[];
+  job_id?: string;
+  activity?: ActivityPayload;
 }
 
 interface ReviewMessage {
@@ -136,6 +141,12 @@ export default function DatingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
+  const [activity, setActivity] = useState<ActivityPayload | null>(null);
+  const [dryRun, setDryRun] = useState(true);
+  const [deviceId, setDeviceId] = useState('');
+  const [devices, setDevices] = useState<
+    Array<{ device_id: string; name?: string; connected?: boolean }>
+  >([]);
   const [openerMode, setOpenerMode] = useState<OpenerMode>('templates');
   const [templates, setTemplates] = useState<OpenerTemplate[]>([]);
   const [bucketNow, setBucketNow] = useState('morning');
@@ -257,6 +268,7 @@ export default function DatingPage() {
       setBucketNow(openersRes.data.bucket_now || 'morning');
       setBucketCounts(openersRes.data.bucket_counts || {});
       setSelectorApps(selData.apps || []);
+      setActivity(statusRes.data.activity || null);
       setError(null);
     } catch (e: unknown) {
       console.error(e);
@@ -264,20 +276,47 @@ export default function DatingPage() {
     }
   };
 
+  const loadDevices = async () => {
+    try {
+      const res = await axios.get(`${getBackendUrl()}/api/devices`, {
+        headers: authHeaders(),
+      });
+      const list = (res.data || []) as Array<{
+        device_id: string;
+        name?: string;
+        connected?: boolean;
+      }>;
+      setDevices(list);
+      const online = list.find((d) => d.connected);
+      if (online && !deviceId) setDeviceId(online.device_id);
+    } catch {
+      /* optional */
+    }
+  };
+
   useEffect(() => {
     loadAll();
-    const interval = setInterval(loadAll, 4000);
+    loadDevices();
+    const interval = setInterval(() => {
+      loadAll();
+    }, 2500);
     return () => clearInterval(interval);
   }, []);
 
   const control = async (action: 'start' | 'stop' | 'pause') => {
     setLoading(true);
     try {
-      await axios.post(
-        `${getBackendUrl()}/api/dating/${action}`,
-        {},
-        { headers: authHeaders() }
-      );
+      const body =
+        action === 'start'
+          ? {
+              device_id: deviceId || undefined,
+              dry_run: dryRun,
+              stand_in_package: 'ai.mobilerun.mockdating',
+            }
+          : {};
+      await axios.post(`${getBackendUrl()}/api/dating/${action}`, body, {
+        headers: authHeaders(),
+      });
       await loadAll();
     } catch (e) {
       console.error(e);
@@ -502,11 +541,12 @@ export default function DatingPage() {
       />
 
       {/* Controls */}
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3 items-center">
         <button
           disabled={loading || status?.running}
           onClick={() => control('start')}
           className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded"
+          data-testid="dating-start"
         >
           <Play size={16} /> Start
         </button>
@@ -521,10 +561,42 @@ export default function DatingPage() {
           disabled={loading || !status?.running}
           onClick={() => control('stop')}
           className="flex items-center gap-2 px-4 py-2 bg-surface-elev hover:bg-gray-600 disabled:opacity-50 rounded"
+          data-testid="dating-stop"
         >
           <Square size={16} /> Stop
         </button>
+        <label className="flex items-center gap-2 text-sm text-mute ml-2">
+          <input
+            type="checkbox"
+            checked={dryRun}
+            onChange={(e) => setDryRun(e.target.checked)}
+            data-testid="dating-dry-run"
+          />
+          Dry-run (no real likes/messages)
+        </label>
+        {devices.length > 0 && (
+          <select
+            className="mr-input text-sm max-w-xs"
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            data-testid="dating-device"
+            aria-label="Dating device"
+          >
+            <option value="">Select device…</option>
+            {devices.map((d) => (
+              <option key={d.device_id} value={d.device_id}>
+                {(d.connected ? '● ' : '○ ') + (d.name || d.device_id)}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
+
+      <LiveActivityFeed
+        title="Dating live activity"
+        activity={activity}
+        loading={!!status?.running && !status?.paused}
+      />
 
       {/* Global progress */}
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
