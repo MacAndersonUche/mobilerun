@@ -325,12 +325,20 @@ jobs:
           # Cleanup — never leave CI devices on the account (including any
           # concurrent real-APK/emulator sessions under ci-e2e).
           DID=$(python3 -c "import json; print(json.load(open('/tmp/claim.json'))['device_id'])")
-          curl -sfS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
-          curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
-          API_URL="$API_URL" TOKEN="$TOKEN" python3 scripts/smoke_cleanup_ci_devices.py /tmp/ci_devices.json
-          curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
-          # Smoke device must be gone; concurrent live emulator sessions under ci-e2e may remain
-          python3 -c "import json,os; d=json.load(open('/tmp/ci_devices.json')); did=os.environ.get('DID') or '''$DID'''; assert not any((x.get('device_id')==did) for x in d), d; print('smoke_device_removed remaining', len(d))"
+          # Retry delete — list can briefly retain the smoke device after revoke
+          for attempt in 1 2 3 4 5; do
+            curl -sS -X DELETE "$API_URL/api/devices/$DID" -H "Authorization: Bearer $TOKEN" || true
+            curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
+            API_URL="$API_URL" TOKEN="$TOKEN" python3 scripts/smoke_cleanup_ci_devices.py /tmp/ci_devices.json
+            curl -sfS "$API_URL/api/devices" -H "Authorization: Bearer $TOKEN" | tee /tmp/ci_devices.json
+            if python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); raise SystemExit(0 if not any(x.get('device_id')=='$DID' for x in d) else 1)"; then
+              echo "smoke_device_removed remaining $(python3 -c "import json; print(len(json.load(open('/tmp/ci_devices.json'))))")"
+              break
+            fi
+            echo "smoke device still listed (attempt $attempt); retrying..."
+            sleep $((attempt * 2))
+          done
+          python3 -c "import json; d=json.load(open('/tmp/ci_devices.json')); did='$DID'; assert not any((x.get('device_id')==did) for x in d), d; print('smoke_device_removed remaining', len(d))"
           # /health alias
           curl -sfS "$API_URL/health" | tee /tmp/health_alias.json
           python3 -c "import json; d=json.load(open('/tmp/health_alias.json')); assert d.get('status')=='ok', d"
