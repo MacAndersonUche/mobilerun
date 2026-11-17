@@ -724,8 +724,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as tree_err:
             # Overloaded OEM/emulator a11y can hang; still allow open_app.
             low = str(tree_err).lower()
-            if any(
-                t in low for t in ("timed out", "timeout", "accessibility", "offline")
+            if "offline" not in low and any(
+                t in low for t in ("timed out", "timeout", "accessibility")
             ):
                 logger.warning("get_ui_tree failed, using empty tree: %s", tree_err)
                 reason_attr = (
