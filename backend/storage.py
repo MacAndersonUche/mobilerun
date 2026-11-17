@@ -175,6 +175,31 @@ def list_due_jobs(
     return resp.get("Items", [])
 
 
+def list_recent_jobs(limit: int = 50) -> List[Dict[str, Any]]:
+    """Recent agent/dating jobs across running/completed/failed (for History UI)."""
+    table = _table("JOBS_TABLE")
+    if table is None:
+        return []
+    out: List[Dict[str, Any]] = []
+    for status in ("running", "completed", "failed", "stopped", "paused"):
+        try:
+            resp = table.query(
+                IndexName="status-index",
+                KeyConditionExpression="#s = :st",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":st": status},
+                Limit=min(limit, 40),
+                ScanIndexForward=False,
+            )
+            out.extend(resp.get("Items") or [])
+        except Exception:
+            continue
+    out.sort(
+        key=lambda j: int(j.get("updated_at") or j.get("created_at") or 0), reverse=True
+    )
+    return out[:limit]
+
+
 # --- Per-user settings (dating openers library, etc.) ---
 
 

@@ -160,8 +160,22 @@ def _persist_device(
             "authed": bool(owner) or role == "ui",
             "owner": owner or "",
             "name": name,
+            "connected_at": int(time.time()),
         },
     )
+    # One live device socket — drop older duplicates (Samsung reconnect leaves ghosts)
+    if role != "ui" and device_id:
+        try:
+            from device_push import prune_stale_device_connections
+        except ImportError:
+            from backend.device_push import prune_stale_device_connections  # type: ignore
+
+        try:
+            prune_stale_device_connections(
+                str(device_id), keep_connection_id=connection_id
+            )
+        except Exception as e:
+            logger.warning("prune stale connections failed: %s", e)
     if owner and role != "ui":
         upsert_from_ws(
             owner=owner,

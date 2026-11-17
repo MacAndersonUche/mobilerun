@@ -11,6 +11,7 @@ import logging
 import os
 import secrets
 import sys
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -158,6 +159,19 @@ class TaskRequest(BaseModel):
     speed_preset: str = "balanced"
 
 
+class TaskStep(BaseModel):
+    n: int
+    action: str
+    reason: Optional[str] = None
+    ok: Optional[bool] = True
+    package: Optional[str] = None
+    tree_chars: Optional[int] = None
+    screenshot_key: Optional[str] = None
+    screenshot_url: Optional[str] = None
+    verify: Optional[str] = None
+    ts: Optional[int] = None
+
+
 class TaskStatus(BaseModel):
     task_id: str
     device_id: str
@@ -172,6 +186,8 @@ class TaskStatus(BaseModel):
     # llm | heuristic | None — heuristic is open-app-only + labelled in UI
     planner: Optional[str] = None
     llm_provider: Optional[str] = None
+    mode: Optional[str] = None
+    steps: Optional[List[TaskStep]] = None
 
 
 class LLMConfig(BaseModel):
@@ -1431,6 +1447,33 @@ async def get_task_status(
             if completed_at is not None:
                 mem["completed_at"] = completed_at
         st = job.get("state") or {}
+        # Timeout stale running jobs on read
+        if status == "running":
+            created = job.get("created_at")
+            try:
+                from cloud_agent import TASK_TIMEOUT_S
+            except ImportError:
+                from backend.cloud_agent import TASK_TIMEOUT_S  # type: ignore
+            if isinstance(created, (int, float)) and (
+                time.time() - float(created) > TASK_TIMEOUT_S
+            ):
+                status = "failed"
+                job["status"] = "failed"
+                job["error"] = (
+                    job.get("error") or f"Task timed out after {TASK_TIMEOUT_S}s"
+                )
+                try:
+                    from storage import put_job as _put
+
+                    _put(job)
+                except Exception:
+                    try:
+                        from backend.storage import put_job as _put  # type: ignore
+
+                        _put(job)
+                    except Exception:
+                        pass
+        steps = _task_steps_from_state(st)
         return TaskStatus(
             task_id=task_id,
             device_id=str(job.get("device_id") or (mem or {}).get("device_id") or ""),
@@ -1446,6 +1489,8 @@ async def get_task_status(
             completed_at=completed_at,
             planner=st.get("planner") or (mem or {}).get("planner"),
             llm_provider=st.get("llm_provider") or (mem or {}).get("llm_provider"),
+            mode=str(job.get("mode") or (mem or {}).get("mode") or "normal"),
+            steps=steps,
         )
 
     if mem:
@@ -1454,11 +1499,105 @@ async def get_task_status(
     raise HTTPException(status_code=404, detail="Task not found")
 
 
+def _task_steps_from_state(st: Dict[str, Any]) -> List[TaskStep]:
+    raw = list(st.get("steps_detail") or [])
+    out: List[TaskStep] = []
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        key = s.get("screenshot_key")
+        url = None
+        if key and bucket:
+            # Presign lightly so History can show thumbs (short TTL)
+            try:
+                import boto3
+
+                url = boto3.client("s3").generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": bucket, "Key": key},
+                    ExpiresIn=3600,
+                )
+            except Exception:
+                url = None
+        out.append(
+            TaskStep(
+                n=int(s.get("n") or 0),
+                action=str(s.get("action") or ""),
+                reason=s.get("reason"),
+                ok=s.get("ok", True),
+                package=s.get("package"),
+                tree_chars=s.get("tree_chars"),
+                screenshot_key=key,
+                screenshot_url=url,
+                verify=s.get("verify"),
+                ts=s.get("ts"),
+            )
+        )
+    # Fallback: derive from flat history strings
+    if not out:
+        for i, h in enumerate(st.get("history") or []):
+            out.append(TaskStep(n=i + 1, action=str(h), reason=None, ok=True))
+    return out
+
+
 @app.get("/api/tasks", response_model=List[TaskStatus])
 async def list_tasks(
     limit: int = 50, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """List recent tasks."""
+    """List recent tasks (Dynamo jobs preferred over in-memory)."""
+    jobs: List[Dict[str, Any]] = []
+    try:
+        from storage import list_recent_jobs
+    except ImportError:
+        from backend.storage import list_recent_jobs  # type: ignore
+    try:
+        jobs = list_recent_jobs(limit=limit)
+    except Exception as e:
+        logger.warning("list_recent_jobs failed: %s", e)
+
+    out: List[TaskStatus] = []
+    for job in jobs:
+        # Skip dating loop jobs from Normal history unless mode matches
+        kind = str(job.get("kind") or "agent")
+        if kind not in ("agent", "task"):
+            # Still include dating as history entries with mode label
+            if kind != "dating":
+                continue
+        st = job.get("state") or {}
+        started = job.get("created_at") or job.get("started_at")
+        if isinstance(started, (int, float)):
+            started_at = datetime.fromtimestamp(float(started))
+        else:
+            started_at = datetime.now()
+        completed = job.get("completed_at")
+        completed_at = (
+            datetime.fromtimestamp(float(completed))
+            if isinstance(completed, (int, float))
+            else None
+        )
+        out.append(
+            TaskStatus(
+                task_id=str(job.get("job_id") or ""),
+                device_id=str(job.get("device_id") or ""),
+                instruction=str(job.get("instruction") or kind),
+                status=str(job.get("status") or "unknown"),
+                current_step=int(st.get("steps") or 0),
+                max_steps=int(job.get("max_steps") or 15),
+                result=job.get("result") or st.get("last_action"),
+                error=job.get("error"),
+                started_at=started_at,
+                completed_at=completed_at,
+                planner=st.get("planner"),
+                llm_provider=st.get("llm_provider"),
+                mode=str(job.get("mode") or kind),
+                steps=_task_steps_from_state(st),
+            )
+        )
+    if out:
+        return out[:limit]
+
+    # Local fallback
     tasks = list(active_runs.values()) + run_history
     tasks.sort(key=lambda t: t["started_at"], reverse=True)
     return [TaskStatus(**t) for t in tasks[:limit]]

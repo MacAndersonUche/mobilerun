@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("mobilerun.cloud_agent")
 
 SYSTEM_PROMPT = """You are MobileRun, controlling an Android phone via accessibility.
-Given the goal and a compressed UI tree, pick ONE next action as JSON only:
+Given the goal and a compressed UI tree (and optional screenshot), pick ONE next action as JSON only:
 {"action":"tap","x":123,"y":456,"reason":"..."}
 {"action":"swipe","x1":100,"y1":800,"x2":100,"y2":200,"reason":"..."}
 {"action":"type","text":"...","reason":"..."}
@@ -26,9 +26,20 @@ Given the goal and a compressed UI tree, pick ONE next action as JSON only:
 {"action":"open_app","app":"Settings","reason":"..."}
 {"action":"done","reason":"goal achieved"}
 {"action":"fail","reason":"cannot proceed: ..."}
-Coordinates are screen pixels from node bounds centers. Prefer clickable nodes
-matching the goal. Never invent coordinates outside the tree. Reply with JSON only.
+Rules:
+- To launch an app (Settings, WhatsApp, Chrome, …) ALWAYS use open_app with the app
+  label — never hunt launcher icons or swipe the home screen.
+- Prefer clickable/text nodes with center=(x,y) from the tree. Never invent coordinates.
+- If the tree is empty/thin but a screenshot is provided, estimate taps from the image
+  or use open_app / fail.
+- Do NOT repeat the same swipe. If stuck, use open_app, back, or fail.
+- Reply with JSON only.
 """
+
+# Wall-clock timeout for a cloud agent job (seconds)
+TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "300")
+# Max identical swipe summaries before hard-fail
+MAX_SWIPE_LOOPS = 2
 
 # Shown in Tasks/Chat UI when Gemini/OpenAI cannot plan.
 LLM_UNAVAILABLE_LABEL = "LLM unavailable: quota"
@@ -151,18 +162,38 @@ def _openai_model() -> str:
     return "gpt-4o-mini"
 
 
-def _call_openai(user_prompt: str) -> str:
+def _call_openai(user_prompt: str, image_b64: Optional[str] = None) -> str:
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("No OpenAI API key")
     model = _openai_model()
+    if image_b64:
+        # Vision path for thin/empty a11y trees on Samsung One UI
+        user_content: Any = [
+            {"type": "text", "text": user_prompt},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{image_b64}",
+                    "detail": "low",
+                },
+            },
+        ]
+        # Prefer a vision-capable mini model
+        if model == "gpt-4o-mini" or "gpt-4o" in model:
+            pass
+        else:
+            model = "gpt-4o-mini"
+    else:
+        user_content = user_prompt
     body = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,
+        "max_tokens": 512,
     }
     req = urllib.request.Request(
         "https://api.openai.com/v1/chat/completions",
@@ -173,7 +204,7 @@ def _call_openai(user_prompt: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=40) as resp:
+    with urllib.request.urlopen(req, timeout=50) as resp:
         data = json.load(resp)
     return data["choices"][0]["message"]["content"]
 
@@ -261,10 +292,36 @@ def probe_llm_providers() -> Dict[str, Any]:
     return out
 
 
+def _trivial_open_app_target(instruction: str) -> Optional[str]:
+    """If instruction is essentially 'open X', return X; else None."""
+    text = (instruction or "").strip()
+    m = re.match(
+        r"^\s*(?:please\s+)?(?:open(?:\s+app)?|launch|start)\s+(.+?)\s*$",
+        text,
+        re.I,
+    )
+    if not m:
+        return None
+    app = m.group(1).strip().strip("\"'")
+    app = re.sub(r"\s+(please|now|for me)\s*$", "", app, flags=re.I).strip()
+    if not app or len(app) > 40:
+        return None
+    if re.search(
+        r"\b(and|then|go to|turn on|turn off|enable|disable|tap|type|swipe)\b",
+        app,
+        re.I,
+    ):
+        return None
+    if "," in app:
+        return None
+    return app
+
+
 def plan_next_action(
     instruction: str,
     ui_tree: str,
     history: List[str],
+    image_b64: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Plan one action. Multi-step goals require a real LLM (Gemini or OpenAI).
 
@@ -272,31 +329,45 @@ def plan_next_action(
     and is always labelled LLM unavailable: quota. It must never complete
     multi-step verification tasks.
     """
+    open_target = _trivial_open_app_target(instruction)
+    hist_blob = " ".join(history).lower()
     hist = "\n".join(history[-8:]) or "(none)"
+    tree_note = ""
+    if not ui_tree or 'empty="true"' in ui_tree or len(ui_tree) < 80:
+        tree_note = (
+            "\nNOTE: UI tree is empty/thin (common on Samsung One UI). "
+            "Prefer open_app for launching apps. "
+            + ("A screenshot is attached.\n" if image_b64 else "No screenshot.\n")
+        )
+    open_hint = ""
+    if open_target and "open_app" not in hist_blob:
+        open_hint = (
+            f"\nHINT: This goal is a simple app launch — use "
+            f'{{"action":"open_app","app":"{open_target}"}} immediately '
+            f"(PackageManager). Do not swipe the launcher.\n"
+        )
     user = (
         f"GOAL: {instruction}\n\n"
         f"RECENT ACTIONS:\n{hist}\n\n"
+        f"{tree_note}{open_hint}"
         f"UI TREE:\n{_compress_tree(ui_tree)}\n\n"
         "JSON action:"
     )
     raw = None
     errors: List[str] = []
     provider_used: Optional[str] = None
-    # Prefer OpenAI first when LLM_PROVIDER=openai, or when Gemini is known-unusable
-    # via prior 429 (caller still falls through). Default: Gemini then OpenAI.
     prefer_openai = (
-        os.environ.get("LLM_PROVIDER") or ""
-    ).strip().lower() == "openai" or (
-        os.environ.get("PREFER_OPENAI") or ""
-    ).strip().lower() in (
-        "1",
-        "true",
-        "yes",
+        (os.environ.get("LLM_PROVIDER") or "").strip().lower() == "openai"
+        or (os.environ.get("PREFER_OPENAI") or "").strip().lower()
+        in ("1", "true", "yes")
+        or bool(image_b64)
     )
     providers: List[str] = []
     if prefer_openai and os.environ.get("OPENAI_API_KEY"):
         providers.append("openai")
-    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+    if not image_b64 and (
+        os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    ):
         providers.append("gemini")
     if "openai" not in providers and os.environ.get("OPENAI_API_KEY"):
         providers.append("openai")
@@ -309,16 +380,14 @@ def plan_next_action(
                 raw = _call_gemini(SYSTEM_PROMPT + "\n\n" + user)
                 provider_used = "gemini"
             else:
-                raw = _call_openai(user)
+                raw = _call_openai(user, image_b64=image_b64)
                 provider_used = "openai"
         except Exception as e:
             errors.append(f"{prov}: {e}")
             logger.warning("%s failed, trying next provider: %s", prov, e)
-            # On Gemini quota, immediately continue to OpenAI (already next in list)
             continue
     if raw is None:
         detail = "; ".join(errors) or "no keys"
-        # Trivial open-app only — never multi-step navigation/toggles
         heur = _heuristic_open_app_only(instruction, history)
         if heur:
             logger.warning(
@@ -328,7 +397,6 @@ def plan_next_action(
             )
             heur["planner"] = "heuristic"
             heur["llm_provider"] = None
-            # Force UI-visible label
             reason = str(heur.get("reason") or "")
             if LLM_UNAVAILABLE_LABEL not in reason:
                 heur["reason"] = f"{LLM_UNAVAILABLE_LABEL} — {reason}".strip(" —")
@@ -434,6 +502,70 @@ def _parse_action_json(raw: str) -> Dict[str, Any]:
     return json.loads(m.group(0))
 
 
+def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
+    """APK may return a plain string or {tree, package, empty, chars}."""
+    if isinstance(raw, dict):
+        tree = raw.get("tree") or raw.get("result") or ""
+        if not isinstance(tree, str):
+            tree = json.dumps(tree)
+        return {
+            "tree": tree,
+            "package": str(raw.get("package") or ""),
+            "empty": bool(raw.get("empty") or 'empty="true"' in tree or len(tree) < 80),
+            "chars": int(raw.get("chars") or len(tree)),
+        }
+    tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
+    return {
+        "tree": tree,
+        "package": "",
+        "empty": (not tree) or 'empty="true"' in tree or len(tree) < 80,
+        "chars": len(tree),
+    }
+
+
+def _fetch_screenshot_b64(device_id: str) -> Optional[str]:
+    try:
+        from device_rpc import call_device
+    except ImportError:
+        from backend.device_rpc import call_device  # type: ignore
+
+    try:
+        raw = call_device(device_id, "screenshot", {}, timeout_s=15)
+    except Exception as e:
+        logger.warning("screenshot rpc failed: %s", e)
+        return None
+    if isinstance(raw, dict):
+        if raw.get("ok") and raw.get("data"):
+            return str(raw["data"])
+        return None
+    if isinstance(raw, str) and len(raw) > 100:
+        return raw
+    return None
+
+
+def _store_step_screenshot(job_id: str, step_n: int, b64: str) -> Optional[str]:
+    """Upload JPEG to S3; return s3 key or None."""
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    if not bucket or not b64:
+        return None
+    try:
+        import base64
+        import boto3
+
+        key = f"tasks/{job_id}/step_{step_n}.jpg"
+        body = base64.b64decode(b64)
+        boto3.client("s3").put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=body,
+            ContentType="image/jpeg",
+        )
+        return key
+    except Exception as e:
+        logger.warning("screenshot s3 upload failed: %s", e)
+        return None
+
+
 def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     try:
         from device_rpc import call_device
@@ -460,7 +592,10 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                 "duration_ms": int(action.get("duration_ms") or 300),
             },
         )
-        return f"swipe({action.get('x1')},{action.get('y1')}->{action.get('x2')},{action.get('y2')})"
+        return (
+            f"swipe({action.get('x1')},{action.get('y1')}->"
+            f"{action.get('x2')},{action.get('y2')})"
+        )
     if kind in ("type", "type_text", "input_text"):
         call_device(
             device_id,
@@ -476,10 +611,15 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         return "home"
     if kind in ("open_app", "start_app"):
         app = str(action.get("app") or action.get("package") or "")
-        call_device(
+        raw = call_device(
             device_id, "open_app", {"app": app, "package": action.get("package")}
         )
-        return f"open_app({app})"
+        pkg = ""
+        if isinstance(raw, dict):
+            pkg = str(raw.get("package") or raw.get("active_package") or "")
+            if raw.get("ok") is False:
+                raise RuntimeError(str(raw.get("error") or f"open_app failed: {app}"))
+        return f"open_app({app})" + (f"[{pkg}]" if pkg else "")
     if kind == "done":
         return "done"
     if kind == "fail":
@@ -487,8 +627,20 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     raise RuntimeError(f"Unknown action: {kind}")
 
 
+def _count_recent_swipes(history: List[str]) -> int:
+    n = 0
+    for h in reversed(history):
+        if str(h).startswith("swipe("):
+            n += 1
+        else:
+            break
+    return n
+
+
 def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     """Advance an agent job by one LLM+action step. Mutates and returns job."""
+    import time
+
     try:
         from device_rpc import call_device
     except ImportError:
@@ -504,6 +656,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     step = int(state.get("steps") or 0)
     max_steps = int(job.get("max_steps") or 15)
     history: List[str] = list(state.get("history") or [])
+    steps_detail: List[Dict[str, Any]] = list(state.get("steps_detail") or [])
+    now = int(time.time())
+    created = int(job.get("created_at") or now)
 
     if not device_id:
         job["status"] = "failed"
@@ -512,6 +667,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     if not instruction:
         job["status"] = "failed"
         job["error"] = "No instruction on job"
+        return job
+    # Stale running tasks time out
+    if now - created > TASK_TIMEOUT_S:
+        job["status"] = "failed"
+        job["error"] = f"Task timed out after {TASK_TIMEOUT_S}s"
+        state["last_action"] = "timeout"
+        job["state"] = state
+        job["completed_at"] = now
         return job
     if not device_is_reachable(device_id):
         job["status"] = "failed"
@@ -531,9 +694,19 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     if step >= max_steps:
         job["status"] = "completed"
         job["result"] = state.get("last_action") or f"Reached max_steps={max_steps}"
+        job["completed_at"] = now
+        return job
+    if _count_recent_swipes(history) >= MAX_SWIPE_LOOPS:
+        job["status"] = "failed"
+        job["error"] = (
+            "Stopped swipe loop — use open_app for launching apps "
+            "(PackageManager), not launcher swipes"
+        )
+        state["last_action"] = "swipe_loop"
+        job["state"] = state
+        job["completed_at"] = now
         return job
 
-    # Notify UI / phone that cloud agent is driving
     push_to_device(
         device_id,
         {
@@ -546,10 +719,20 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        ui_tree = call_device(device_id, "get_ui_tree", {}, timeout_s=20) or ""
-        if not isinstance(ui_tree, str):
-            ui_tree = json.dumps(ui_tree)
-        action = plan_next_action(instruction, ui_tree, history)
+        tree_raw = call_device(device_id, "get_ui_tree", {}, timeout_s=20) or ""
+        tree_info = _normalize_tree_payload(tree_raw)
+        ui_tree = tree_info["tree"]
+        image_b64 = None
+        # Always grab a screenshot for step history; use for vision when tree thin
+        image_b64 = _fetch_screenshot_b64(device_id)
+        use_vision = bool(image_b64) and tree_info["empty"]
+
+        action = plan_next_action(
+            instruction,
+            ui_tree,
+            history,
+            image_b64=image_b64 if use_vision else None,
+        )
         kind = str(action.get("action") or "").lower()
         reason = str(action.get("reason") or "")
         planner = action.get("planner") or "llm"
@@ -557,43 +740,153 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["planner"] = planner
         if llm_provider:
             state["llm_provider"] = llm_provider
+
+        # Block swipe when tree empty — force open_app or fail
+        if kind == "swipe" and tree_info["empty"]:
+            kind = "fail"
+            reason = (
+                "UI tree empty — refusing swipe. "
+                "Re-enable Accessibility or use open_app."
+            )
+            action = {"action": "fail", "reason": reason}
+
+        def _record_step(
+            summary: str,
+            *,
+            ok: bool = True,
+            screenshot_key: Optional[str] = None,
+            verify: Optional[str] = None,
+        ) -> None:
+            entry = {
+                "n": step + 1,
+                "action": summary,
+                "reason": reason,
+                "ok": ok,
+                "package": tree_info.get("package") or "",
+                "tree_chars": tree_info.get("chars") or 0,
+                "screenshot_key": screenshot_key,
+                "verify": verify,
+                "ts": int(time.time()),
+            }
+            steps_detail.append(entry)
+            # Keep Dynamo item small
+            state["steps_detail"] = steps_detail[-40:]
+
+        shot_key = None
+        if image_b64:
+            shot_key = _store_step_screenshot(
+                str(job.get("job_id") or ""), step + 1, image_b64
+            )
+
         if kind == "done":
             state["steps"] = step + 1
             state["last_action"] = f"done: {reason}"
             history.append(f"done: {reason}")
             state["history"] = history
+            _record_step(f"done: {reason}", screenshot_key=shot_key)
             job["state"] = state
             job["status"] = "completed"
             job["result"] = reason or "Goal completed"
+            job["completed_at"] = int(time.time())
             return job
         if kind == "fail":
             state["steps"] = step + 1
             state["last_action"] = f"fail: {reason}"
             history.append(f"fail: {reason}")
             state["history"] = history
+            _record_step(f"fail: {reason}", ok=False, screenshot_key=shot_key)
             job["state"] = state
             job["status"] = "failed"
             job["error"] = reason or "Agent could not complete the goal"
+            job["completed_at"] = int(time.time())
             return job
 
+        # Identical swipe detection before executing
+        pending_summary_prefix = "swipe(" if kind == "swipe" else ""
+        if (
+            pending_summary_prefix
+            and _count_recent_swipes(history) >= MAX_SWIPE_LOOPS - 1
+        ):
+            raise RuntimeError(
+                "Swipe loop detected — aborting. Use open_app instead of launcher swipes."
+            )
+
         summary = execute_action(device_id, action)
+
+        # Verify: re-fetch tree / package after action
+        verify_msg = ""
+        try:
+            after = _normalize_tree_payload(
+                call_device(device_id, "get_ui_tree", {}, timeout_s=15) or ""
+            )
+            if kind in ("open_app", "start_app"):
+                app_l = str(action.get("app") or "").lower()
+                pkg_l = (after.get("package") or "").lower()
+                tree_l = (after.get("tree") or "").lower()
+                tokens = []
+                if "setting" in app_l:
+                    tokens.append("settings")
+                if "whatsapp" in app_l or app_l == "wa":
+                    tokens.append("whatsapp")
+                if "chrome" in app_l:
+                    tokens.append("chrome")
+                if "snap" in app_l:
+                    tokens.append("snapchat")
+                opened = bool(pkg_l) and (
+                    any(tok in pkg_l for tok in tokens)
+                    or app_l.replace(" ", "") in pkg_l.replace(".", "")
+                    or app_l in tree_l
+                )
+                if (
+                    not opened
+                    and after.get("package")
+                    and after["package"] != tree_info.get("package")
+                ):
+                    opened = True
+                    verify_msg = f"package→{after['package']}"
+                elif opened:
+                    verify_msg = f"open_ok package={after.get('package')}"
+                else:
+                    verify_msg = (
+                        f"open_unconfirmed package={after.get('package')!r} "
+                        f"tree_chars={after.get('chars')}"
+                    )
+            else:
+                verify_msg = (
+                    f"after_chars={after.get('chars')} pkg={after.get('package')}"
+                )
+        except Exception as ve:
+            verify_msg = f"verify_error={ve}"
+
         state["steps"] = step + 1
         state["last_action"] = summary
         state["last_reason"] = reason
+        state["last_verify"] = verify_msg
         history.append(f"{summary} — {reason}".strip(" —"))
         state["history"] = history
+        _record_step(summary, screenshot_key=shot_key, verify=verify_msg)
         job["state"] = state
-        # Surface heuristic label in the result line for Tasks UI
         if planner == "heuristic":
             job["result"] = f"Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
         else:
             job["result"] = f"Step {step + 1}: {summary}"
-        # Schedule next tick soon (EventBridge also picks up due jobs)
-        import time
+            if verify_msg:
+                job["result"] += f" · {verify_msg}"
+
+        # Pure open_app goal → complete once launched
+        open_target = _trivial_open_app_target(instruction)
+        if (
+            open_target
+            and kind in ("open_app", "start_app")
+            and "open_unconfirmed" not in verify_msg
+        ):
+            job["status"] = "completed"
+            job["result"] = f"Opened {open_target} ({verify_msg or summary})"
+            job["completed_at"] = int(time.time())
+            return job
 
         job["next_run_at"] = int(time.time()) + 2
         job["updated_at"] = int(time.time())
-        # Immediate follow-up invoke for snappier UX when STEP_WORKER_ARN set
         _kick_self(job.get("job_id"))
         return job
     except Exception as e:
@@ -601,8 +894,17 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["last_action"] = f"error: {e}"
         history.append(f"error: {e}")
         state["history"] = history
+        steps_detail.append(
+            {
+                "n": step + 1,
+                "action": f"error: {e}",
+                "reason": str(e),
+                "ok": False,
+                "ts": int(time.time()),
+            }
+        )
+        state["steps_detail"] = steps_detail[-40:]
         job["state"] = state
-        # Soft fail a single step (retry) unless hard errors
         msg = str(e)
         low = msg.lower()
         hard = any(
@@ -614,12 +916,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 "offline",
                 "api key",
                 "failed to push",
+                "swipe loop",
             )
         )
         rate_limited = any(t in low for t in ("429", "503", "quota", "high demand"))
         if hard or step + 1 >= max_steps:
             job["status"] = "failed"
-            # Ensure Tasks UI shows the standard label
+            job["completed_at"] = int(time.time())
             if LLM_UNAVAILABLE_LABEL.lower() in low or "no working llm" in low:
                 if LLM_UNAVAILABLE_LABEL not in msg:
                     job["error"] = f"{LLM_UNAVAILABLE_LABEL} — {msg}"
@@ -628,9 +931,6 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 job["error"] = msg
         else:
-            import time
-
-            # Rate limits: wait longer and do not burn a step slot
             if rate_limited:
                 job["next_run_at"] = int(time.time()) + 20
                 job["error"] = f"{LLM_UNAVAILABLE_LABEL} — {msg}"
