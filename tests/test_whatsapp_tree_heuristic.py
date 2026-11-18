@@ -166,9 +166,24 @@ def test_plan_next_action_uses_whatsapp_heuristic(monkeypatch):
 
 def test_goal_satisfied_whatsapp_bubble():
     sent = _load("whatsapp_sent_tree.xml")
-    reason = _goal_satisfied_from_tree(INSTR, sent, "com.whatsapp")
+    # Old bubbles alone must NOT complete a new job
+    assert _goal_satisfied_from_tree(INSTR, sent, "com.whatsapp", history=[]) is None
+    hist = [
+        'type("hi baby") — Type message (whatsapp heuristic)',
+        "tap(1000,2280) — Tap Send (whatsapp heuristic)",
+    ]
+    reason = _goal_satisfied_from_tree(
+        INSTR, sent, "com.whatsapp", history=hist
+    )
     assert reason is not None
     assert "hi baby" in reason.lower()
+    # dry_run never completes via bubble detection
+    assert (
+        _goal_satisfied_from_tree(
+            INSTR, sent, "com.whatsapp", history=hist, dry_run=True
+        )
+        is None
+    )
 
 
 def test_thin_tree_fixture_is_under_useful_node_budget():

@@ -31,8 +31,14 @@ from typing import Any, Dict, List, Optional
 API = os.environ.get(
     "API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com"
 ).rstrip("/")
-USER = os.environ.get("E2E_USER", "ci-e2e")
-PASSWORD = os.environ.get("E2E_PASSWORD", "admin")
+# Mac's S21+ is owned by the admin account (not ci-e2e)
+USER = os.environ.get("E2E_USER") or os.environ.get("MATRIX_USER") or "admin"
+PASSWORD = (
+    os.environ.get("E2E_PASSWORD")
+    or os.environ.get("ADMIN_PASSWORD")
+    or os.environ.get("MATRIX_PASSWORD")
+    or "admin"
+)
 # Mac's S21+ from the failing job — override with DEVICE_ID env
 DEFAULT_DEVICE = "android_46101066-f6d8-4369-b058-0fe822b55361"
 DEVICE_ID = os.environ.get("DEVICE_ID", DEFAULT_DEVICE)
@@ -74,19 +80,35 @@ def req(
     body: Optional[Dict[str, Any]] = None,
     token: Optional[str] = None,
     timeout: float = 60,
+    retries: int = 8,
 ) -> Any:
     data = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    r = urllib.request.Request(API + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
-            raw = resp.read().decode()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        err = e.read().decode()
-        raise RuntimeError(f"{method} {path} -> {e.code}: {err[:800]}") from e
+    last_err: Optional[Exception] = None
+    for attempt in range(retries):
+        r = urllib.request.Request(
+            API + path, data=data, headers=headers, method=method
+        )
+        try:
+            with urllib.request.urlopen(r, timeout=timeout) as resp:
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            err = e.read().decode()
+            last_err = RuntimeError(f"{method} {path} -> {e.code}: {err[:800]}")
+            if e.code in (429, 500, 502, 503, 504) and attempt + 1 < retries:
+                time.sleep(min(30, 2**attempt))
+                continue
+            raise last_err from e
+        except Exception as e:
+            last_err = e
+            if attempt + 1 < retries:
+                time.sleep(min(30, 2**attempt))
+                continue
+            raise
+    raise last_err or RuntimeError(f"{method} {path} failed")
 
 
 def login() -> str:
@@ -151,8 +173,28 @@ def poll_task(token: str, task_id: str, timeout_s: int = 300) -> Dict[str, Any]:
     raise RuntimeError(f"Task timeout: {last}")
 
 
+def case_blocked(task: Dict[str, Any]) -> Optional[str]:
+    """Return blocker reason when app missing / logged out — not a product fail."""
+    err = str(task.get("error") or "")
+    result = str(task.get("result") or "")
+    blob = f"{err} {result}".lower()
+    steps = task.get("steps") or []
+    step_blob = " ".join(
+        f"{s.get('action')} {s.get('reason')}" for s in steps if isinstance(s, dict)
+    ).lower()
+    for needle, reason in (
+        ("could not open app", "app not installed or not launchable"),
+        ("not installed", "app not installed"),
+        ("log in", "app requires login"),
+        ("logged out", "app logged out"),
+    ):
+        if needle in blob or needle in step_blob:
+            return reason
+    return None
+
+
 def case_passed(task: Dict[str, Any]) -> bool:
-    """Pass = completed dry_run with compose filled (send skipped) or explicit dry_run done."""
+    """Pass = completed dry_run with compose filled (send skipped)."""
     status = (task.get("status") or "").lower()
     result = str(task.get("result") or "").lower()
     error = str(task.get("error") or "").lower()
@@ -160,24 +202,60 @@ def case_passed(task: Dict[str, Any]) -> bool:
         return False
     if "offline" in error or "offline" in result:
         return False
+    if case_blocked(task):
+        return False
     steps = task.get("steps") or []
-    # Prefer explicit dry_run / compose-filled markers
     if "dry_run" in result and ("compose" in result or "send skipped" in result):
         return True
-    # Or: typed the message body and never tapped send
     typed_msg = any(
-        MESSAGE.lower() in str(s.get("action") or "").lower()
+        (
+            MESSAGE.lower() in str(s.get("action") or "").lower()
+            and (
+                "type" in str(s.get("action") or "").lower()
+                or "typed" in str(s.get("action") or "").lower()
+            )
+        )
         or (
             "type message" in str(s.get("reason") or "").lower()
             and MESSAGE.lower() in str(s.get("reason") or "").lower()
         )
+        or s.get("fastpath_step") == "type_message"
         for s in steps
+        if isinstance(s, dict)
     )
-    tapped_send = any("tap send" in str(s.get("reason") or "").lower() for s in steps)
+    tapped_send = any(
+        "tap send" in str(s.get("reason") or "").lower()
+        or s.get("fastpath_step") == "tap_send"
+        for s in steps
+        if isinstance(s, dict)
+    )
     fast = [s.get("fastpath_step") for s in steps if isinstance(s, dict)]
-    if "dry_run_stop" in fast or "type_message" in fast:
+    if "dry_run_stop" in fast:
         return typed_msg and not tapped_send
     return typed_msg and not tapped_send and len(steps) >= 3
+
+
+def save_screenshots(token: str, task: Dict[str, Any], case_id: str) -> List[str]:
+    """Download any step screenshots into OUT_DIR/shots/."""
+    shots_dir = OUT_DIR / "shots" / case_id
+    shots_dir.mkdir(parents=True, exist_ok=True)
+    saved: List[str] = []
+    for s in task.get("steps") or []:
+        if not isinstance(s, dict):
+            continue
+        url = s.get("screenshot_url")
+        key = s.get("screenshot_key")
+        if not url and not key:
+            continue
+        name = f"step_{s.get('n')}_{s.get('fastpath_step') or 'shot'}.jpg"
+        dest = shots_dir / name
+        try:
+            if url:
+                urllib.request.urlretrieve(url, dest)  # noqa: S310
+                saved.append(str(dest))
+        except Exception as e:
+            (shots_dir / f"{name}.err").write_text(str(e))
+    return saved
 
 
 def main() -> int:
@@ -268,11 +346,17 @@ def main() -> int:
                     "error": task.get("error"),
                     "steps": task.get("steps"),
                 }
-                # Persist steps for debugging
                 (OUT_DIR / f"{case_id}.json").write_text(
                     json.dumps(task, indent=2, default=str)
                 )
-                if case_passed(task):
+                case["screenshots"] = save_screenshots(token, task, case_id)
+                blocked = case_blocked(task)
+                if blocked:
+                    case["status"] = "blocked"
+                    case["blocker"] = blocked
+                    skips += 1  # treat as non-fail blocker
+                    print(f"  BLOCKED {case_id}: {blocked}", flush=True)
+                elif case_passed(task):
                     case["status"] = "pass"
                     passes += 1
                     print(f"  PASS {case_id}", flush=True)
@@ -289,15 +373,17 @@ def main() -> int:
             time.sleep(2)
 
     report["finished_at"] = datetime.now(timezone.utc).isoformat()
+    blocked_n = sum(1 for c in report["cases"] if c.get("status") == "blocked")
     report["summary"] = {
         "pass": passes,
         "fail": fails,
-        "skip": skips,
+        "skip": skips - blocked_n,
+        "blocked": blocked_n,
         "total": passes + fails + skips,
         "verdict": (
             "PASS"
             if fails == 0 and passes > 0
-            else ("SKIPPED" if passes == 0 and skips > 0 else "FAIL")
+            else ("SKIPPED" if passes == 0 and fails == 0 else "FAIL")
         ),
     }
     (OUT_DIR / "report.json").write_text(json.dumps(report, indent=2, default=str))
