@@ -1,7 +1,8 @@
 """Deterministic DM / chat fast-paths for Social + Dating apps.
 
 Covers: WhatsApp, Instagram, Messenger, Telegram, Tinder, Bumble, Hinge.
-Flow (per app): open → inbox/DMs → search → open chat → compose → type → send → verify.
+Flow: open → inbox/DMs → search → type contact → tap result row → VERIFY chat
+(header + compose) → type message into compose only → send (or dry-run stop).
 """
 
 from __future__ import annotations
@@ -20,7 +21,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "pkg_markers": ("whatsapp",),
         "open_label": "WhatsApp",
         "inbox_labels": ("Chats", "New chat"),
-        "search_labels": ("Search", "search"),
+        "new_chat_labels": ("New chat", "New Chat"),
+        "search_labels": ("Search", "search", "Search…", "Search..."),
         "search_fallback": (980, 160),
         "compose_labels": ("Type a message", "Message", "Write a message"),
         "send_labels": ("Send",),
@@ -40,6 +42,7 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "Inbox",
             "New message",
         ),
+        "new_chat_labels": ("New message", "New Message"),
         "search_labels": ("Search", "Search…", "Search...", "To:"),
         "search_fallback": (980, 160),
         "compose_labels": ("Message…", "Message...", "Message", "Write a message"),
@@ -53,6 +56,7 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "pkg_markers": ("orca", "messenger"),
         "open_label": "Messenger",
         "inbox_labels": ("Chats", "Messages", "New message", "Compose"),
+        "new_chat_labels": ("New message", "Compose"),
         "search_labels": ("Search", "Search…", "Search Messenger"),
         "search_fallback": (540, 200),
         "compose_labels": ("Aa", "Message", "Write a message", "Send a message"),
@@ -66,6 +70,7 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "pkg_markers": ("telegram",),
         "open_label": "Telegram",
         "inbox_labels": ("Chats", "New Message", "New message"),
+        "new_chat_labels": ("New Message", "New message"),
         "search_labels": ("Search", "Search…"),
         "search_fallback": (980, 160),
         "compose_labels": ("Message", "Write a message"),
@@ -79,6 +84,7 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "pkg_markers": ("tinder",),
         "open_label": "Tinder",
         "inbox_labels": ("Chat", "Chats", "Messages", "Matches", "Inbox"),
+        "new_chat_labels": ("Matches", "Chat"),
         "search_labels": ("Search", "Search matches", "Search…"),
         "search_fallback": (540, 200),
         "compose_labels": (
@@ -97,6 +103,7 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "pkg_markers": ("bumble",),
         "open_label": "Bumble",
         "inbox_labels": ("Messages", "Connections", "Chats", "Inbox"),
+        "new_chat_labels": ("Messages", "Connections"),
         "search_labels": ("Search", "Search…"),
         "search_fallback": (980, 160),
         "compose_labels": ("Type a message", "Message", "Say something"),
@@ -110,6 +117,7 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "pkg_markers": ("hinge",),
         "open_label": "Hinge",
         "inbox_labels": ("Matches", "Messages", "Chats", "Liked You", "Inbox"),
+        "new_chat_labels": ("Matches", "Liked You"),
         "search_labels": ("Search", "Search…"),
         "search_fallback": (980, 160),
         "compose_labels": (
@@ -136,7 +144,6 @@ def tree_is_sparse(tree: str, nodes: Optional[int] = None) -> bool:
         return nodes < MIN_USEFUL_TREE_NODES
     n = tree_node_count(tree)
     if n == 0:
-        # Empty / hollow hierarchy
         low = (tree or "").lower()
         if not tree or 'empty="true"' in low or len(tree) < 80:
             return True
@@ -191,6 +198,228 @@ def _tree_editable_center(tree: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+_NODE_TAG_RE = re.compile(r"<(?:n|node)\b([^>]*)/?>", re.I)
+
+
+def _attr(blob: str, *names: str) -> str:
+    for name in names:
+        m = re.search(rf'\b{re.escape(name)}="([^"]*)"', blob, re.I)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
+    """Parse compact a11y dump nodes into dicts with center/flags."""
+    out: List[Dict[str, Any]] = []
+    for m in _NODE_TAG_RE.finditer(tree or ""):
+        attrs = m.group(1)
+        text = _attr(attrs, "t", "text")
+        desc = _attr(attrs, "d", "content-desc", "contentDescription")
+        hint = _attr(attrs, "h", "hint")
+        xy = _attr(attrs, "xy")
+        b = _attr(attrs, "b", "bounds")
+        editable = _attr(attrs, "e") in ("1", "true", "True")
+        clickable = _attr(attrs, "c") in ("1", "true", "True")
+        cx = cy = None
+        if xy and "," in xy:
+            try:
+                cx, cy = [int(p) for p in xy.split(",")[:2]]
+            except ValueError:
+                cx = cy = None
+        if (cx is None or cy is None) and b:
+            nums = re.findall(r"\d+", b)
+            if len(nums) >= 4:
+                x1, y1, x2, y2 = (int(n) for n in nums[:4])
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        if cx is None or cy is None:
+            continue
+        label = " ".join(p for p in (text, desc, hint) if p).strip()
+        out.append(
+            {
+                "text": text,
+                "desc": desc,
+                "hint": hint,
+                "label": label,
+                "x": cx,
+                "y": cy,
+                "editable": editable,
+                "clickable": clickable,
+            }
+        )
+    return out
+
+
+def _fuzzy_score(needle: str, hay: str) -> float:
+    """Simple token-overlap fuzzy score in [0, 1]."""
+    n = re.sub(r"\s+", " ", (needle or "").strip().lower())
+    h = re.sub(r"\s+", " ", (hay or "").strip().lower())
+    if not n or not h:
+        return 0.0
+    if n == h:
+        return 1.0
+    if n in h or h in n:
+        return 0.92
+    nt = [t for t in re.split(r"[^\w]+", n) if t]
+    ht = set(t for t in re.split(r"[^\w]+", h) if t)
+    if not nt:
+        return 0.0
+    hit = sum(1 for t in nt if t in ht)
+    return hit / len(nt)
+
+
+def _is_searchish_node(node: Dict[str, Any], search_labels: Sequence[str]) -> bool:
+    if node.get("editable"):
+        hint = (node.get("hint") or "").lower()
+        label = (node.get("label") or "").lower()
+        if any(s.lower() in hint or s.lower() in label for s in search_labels):
+            return True
+        if "search" in hint or "search" in label or hint.startswith("to"):
+            return True
+        # Top-of-screen editable is almost always the search box after query type
+        if int(node.get("y") or 0) < 280:
+            return True
+    return False
+
+
+def find_contact_result_center(
+    tree: str,
+    contact: str,
+    *,
+    search_labels: Sequence[str] = (),
+) -> Optional[Tuple[int, int]]:
+    """Best fuzzy match for a contact *result row* — never the search EditText."""
+    nodes = _parse_compact_nodes(tree)
+    if not nodes:
+        # Fallback: old center search but only if we can exclude editables later
+        return None
+    candidates: List[Tuple[float, int, Dict[str, Any]]] = []
+    for node in nodes:
+        if _is_searchish_node(node, search_labels):
+            continue
+        score = _fuzzy_score(contact, node.get("label") or "")
+        if score < 0.5:
+            # Also try first token (first name)
+            first = (contact.split() or [""])[0]
+            if first and len(first) >= 3:
+                score = max(score, _fuzzy_score(first, node.get("label") or "") * 0.85)
+        if score < 0.5:
+            continue
+        # Prefer clickable list rows below the search bar
+        y = int(node.get("y") or 0)
+        if y < 260:
+            score *= 0.4
+        if node.get("clickable"):
+            score += 0.05
+        candidates.append((score, y, node))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (-t[0], t[1]))
+    best = candidates[0][2]
+    return (int(best["x"]), int(best["y"]))
+
+
+def _label_matches_compose(blob: str, compose_labels: Sequence[str]) -> bool:
+    """Match compose hints without treating nav 'Messages' as a compose box."""
+    b = (blob or "").strip().lower()
+    if not b:
+        return False
+    # Exact / prefix-ish compose phrases
+    for lab in compose_labels:
+        l = lab.lower().strip()
+        if not l:
+            continue
+        if b == l or b.startswith(l) or l.startswith(b):
+            return True
+        # Allow "Type a message" inside longer hint strings
+        if " " in l and l in b:
+            return True
+    if b in ("aa", "say something") or b.startswith("type a message"):
+        return True
+    # Single word "message" / "message…" only — not "Messages" inbox tab
+    if re.fullmatch(r"message[.…]*", b):
+        return True
+    return False
+
+
+def compose_field_present(tree: str, compose_labels: Sequence[str]) -> bool:
+    # Prefer editable nodes with compose-like hints (real message box)
+    for node in _parse_compact_nodes(tree):
+        if not node.get("editable"):
+            continue
+        blob = f"{node.get('hint') or ''} {node.get('label') or ''}".strip()
+        if _label_matches_compose(blob, compose_labels):
+            return True
+        # Bottom-of-screen editable without "search" is almost always compose
+        y = int(node.get("y") or 0)
+        low = blob.lower()
+        if y > 1600 and "search" not in low and "to:" not in low:
+            return True
+    return False
+
+
+def chat_screen_verified(
+    tree: str,
+    contact: str,
+    compose_labels: Sequence[str],
+) -> bool:
+    """True when conversation header shows the contact AND a compose field exists."""
+    if not compose_field_present(tree, compose_labels):
+        return False
+    nodes = _parse_compact_nodes(tree)
+    # Search screen still active?
+    searchish = [
+        n
+        for n in nodes
+        if n.get("editable")
+        and (
+            "search" in f"{n.get('hint')} {n.get('label')}".lower()
+            or (
+                int(n.get("y") or 0) < 280
+                and "message" not in f"{n.get('hint')} {n.get('label')}".lower()
+            )
+        )
+    ]
+    if searchish:
+        return False
+    # Header / title match for contact (top band, non-editable)
+    for n in nodes:
+        if n.get("editable"):
+            continue
+        y = int(n.get("y") or 0)
+        if y > 320:
+            continue
+        if _fuzzy_score(contact, n.get("label") or "") >= 0.6:
+            return True
+    # Soft pass: compose present and no search field
+    return True
+
+
+def focused_is_compose_not_search(
+    tree: str, compose_labels: Sequence[str], search_labels: Sequence[str]
+) -> bool:
+    """Refuse typing when the only editable is a search/recipient field."""
+    nodes = _parse_compact_nodes(tree)
+    editables = [n for n in nodes if n.get("editable")]
+    if not editables:
+        # Compose might be described only via hint labels without e=1
+        return compose_field_present(tree, compose_labels)
+    # Prefer bottom-of-screen message boxes
+    for n in editables:
+        blob = f"{n.get('hint')} {n.get('label')}".lower()
+        y = int(n.get("y") or 0)
+        if any(lab.lower() in blob for lab in compose_labels) or (
+            ("message" in blob or "say something" in blob) and y > 1600
+        ):
+            return True
+    # If every editable looks like search / top bar → not compose
+    if all(_is_searchish_node(n, search_labels) for n in editables):
+        return False
+    # Bottom editable without search hint counts as compose
+    bottom = [n for n in editables if int(n.get("y") or 0) > 1600]
+    return bool(bottom)
+
+
 def _is_launcher_package(package: str) -> bool:
     pkg = (package or "").lower()
     return bool(pkg) and "launcher" in pkg
@@ -199,7 +428,6 @@ def _is_launcher_package(package: str) -> bool:
 def detect_dm_app(instruction: str) -> Optional[str]:
     """Return profile key if instruction names a supported DM app."""
     low = (instruction or "").lower()
-    # Longer aliases first (facebook messenger before messenger)
     ranked: List[Tuple[int, str]] = []
     for key, prof in DM_APP_PROFILES.items():
         for alias in prof["aliases"]:
@@ -213,7 +441,12 @@ def detect_dm_app(instruction: str) -> Optional[str]:
 
 
 def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
-    """Extract {app, contact, message} from a DM send goal."""
+    """Extract {app, contact, message} from a DM send goal.
+
+    Supports phrasings like:
+      whatsapp find and message Precious Achalugo tell her hi baby
+      go on whatsapp message X and say Y
+    """
     text = (instruction or "").strip()
     if not text:
         return None
@@ -222,20 +455,22 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
         return None
     if not any(
         k in text.lower()
-        for k in ("message", "msg", "text", "chat", "say", "send", "dm")
+        for k in ("message", "msg", "text", "chat", "say", "send", "dm", "tell")
     ):
         return None
     aliases = DM_APP_PROFILES[app_key]["aliases"]
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
+    say = r"(?:say|send|tell(?:\s+(?:her|him|them))?)"
     patterns = (
+        # find and message X tell her Y
         rf"(?:go\s+on\s+|open\s+|launch\s+)?(?:{alias_alt})\s+"
-        rf"(?:message|msg|text|dm|chat(?:\s+with)?)\s+(.+?)\s+"
-        rf"(?:and\s+)?(?:say|send|tell)\s+(.+)$",
-        rf"(?:{alias_alt})[,:]?\s+(?:message|msg|text|dm)\s+(.+?)\s+"
-        rf"(?:and\s+)?(?:say|send)\s+(.+)$",
+        rf"(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+(.+?)\s+"
+        rf"(?:and\s+)?{say}\s+(.+)$",
+        rf"(?:{alias_alt})[,:]?\s+(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm)\s+(.+?)\s+"
+        rf"(?:and\s+)?{say}\s+(.+)$",
         rf"(?:message|msg|text|dm)\s+(.+?)\s+on\s+(?:{alias_alt})\s+"
-        rf"(?:and\s+)?(?:say|send)\s+(.+)$",
-        rf"(?:{alias_alt})\s+(.+?)\s+(?:and\s+)?(?:say|send)\s+(.+)$",
+        rf"(?:and\s+)?{say}\s+(.+)$",
+        rf"(?:{alias_alt})\s+(.+?)\s+(?:and\s+)?{say}\s+(.+)$",
     )
     for pat in patterns:
         m = re.search(pat, text, re.I)
@@ -244,11 +479,15 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
         contact = re.sub(r"\s+", " ", m.group(1)).strip(" .,\"'")
         message = re.sub(r"\s+", " ", m.group(2)).strip(" .,\"'")
         contact = re.sub(
-            r"^(?:message|msg|text|dm|chat(?:\s+with)?)\s+",
+            r"^(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+",
             "",
             contact,
             flags=re.I,
         ).strip()
+        # Strip instruction leftovers from message body
+        message = re.sub(r"^(?:her|him|them)\s+", "", message, flags=re.I).strip(
+            " .,\"'"
+        )
         if contact and message and len(contact) <= 80 and len(message) <= 500:
             return {"app": app_key, "contact": contact, "message": message}
     return None
@@ -276,6 +515,14 @@ def _hist_has_type(history: List[str], text: str) -> bool:
     )
 
 
+def _fp(action: Dict[str, Any], step: str) -> Dict[str, Any]:
+    """Tag heuristic actions for steps_detail / debugging."""
+    action = dict(action)
+    action["fastpath_step"] = step
+    action["_fastpath_step"] = step
+    return action
+
+
 def heuristic_dm_send(
     instruction: str,
     ui_tree: str,
@@ -283,6 +530,7 @@ def heuristic_dm_send(
     package: str = "",
     *,
     goal_satisfied=None,
+    dry_run: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Generic DM fast-path. Returns an action dict or None."""
     parsed = parse_dm_instruction(instruction)
@@ -299,27 +547,34 @@ def heuristic_dm_send(
     open_label = profile["open_label"]
     open_l = open_label.lower()
     fg = _app_foreground(pkg, ui_tree, profile)
+    search_labels = tuple(profile.get("search_labels") or ())
+    compose_labels = tuple(profile.get("compose_labels") or ())
 
     if goal_satisfied:
         sat = goal_satisfied(instruction, ui_tree, package)
-        # goal_satisfied already requires marker in a text/desc attribute
         if sat:
-            return {
-                "action": "done",
-                "reason": sat,
-                "planner": planner,
-                "llm_provider": None,
-            }
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": sat,
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "done_goal",
+            )
 
     if "isn't responding" in tl or "not responding" in tl:
-        return {
-            "action": "tap",
-            "x": 540,
-            "y": 1395,
-            "reason": f"Dismiss ANR Wait ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return _fp(
+            {
+                "action": "tap",
+                "x": 540,
+                "y": 1395,
+                "reason": f"Dismiss ANR Wait ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "dismiss_anr",
+        )
 
     opened = (
         f"opened {open_l}" in hist
@@ -329,25 +584,30 @@ def heuristic_dm_send(
         or fg
     )
     if not opened:
-        return {
-            "action": "open_app",
-            "app": open_label,
-            "reason": f"Open {open_label} ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return _fp(
+            {
+                "action": "open_app",
+                "app": open_label,
+                "reason": f"Open {open_label} ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "open_app",
+        )
 
     typed_contact = _hist_has_type(history, contact)
     tapped_contact = any(
-        contact.lower() in str(h).lower()
-        and (
-            "tap contact" in str(h).lower()
+        (
+            "tap matching contact" in str(h).lower()
+            or "tap contact" in str(h).lower()
             or "select contact" in str(h).lower()
-            or "matching" in str(h).lower()
             or "open chat" in str(h).lower()
+            or "first search result" in str(h).lower()
         )
         for h in history[-16:]
     )
+    # Do NOT treat a tap whose reason was only the name in search field as success
+    chat_ok = chat_screen_verified(ui_tree, contact, compose_labels)
     tapped_inbox = (
         any(
             any(lab.lower() in str(h).lower() for lab in profile["inbox_labels"])
@@ -370,189 +630,376 @@ def heuristic_dm_send(
         "compose" in str(h).lower() or "message field" in str(h).lower()
         for h in history[-16:]
     )
+    tried_new_chat = any("new chat" in str(h).lower() for h in history[-16:])
+    contact_tap_attempts = sum(
+        1
+        for h in history[-16:]
+        if "matching contact" in str(h).lower()
+        or "first search result" in str(h).lower()
+    )
+
+    # Sparse tree after search → ask planner/vision (signal via None + caller)
+    # We still return wait-style re-eval by swiping minimally or no-op wait tap.
+    sparse_after_search = typed_contact and tree_is_sparse(ui_tree)
 
     # 0) Enter DMs / inbox when still on feed/home (Instagram / dating)
     needs_inbox = bool(profile.get("inbox_labels")) and app_key != "whatsapp"
     if needs_inbox and not tapped_inbox and not typed_contact and not tapped_search:
-        # If search already visible, skip inbox hop
-        if not _tree_node_center(ui_tree, *tuple(profile["search_labels"])):
+        if not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
             if c:
-                return {
-                    "action": "tap",
-                    "x": c[0],
-                    "y": c[1],
-                    "reason": f"Open inbox/DMs ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                }
-            # Dating apps: often bottom-nav Messages — try common coords
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": c[0],
+                        "y": c[1],
+                        "reason": f"Open inbox/DMs ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "open_inbox",
+                )
             if app_key in ("tinder", "bumble", "hinge", "instagram"):
-                return {
-                    "action": "tap",
-                    "x": 860 if app_key == "instagram" else 900,
-                    "y": 150 if app_key == "instagram" else 2280,
-                    "reason": f"Open inbox coords fallback ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                }
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": 860 if app_key == "instagram" else 900,
+                        "y": 150 if app_key == "instagram" else 2280,
+                        "reason": f"Open inbox coords fallback ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "open_inbox_fallback",
+                )
 
     # 1) Search
     if not typed_contact and not tapped_search:
-        c = _tree_node_center(ui_tree, *tuple(profile["search_labels"]))
+        c = _tree_node_center(ui_tree, *search_labels)
         if c:
-            return {
-                "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": f"Tap Search ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            }
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": c[0],
+                    "y": c[1],
+                    "reason": f"Tap Search ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_search",
+            )
         fx, fy = profile["search_fallback"]
-        return {
-            "action": "tap",
-            "x": fx,
-            "y": fy,
-            "reason": f"Tap Search coords fallback ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return _fp(
+            {
+                "action": "tap",
+                "x": fx,
+                "y": fy,
+                "reason": f"Tap Search coords fallback ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "tap_search_fallback",
+        )
 
-    # 2) Type contact
+    # 2) Type contact into search
     if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
-        return {
-            "action": "type",
-            "text": contact,
-            "reason": f"Type contact '{contact}' ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return _fp(
+            {
+                "action": "type",
+                "text": contact,
+                "reason": f"Type contact '{contact}' ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+                "clear": True,
+            },
+            "type_contact",
+        )
 
-    # 3) Tap matching result / open chat
-    if typed_contact and not tapped_contact and not typed_message:
-        tokens = [contact] + ([contact.split()[0]] if " " in contact else [])
-        c = _tree_node_center(ui_tree, *tokens)
+    # 3) Tap matching result / open chat (EXCLUDE search EditText)
+    if typed_contact and not chat_ok and not typed_message:
+        if sparse_after_search:
+            # Signal vision by returning None would skip heuristic; instead wait
+            # one tick with a no-op that forces re-dump — use tiny wait via back? No.
+            # Prefer first-result fallback lower on screen after a short scroll.
+            pass
+        c = find_contact_result_center(ui_tree, contact, search_labels=search_labels)
         if c:
-            return {
-                "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": f"Tap matching contact '{contact}' ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            }
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": c[0],
+                    "y": c[1],
+                    "reason": f"Tap matching contact '{contact}' ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_contact",
+            )
+        # Thin tree after typing contact → let vision pick the result row
+        if sparse_after_search and contact_tap_attempts == 0:
+            return None
+        # Alternate route: New chat → search contacts
+        if contact_tap_attempts >= 2 and not tried_new_chat:
+            nc = _tree_node_center(
+                ui_tree, *tuple(profile.get("new_chat_labels") or ())
+            )
+            if nc:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": nc[0],
+                        "y": nc[1],
+                        "reason": f"Alternate route: New chat ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "alt_new_chat",
+                )
+            # WhatsApp new-chat FAB typical
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": 980,
+                    "y": 2100,
+                    "reason": f"Alternate route: New chat FAB ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "alt_new_chat_fab",
+            )
         if hist.count("swipe") < 2:
-            return {
-                "action": "swipe",
-                "x1": 540,
-                "y1": 1600,
-                "x2": 540,
-                "y2": 800,
-                "reason": f"Scroll contact results ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            }
-        return {
-            "action": "tap",
-            "x": 540,
-            "y": 420,
-            "reason": f"Tap first search result for '{contact}' ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
-
-    # 4) Focus compose
-    if (tapped_contact or typed_contact) and not typed_message and not focused_compose:
-        ec = _tree_editable_center(ui_tree)
-        c = _tree_node_center(ui_tree, *tuple(profile["compose_labels"]))
-        if ec or c:
-            x, y = ec or c
-            return {
+            return _fp(
+                {
+                    "action": "swipe",
+                    "x1": 540,
+                    "y1": 1600,
+                    "x2": 540,
+                    "y2": 800,
+                    "reason": f"Scroll contact results ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "scroll_results",
+            )
+        # Last resort: tap below search bar (first row), never the search field itself
+        return _fp(
+            {
                 "action": "tap",
-                "x": x,
-                "y": y,
-                "reason": f"Focus compose Message field ({planner})",
+                "x": 540,
+                "y": 420,
+                "reason": f"Tap first search result for '{contact}' ({planner})",
                 "planner": planner,
                 "llm_provider": None,
-            }
+            },
+            "tap_first_result",
+        )
+
+    # 3b) Tapped but chat not verified → retry / alternate (do NOT type message)
+    if typed_contact and tapped_contact and not chat_ok and not typed_message:
+        if contact_tap_attempts < 4:
+            c = find_contact_result_center(
+                ui_tree, contact, search_labels=search_labels
+            )
+            if c:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": c[0],
+                        "y": c[1],
+                        "reason": (
+                            f"Retry tap contact '{contact}' — chat not verified ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "retry_tap_contact",
+                )
+        if not tried_new_chat:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": 980,
+                    "y": 2100,
+                    "reason": f"Chat verify failed — try New chat ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "verify_fail_new_chat",
+            )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Could not open chat with '{contact}' — "
+                    "header/compose not verified after contact taps"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "verify_fail",
+        )
+
+    # 4) Focus compose — only when chat verified
+    if chat_ok and not typed_message and not focused_compose:
+        # Prefer compose label / bottom editable, never search
+        c = _tree_node_center(ui_tree, *compose_labels)
+        if c:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": c[0],
+                    "y": c[1],
+                    "reason": f"Focus compose Message field ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "focus_compose",
+            )
+        for n in _parse_compact_nodes(ui_tree):
+            if n.get("editable") and not _is_searchish_node(n, search_labels):
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": n["x"],
+                        "y": n["y"],
+                        "reason": f"Focus compose editable ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "focus_compose_editable",
+                )
         cx, cy = profile["compose_fallback"]
-        return {
-            "action": "tap",
-            "x": cx,
-            "y": cy,
-            "reason": f"Focus compose coords fallback ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return _fp(
+            {
+                "action": "tap",
+                "x": cx,
+                "y": cy,
+                "reason": f"Focus compose coords fallback ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "focus_compose_fallback",
+        )
 
-    # 5) Type message
-    if (focused_compose or (typed_contact and tapped_contact)) and not typed_message:
-        return {
-            "action": "type",
-            "text": message,
-            "reason": f"Type message '{message}' ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+    # 5) Type message — ONLY if chat verified AND target is compose (not search)
+    if chat_ok and not typed_message:
+        if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": profile["compose_fallback"][0],
+                    "y": profile["compose_fallback"][1],
+                    "reason": (
+                        f"Refuse type — focus looks like search; retarget compose ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "refuse_type_search",
+            )
+        return _fp(
+            {
+                "action": "type",
+                "text": message,
+                "reason": f"Type message '{message}' ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "type_message",
+        )
 
-    # 6) Send
+    # 6) Send — or dry-run stop with compose filled
     if typed_message and not tapped_send:
+        if dry_run:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"dry_run — compose filled with '{message}' "
+                        f"for {contact}; send skipped"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "screenshot": True,
+                },
+                "dry_run_stop",
+            )
         c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
         sx, sy = profile["send_fallback"]
         x, y = c if c else (sx, sy)
-        return {
-            "action": "tap",
-            "x": x,
-            "y": y,
-            "reason": f"Tap Send ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return _fp(
+            {
+                "action": "tap",
+                "x": x,
+                "y": y,
+                "reason": f"Tap Send ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "tap_send",
+        )
 
     # 7) Verify / re-send
     if tapped_send:
         if goal_satisfied:
             sat2 = goal_satisfied(instruction, ui_tree, package)
             if sat2:
-                return {
-                    "action": "done",
-                    "reason": sat2,
-                    "planner": planner,
-                    "llm_provider": None,
-                }
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": sat2,
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "done_after_send",
+                )
         if hist.count("tap send") + hist.count("re-tap send") < 3:
             c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
             sx, sy = profile["send_fallback"]
             x, y = c if c else (sx, sy)
-            return {
-                "action": "tap",
-                "x": x,
-                "y": y,
-                "reason": f"Re-tap Send ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            }
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": x,
+                    "y": y,
+                    "reason": f"Re-tap Send ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "retap_send",
+            )
 
     if fg:
-        ec = _tree_editable_center(ui_tree)
-        if ec and not typed_message:
-            return {
-                "action": "tap",
-                "x": ec[0],
-                "y": ec[1],
-                "reason": f"Continue compose ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            }
-        c = _tree_node_center(ui_tree, *tuple(profile["search_labels"]))
+        if chat_ok and not typed_message:
+            ec_nodes = [
+                n
+                for n in _parse_compact_nodes(ui_tree)
+                if n.get("editable") and not _is_searchish_node(n, search_labels)
+            ]
+            if ec_nodes:
+                n = ec_nodes[0]
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": n["x"],
+                        "y": n["y"],
+                        "reason": f"Continue compose ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "continue_compose",
+                )
+        c = _tree_node_center(ui_tree, *search_labels)
         if c and not typed_contact:
-            return {
-                "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": f"Retry Search ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            }
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": c[0],
+                    "y": c[1],
+                    "reason": f"Retry Search ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "retry_search",
+            )
     return None
