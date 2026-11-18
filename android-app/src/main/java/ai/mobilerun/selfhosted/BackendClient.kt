@@ -98,10 +98,13 @@ class BackendClient(private val context: Context) {
     private var lastLatencyMs: Double? = null
     @Volatile private var lastHeartbeatAckAtMs: Long = 0L
     private val reconnectAttempt = AtomicInteger(0)
+    /** Bumped on every openSocket so stale cancel/failure callbacks cannot stomp a newer socket. */
+    private val socketGeneration = AtomicInteger(0)
     private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
     private var userDisconnected = false
-    private var connecting = false
+    @Volatile private var connecting = false
+    @Volatile private var lastOpenAtMs: Long = 0L
 
     private val _statusFlow = MutableStateFlow("Disconnected")
     val statusFlow: StateFlow<String> = _statusFlow
@@ -595,7 +598,15 @@ class BackendClient(private val context: Context) {
 
     private suspend fun connectBest(force: Boolean = false) {
         if (userDisconnected) return
-        if (connecting && !force) return
+        // Serialize connects: force=true used to barge in and cancel a socket that
+        // just opened, producing an open→cancel→open storm (Socket is closed).
+        if (connecting) return
+        if (!force && webSocket != null && _statusFlow.value == "Connected") return
+        // Grace window after a successful open — ignore duplicate force reconnects
+        if (force && lastOpenAtMs > 0 && System.currentTimeMillis() - lastOpenAtMs < 2_500) {
+            Log.d(tag, "skip connectBest(force): opened ${System.currentTimeMillis() - lastOpenAtMs}ms ago")
+            return
+        }
         val cands = candidates()
         if (cands.isEmpty()) {
             _statusFlow.value = "No endpoints — set backend URL & sign in"
@@ -662,7 +673,11 @@ class BackendClient(private val context: Context) {
     }
 
     private fun openSocket(candidate: Candidate, latencyMs: Double?) {
-        webSocket?.cancel()
+        val gen = socketGeneration.incrementAndGet()
+        try {
+            webSocket?.cancel()
+        } catch (_: Exception) {
+        }
         webSocket = null
         activeRoute = candidate.route
         lastLatencyMs = latencyMs
@@ -671,9 +686,20 @@ class BackendClient(private val context: Context) {
 
         val request = Request.Builder().url(candidate.ws).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            private fun isCurrent(): Boolean = socketGeneration.get() == gen
+
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(tag, "WebSocket opened via ${candidate.route}")
+                if (!isCurrent()) {
+                    Log.d(tag, "ignore stale onOpen gen=$gen")
+                    try {
+                        webSocket.cancel()
+                    } catch (_: Exception) {
+                    }
+                    return
+                }
+                Log.d(tag, "WebSocket opened via ${candidate.route} gen=$gen")
                 reconnectAttempt.set(0)
+                lastOpenAtMs = System.currentTimeMillis()
                 _statusFlow.value = "Connected"
                 _pairErrorFlow.value = null
                 prefs().edit().putString("last_pair_error", "").apply()
@@ -703,33 +729,33 @@ class BackendClient(private val context: Context) {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (!isCurrent()) return
                 handleMessage(text)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (!isCurrent()) return
                 _statusFlow.value = "Disconnecting"
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (!isCurrent()) return
                 _statusFlow.value = "Disconnected"
                 stopStreamInternal()
                 scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (!isCurrent()) {
+                    Log.d(tag, "ignore stale onFailure gen=$gen: ${t.message}")
+                    return
+                }
                 Log.e(tag, "WebSocket error via ${candidate.route}", t)
                 _statusFlow.value = "Error: ${t.message}"
                 stopStreamInternal()
-                // Try next route immediately once, then backoff
-                scope.launch {
-                    val others = candidates().filter { it.ws != candidate.ws }
-                    if (others.isNotEmpty() && reconnectAttempt.get() == 0) {
-                        val next = others.first()
-                        openSocket(next, probeLatencyMs(next.ws, next.http))
-                    } else {
-                        scheduleReconnect()
-                    }
-                }
+                // Single reconnect path with backoff — do not immediately openSocket
+                // another candidate (that raced with cancel and caused Socket-is-closed).
+                scheduleReconnect()
             }
         })
     }
@@ -799,10 +825,10 @@ class BackendClient(private val context: Context) {
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             val attempt = reconnectAttempt.getAndIncrement()
-            // Fast first reconnects — phone drops mid-task need <5s recovery
-            val base = min(15.0, 0.5 * Math.pow(2.0, attempt.toDouble()))
+            // Fast recovery, but never sub-second — that races OkHttp cancel/open.
+            val base = min(15.0, 1.2 * Math.pow(2.0, attempt.toDouble()))
             val jitter = base * 0.25
-            val delaySec = (base + Random.nextDouble(-jitter, jitter)).coerceAtLeast(0.3)
+            val delaySec = (base + Random.nextDouble(-jitter, jitter)).coerceAtLeast(1.2)
             _statusFlow.value = "Reconnecting in ${"%.1f".format(delaySec)}s…"
             delay((delaySec * 1000).toLong())
             connectBest(force = true)
