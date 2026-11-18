@@ -208,9 +208,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "Health..."
-          # Post-CDK Alias may briefly 503 while Lambda versions settle — retry.
+          # Post-CDK Alias / concurrent PR+push deploys can 503 for minutes.
           ok=0
-          for i in 1 2 3 4 5 6 7 8; do
+          for i in $(seq 1 20); do
             if curl -sfS --max-time 20 "$API_URL/api/health" -o /tmp/health.json; then
               if python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', d"; then
                 cat /tmp/health.json; echo
@@ -218,8 +218,9 @@ jobs:
                 break
               fi
             fi
-            echo "health attempt $i failed; sleeping $((i*3))s..."
-            sleep $((i * 3))
+            sleep_s=$(( i < 6 ? 5 : 15 ))
+            echo "health attempt $i failed; sleeping ${sleep_s}s..."
+            sleep "$sleep_s"
           done
           test "$ok" = "1"
 
