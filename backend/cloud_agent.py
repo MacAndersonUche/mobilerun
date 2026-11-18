@@ -1354,22 +1354,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["last_tree_fp"] = None
                 if fail_n < 8:
                     # Rotate recovery actions so we actually move the UI forward
-                    # Pixel coords for ~1080x2400 emu / S21-class screens
+                    # Pixel coords for ~1080x2400 emu / S21-class screens.
+                    # Keys must use "action" (execute_action reads action["action"]).
                     recoveries = (
-                        {"type": "open_app", "app": "messages"},
-                        {"type": "tap", "x": 970, "y": 2200},  # compose FAB
-                        {"type": "type", "text": "5550100"},
-                        {"type": "tap", "x": 540, "y": 220},  # search/recipient
+                        {"action": "open_app", "app": "messages"},
+                        {"action": "tap", "x": 970, "y": 2200},  # compose FAB
+                        {"action": "type", "text": "5550100"},
+                        {"action": "tap", "x": 540, "y": 220},  # search/recipient
                         {
-                            "type": "type",
+                            "action": "type",
                             "text": "hello from macai uitree recovery test",
                         },
-                        {"type": "tap", "x": 980, "y": 2200},  # send
-                        {"type": "back"},
-                        {"type": "tap", "x": 900, "y": 2100},
+                        {"action": "tap", "x": 980, "y": 2200},  # send
+                        {"action": "back"},
+                        {"action": "tap", "x": 900, "y": 2100},
                     )
                     action = recoveries[(fail_n - 1) % len(recoveries)]
-                    kind = str(action.get("type") or "").lower()
+                    kind = str(action.get("action") or "").lower()
                     history.append(
                         f"hint: planner fail ({reason[:60]}) → recovery {kind} "
                         f"(streak={fail_n})"
