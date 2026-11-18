@@ -67,14 +67,23 @@ object MatchStore {
     fun seedIfNeeded(context: Context) {
         val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         if (prefs.getBoolean("seeded", false)) return
-        val names = (1..AppCatalog.MATCH_POOL).map { i -> "Match%02d".format(i) }
-        prefs.edit().putStringSet("matches", names.toSet()).putBoolean("seeded", true).apply()
+        val names =
+            mutableSetOf("Precious Achalugo") +
+                (1..AppCatalog.MATCH_POOL).map { i -> "Match%02d".format(i) }
+        prefs.edit().putStringSet("matches", names).putBoolean("seeded", true).apply()
     }
 
     fun all(context: Context): List<String> {
         seedIfNeeded(context)
         val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        return prefs.getStringSet("matches", emptySet())!!.sorted()
+        val names = prefs.getStringSet("matches", emptySet())!!.toMutableList()
+        // Keep Precious first so single-DM benches do not need to scroll.
+        names.sort()
+        val precious = "Precious Achalugo"
+        if (names.remove(precious)) {
+            names.add(0, precious)
+        }
+        return names
     }
 
     fun add(context: Context, name: String) {

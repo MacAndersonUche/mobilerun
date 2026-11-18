@@ -60,28 +60,33 @@
         </FrameLayout>
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="72dp"
+            android:layout_height="88dp"
             android:gravity="center"
-            android:orientation="horizontal">
-            <ImageButton
+            android:orientation="horizontal"
+            android:paddingHorizontal="12dp">
+            <!-- Text buttons: large a11y targets so emulator RPC taps reliably hit. -->
+            <Button
                 android:id="@id/btn_pass"
-                android:layout_width="64dp"
+                android:layout_width="0dp"
                 android:layout_height="64dp"
+                android:layout_weight="1"
                 android:contentDescription="Pass"
-                android:src="@android:drawable/ic_menu_close_clear_cancel" />
-            <ImageButton
+                android:text="Pass" />
+            <Button
                 android:id="@id/btn_superlike"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_marginHorizontal="16dp"
-                android:contentDescription="Super Like"
-                android:src="@android:drawable/btn_star_big_on" />
-            <ImageButton
-                android:id="@id/btn_like"
-                android:layout_width="64dp"
+                android:layout_width="0dp"
                 android:layout_height="64dp"
+                android:layout_marginHorizontal="8dp"
+                android:layout_weight="1"
+                android:contentDescription="Super Like"
+                android:text="Super Like" />
+            <Button
+                android:id="@id/btn_like"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="1"
                 android:contentDescription="Like"
-                android:src="@android:drawable/btn_plus" />
+                android:text="Like" />
         </LinearLayout>
     </LinearLayout>
     <LinearLayout

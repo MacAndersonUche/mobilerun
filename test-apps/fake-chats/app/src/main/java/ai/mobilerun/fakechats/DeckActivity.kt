@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
 import android.widget.Button
-import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -35,16 +34,30 @@ class DeckActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_deck)
         val ids = FlavorIds.current()
+        // Resume deck cursor across open_app relaunches so bulk-50 doesn't
+        // re-like Profile01 after a SystemUI race.
+        val progress = getSharedPreferences("deck_progress", MODE_PRIVATE)
+        index = progress.getInt("index", 0).coerceIn(0, profiles.size)
+        likes = progress.getInt("likes", 0).coerceAtLeast(0)
+        if (intent?.getBooleanExtra("clear_log", false) == true) {
+            SentLog.clear(this)
+            SwipeLog.clear(this)
+            TimingLog.clear(this)
+            MatchStore.clear(this)
+            index = 0
+            likes = 0
+            progress.edit().clear().apply()
+        }
 
         findViewById<View>(R.id.deck_card).remapId(this, ids.deckCard)
         nameView = findViewById(R.id.deck_profile_name)
         nameView.remapId(this, ids.profileName)
         bioView = findViewById(R.id.deck_profile_bio)
-        val like = findViewById<ImageButton>(R.id.btn_like)
+        val like = findViewById<Button>(R.id.btn_like)
         like.remapId(this, ids.like)
-        val pass = findViewById<ImageButton>(R.id.btn_pass)
+        val pass = findViewById<Button>(R.id.btn_pass)
         pass.remapId(this, ids.pass)
-        val superLike = findViewById<ImageButton>(R.id.btn_superlike)
+        val superLike = findViewById<Button>(R.id.btn_superlike)
         superLike.remapId(this, ids.superLike)
         val matchesBtn = findViewById<Button>(R.id.btn_matches)
         matchesBtn.remapId(this, ids.matchesTab)
@@ -113,6 +126,11 @@ class DeckActivity : AppCompatActivity() {
         }
         val likedIndex = index
         index += 1
+        getSharedPreferences("deck_progress", MODE_PRIVATE)
+            .edit()
+            .putInt("index", index)
+            .putInt("likes", likes)
+            .commit()
 
         // Upsell mid-deck
         if (likedIndex + 1 == 25 && action != "pass") {

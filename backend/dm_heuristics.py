@@ -822,19 +822,25 @@ def heuristic_dm_send(
             "dismiss_anr",
         )
 
-    opened = (
-        f"opened {open_l}" in hist
-        or f"open_app({open_l})" in hist
-        or f"open_app({app_key})" in hist
-        or (f"open_ok" in hist and (open_l in hist or app_key in hist))
-        or fg
+    # Require real FG match. open_ok in history can race while SystemUI/launcher
+    # still owns the tree — keep reopening until package markers match.
+    want_pkg = str(profile.get("package") or "").lower()
+    pkg_ok = bool(fg) or (bool(want_pkg) and want_pkg in pkg)
+    open_attempts = sum(
+        1
+        for h in history[-16:]
+        if "open_app(" in str(h).lower() or "opened " in str(h).lower()
     )
-    if not opened:
+    if not pkg_ok and open_attempts < 8:
         return _fp(
             {
                 "action": "open_app",
                 "app": open_label,
-                "reason": f"Open {open_label} ({planner})",
+                "reason": (
+                    f"Open {open_label} ({planner})"
+                    if open_attempts == 0
+                    else f"Re-open {open_label}; FG={package or '?'} ({planner})"
+                ),
                 "planner": planner,
                 "llm_provider": None,
             },
@@ -890,11 +896,43 @@ def heuristic_dm_send(
     # Sparse tree after search → ask planner/vision (signal via None + caller)
     # We still return wait-style re-eval by swiping minimally or no-op wait tap.
     sparse_after_search = typed_contact and tree_is_sparse(ui_tree)
+    needs_inbox = bool(profile.get("inbox_labels")) and app_key != "whatsapp"
+
+    # 0a) If the contact row is already on-screen (inbox / matches list), tap it
+    # before any search field — dating decks often expose a Search affordance
+    # that would otherwise steal the flow.
+    if not chat_ok and not typed_message and not tapped_contact:
+        visible = find_contact_result_center(
+            ui_tree, contact, search_labels=search_labels
+        )
+        if visible is None:
+            # Fake-chats rows use "Chat with X" / "Match X" content-desc
+            visible = _tree_node_center(
+                ui_tree,
+                f"Chat with {contact}",
+                f"Match {contact}",
+                contact,
+            )
+        if visible:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": visible[0],
+                    "y": visible[1],
+                    "reason": f"Tap visible contact '{contact}' ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_visible_contact",
+            )
 
     # 0) Enter DMs / inbox when still on feed/home (Instagram / dating)
-    needs_inbox = bool(profile.get("inbox_labels")) and app_key != "whatsapp"
     if needs_inbox and not tapped_inbox and not typed_contact and not tapped_search:
-        if not _tree_node_center(ui_tree, *search_labels):
+        # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
+        on_deck = bool(
+            _tree_node_center(ui_tree, "Like") or _tree_node_center(ui_tree, "Pass")
+        )
+        if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
             if c:
                 return _fp(
@@ -908,7 +946,9 @@ def heuristic_dm_send(
                     },
                     "open_inbox",
                 )
-            if app_key in ("tinder", "bumble", "hinge", "instagram"):
+            if app_key in ("tinder", "bumble", "hinge", "instagram") or (
+                profile.get("package") or ""
+            ).startswith(("com.tinder", "com.bumble", "co.hinge")):
                 return _fp(
                     {
                         "action": "tap",
@@ -920,6 +960,31 @@ def heuristic_dm_send(
                     },
                     "open_inbox_fallback",
                 )
+
+    # 0b) Dating decks: open Chats/Matches tab before Search (Search sits on
+    # every screen and otherwise short-circuits the contact list).
+    if (
+        needs_inbox
+        and not tapped_inbox
+        and not typed_contact
+        and not chat_ok
+        and not typed_message
+    ):
+        tab = _tree_node_center(
+            ui_tree, "Chats", "Matches", "Messages", "Inbox", "Connections"
+        )
+        if tab:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": tab[0],
+                    "y": tab[1],
+                    "reason": f"Open chats/matches tab ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "open_inbox_tab",
+            )
 
     # 1) Search — prefer resource-id (deterministic), never vision
     if not typed_contact and not tapped_search:
@@ -1213,7 +1278,9 @@ def heuristic_dm_send(
 
     # 7) Verify outgoing bubble / re-send
     if tapped_send:
-        if outgoing_bubble_present(ui_tree, message):
+        want_pkg = str(profile.get("package") or "").lower()
+        pkg_ok = (not want_pkg) or (want_pkg in pkg) or fg
+        if pkg_ok and outgoing_bubble_present(ui_tree, message):
             return _fp(
                 {
                     "action": "done",
@@ -1226,6 +1293,21 @@ def heuristic_dm_send(
                     "outgoing_confirmed": True,
                 },
                 "done_outgoing_bubble",
+            )
+        if not pkg_ok and outgoing_bubble_present(ui_tree, message):
+            # Bubble on wrong package — re-open target app
+            return _fp(
+                {
+                    "action": "open_app",
+                    "app": open_label,
+                    "reason": (
+                        f"Wrong FG package {package or '?'} — reopen "
+                        f"{open_label} ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "reopen_wrong_pkg",
             )
         if goal_satisfied:
             sat2 = goal_satisfied(instruction, ui_tree, package)

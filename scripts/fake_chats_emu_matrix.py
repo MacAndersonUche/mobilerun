@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -118,7 +119,7 @@ def clear_logs(pkg: str) -> None:
         f"{pkg}/ai.mobilerun.fakechats.ClearLogActivity",
         check=False,
     )
-    time.sleep(0.4)
+    time.sleep(1.2)
     for f in ("sent_messages.jsonl", "swipes.jsonl", "action_timings.jsonl"):
         adb(
             "shell",
@@ -126,21 +127,70 @@ def clear_logs(pkg: str) -> None:
             pkg,
             "sh",
             "-c",
-            f"echo -n > files/{f}",
+            f"mkdir -p files && : > files/{f}",
             check=False,
         )
+    # Verify wipe — retry once if stale rows remain
+    left = read_jsonl(pkg, "swipes.jsonl")
+    if left:
+        adb(
+            "shell",
+            "run-as",
+            pkg,
+            "sh",
+            "-c",
+            ": > files/swipes.jsonl; : > files/sent_messages.jsonl; : > files/action_timings.jsonl",
+            check=False,
+        )
+
+
+def force_stop_fakes(extra: Optional[List[str]] = None) -> None:
+    """Stop running fake-chats packages so a prior case cannot steal FG."""
+    running = adb("shell", "ps", "-A", check=False)
+    pkgs = list(PACKAGES.values())
+    if extra:
+        pkgs.extend(extra)
+    for p in dict.fromkeys(pkgs):
+        # Skip packages that are not currently running (install set is large).
+        short = p.split(".")[-1]
+        if p not in running and short not in running:
+            continue
+        adb("shell", "am", "force-stop", p, check=False)
+
+
+def _top_package() -> str:
+    out = adb(
+        "shell",
+        "dumpsys",
+        "activity",
+        "activities",
+        check=False,
+    )
+    for line in out.splitlines():
+        if "topResumedActivity" in line or "mResumedActivity" in line:
+            # ActivityRecord{… u0 com.tinder/ai.mobilerun…
+            for tok in line.replace("/", " ").replace("}", " ").split():
+                if tok.count(".") >= 1 and not tok.startswith("ActivityRecord"):
+                    if "/" in line and tok in line:
+                        # Prefer package before slash
+                        pass
+            m = re.search(r"\s([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+", line)
+            if m:
+                return m.group(1)
+    return ""
 
 
 def launch_app(
     pkg: str, activity: str = "ai.mobilerun.fakechats.LauncherActivity"
 ) -> None:
+    # Stop only currently-running fakes, then start target (avoid HOME race).
+    force_stop_fakes()
     adb("shell", "am", "force-stop", pkg, check=False)
-    time.sleep(0.3)
+    time.sleep(0.5)
     adb(
         "shell",
         "am",
         "start",
-        "-W",
         "-n",
         f"{pkg}/{activity}",
         "-f",
@@ -150,7 +200,38 @@ def launch_app(
         "true",
         check=False,
     )
-    time.sleep(1.0)
+    # Wait until the target package is actually resumed (cold start can exceed 20s).
+    started = time.time()
+    deadline = started + 45
+    kicked = False
+    while time.time() < deadline:
+        if _top_package() == pkg:
+            break
+        if not kicked and (time.time() - started) > 12:
+            adb(
+                "shell",
+                "am",
+                "start",
+                "-n",
+                f"{pkg}/{activity}",
+                "-f",
+                "0x10008000",
+                check=False,
+            )
+            kicked = True
+        time.sleep(0.5)
+    else:
+        adb(
+            "shell",
+            "am",
+            "start",
+            "-n",
+            f"{pkg}/{activity}",
+            "-f",
+            "0x10008000",
+            check=False,
+        )
+        time.sleep(2.0)
     adb(
         "shell",
         "am",
@@ -159,6 +240,9 @@ def launch_app(
         "android.intent.action.CLOSE_SYSTEM_DIALOGS",
         check=False,
     )
+    top = _top_package()
+    if top and top != pkg:
+        print(f"    WARN launch FG={top} expected={pkg}", flush=True)
 
 
 def set_ime(enabled: bool) -> None:
@@ -396,25 +480,19 @@ def main() -> int:
                 try:
                     clear_logs(pkg)
                     if scenario == "bulk_swipe_50":
-                        launch_app(pkg)
+                        launch_app(pkg, "ai.mobilerun.fakechats.DeckActivity")
                         instr = f"{app} auto-swipe {COUNTS['swipe']} profiles"
                         max_steps = COUNTS["swipe"] * 3 + 40
                     elif scenario == "bulk_message_50":
-                        launch_app(
-                            pkg,
-                            (
-                                "ai.mobilerun.fakechats.MatchesActivity"
-                                if app in SWIPE or app == "facebook"
-                                else "ai.mobilerun.fakechats.LauncherActivity"
-                            ),
-                        )
+                        launch_app(pkg, "ai.mobilerun.fakechats.MatchesActivity")
                         instr = (
                             f"{app} auto-message {COUNTS['message']} matches "
                             f'tell them "{MESSAGE}"'
                         )
                         max_steps = COUNTS["message"] * 6 + 40
                     else:
-                        launch_app(pkg)
+                        # Inbox lists Precious up front; Matches is reserved for bulk_message_50.
+                        launch_app(pkg, "ai.mobilerun.fakechats.InboxActivity")
                         instr = f"{app} find and message {CONTACT} tell her {MESSAGE}"
                         max_steps = 28
                     t0 = time.time()

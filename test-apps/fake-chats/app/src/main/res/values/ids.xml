@@ -164,9 +164,4 @@
     <item name="your_message" type="id"/>
     <item name="yubo_like" type="id"/>
     <item name="yubo_pass" type="id"/>
-    <item name="bubbles" type="id"/>
-    <item name="root_search" type="id"/>
-    <item name="search_results" type="id"/>
-    <item name="root_conversation" type="id"/>
-    <item name="composer_bar" type="id"/>
 </resources>

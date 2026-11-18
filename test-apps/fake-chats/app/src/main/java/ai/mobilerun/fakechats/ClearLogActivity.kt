@@ -10,6 +10,7 @@ class ClearLogActivity : Activity() {
         SwipeLog.clear(this)
         TimingLog.clear(this)
         MatchStore.clear(this)
+        getSharedPreferences("deck_progress", MODE_PRIVATE).edit().clear().apply()
         finish()
     }
 }

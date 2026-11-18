@@ -1372,13 +1372,30 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                     b_tuple = (parts[0], parts[1], parts[2], parts[3])
             except ValueError:
                 b_tuple = None
-        jx, jy = jitter_tap(ox, oy, bounds=b_tuple)
+        # Fake-chats bench: keep taps exact so Like ≠ Super Like under jitter.
+        bench_exact = os.environ.get("FAKE_CHATS_FAST", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ) or bool(
+            action.get("_bulk_swipe_inc")
+            or action.get("fastpath_step")
+            in (
+                "bulk_like",
+                "bulk_dismiss_dialog",
+                "bulk_dismiss_fallback",
+            )
+        )
+        if bench_exact:
+            jx, jy = ox, oy
+        else:
+            jx, jy = jitter_tap(ox, oy, bounds=b_tuple)
         action["_tap_raw"] = (ox, oy)
         action["_tap_jitter"] = (jx, jy)
         raw = call_device(
             device_id,
             "tap",
-            {"x": jx, "y": jy, "humanize": True},
+            {"x": jx, "y": jy, "humanize": not bench_exact},
             timeout_s=20,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
@@ -2091,7 +2108,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or ("chrome" in app_l and "chrome" in fg)
                 or ("message" in app_l and "messaging" in fg)
             )
-            if fg_matches or _history_shows_app_opened(hist_blob, app_name):
+            # History alone is not enough: open_ok can race while SystemUI /
+            # launcher / MobileRun still owns the foreground. Only skip when FG
+            # actually matches the target app.
+            history_opened = _history_shows_app_opened(hist_blob, app_name)
+            if fg_matches:
                 logger.info(
                     "skipping repeat open_app(%s) — already open (fg=%s)",
                     app_name,
@@ -2153,6 +2174,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             )
                             action = {"action": "fail", "reason": reason}
                             kind = "fail"
+            elif history_opened and not fg_matches:
+                # Allow the open_app action to execute again — prior open_ok
+                # did not land the target package in the foreground.
+                logger.info(
+                    "re-issuing open_app(%s) — history open_ok but fg=%s",
+                    app_name,
+                    fg or "?",
+                )
 
         # Hard-stop after too many no-progress steps (same tree forever)
         if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
@@ -2321,47 +2350,91 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     from backend.recovery import should_hard_fail as _shf  # type: ignore
 
                 if fail_n < 16 and not _shf(state):
-                    # Rotate recovery actions so we actually move the UI forward.
-                    # If we left Messages (SystemUI/launcher), open_app first;
-                    # then focus compose, type marker, tap Send. Never Back.
-                    pkg_l = str(tree_info.get("package") or "").lower()
-                    off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
-                    # ANR dialog "Wait" button (accel-off emu); then reopen Messages.
-                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
-                    recoveries = (
-                        (
-                            anr_wait,
-                            {"action": "open_app", "app": "messages"},
-                            {"action": "tap", "x": 845, "y": 2200},  # Start chat FAB
-                            {"action": "tap", "x": 540, "y": 400},  # contact/search
-                            {
-                                "action": "type",
-                                "text": "5550100",
-                            },
-                            {"action": "tap", "x": 540, "y": 450},
-                            {
-                                "action": "type",
-                                "text": "hello from macai uitree recovery test",
-                            },
-                            {"action": "tap", "x": 1000, "y": 2280},  # Send
-                            {"action": "open_app", "app": "messages"},
-                        )
-                        if off_messages
-                        else (
-                            {"action": "tap", "x": 1000, "y": 2280},  # Send first
-                            {"action": "tap", "x": 845, "y": 2200},  # Start chat / Send
-                            {"action": "tap", "x": 540, "y": 2250},  # message field
-                            {
-                                "action": "type",
-                                "text": "hello from macai uitree recovery test",
-                            },
-                            {"action": "tap", "x": 1000, "y": 2280},  # send again
-                            anr_wait,
-                            {"action": "open_app", "app": "messages"},
-                            {"action": "tap", "x": 540, "y": 2100},
+                    instr_l = (instruction or "").lower()
+                    sms_goal = any(
+                        k in instr_l
+                        for k in (
+                            "messages",
+                            "sms",
+                            "5550100",
+                            "macai",
+                            "text message",
                         )
                     )
-                    action = recoveries[(fail_n - 1) % len(recoveries)]
+                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
+                    if sms_goal:
+                        # Rotate recovery actions so we actually move the UI forward.
+                        # If we left Messages (SystemUI/launcher), open_app first;
+                        # then focus compose, type marker, tap Send. Never Back.
+                        pkg_l = str(tree_info.get("package") or "").lower()
+                        off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
+                        recoveries = (
+                            (
+                                anr_wait,
+                                {"action": "open_app", "app": "messages"},
+                                {"action": "tap", "x": 845, "y": 2200},
+                                {"action": "tap", "x": 540, "y": 400},
+                                {"action": "type", "text": "5550100"},
+                                {"action": "tap", "x": 540, "y": 450},
+                                {
+                                    "action": "type",
+                                    "text": "hello from macai uitree recovery test",
+                                },
+                                {"action": "tap", "x": 1000, "y": 2280},
+                                {"action": "open_app", "app": "messages"},
+                            )
+                            if off_messages
+                            else (
+                                {"action": "tap", "x": 1000, "y": 2280},
+                                {"action": "tap", "x": 845, "y": 2200},
+                                {"action": "tap", "x": 540, "y": 2250},
+                                {
+                                    "action": "type",
+                                    "text": "hello from macai uitree recovery test",
+                                },
+                                {"action": "tap", "x": 1000, "y": 2280},
+                                anr_wait,
+                                {"action": "open_app", "app": "messages"},
+                                {"action": "tap", "x": 540, "y": 2100},
+                            )
+                        )
+                        action = recoveries[(fail_n - 1) % len(recoveries)]
+                    else:
+                        # Dating / fake-chats / generic: dismiss ANR, back, re-open
+                        # the instruction's app — never hijack into SMS Messages.
+                        dm_app = None
+                        open_label = None
+                        try:
+                            from dm_heuristics import (
+                                DM_APP_PROFILES as _DAP,
+                                detect_dm_app as _dda,
+                            )
+                        except ImportError:
+                            from backend.dm_heuristics import (  # type: ignore
+                                DM_APP_PROFILES as _DAP,
+                                detect_dm_app as _dda,
+                            )
+                        try:
+                            dm_app = _dda(instruction)
+                        except Exception:
+                            dm_app = None
+                        if dm_app:
+                            open_label = str(
+                                (_DAP.get(dm_app) or {}).get("open_label") or dm_app
+                            )
+                        reopen = (
+                            {"action": "open_app", "app": open_label}
+                            if open_label
+                            else anr_wait
+                        )
+                        recoveries = (
+                            anr_wait,
+                            {"action": "back"},
+                            reopen,
+                            {"action": "tap", "x": 950, "y": 2200},
+                            {"action": "tap", "x": 540, "y": 1500},
+                        )
+                        action = recoveries[(fail_n - 1) % len(recoveries)]
                     kind = str(action.get("action") or "").lower()
                     history.append(
                         f"hint: planner fail ({reason[:60]}) → recovery {kind} "
