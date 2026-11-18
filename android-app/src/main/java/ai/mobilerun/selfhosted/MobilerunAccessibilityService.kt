@@ -43,7 +43,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         private const val MAX_DEPTH = 16
         private const val MAX_TREE_CHARS = 18_000
         private const val SOFT_DEADLINE_MS = 3_000L
-        private const val HARD_AWAIT_MS = 3_500L
+        // Must exceed soft deadline + main-looper scheduling slack in dumpAndCache
+        private const val HARD_AWAIT_MS = 4_200L
         private const val CACHE_TTL_MS = 2_500L
 
         @Volatile
@@ -366,13 +367,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     /**
      * Walk a11y tree on main looper; gzip + cache on the calling (dump) thread.
+     *
+     * Soft deadline starts when the main-looper walk begins — not when the dump
+     * thread schedules the post — otherwise a busy main looper burns the whole
+     * budget before rootInActiveWindow runs and we return an empty tree.
      */
     private fun dumpAndCache(gen: Long): TreeResult {
         val t0 = SystemClock.elapsedRealtime()
-        val deadlineMs = t0 + SOFT_DEADLINE_MS
         val walkRef = AtomicReference<TreeResult?>(null)
 
         fun walkOnMain() {
+            val walkStart = SystemClock.elapsedRealtime()
+            val deadlineMs = walkStart + SOFT_DEADLINE_MS
             val anr = try {
                 dismissSystemAnrIfPresent()
             } catch (e: Exception) {
@@ -397,10 +403,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     latch.countDown()
                 }
             }
-            // Soft deadline + small slack for posting; return whatever we have
-            if (!latch.await(SOFT_DEADLINE_MS + 250, TimeUnit.MILLISECONDS)) {
+            // Soft walk + main-looper scheduling slack
+            if (!latch.await(SOFT_DEADLINE_MS + 800, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "main dump soft deadline exceeded (${SOFT_DEADLINE_MS}ms)")
-                // Prefer a late partial if the walk finished just after the wait
                 val late = walkRef.get()
                 if (late == null) {
                     return emptyTreeResult(
