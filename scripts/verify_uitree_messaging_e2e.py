@@ -117,69 +117,17 @@ def _push_and_run_b64(script: str, remote: str = "/data/local/tmp/mr_seed.sh") -
 
 
 def seed_contact() -> None:
-    """Warm Messages and leave compose open with draft text (no force-stop)."""
+    """Dismiss ANRs and leave Home. Contact MacAITest may already exist."""
     ensure_a11y_bound()
-    # Grant SMS perms; set default SMS app
-    for perm in (
-        "SEND_SMS",
-        "READ_SMS",
-        "RECEIVE_SMS",
-        "READ_CONTACTS",
-        "WRITE_CONTACTS",
-        "POST_NOTIFICATIONS",
-        "READ_PHONE_STATE",
-    ):
-        adb(
-            "shell",
-            "pm",
-            "grant",
-            "com.google.android.apps.messaging",
-            f"android.permission.{perm}",
-        )
-    adb(
-        "shell",
-        "cmd",
-        "role",
-        "add-role-holder",
-        "android.app.role.SMS",
-        "com.google.android.apps.messaging",
-    )
-    # Dismiss any ANR dialogs without killing Messages
-    for _ in range(3):
+    for _ in range(5):
         focus = adb_out("shell", "dumpsys", "window")
         if "Not Responding" in focus:
-            adb("shell", "input", "tap", "350", "1450")  # Wait
+            adb("shell", "input", "tap", "540", "1395")
             time.sleep(2)
         else:
             break
-    # On-device seed: open Messages → Start chat → type number → type marker
-    # Spaces in `input text` must be %s. Avoid host-side phone redaction via b64.
-    marker_input = SENT_MARKER.replace(" ", "%s")
-    script = f"""#!/system/bin/sh
-monkey -p com.google.android.apps.messaging -c android.intent.category.LAUNCHER 1
-sleep 10
-# Dismiss ANR Wait if shown
-input tap 350 1450
-sleep 1
-input tap 845 2200
-sleep 4
-input text 5550100
-sleep 2
-input keyevent 66
-sleep 3
-input tap 540 2250
-sleep 1
-input text {marker_input}
-sleep 2
-uiautomator dump /sdcard/seed_compose.xml
-"""
-    _push_and_run_b64(script)
+    adb("shell", "input", "keyevent", "KEYCODE_HOME")
     time.sleep(1.0)
-    dump = adb_out("shell", "cat", "/sdcard/seed_compose.xml").lower()
-    if SENT_MARKER.lower() not in dump and "edittext" not in dump:
-        # One retry with longer settle (accel-off emu)
-        time.sleep(8)
-        _push_and_run_b64(script)
 
 
 def percentile(vals: List[float], p: float) -> Optional[float]:
@@ -213,7 +161,17 @@ def wait_device_online(tok: str, seconds: float = 60.0) -> None:
                         return
         except RuntimeError as e:
             last = {"error": str(e)}
-        adb("shell", "am", "start", "-n", "ai.mobilerun.selfhosted/.MainActivity")
+        # Do NOT foreground MainActivity here — it steals focus from Messages
+        # and triggers ANRs on accel-off emulators. Nudge via monkey instead.
+        adb(
+            "shell",
+            "monkey",
+            "-p",
+            "ai.mobilerun.selfhosted",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        )
         time.sleep(3)
     raise RuntimeError(f"Device {DEVICE_ID} still offline after seed: {last}")
 
@@ -260,12 +218,12 @@ def main() -> int:
     wait_device_online(tok, seconds=90.0)
     instr = os.environ.get(
         "E2E_INSTRUCTION",
-        "You are in Android Messages composing an SMS to 5550100 with draft text "
-        f"'{SENT_MARKER}'. Tap the Send button now. After sending, wait until the "
-        "same text appears as a sent bubble in the conversation (not in the "
-        "compose box), then call done. Do NOT press Home or Back. If you are not "
-        "in the compose thread, open_app Messages once, open the 5550100 chat, "
-        "ensure the marker is in the draft (type it if empty), then Send. Keep "
+        "Open Android Messages (open_app Messages once if needed). Start a chat "
+        "with contact MacAITest or number 5550100. Type exactly "
+        f"'{SENT_MARKER}' into the message field and tap Send. Wait until that "
+        "same text appears as a sent bubble in the conversation (not only in the "
+        "compose box), then call done. Do NOT press Home. If Send is missing, "
+        "re-focus the message field, re-type the marker, and Send again. Keep "
         "going until the sent bubble is confirmed.",
     )
     print("START", instr, flush=True)
