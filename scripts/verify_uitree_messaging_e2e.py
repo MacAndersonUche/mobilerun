@@ -117,49 +117,16 @@ def _push_and_run_b64(script: str, remote: str = "/data/local/tmp/mr_seed.sh") -
 
 
 def seed_contact() -> None:
-    """Grant SMS perms + insert contact. Avoid opening Messages (ANR-prone on
-    accel-off emulators); the agent opens compose via open_app + Start chat."""
+    """Dismiss ANRs and leave Home. Contact MacAITest may already exist."""
     ensure_a11y_bound()
-    for perm in (
-        "SEND_SMS",
-        "READ_SMS",
-        "RECEIVE_SMS",
-        "READ_CONTACTS",
-        "WRITE_CONTACTS",
-        "POST_NOTIFICATIONS",
-        "READ_PHONE_STATE",
-    ):
-        adb(
-            "shell",
-            "pm",
-            "grant",
-            "com.google.android.apps.messaging",
-            f"android.permission.{perm}",
-        )
-    adb(
-        "shell",
-        "cmd",
-        "role",
-        "add-role-holder",
-        "android.app.role.SMS",
-        "com.google.android.apps.messaging",
-    )
-    # Dismiss ANR overlays (Wait) so the agent can drive the UI
-    for _ in range(4):
+    for _ in range(5):
         focus = adb_out("shell", "dumpsys", "window")
         if "Not Responding" in focus:
-            adb("shell", "input", "tap", "540", "1395")  # Wait
-            time.sleep(3)
+            adb("shell", "input", "tap", "540", "1395")
+            time.sleep(2)
         else:
             break
-    # Insert contact on-device (host argv redaction rewrites sms:/phone literals)
-    _push_and_run_b64("""#!/system/bin/sh
-content insert --uri content://com.android.contacts/raw_contacts --bind account_type:s:null --bind account_name:s:null
-RID=$(content query --uri content://com.android.contacts/raw_contacts --projection _id | tail -1 | sed -n "s/.*_id=\\([0-9]*\\).*/\\1/p")
-content insert --uri content://com.android.contacts/data --bind raw_contact_id:i:$RID --bind mimetype:s:vnd.android.cursor.item/name --bind data1:s:MacAITest
-content insert --uri content://com.android.contacts/data --bind raw_contact_id:i:$RID --bind mimetype:s:vnd.android.cursor.item/phone_v2 --bind data1:s:5550100 --bind data2:i:2
-input keyevent 3
-""")
+    adb("shell", "input", "keyevent", "KEYCODE_HOME")
     time.sleep(1.0)
 
 
@@ -194,7 +161,17 @@ def wait_device_online(tok: str, seconds: float = 60.0) -> None:
                         return
         except RuntimeError as e:
             last = {"error": str(e)}
-        adb("shell", "am", "start", "-n", "ai.mobilerun.selfhosted/.MainActivity")
+        # Do NOT foreground MainActivity here — it steals focus from Messages
+        # and triggers ANRs on accel-off emulators. Nudge via monkey instead.
+        adb(
+            "shell",
+            "monkey",
+            "-p",
+            "ai.mobilerun.selfhosted",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        )
         time.sleep(3)
     raise RuntimeError(f"Device {DEVICE_ID} still offline after seed: {last}")
 

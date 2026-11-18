@@ -1381,31 +1381,37 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     # then focus compose, type marker, tap Send. Never Back.
                     pkg_l = str(tree_info.get("package") or "").lower()
                     off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
+                    # ANR dialog "Wait" button (accel-off emu); then reopen Messages.
+                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
                     recoveries = (
                         (
+                            anr_wait,
                             {"action": "open_app", "app": "messages"},
-                            {"action": "tap", "x": 540, "y": 2250},  # compose field
+                            {"action": "tap", "x": 845, "y": 2200},  # Start chat FAB
+                            {"action": "tap", "x": 540, "y": 400},  # contact/search
+                            {
+                                "action": "type",
+                                "text": "5550100",
+                            },
+                            {"action": "tap", "x": 540, "y": 450},
                             {
                                 "action": "type",
                                 "text": "hello from macai uitree recovery test",
                             },
                             {"action": "tap", "x": 1000, "y": 2280},  # Send
-                            {"action": "tap", "x": 970, "y": 2200},  # Send alt
-                            {"action": "tap", "x": 900, "y": 2280},
-                            {"action": "tap", "x": 540, "y": 2100},
                             {"action": "open_app", "app": "messages"},
                         )
                         if off_messages
                         else (
                             {"action": "tap", "x": 1000, "y": 2280},  # Send first
-                            {"action": "tap", "x": 970, "y": 2200},  # FAB / Send alt
+                            {"action": "tap", "x": 845, "y": 2200},  # Start chat / Send
                             {"action": "tap", "x": 540, "y": 2250},  # message field
                             {
                                 "action": "type",
                                 "text": "hello from macai uitree recovery test",
                             },
                             {"action": "tap", "x": 1000, "y": 2280},  # send again
-                            {"action": "tap", "x": 900, "y": 2280},
+                            anr_wait,
                             {"action": "open_app", "app": "messages"},
                             {"action": "tap", "x": 540, "y": 2100},
                         )
