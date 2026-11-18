@@ -1176,8 +1176,26 @@ req = urllib.request.Request(
     headers={"Authorization": f"Bearer {token}"},
 )
 print("prod_remove", json.load(urllib.request.urlopen(req)))
-req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
-left = json.load(urllib.request.urlopen(req))
+# WS may re-register briefly after DELETE — retry until ours is gone
+left = []
+for attempt in range(1, 8):
+    req = urllib.request.Request(
+        prod + f"/api/devices/{device_id}",
+        method="DELETE",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        json.load(urllib.request.urlopen(req))
+    except Exception:
+        pass
+    req = urllib.request.Request(
+        prod + "/api/devices", headers={"Authorization": f"Bearer {token}"}
+    )
+    left = json.load(urllib.request.urlopen(req))
+    if not any(d.get("device_id") == device_id for d in left):
+        break
+    print(f"prod_remove_retry {attempt} still listed; sleeping...")
+    time.sleep(attempt)
 # Shared prod ci-e2e may retain other concurrent jobs' devices — only assert ours is gone
 assert not any(d.get("device_id") == device_id for d in left), left
 open(os.path.join(artifacts, "prod_cloud_only_ok.txt"), "w").write(f"{code}\n{device_id}\n")
