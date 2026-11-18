@@ -1595,10 +1595,16 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         try:
             ime_res = call_device(device_id, "ensure_ime", {}, timeout_s=12)
             state["ime_ensured"] = True
-            state["ime_status"] = ime_res if isinstance(ime_res, dict) else {"raw": ime_res}
+            state["ime_status"] = (
+                ime_res if isinstance(ime_res, dict) else {"raw": ime_res}
+            )
             history.append(
                 "ensure_ime "
-                + str((ime_res or {}).get("selected") if isinstance(ime_res, dict) else ime_res)
+                + str(
+                    (ime_res or {}).get("selected")
+                    if isinstance(ime_res, dict)
+                    else ime_res
+                )
             )
             state["history"] = history[-40:]
         except Exception as e:
@@ -2467,7 +2473,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # Deterministic post-action checks for type / send (no vision)
             if kind in ("type", "type_text", "input_text"):
                 typed = str(action.get("text") or "")
-                focus = action.get("_focus") if isinstance(action.get("_focus"), dict) else {}
+                focus = (
+                    action.get("_focus")
+                    if isinstance(action.get("_focus"), dict)
+                    else {}
+                )
                 # Prefer focus metadata from IME response when present
                 if isinstance(action.get("_timing"), dict):
                     pass
@@ -2499,7 +2509,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             msg_guess = m.group(1)
                             break
                 if not msg_guess:
-                    msg_guess = str(job.get("message_text") or job.get("bank_text") or "")
+                    msg_guess = str(
+                        job.get("message_text") or job.get("bank_text") or ""
+                    )
                 if msg_guess and outgoing_bubble_present(after_tree, msg_guess):
                     verify_msg = (verify_msg + " · outgoing_bubble").strip(" ·")
                     state["outgoing_confirmed"] = True

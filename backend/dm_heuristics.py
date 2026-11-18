@@ -116,7 +116,10 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "id/composer_text",
         ),
         "send_labels": ("Send", "Send message"),
-        "send_ids": ("com.facebook.orca:id/composer_send_button", "id/composer_send_button"),
+        "send_ids": (
+            "com.facebook.orca:id/composer_send_button",
+            "id/composer_send_button",
+        ),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -1142,9 +1145,10 @@ def heuristic_dm_send(
                     },
                     "done_after_send",
                 )
-        if hist.count("tap send") + hist.count("re-tap send") + hist.count(
-            "ime_send"
-        ) < 3:
+        if (
+            hist.count("tap send") + hist.count("re-tap send") + hist.count("ime_send")
+            < 3
+        ):
             c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
             sx, sy = profile["send_fallback"]
             x, y = c if c else (sx, sy)
