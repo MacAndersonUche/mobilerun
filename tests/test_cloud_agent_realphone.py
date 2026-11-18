@@ -36,11 +36,31 @@ def test_normalize_tree_dict_payload():
             "package": "com.android.settings",
             "empty": False,
             "chars": len(tree),
+            "timing": {"build_ms": 42, "bytes": 100},
         }
     )
     assert info["package"] == "com.android.settings"
     assert info["empty"] is False
     assert "Hi" in info["tree"]
+    assert info["timing"]["build_ms"] == 42
+
+
+def test_normalize_tree_gzip_payload():
+    import base64
+    import gzip
+
+    plain = '<hierarchy nodes="2"><n t="Settings" c="1" xy="100,200"/></hierarchy>'
+    gz = base64.b64encode(gzip.compress(plain.encode())).decode()
+    info = _normalize_tree_payload(
+        {
+            "tree": '<hierarchy empty="false" reason="see_tree_gz"/>',
+            "tree_gz": gz,
+            "package": "com.android.settings",
+            "timing": {"build_ms": 12, "bytes": len(plain)},
+        }
+    )
+    assert "Settings" in info["tree"]
+    assert info["timing"]["build_ms"] == 12
 
 
 def test_trivial_open_app_targets():

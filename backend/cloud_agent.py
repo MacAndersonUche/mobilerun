@@ -40,6 +40,8 @@ Rules:
   noted, change strategy: different node, swipe, back, type, done, or fail.
 - If the goal is to READ a value (version, name, status) and that value is already
   visible in the UI tree, call done immediately with the value — do not keep tapping.
+- If the tree shows a System UI ANR dialog ("isn't responding" / Wait / Close app),
+  tap Wait (prefer) or Close app, then continue — do not fail the goal for an ANR.
 - Reply with JSON only.
 """
 
@@ -670,16 +672,35 @@ def _parse_action_json(raw: str) -> Dict[str, Any]:
 
 
 def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
-    """APK may return a plain string or {tree, package, empty, chars}."""
+    """APK may return a plain string or {tree, package, empty, chars, timing, tree_gz}."""
+    timing: Dict[str, Any] = {}
     if isinstance(raw, dict):
         tree = raw.get("tree") or raw.get("result") or ""
+        # Prefer gzip payload when present (compact APK path)
+        gz = raw.get("tree_gz") or raw.get("tree_b64_gz")
+        if gz and isinstance(gz, str):
+            try:
+                import base64
+                import gzip
+
+                tree = gzip.decompress(base64.b64decode(gz)).decode(
+                    "utf-8", errors="replace"
+                )
+            except Exception as e:
+                logger.warning("tree_gz decompress failed: %s", e)
         if not isinstance(tree, str):
             tree = json.dumps(tree)
+        if isinstance(raw.get("timing"), dict):
+            timing = dict(raw["timing"])
         return {
             "tree": tree,
             "package": str(raw.get("package") or ""),
             "empty": bool(raw.get("empty") or 'empty="true"' in tree or len(tree) < 80),
             "chars": int(raw.get("chars") or len(tree)),
+            "nodes": int(raw.get("nodes") or 0),
+            "partial": bool(raw.get("partial") or raw.get("truncated")),
+            "anr_dismissed": bool(raw.get("anr_dismissed")),
+            "timing": timing,
         }
     tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
     return {
@@ -687,6 +708,10 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
         "package": "",
         "empty": (not tree) or 'empty="true"' in tree or len(tree) < 80,
         "chars": len(tree),
+        "nodes": 0,
+        "partial": False,
+        "anr_dismissed": False,
+        "timing": {},
     }
 
 
@@ -741,11 +766,14 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
 
     kind = str(action.get("action") or "").lower()
     if kind == "tap":
-        call_device(
+        raw = call_device(
             device_id,
             "tap",
             {"x": int(action["x"]), "y": int(action["y"])},
+            timeout_s=12,
         )
+        if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
+            action["_timing"] = raw["timing"]
         label = str(
             action.get("label")
             or action.get("text")
@@ -757,7 +785,7 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             return f'Tapped "{label[:60]}"'
         return f"tap({action.get('x')},{action.get('y')})"
     if kind == "swipe":
-        call_device(
+        raw = call_device(
             device_id,
             "swipe",
             {
@@ -767,15 +795,21 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                 "y2": int(action["y2"]),
                 "duration_ms": int(action.get("duration_ms") or 300),
             },
+            timeout_s=12,
         )
+        if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
+            action["_timing"] = raw["timing"]
         return "Swiped"
     if kind in ("type", "type_text", "input_text"):
         text = str(action.get("text") or "")
-        call_device(
+        raw = call_device(
             device_id,
             "input_text",
             {"text": text, "clear": bool(action.get("clear"))},
+            timeout_s=12,
         )
+        if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
+            action["_timing"] = raw["timing"]
         preview = text[:48]
         return f'Typed "{preview}"' if preview else "Typed text"
     if kind == "back":
@@ -933,7 +967,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     device_id,
                     "get_ui_tree",
                     {},
-                    timeout_s=10,
+                    timeout_s=12,
                     wait_reconnect_s=45,
                 )
                 or ""
@@ -972,6 +1006,36 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 raise
         tree_info = _normalize_tree_payload(tree_raw)
         ui_tree = tree_info["tree"]
+        # Auto-dismiss System UI ANR overlays before planning
+        tree_l = (ui_tree or "").lower()
+        if (
+            "isn't responding" in tree_l
+            or "isnt responding" in tree_l
+            or "not responding" in tree_l
+            or ('t="wait"' in tree_l and "close app" in tree_l)
+        ):
+            try:
+                call_device(
+                    device_id,
+                    "dismiss_anr",
+                    {},
+                    timeout_s=8,
+                    wait_reconnect_s=10,
+                )
+                tree_raw = (
+                    call_device(
+                        device_id,
+                        "get_ui_tree",
+                        {},
+                        timeout_s=8,
+                        wait_reconnect_s=15,
+                    )
+                    or tree_raw
+                )
+                tree_info = _normalize_tree_payload(tree_raw)
+                ui_tree = tree_info["tree"]
+            except Exception as anr_err:
+                logger.warning("dismiss_anr failed: %s", anr_err)
         image_b64 = None
         # Skip screenshot when tree is healthy — cuts ~5-10s per step
         try:
@@ -1138,6 +1202,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             ok: bool = True,
             screenshot_key: Optional[str] = None,
             verify: Optional[str] = None,
+            timing: Optional[Dict[str, Any]] = None,
         ) -> None:
             entry = {
                 "n": step + 1,
@@ -1150,6 +1215,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 "verify": verify,
                 "ts": int(time.time()),
             }
+            # Per-command timings from APK (build_ms / bytes / round_trip_ms)
+            tinfo = timing or tree_info.get("timing") or {}
+            if isinstance(tinfo, dict) and tinfo:
+                entry["timing"] = {
+                    k: tinfo[k]
+                    for k in (
+                        "build_ms",
+                        "bytes",
+                        "nodes",
+                        "cached",
+                        "partial",
+                        "round_trip_ms",
+                        "ack_ms",
+                    )
+                    if k in tinfo
+                }
             steps_detail.append(entry)
             # Keep Dynamo item small
             state["steps_detail"] = steps_detail[-40:]
@@ -1205,7 +1286,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     device_id,
                     "get_ui_tree",
                     {},
-                    timeout_s=8,
+                    timeout_s=12,
                     wait_reconnect_s=30,
                 )
                 or ""
@@ -1286,6 +1367,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["same_tap_streak"] = 0
             # Goal became visible after this action → finish now (no tap loop)
             sat_after = _goal_satisfied_from_tree(instruction, after_tree, after_pkg)
+            if isinstance(after.get("timing"), dict):
+                state["last_tree_timing"] = after["timing"]
+                if after["timing"].get("build_ms") is not None:
+                    verify_msg = (
+                        f"{verify_msg} · tree_ms={after['timing']['build_ms']}".strip(
+                            " ·"
+                        )
+                    )
         except Exception as ve:
             after_tree = ""
             after_pkg = ""
@@ -1302,7 +1391,27 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["last_verify"] = verify_msg
         history.append(f"{summary} — {reason}".strip(" —"))
         state["history"] = history
-        _record_step(summary, screenshot_key=shot_key, verify=verify_msg)
+        # Merge pre-tree + action ACK + post-tree timings into the step log
+        step_timing: Dict[str, Any] = {}
+        if isinstance(tree_info.get("timing"), dict):
+            step_timing.update(tree_info["timing"])
+        if isinstance(state.get("last_tree_timing"), dict):
+            # Prefer post-action tree build_ms for the step metric
+            post = state["last_tree_timing"]
+            if post.get("build_ms") is not None:
+                step_timing["build_ms"] = post["build_ms"]
+            if post.get("bytes") is not None:
+                step_timing["bytes"] = post["bytes"]
+            if post.get("round_trip_ms") is not None:
+                step_timing["round_trip_ms"] = post["round_trip_ms"]
+        if isinstance(action.get("_timing"), dict):
+            step_timing.update(action["_timing"])
+        _record_step(
+            summary,
+            screenshot_key=shot_key,
+            verify=verify_msg,
+            timing=step_timing or None,
+        )
         job["state"] = state
         if planner == "heuristic":
             job["result"] = f"Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
@@ -1310,6 +1419,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job["result"] = f"Step {step + 1}: {summary}"
             if verify_msg:
                 job["result"] += f" · {verify_msg}"
+            if step_timing.get("build_ms") is not None:
+                job["result"] += f" · tree_ms={step_timing.get('build_ms')}"
 
         # Pure open_app goal → complete once PackageManager launched
         open_target = _trivial_open_app_target(instruction)
