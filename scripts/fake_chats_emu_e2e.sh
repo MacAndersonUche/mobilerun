@@ -55,9 +55,12 @@ adb shell settings put secure default_input_method "$IME" || true
 
 echo "== Start local backend if needed =="
 if ! curl -sfS "$HOST_BACKEND/api/health" >/dev/null 2>&1; then
-  echo "Backend not up at $HOST_BACKEND — start uvicorn first"
+  echo "Backend not up at $HOST_BACKEND — start with ALLOW_UNAUTHENTICATED=true"
   exit 1
 fi
+# Dismiss any leftover ANR / system dialogs before pairing
+adb shell input keyevent KEYCODE_BACK || true
+adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
 
 echo "== Pair emulator (short-code, LAN via adb reverse) =="
 adb reverse tcp:8000 tcp:8000 || true

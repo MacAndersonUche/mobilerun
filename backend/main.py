@@ -75,8 +75,16 @@ pairing_tokens: Dict[str, Dict[str, Any]] = {}
 # Long-lived device sessions for reconnect without USB / without re-scan
 device_sessions: Dict[str, Dict[str, Any]] = {}  # session_token -> meta
 device_websockets: Dict[str, WebSocket] = {}
+# Uvicorn event loop — used by device_push local in-memory bridge
+_app_loop: Optional[asyncio.AbstractEventLoop] = None
 # Device-code OAuth style linking (APK shows code → approve on web)
 device_link_codes: Dict[str, Dict[str, Any]] = {}  # user_code -> meta
+
+
+@app.on_event("startup")
+async def _capture_app_loop() -> None:
+    global _app_loop
+    _app_loop = asyncio.get_running_loop()
 
 
 def _owner_key(auth: Optional[dict]) -> Optional[str]:
@@ -1012,6 +1020,11 @@ async def device_websocket(websocket: WebSocket):
             )
 
         device_websockets[device_id] = websocket
+        global _app_loop
+        try:
+            _app_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
 
         await websocket.send_json(
             {
@@ -1366,37 +1379,12 @@ async def submit_task(
             task["status"] = "running"
             task["result"] = "Cloud agent started (step worker)"
         elif os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() == "true":
-            # Local/dev: run one step inline so CI/emulator can progress without EventBridge
-            try:
-                from cloud_agent import run_one_agent_step
-            except ImportError:
-                from backend.cloud_agent import run_one_agent_step  # type: ignore
-            try:
-                from storage import get_job, put_job
-            except ImportError:
-                from backend.storage import get_job, put_job  # type: ignore
-
-            job = get_job(task_id) or {
-                "job_id": task_id,
-                "kind": "agent",
-                "status": "running",
-                "device_id": request.device_id,
-                "instruction": request.instruction,
-                "max_steps": request.max_steps or 15,
-                "state": {"steps": 0, "history": []},
-            }
-            # Run steps inline for local backends (emulator bench needs full
-            # open→search→compose→send loops; callers may also /tick).
-            for _ in range(int(request.max_steps or 15)):
-                if job.get("status") != "running":
-                    break
-                job = run_one_agent_step(job)
-                put_job(job)
+            # Local/dev: queue the job; /api/jobs/{id}/tick advances steps off the
+            # event loop (asyncio.to_thread) so in-memory WS RPC can complete.
+            # Do NOT run steps inline here — that deadlocks get_ui_tree.
             kicked = True
-            task["status"] = job.get("status") or "running"
-            task["result"] = job.get("result")
-            task["error"] = job.get("error")
-            task["current_step"] = int((job.get("state") or {}).get("steps") or 0)
+            task["status"] = "running"
+            task["result"] = "Queued for local tick loop"
     except Exception as e:
         logger.error("Failed to kick cloud agent: %s", e)
         task["status"] = "failed"
@@ -3411,7 +3399,8 @@ async def tick_job(job_id: str, auth: Optional[dict] = Depends(optional_verify_t
     job["next_run_at"] = int(time.time()) - 1
     job["status"] = "running"
     put_job(job)
-    process_job(job)
+    # Off-loop so device WS can deliver RPC replies during the step
+    await asyncio.to_thread(process_job, job)
     updated = get_job(job_id) or job
     kind = str(updated.get("kind") or "agent")
     return {

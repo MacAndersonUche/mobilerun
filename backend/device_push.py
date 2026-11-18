@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import json
 import logging
 import os
@@ -9,6 +11,53 @@ import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("mobilerun.push")
+
+
+def _try_local_memory_push(device_id: str, payload: Dict[str, Any]) -> bool:
+    """Deliver via in-process FastAPI WebSocket (local uvicorn / emulator e2e).
+
+    Must be callable from a worker thread while the uvicorn event loop stays free
+    to process the phone's RPC response — never block the loop waiting on RPC.
+    """
+    if not device_id:
+        return False
+    for mod_name in ("main", "backend.main"):
+        try:
+            main_mod = importlib.import_module(mod_name)
+        except Exception:
+            continue
+        sockets = getattr(main_mod, "device_websockets", None) or {}
+        ws = sockets.get(device_id)
+        if ws is None:
+            continue
+        loop = getattr(main_mod, "_app_loop", None)
+        if loop is None or not loop.is_running():
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    loop = asyncio.get_event_loop()
+                except Exception:
+                    loop = None
+        if loop is None or not loop.is_running():
+            logger.warning(
+                "local WS for %s found but no running event loop to schedule send",
+                device_id,
+            )
+            continue
+
+        async def _send() -> None:
+            await ws.send_json(payload)
+
+        try:
+            # Always schedule on the uvicorn loop from this (worker) thread.
+            fut = asyncio.run_coroutine_threadsafe(_send(), loop)
+            fut.result(timeout=15)
+            return True
+        except Exception as e:
+            logger.warning("local in-memory send to %s failed: %s", device_id, e)
+            return False
+    return False
 
 
 def _sorted_device_conns(device_id: str) -> List[Dict[str, Any]]:
@@ -96,8 +145,8 @@ def push_to_device(
         return False
     endpoint = os.environ.get("WEBSOCKET_MANAGEMENT_ENDPOINT") or ""
     if not endpoint:
-        # Local/dev: caller may fall back to in-memory websockets
-        return False
+        # Local/dev (emulator bench): push over in-memory device_websockets
+        return _try_local_memory_push(device_id, payload)
 
     import boto3
 

@@ -90,12 +90,13 @@ jobs:
           PORT: '8000'
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          nohup python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
           echo $! > /tmp/backend.pid
           for i in $(seq 1 40); do
             curl -sfS http://127.0.0.1:8000/api/health && break
             sleep 1
           done
+          grep -q ALLOW_UNAUTHENTICATED=true <(tr '\0' '\n' < /proc/$(cat /tmp/backend.pid)/environ) || echo "WARN: ALLOW_UNAUTHENTICATED not in env"
 
       - name: Run emulator + fake-chats matrix
         uses: reactivecircus/android-emulator-runner@v2
