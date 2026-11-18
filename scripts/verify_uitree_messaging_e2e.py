@@ -221,13 +221,37 @@ def percentile(vals: List[float], p: float) -> Optional[float]:
     return float(s[f] + (s[c] - s[f]) * (k - f))
 
 
+def wait_device_online(tok: str, seconds: float = 60.0) -> None:
+    """Poll /api/devices until DEVICE_ID is connected (seed can drop WS briefly)."""
+    deadline = time.time() + seconds
+    last = None
+    while time.time() < deadline:
+        try:
+            devices = req("GET", "/api/devices", token=tok, retries=3)
+            for d in devices if isinstance(devices, list) else []:
+                if d.get("device_id") == DEVICE_ID:
+                    last = d
+                    if (
+                        d.get("connected")
+                        or d.get("online")
+                        or d.get("status") == "online"
+                    ):
+                        return
+        except RuntimeError as e:
+            last = {"error": str(e)}
+        adb("shell", "am", "start", "-n", "ai.mobilerun.selfhosted/.MainActivity")
+        time.sleep(3)
+    raise RuntimeError(f"Device {DEVICE_ID} still offline after seed: {last}")
+
+
 def main() -> int:
     if not DEVICE_ID:
         raise RuntimeError("DEVICE_ID required")
-    seed_contact()
     tok = req("POST", "/api/auth/login", {"username": USER, "password": PASSWORD})[
         "access_token"
     ]
+    seed_contact()
+    wait_device_online(tok, seconds=90.0)
     instr = os.environ.get(
         "E2E_INSTRUCTION",
         "Complete a full Messages flow with many UI steps: (1) open Messages, "
