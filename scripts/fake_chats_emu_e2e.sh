@@ -22,16 +22,18 @@ fi
 echo "MOBILERUN_APK=$MOBILERUN_APK" | tee "$ARTIFACTS_DIR/apk_paths.txt"
 
 echo "== Build fake-chats flavors =="
-(cd "$ROOT/test-apps/fake-chats" && ./gradlew assembleDebug --no-daemon)
+(cd "$ROOT/test-apps/fake-chats" && python3 scripts/generate_from_catalog.py && ./gradlew assembleDebug --no-daemon)
 FAKE_DIR="$ROOT/test-apps/fake-chats/app/build/outputs/apk"
 
 echo "== Install APKs =="
 adb install -r "$MOBILERUN_APK"
-for flavor in whatsapp instagram messenger telegram tinder bumble hinge; do
-  apk=$(ls -1 "$FAKE_DIR/$flavor/debug/"*.apk | head -1)
-  echo "install $flavor -> $apk"
-  adb install -r "$apk"
-done
+# Install every product-flavor APK from catalog (skip missing)
+while IFS= read -r apk; do
+  echo "install $apk"
+  adb install -r "$apk" || true
+done < <(find "$FAKE_DIR" -path '*/debug/*.apk' | sort)
+export FAKE_CHATS_FAST="${FAKE_CHATS_FAST:-1}"
+export MATRIX_TIMEOUT="${MATRIX_TIMEOUT:-900}"
 
 A11Y="ai.mobilerun.selfhosted/ai.mobilerun.selfhosted.MobilerunAccessibilityService"
 IME="ai.mobilerun.selfhosted/.input.MobilerunKeyboardIME"

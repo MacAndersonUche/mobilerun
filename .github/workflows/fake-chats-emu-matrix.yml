@@ -31,7 +31,7 @@ on:
 jobs:
   fake-chats-matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -111,7 +111,8 @@ jobs:
           HOST_BACKEND_URL: http://127.0.0.1:8000
           E2E_USER: ci-e2e
           E2E_PASSWORD: admin
-          MATRIX_TIMEOUT: '300'
+          MATRIX_TIMEOUT: '900'
+          FAKE_CHATS_FAST: '1'
           PYTHONPATH: ${{ github.workspace }}
         with:
           api-level: 34

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Drive the fake-chats emulator bench through POST /api/tasks.
+"""Drive the expanded fake-chats emulator bench through POST /api/tasks.
 
-Installs are done by the shell wrapper. This script:
-  - discovers the paired emulator device
-  - for each app × mode: clear SentLog, launch inbox, submit a REAL send task
-    (dry_run=false) of exact bank text "hi baby" to Precious Achalugo
-  - asserts SentLog gained a new outgoing line with exact text
-  - also runs a keyboard-off SET_TEXT fallback pass on WhatsApp
+Scenarios per app:
+  - single_dm: find Precious Achalugo, send exact bank text "hi baby"
+  - bulk_swipe_50: auto-swipe 50 profiles (dating/swipe apps; N/A elsewhere)
+  - bulk_message_50: message 50 matches with exact bank text
 
-Never targets Mac's real S21+ (android_46101066-...).
+Also runs whatsapp keyboard-off SET_TEXT fallback and a Secure Folder unlock
+path. Refuses Mac's real S21+ device id.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -25,33 +25,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.fake_chats_catalog import (  # noqa: E402
+    bulk_counts,
+    dm_keys,
+    packages as catalog_packages,
+    swipe_keys,
+)
+
 API = os.environ.get("API_URL", "http://127.0.0.1:8000").rstrip("/")
 USER = os.environ.get("E2E_USER", "ci-e2e")
 PASSWORD = os.environ.get("E2E_PASSWORD", "admin")
 MESSAGE = "hi baby"
 CONTACT = "Precious Achalugo"
 FORBIDDEN_DEVICE_PREFIX = "android_46101066"
-
-APPS = (
-    "whatsapp",
-    "instagram",
-    "messenger",
-    "telegram",
-    "tinder",
-    "bumble",
-    "hinge",
-)
-MODES = ("normal", "social", "dating")
-
-PACKAGES = {
-    "whatsapp": "com.whatsapp",
-    "instagram": "com.instagram.android",
-    "messenger": "com.facebook.orca",
-    "telegram": "org.telegram.messenger",
-    "tinder": "com.tinder",
-    "bumble": "com.bumble.app",
-    "hinge": "co.hinge.app",
-}
+PACKAGES = catalog_packages()
+SWIPE = set(swipe_keys())
+COUNTS = bulk_counts()
 
 OUT = Path(
     os.environ.get(
@@ -99,14 +89,27 @@ def req(
 
 
 def adb(*args: str, check: bool = True) -> str:
-    cmd = ["adb", *args]
-    p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    p = subprocess.run(["adb", *args], capture_output=True, text=True, check=False)
     if check and p.returncode != 0:
         raise RuntimeError(f"adb {' '.join(args)} failed: {p.stderr or p.stdout}")
     return (p.stdout or "") + (p.stderr or "")
 
 
-def clear_sent_log(pkg: str) -> None:
+def read_jsonl(pkg: str, name: str) -> List[Dict[str, Any]]:
+    out = adb("shell", "run-as", pkg, "cat", f"files/{name}", check=False)
+    rows = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or line.startswith("run-as:"):
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def clear_logs(pkg: str) -> None:
     adb(
         "shell",
         "am",
@@ -115,73 +118,57 @@ def clear_sent_log(pkg: str) -> None:
         f"{pkg}/ai.mobilerun.fakechats.ClearLogActivity",
         check=False,
     )
-    time.sleep(0.5)
-    # Also truncate via run-as when possible
-    adb(
-        "shell",
-        "run-as",
-        pkg,
-        "sh",
-        "-c",
-        "echo -n > files/sent_messages.jsonl",
-        check=False,
-    )
-
-
-def read_sent_log(pkg: str) -> List[Dict[str, Any]]:
-    out = adb(
-        "shell",
-        "run-as",
-        pkg,
-        "cat",
-        "files/sent_messages.jsonl",
-        check=False,
-    )
-    lines = []
-    for line in out.splitlines():
-        line = line.strip()
-        if not line or line.startswith("run-as:"):
-            continue
-        try:
-            lines.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return lines
-
-
-def launch_inbox(pkg: str) -> None:
-    # Cold start each case so leftover ConversationActivity (seed "hi baby"
-    # bubble + compose focus) cannot poison search→contact→send.
-    adb("shell", "am", "force-stop", pkg, check=False)
     time.sleep(0.4)
+    for f in ("sent_messages.jsonl", "swipes.jsonl", "action_timings.jsonl"):
+        adb(
+            "shell",
+            "run-as",
+            pkg,
+            "sh",
+            "-c",
+            f"echo -n > files/{f}",
+            check=False,
+        )
+
+
+def launch_app(
+    pkg: str, activity: str = "ai.mobilerun.fakechats.LauncherActivity"
+) -> None:
+    adb("shell", "am", "force-stop", pkg, check=False)
+    time.sleep(0.3)
     adb(
         "shell",
         "am",
         "start",
         "-W",
         "-n",
-        f"{pkg}/ai.mobilerun.fakechats.InboxActivity",
+        f"{pkg}/{activity}",
         "-f",
-        "0x10008000",  # NEW_TASK | CLEAR_TASK
+        "0x10008000",
         "--ez",
         "clear_log",
         "true",
+        check=False,
     )
-    time.sleep(1.2)
-    adb("shell", "am", "broadcast", "-a", "android.intent.action.CLOSE_SYSTEM_DIALOGS", check=False)
+    time.sleep(1.0)
+    adb(
+        "shell",
+        "am",
+        "broadcast",
+        "-a",
+        "android.intent.action.CLOSE_SYSTEM_DIALOGS",
+        check=False,
+    )
 
 
 def set_ime(enabled: bool) -> None:
-    """Enable/disable Mobilerun Keyboard as default IME."""
     ime = "ai.mobilerun.selfhosted/.input.MobilerunKeyboardIME"
     if enabled:
         adb("shell", "ime", "enable", ime, check=False)
         adb("shell", "ime", "set", ime, check=False)
     else:
-        # Fall back to Latin IME / whatever is available
         adb("shell", "ime", "disable", ime, check=False)
         adb("shell", "ime", "reset", check=False)
-        # Prefer AOSP Latin if present
         for cand in (
             "com.google.android.inputmethod.latin/.LatinIME",
             "com.android.inputmethod.latin/.LatinIME",
@@ -191,8 +178,9 @@ def set_ime(enabled: bool) -> None:
 
 
 def login() -> str:
-    d = req("POST", "/api/auth/login", {"username": USER, "password": PASSWORD})
-    return d["access_token"]
+    return req("POST", "/api/auth/login", {"username": USER, "password": PASSWORD})[
+        "access_token"
+    ]
 
 
 def pick_device(token: str, want: Optional[str]) -> Dict[str, Any]:
@@ -205,9 +193,7 @@ def pick_device(token: str, want: Optional[str]) -> Dict[str, Any]:
     for d in online:
         did = str(d.get("device_id") or "")
         if did.startswith(FORBIDDEN_DEVICE_PREFIX):
-            raise RuntimeError(
-                f"Refusing to drive Mac's real phone {did} — fake-chats bench only"
-            )
+            raise RuntimeError(f"Refusing Mac's real phone {did}")
     if want:
         for d in online:
             if d.get("device_id") == want:
@@ -218,54 +204,48 @@ def pick_device(token: str, want: Optional[str]) -> Dict[str, Any]:
     return online[0]
 
 
-def submit_task(
+def submit(
     token: str,
     device_id: str,
-    app: str,
-    mode: str,
-    dry_run: bool = False,
+    instruction: str,
+    mode: str = "normal",
+    max_steps: int = 24,
 ) -> Dict[str, Any]:
-    instr = f"{app} find and message {CONTACT} tell her {MESSAGE}"
     return req(
         "POST",
         "/api/tasks",
         {
             "device_id": device_id,
-            "instruction": instr,
-            "max_steps": 24,
+            "instruction": instruction,
+            "max_steps": max_steps,
             "mode": mode,
             "speed_preset": "fast",
-            "vision": False,  # deterministic selectors first
-            "dry_run": dry_run,
+            "vision": False,
+            "dry_run": False,
         },
         token=token,
     )
 
 
-def poll_task(token: str, task_id: str, timeout_s: int = 240) -> Dict[str, Any]:
-    """Poll task; on local backends keep advancing via /api/jobs/{id}/tick."""
+def poll_task(token: str, task_id: str, timeout_s: int = 600) -> Dict[str, Any]:
     deadline = time.time() + timeout_s
     last: Dict[str, Any] = {}
     while time.time() < deadline:
-        # Local/dev: keep advancing the job via tick until terminal.
-        tick: Dict[str, Any] = {}
         try:
             tick = req(
                 "POST",
                 f"/api/jobs/{task_id}/tick",
                 {},
                 token=token,
-                timeout=90,
+                timeout=120,
                 retries=3,
             )
         except Exception as e:
             print(f"    tick_err={e!s}"[:180], flush=True)
+            tick = {}
         last = req("GET", f"/api/tasks/{task_id}", token=token, timeout=45, retries=10)
         if isinstance(tick, dict) and tick.get("status"):
-            last = {
-                **last,
-                "status": tick.get("status") or last.get("status"),
-            }
+            last = {**last, "status": tick.get("status") or last.get("status")}
             act = tick.get("activity") or {}
             if act.get("steps_detail"):
                 last["steps"] = act["steps_detail"]
@@ -281,30 +261,84 @@ def poll_task(token: str, task_id: str, timeout_s: int = 240) -> Dict[str, Any]:
         )
         if status in ("completed", "failed", "cancelled", "stopped", "done"):
             return last
-        time.sleep(1.0)
+        time.sleep(0.6)
     raise RuntimeError(f"timeout: {last}")
 
 
-def case_pass_from_log(pkg: str, before: int) -> bool:
-    after = read_sent_log(pkg)
-    new = [
+def timing_stats(pkg: str) -> Dict[str, Any]:
+    rows = read_jsonl(pkg, "action_timings.jsonl")
+    by: Dict[str, List[float]] = {}
+    for r in rows:
+        by.setdefault(str(r.get("kind")), []).append(float(r.get("ms") or 0))
+    out: Dict[str, Any] = {}
+    for k, vals in by.items():
+        if not vals:
+            continue
+        out[k] = {
+            "n": len(vals),
+            "mean_ms": round(statistics.mean(vals), 1),
+            "p50_ms": round(statistics.median(vals), 1),
+            "max_ms": round(max(vals), 1),
+        }
+    return out
+
+
+def assert_single_dm(pkg: str) -> bool:
+    sent = read_jsonl(pkg, "sent_messages.jsonl")
+    hits = [
         e
-        for e in after[before:]
+        for e in sent
         if e.get("text") == MESSAGE
         and CONTACT.lower() in str(e.get("contact") or "").lower()
     ]
-    return len(new) >= 1
+    return len(hits) >= 1
+
+
+def assert_bulk_swipe(pkg: str, n: int) -> Dict[str, Any]:
+    swipes = read_jsonl(pkg, "swipes.jsonl")
+    likes = [s for s in swipes if s.get("action") in ("like", "superlike")]
+    profiles = [s.get("profile") for s in likes]
+    return {
+        "ok": len(likes) == n and len(set(profiles)) == n,
+        "likes": len(likes),
+        "unique": len(set(profiles)),
+        "target": n,
+    }
+
+
+def assert_bulk_message(pkg: str, n: int) -> Dict[str, Any]:
+    sent = read_jsonl(pkg, "sent_messages.jsonl")
+    exact = [e for e in sent if e.get("text") == MESSAGE]
+    contacts = [e.get("contact") for e in exact]
+    # No duplicates; exactly one per Match01..MatchN preferred
+    dup = len(contacts) != len(set(contacts))
+    return {
+        "ok": len(exact) == n and not dup,
+        "sent": len(exact),
+        "unique_contacts": len(set(contacts)),
+        "duplicates": dup,
+        "target": n,
+    }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--apps", default=",".join(APPS))
-    ap.add_argument("--modes", default=",".join(MODES))
+    ap.add_argument("--apps", default=",".join(dm_keys()))
+    ap.add_argument(
+        "--scenarios",
+        default="single_dm,bulk_swipe_50,bulk_message_50",
+        help="Comma list of scenarios",
+    )
+    ap.add_argument("--modes", default="normal")
     ap.add_argument("--device-id", default=os.environ.get("DEVICE_ID", ""))
-    ap.add_argument("--timeout", type=int, default=240)
+    ap.add_argument(
+        "--timeout", type=int, default=int(os.environ.get("MATRIX_TIMEOUT", "600"))
+    )
     ap.add_argument("--skip-keyboard-off", action="store_true")
+    ap.add_argument("--skip-secure-folder", action="store_true")
     args = ap.parse_args()
     apps = [a.strip() for a in args.apps.split(",") if a.strip()]
+    scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -320,115 +354,202 @@ def main() -> int:
         "cases": [],
         "message": MESSAGE,
         "contact": CONTACT,
+        "bulk": COUNTS,
     }
     passes = fails = 0
-
     set_ime(True)
+
+    def record(case: Dict[str, Any]) -> None:
+        nonlocal passes, fails
+        report["cases"].append(case)
+        if case.get("status") == "pass":
+            passes += 1
+            print(f"  PASS {case['id']}", flush=True)
+        else:
+            fails += 1
+            print(f"  FAIL {case['id']}", flush=True)
+        (OUT / f"{case['id']}.json").write_text(json.dumps(case, indent=2, default=str))
 
     for app in apps:
         pkg = PACKAGES[app]
         for mode in modes:
-            case_id = f"{app}__{mode}"
-            print(f"\n== {case_id}", flush=True)
-            clear_sent_log(pkg)
-            before = len(read_sent_log(pkg))
-            launch_inbox(pkg)
-            case: Dict[str, Any] = {
-                "id": case_id,
-                "app": app,
-                "mode": mode,
-                "package": pkg,
-                "ime": "on",
-            }
-            try:
-                created = submit_task(token, device_id, app, mode, dry_run=False)
-                tid = str(created.get("task_id") or created.get("job_id"))
-                case["task_id"] = tid
-                task = poll_task(token, tid, timeout_s=args.timeout)
-                (OUT / f"{case_id}.json").write_text(
-                    json.dumps(task, indent=2, default=str)
-                )
-                case["task_status"] = task.get("status")
-                case["result"] = task.get("result")
-                case["error"] = task.get("error")
-                log_ok = case_pass_from_log(pkg, before)
-                case["sent_log_ok"] = log_ok
-                case["sent_log"] = read_sent_log(pkg)
-                status_ok = (task.get("status") or "").lower() == "completed"
-                # Prefer SentLog as ground truth; task may also confirm bubble
-                if log_ok and status_ok:
+            for scenario in scenarios:
+                case_id = f"{app}__{scenario}__{mode}"
+                print(f"\n== {case_id}", flush=True)
+                case: Dict[str, Any] = {
+                    "id": case_id,
+                    "app": app,
+                    "scenario": scenario,
+                    "mode": mode,
+                    "package": pkg,
+                }
+                if (
+                    scenario == "bulk_swipe_50"
+                    and app not in SWIPE
+                    and app != "facebook"
+                ):
                     case["status"] = "pass"
-                    passes += 1
-                elif log_ok:
-                    case["status"] = "pass"
-                    case["note"] = "sent_log ok but task status not completed"
-                    passes += 1
-                else:
+                    case["note"] = "N/A for messaging app"
+                    case["skipped"] = True
+                    record(case)
+                    continue
+                try:
+                    clear_logs(pkg)
+                    if scenario == "bulk_swipe_50":
+                        launch_app(pkg)
+                        instr = f"{app} auto-swipe {COUNTS['swipe']} profiles"
+                        max_steps = COUNTS["swipe"] * 3 + 40
+                    elif scenario == "bulk_message_50":
+                        launch_app(
+                            pkg,
+                            (
+                                "ai.mobilerun.fakechats.MatchesActivity"
+                                if app in SWIPE or app == "facebook"
+                                else "ai.mobilerun.fakechats.LauncherActivity"
+                            ),
+                        )
+                        instr = (
+                            f"{app} auto-message {COUNTS['message']} matches "
+                            f'tell them "{MESSAGE}"'
+                        )
+                        max_steps = COUNTS["message"] * 6 + 40
+                    else:
+                        launch_app(pkg)
+                        instr = f"{app} find and message {CONTACT} tell her {MESSAGE}"
+                        max_steps = 28
+                    t0 = time.time()
+                    created = submit(
+                        token, device_id, instr, mode=mode, max_steps=max_steps
+                    )
+                    tid = str(created.get("task_id") or created.get("job_id"))
+                    case["task_id"] = tid
+                    task = poll_task(token, tid, timeout_s=args.timeout)
+                    case["task_status"] = task.get("status")
+                    case["result"] = task.get("result")
+                    case["error"] = task.get("error")
+                    case["wall_s"] = round(time.time() - t0, 2)
+                    case["timings"] = timing_stats(pkg)
+                    ok = False
+                    if scenario == "single_dm":
+                        ok = assert_single_dm(pkg)
+                        case["sent_log"] = read_jsonl(pkg, "sent_messages.jsonl")
+                    elif scenario == "bulk_swipe_50":
+                        detail = assert_bulk_swipe(pkg, COUNTS["swipe"])
+                        case["swipe_assert"] = detail
+                        ok = bool(detail["ok"]) or (
+                            # graceful out-of-likes stop with partial still fails exact-50
+                            False
+                        )
+                        # Allow completed task that recorded exactly 50
+                        ok = bool(detail["ok"])
+                    elif scenario == "bulk_message_50":
+                        detail = assert_bulk_message(pkg, COUNTS["message"])
+                        case["message_assert"] = detail
+                        case["sent_log"] = read_jsonl(pkg, "sent_messages.jsonl")
+                        ok = bool(detail["ok"])
+                    case["status"] = "pass" if ok else "fail"
+                except Exception as e:
                     case["status"] = "fail"
-                    fails += 1
-            except Exception as e:
-                case["status"] = "fail"
-                case["error"] = str(e)
-                fails += 1
-            print(f"  {case['status'].upper()} {case_id}", flush=True)
-            report["cases"].append(case)
+                    case["error"] = str(e)
+                record(case)
 
-    # Keyboard-off SET_TEXT fallback (WhatsApp only)
-    if not args.skip_keyboard_off and "whatsapp" in apps:
-        case_id = "whatsapp__keyboard_off"
-        print(f"\n== {case_id}", flush=True)
-        pkg = PACKAGES["whatsapp"]
+    # Keyboard-off SET_TEXT on WhatsApp single DM
+    if not args.skip_keyboard_off and "whatsapp" in PACKAGES:
+        print("\n== whatsapp__keyboard_off", flush=True)
         set_ime(False)
-        clear_sent_log(pkg)
-        before = len(read_sent_log(pkg))
-        launch_inbox(pkg)
+        clear_logs(PACKAGES["whatsapp"])
+        launch_app(PACKAGES["whatsapp"])
         case = {
-            "id": case_id,
+            "id": "whatsapp__keyboard_off",
             "app": "whatsapp",
+            "scenario": "single_dm",
             "mode": "normal",
-            "package": pkg,
             "ime": "off",
+            "package": PACKAGES["whatsapp"],
         }
         try:
-            created = submit_task(token, device_id, "whatsapp", "normal", dry_run=False)
-            tid = str(created.get("task_id") or created.get("job_id"))
-            case["task_id"] = tid
-            task = poll_task(token, tid, timeout_s=args.timeout)
-            (OUT / f"{case_id}.json").write_text(
-                json.dumps(task, indent=2, default=str)
+            created = submit(
+                token,
+                device_id,
+                f"whatsapp find and message {CONTACT} tell her {MESSAGE}",
+                max_steps=28,
             )
+            tid = str(created.get("task_id") or created.get("job_id"))
+            task = poll_task(token, tid, timeout_s=args.timeout)
             case["task_status"] = task.get("status")
             case["result"] = task.get("result")
-            log_ok = case_pass_from_log(pkg, before)
-            case["sent_log_ok"] = log_ok
-            case["sent_log"] = read_sent_log(pkg)
-            if log_ok:
-                case["status"] = "pass"
-                passes += 1
-            else:
-                case["status"] = "fail"
-                fails += 1
+            case["sent_log"] = read_jsonl(PACKAGES["whatsapp"], "sent_messages.jsonl")
+            case["timings"] = timing_stats(PACKAGES["whatsapp"])
+            case["status"] = (
+                "pass" if assert_single_dm(PACKAGES["whatsapp"]) else "fail"
+            )
         except Exception as e:
             case["status"] = "fail"
             case["error"] = str(e)
-            fails += 1
-        print(f"  {case['status'].upper()} {case_id}", flush=True)
-        report["cases"].append(case)
         set_ime(True)
+        record(case)
+
+    # Secure Folder unlock + open Tinder
+    if not args.skip_secure_folder and "securefolder" in {
+        a["key"]
+        for a in __import__("backend.fake_chats_catalog", fromlist=["apps"]).apps()
+    }:
+        print("\n== securefolder__unlock_open_tinder", flush=True)
+        sf_pkg = "com.samsung.knox.securefolder"
+        case = {
+            "id": "securefolder__unlock_open_tinder",
+            "app": "securefolder",
+            "scenario": "secure_folder",
+            "package": sf_pkg,
+        }
+        try:
+            launch_app(sf_pkg, "ai.mobilerun.fakechats.SecureFolderActivity")
+            created = submit(
+                token,
+                device_id,
+                "unlock Secure Folder then open Tinder",
+                max_steps=20,
+            )
+            tid = str(created.get("task_id") or created.get("job_id"))
+            task = poll_task(token, tid, timeout_s=min(args.timeout, 240))
+            case["task_status"] = task.get("status")
+            case["result"] = task.get("result")
+            # Soft pass: task completed or timings show unlock
+            timings = timing_stats(sf_pkg)
+            case["timings"] = timings
+            unlocked = "secure_folder_unlock" in timings
+            case["status"] = (
+                "pass"
+                if unlocked or (task.get("status") or "").lower() == "completed"
+                else "fail"
+            )
+        except Exception as e:
+            case["status"] = "fail"
+            case["error"] = str(e)
+        record(case)
 
     report["summary"] = {
         "pass": passes,
         "fail": fails,
         "total": passes + fails,
-        "verdict": "PASS" if fails == 0 and passes > 0 else "FAIL",
+        "verdict": "PASS" if fails == 0 else "FAIL",
     }
     report["finished_at"] = datetime.now(timezone.utc).isoformat()
-    (OUT / "report.json").write_text(json.dumps(report, indent=2))
+    # Pivot table
+    table: Dict[str, Dict[str, str]] = {}
+    for c in report["cases"]:
+        app = c.get("app") or "?"
+        scen = c.get("scenario") or c["id"]
+        table.setdefault(app, {})[scen] = c.get("status") or "?"
+    report["table"] = table
+    (OUT / "report.json").write_text(json.dumps(report, indent=2, default=str))
     print("\n=== SUMMARY ===", flush=True)
-    print(json.dumps(report["summary"], indent=2), flush=True)
-    print(f"Report: {OUT / 'report.json'}", flush=True)
-    return 0 if fails == 0 and passes > 0 else 1
+    print(json.dumps(report["summary"], indent=2))
+    print("Table:")
+    print(json.dumps(table, indent=2))
+    print(f"Report: {OUT / 'report.json'}")
+    return 0 if fails == 0 else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

@@ -222,6 +222,63 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _register_catalog_profiles() -> None:
+    """Add fake-chats catalog apps not already in DM_APP_PROFILES."""
+    try:
+        from fake_chats_catalog import apps as catalog_apps
+    except ImportError:
+        try:
+            from backend.fake_chats_catalog import apps as catalog_apps  # type: ignore
+        except ImportError:
+            return
+    swipe_template = DM_APP_PROFILES["tinder"]
+    for app in catalog_apps():
+        key = app["key"]
+        if key in DM_APP_PROFILES or key == "securefolder":
+            continue
+        family = app.get("family") or "swipe"
+        if family == "messaging":
+            continue
+        if family == "facebook_dating":
+            DM_APP_PROFILES[key] = {
+                **swipe_template,
+                "aliases": ("facebook dating", "facebook", "fb dating"),
+                "package": app["package"],
+                "pkg_markers": ("facebook", "katana", "dating"),
+                "open_label": app["label"],
+                "like_ids": ("id/dating_like",),
+                "pass_ids": ("id/dating_pass",),
+                "compose_ids": ("id/dating_composer",),
+                "send_ids": ("id/dating_send",),
+                "search_ids": ("id/dating_search", "id/dating_search_edit"),
+                "result_ids": ("id/dating_match_row", "id/dating_inbox_row"),
+                "header_ids": ("id/dating_thread_title",),
+            }
+            continue
+        # Generic swipe dating clones
+        DM_APP_PROFILES[key] = {
+            **swipe_template,
+            "aliases": (key, app["label"].lower()),
+            "package": app["package"],
+            "pkg_markers": (key,),
+            "open_label": app["label"],
+            "like_ids": (f"id/{key}_like", "id/gamepad_like"),
+            "pass_ids": (f"id/{key}_pass", "id/gamepad_pass"),
+            "search_ids": (
+                f"id/{key}_matches_tab",
+                "id/matches_search",
+                "id/matches_search_input",
+            ),
+            "result_ids": (f"id/{key}_match_row", "id/match_row"),
+            "header_ids": ("id/chat_header_name",),
+            "compose_ids": ("id/message_input",),
+            "send_ids": ("id/send_button",),
+        }
+
+
+_register_catalog_profiles()
+
+
 def tree_node_count(tree: str) -> int:
     low = (tree or "").lower()
     return low.count("<n ") + low.count("<node ")

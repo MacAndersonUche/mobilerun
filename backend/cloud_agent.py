@@ -541,7 +541,7 @@ def _goal_satisfied_from_tree(
             # Fake-chats (and fixtures) seed an "Old outgoing message: …" bubble
             # with the same text — that must not satisfy the send goal.
             if re.search(
-                rf'old outgoing message:\s*{re.escape(marker)}',
+                rf"old outgoing message:\s*{re.escape(marker)}",
                 tl,
                 re.I,
             ) and not re.search(
@@ -592,6 +592,7 @@ def plan_next_action(
     last_tap_key: Optional[str] = None,
     package: str = "",
     dry_run: bool = False,
+    agent_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Plan one action. Multi-step goals require a real LLM (Gemini or OpenAI).
 
@@ -599,21 +600,33 @@ def plan_next_action(
     and is always labelled LLM unavailable: quota. It must never complete
     multi-step verification tasks.
     """
+    # Bulk swipe / bulk message bench goals skip the single-DM "goal visible"
+    # short-circuit (seed bubbles / match lists would false-complete).
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal as _parse_bulk
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            parse_bulk_goal as _parse_bulk,
+        )
+    bulk_goal = _parse_bulk(instruction)
+    secure_folder_goal = "secure folder" in (instruction or "").lower()
+
     # Deterministic short-circuit: goal already visible → done (avoids tap loops)
-    satisfied = _goal_satisfied_from_tree(
-        instruction,
-        ui_tree,
-        package,
-        history=history,
-        dry_run=dry_run,
-    )
-    if satisfied:
-        return {
-            "action": "done",
-            "reason": satisfied,
-            "planner": "goal_visible",
-            "llm_provider": None,
-        }
+    if not bulk_goal and not secure_folder_goal:
+        satisfied = _goal_satisfied_from_tree(
+            instruction,
+            ui_tree,
+            package,
+            history=history,
+            dry_run=dry_run,
+        )
+        if satisfied:
+            return {
+                "action": "done",
+                "reason": satisfied,
+                "planner": "goal_visible",
+                "llm_provider": None,
+            }
 
     try:
         from message_text_guard import enforce_message_text as _enforce_msg
@@ -624,6 +637,23 @@ def plan_next_action(
 
     def _guard(action: Dict[str, Any]) -> Dict[str, Any]:
         return _enforce_msg(action, instruction, history=history)
+
+    # Fake-chats bulk bench + Secure Folder path — before single-DM path
+    if bulk_goal or secure_folder_goal:
+        try:
+            from bulk_bench_heuristics import plan_bulk_bench
+        except ImportError:
+            from backend.bulk_bench_heuristics import plan_bulk_bench  # type: ignore
+
+        bulk_act = plan_bulk_bench(
+            instruction,
+            ui_tree,
+            history,
+            state=agent_state if isinstance(agent_state, dict) else {},
+            package=package,
+        )
+        if bulk_act:
+            return _guard(bulk_act)
 
     # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
     msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
@@ -1844,6 +1874,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             last_tap_key=state.get("last_tap_key"),
                             package=str(tree_info.get("package") or ""),
                             dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+                            agent_state=state,
                         )
                         kind = str(action.get("action") or "").lower()
                         reason = str(action.get("reason") or "")
@@ -1886,6 +1917,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     {},
                     timeout_s=8,
                     wait_reconnect_s=8,
+                    agent_state=state,
                 )
             except Exception:
                 try:
@@ -1950,6 +1982,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     last_tap_key=state.get("last_tap_key"),
                     package=str(tree_info.get("package") or ""),
                     dry_run=job_dry_run,
+                    agent_state=state,
                 )
             except RuntimeError as plan_err:
                 # Recover instead of failing when possible
@@ -2083,6 +2116,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         last_tap_key=state.get("last_tap_key"),
                         dry_run=bool(job.get("dry_run") or state.get("dry_run")),
                         package=str(tree_info.get("package") or ""),
+                        agent_state=state,
                     )
                     kind = str(action.get("action") or "").lower()
                     reason = str(action.get("reason") or reason)
@@ -2719,9 +2753,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         stats = update_step_timing_stats(state, wall_ms)
         delay_s = 0.0
         planner_l = str(planner or "").lower()
-        # Deterministic fast-paths already skip LLM — only short human gap
+        # Prefer planner-provided pacing (bulk bench); else short human gap
         if kind not in ("done", "fail"):
-            delay_s = sleep_inter_step(seed=f"{job.get('job_id')}:{step}:{kind}")
+            if action.get("delay_s") is not None:
+                delay_s = float(action.get("delay_s") or 0.0)
+                if delay_s > 0:
+                    time.sleep(delay_s)
+            else:
+                delay_s = sleep_inter_step(seed=f"{job.get('job_id')}:{step}:{kind}")
         state["last_human_delay_s"] = round(delay_s, 3)
         state["last_step_wall_ms"] = round(wall_ms, 1)
         job["state"] = state

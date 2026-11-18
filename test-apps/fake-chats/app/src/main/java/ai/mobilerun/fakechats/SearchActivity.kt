@@ -28,7 +28,8 @@ class SearchActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_search)
         val ids = FlavorIds.current()
-        val input = findId<EditText>(ids.searchInput)
+        val input = findViewById<EditText>(R.id.search_src_text)
+        input.remapId(this, ids.searchInput)
         val results = findViewById<LinearLayout>(R.id.search_results)
 
         fun render(query: String) {
@@ -43,13 +44,14 @@ class SearchActivity : AppCompatActivity() {
             val inflater = LayoutInflater.from(this)
             for ((index, name) in matches.withIndex()) {
                 val row = inflater.inflate(R.layout.item_contact_row, results, false)
-                row.findViewById<TextView>(id(ids.contactName)).text = name
+                row.remapId(this, ids.contactRow)
+                val tv = row.findViewById<TextView>(R.id.conversations_row_contact_name)
+                tv.remapId(this, ids.contactName)
+                tv.text = name
                 row.contentDescription = "Search result $name"
                 row.isClickable = true
                 row.isFocusable = true
                 row.setOnClickListener {
-                    // Deliberately do NOT clear search focus before navigate —
-                    // conversation open is the success signal.
                     startActivity(
                         Intent(this, ConversationActivity::class.java)
                             .putExtra(ConversationActivity.EXTRA_CONTACT, name)
@@ -59,7 +61,6 @@ class SearchActivity : AppCompatActivity() {
                 }
                 results.addView(row)
             }
-            // Keep search focused after every keystroke (tricky case).
             input.requestFocus()
         }
 

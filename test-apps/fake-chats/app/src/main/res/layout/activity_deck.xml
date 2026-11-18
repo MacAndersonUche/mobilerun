@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@id/root_deck"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="12dp">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Discover"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+            <Button
+                android:id="@id/btn_matches"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="Matches"
+                android:text="Matches" />
+            <Button
+                android:id="@id/btn_chat_tab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="Chats"
+                android:text="Chats" />
+        </LinearLayout>
+        <FrameLayout
+            android:id="@id/deck_card"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:background="#FFE8E0"
+            android:padding="24dp">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="bottom"
+                android:orientation="vertical">
+                <TextView
+                    android:id="@id/deck_profile_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="28sp"
+                    android:textStyle="bold" />
+                <TextView
+                    android:id="@id/deck_profile_bio"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textSize="16sp" />
+            </LinearLayout>
+        </FrameLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+            <ImageButton
+                android:id="@id/btn_pass"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:contentDescription="Pass"
+                android:src="@android:drawable/ic_menu_close_clear_cancel" />
+            <ImageButton
+                android:id="@id/btn_superlike"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:layout_marginHorizontal="16dp"
+                android:contentDescription="Super Like"
+                android:src="@android:drawable/btn_star_big_on" />
+            <ImageButton
+                android:id="@id/btn_like"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:contentDescription="Like"
+                android:src="@android:drawable/btn_plus" />
+        </LinearLayout>
+    </LinearLayout>
+    <LinearLayout
+        android:id="@id/dialog_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#99000000"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:visibility="gone">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#FFFFFF"
+            android:orientation="vertical"
+            android:padding="20dp">
+            <TextView
+                android:id="@id/dialog_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@id/dialog_body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="16sp" />
+            <Button
+                android:id="@id/dialog_primary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Keep swiping" />
+            <Button
+                android:id="@id/dialog_secondary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Maybe later" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

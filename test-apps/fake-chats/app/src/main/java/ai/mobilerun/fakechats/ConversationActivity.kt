@@ -1,6 +1,7 @@
 package ai.mobilerun.fakechats
 
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.LayoutInflater
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
@@ -33,23 +34,29 @@ class ConversationActivity : AppCompatActivity() {
         val ids = FlavorIds.current()
         contact = intent.getStringExtra(EXTRA_CONTACT) ?: getString(R.string.contact_precious)
 
-        findId<TextView>(ids.header).text = contact
-        bubbles = findViewById(R.id.bubbles)
-        chatLog = findId(ids.chatLog)
+        val header = findViewById<TextView>(R.id.conversation_contact_name)
+        header.remapId(this, ids.header)
+        header.text = contact
 
-        // Seed: old outgoing bubble with the same text we will send again.
+        chatLog = findViewById(R.id.chat_list)
+        chatLog.remapId(this, ids.chatLog)
+        bubbles = findViewById(R.id.bubbles)
+
         addOutgoingBubble(getString(R.string.old_bubble_text), seed = true)
 
-        val compose = findId<EditText>(ids.compose)
-        val send = findId<ImageButton>(ids.send)
+        val compose = findViewById<EditText>(R.id.entry)
+        compose.remapId(this, ids.compose)
+        val send = findViewById<ImageButton>(R.id.send)
+        send.remapId(this, ids.send)
 
         fun doSend() {
             val text = compose.text?.toString()?.trim().orEmpty()
             if (text.isEmpty()) return
+            val t0 = SystemClock.elapsedRealtime()
             addOutgoingBubble(text, seed = false)
             SentLog.append(this, contact, text, via = "send_button")
+            TimingLog.record(this, "send_message", SystemClock.elapsedRealtime() - t0, contact)
             compose.setText("")
-            // Keep compose focused; soft keyboard may cover send (tricky case).
             compose.requestFocus()
         }
 
@@ -68,9 +75,9 @@ class ConversationActivity : AppCompatActivity() {
     private fun addOutgoingBubble(text: String, seed: Boolean) {
         val ids = FlavorIds.current()
         val row = LayoutInflater.from(this).inflate(R.layout.item_outgoing_bubble, bubbles, false)
-        val tv = row.findViewById<TextView>(id(ids.bubbleOut))
+        val tv = row.findViewById<TextView>(R.id.message_text)
+        tv.remapId(this, ids.bubbleOut)
         tv.text = text
-        // Distinguish seed vs new for a11y/tests without breaking text match.
         tv.contentDescription =
             if (seed) {
                 "Old outgoing message: $text"
@@ -78,7 +85,6 @@ class ConversationActivity : AppCompatActivity() {
                 outgoingCount += 1
                 "New outgoing message $outgoingCount: $text"
             }
-        // Tag for instrumentation
         tv.tag = if (seed) "seed" else "new_$outgoingCount"
         bubbles.addView(row)
         chatLog.post { chatLog.fullScroll(ScrollView.FOCUS_DOWN) }
