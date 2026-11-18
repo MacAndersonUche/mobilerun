@@ -208,8 +208,21 @@ jobs:
         run: |
           set -euo pipefail
           echo "Health..."
-          curl -sfS "$API_URL/api/health" | tee /tmp/health.json
-          python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', d"
+          # Post-CDK Alias / concurrent PR+push deploys can 503 for minutes.
+          ok=0
+          for i in $(seq 1 20); do
+            if curl -sfS --max-time 20 "$API_URL/api/health" -o /tmp/health.json; then
+              if python3 -c "import json; d=json.load(open('/tmp/health.json')); assert d.get('status')=='ok', d"; then
+                cat /tmp/health.json; echo
+                ok=1
+                break
+              fi
+            fi
+            sleep_s=$(( i < 6 ? 5 : 15 ))
+            echo "health attempt $i failed; sleeping ${sleep_s}s..."
+            sleep "$sleep_s"
+          done
+          test "$ok" = "1"
 
           echo "Auth rejection (no token)..."
           code=$(curl -s -o /tmp/unauth.json -w '%{http_code}' "$API_URL/api/devices")
