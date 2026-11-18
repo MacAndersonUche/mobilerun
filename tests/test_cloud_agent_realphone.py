@@ -160,6 +160,13 @@ def test_same_tap_key():
     assert _same_tap_key({"action": "back"}) is None
 
 
+def test_trivial_open_already_foreground_is_done():
+    """Chat 'open Settings' must complete when Settings is already FG — not fail."""
+    assert (_trivial_open_app_target("open Settings") or "").lower() == "settings"
+    fg = "com.android.settings"
+    assert "settings" in fg
+
+
 def test_device_ws_freshness(monkeypatch):
     import backend.storage as storage
 

@@ -182,6 +182,24 @@ SCREENS = {
             },
         ]
     },
+    "chrome": {
+        "nodes": [
+            {
+                "text": "Google",
+                "clickable": True,
+                "bounds": "40,200,1000,300",
+                "cx": 520,
+                "cy": 250,
+            },
+            {
+                "text": "Search or type URL",
+                "clickable": True,
+                "bounds": "40,320,1000,420",
+                "cx": 520,
+                "cy": 370,
+            },
+        ]
+    },
 }
 
 state = {"screen": "home", "dark": False, "about_seen": False}
@@ -191,6 +209,8 @@ def screen_package() -> str:
     scr = state["screen"]
     if scr in ("settings", "about", "display", "display_dark"):
         return "com.android.settings"
+    if scr == "chrome":
+        return "com.android.chrome"
     if scr == "home":
         return "com.android.launcher3"
     return "android"
@@ -271,6 +291,7 @@ def handle_command(cmd: str, params: Dict[str, Any]) -> Any:
                 "package": "com.android.settings",
             }
         if "chrome" in app:
+            state["screen"] = "chrome"
             return {
                 "ok": True,
                 "launched": True,
