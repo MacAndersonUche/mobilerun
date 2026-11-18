@@ -1005,6 +1005,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if llm_provider:
             state["llm_provider"] = llm_provider
 
+        # Trivial "open X" when FG already matches → done (never LLM fail)
+        trivial_target = _trivial_open_app_target(instruction)
+        if trivial_target:
+            fg0 = (tree_info.get("package") or "").lower()
+            tl0 = trivial_target.lower()
+            already = bool(fg0) and (
+                tl0.replace(" ", "") in fg0.replace(".", "")
+                or ("setting" in tl0 and "settings" in fg0)
+                or ("chrome" in tl0 and "chrome" in fg0)
+                or ("whatsapp" in tl0 and "whatsapp" in fg0)
+                or ("message" in tl0 and "messaging" in fg0)
+            )
+            if already and kind in ("open_app", "start_app", "fail", "done"):
+                kind = "done"
+                reason = f"App already open ({fg0 or trivial_target})"
+                action = {"action": "done", "reason": reason}
+
         # Same tap + unchanged UI → refuse to re-tap; done/back instead
         pending_tap = _same_tap_key(action)
         if (
@@ -1042,6 +1059,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 app_l.replace(" ", "") in fg.replace(".", "")
                 or ("whatsapp" in app_l and "whatsapp" in fg)
                 or ("setting" in app_l and "settings" in fg)
+                or ("chrome" in app_l and "chrome" in fg)
                 or ("message" in app_l and "messaging" in fg)
             )
             if fg_matches or _history_shows_app_opened(hist_blob, app_name):
@@ -1050,33 +1068,43 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     app_name,
                     fg,
                 )
-                # Re-plan with stronger continue hint
-                history_hint = list(history) + [
-                    f"Opened {app_name}[already] — continue next sub-goal"
-                ]
-                action = plan_next_action(
-                    instruction,
-                    ui_tree,
-                    history_hint,
-                    image_b64=image_b64 if use_vision else None,
-                    no_progress_streak=np_streak,
-                    last_tap_key=state.get("last_tap_key"),
-                    package=str(tree_info.get("package") or ""),
-                )
-                kind = str(action.get("action") or "").lower()
-                reason = str(action.get("reason") or reason)
-                if kind in ("open_app", "start_app"):
-                    # Force progress: ask LLM-equivalent done-or-tap via fail soft
-                    kind = "done" if _trivial_open_app_target(instruction) else "fail"
-                    if kind == "done":
-                        reason = f"App already open ({fg or app_name})"
-                        action = {"action": "done", "reason": reason}
-                    else:
-                        reason = (
-                            "App already open — planner must tap/type/send next; "
-                            "refusing another open_app"
-                        )
-                        action = {"action": "fail", "reason": reason}
+                # Trivial "open X" goals are already satisfied when FG matches
+                if _trivial_open_app_target(instruction):
+                    kind = "done"
+                    reason = f"App already open ({fg or app_name})"
+                    action = {"action": "done", "reason": reason}
+                else:
+                    # Re-plan with stronger continue hint for multi-step goals
+                    history_hint = list(history) + [
+                        f"Opened {app_name}[already] — continue next sub-goal"
+                    ]
+                    action = plan_next_action(
+                        instruction,
+                        ui_tree,
+                        history_hint,
+                        image_b64=image_b64 if use_vision else None,
+                        no_progress_streak=np_streak,
+                        last_tap_key=state.get("last_tap_key"),
+                        package=str(tree_info.get("package") or ""),
+                    )
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or reason)
+                    if kind in ("open_app", "start_app", "fail"):
+                        # Refuse another open_app / LLM "already open" fail —
+                        # multi-step must move on; if it cannot, hard-fail clearly.
+                        if kind == "fail" and "already open" in reason.lower():
+                            reason = (
+                                "App already open — planner must tap/type/send next; "
+                                "refusing open_app/fail loop"
+                            )
+                            action = {"action": "fail", "reason": reason}
+                        elif kind in ("open_app", "start_app"):
+                            reason = (
+                                "App already open — planner must tap/type/send next; "
+                                "refusing another open_app"
+                            )
+                            action = {"action": "fail", "reason": reason}
+                            kind = "fail"
 
         # Hard-stop after too many no-progress steps (same tree forever)
         if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
