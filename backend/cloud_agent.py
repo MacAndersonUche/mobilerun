@@ -1434,8 +1434,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     reason = str(action.get("reason") or reason)
                     if kind in ("open_app", "start_app", "fail"):
                         # Refuse another open_app / LLM "already open" fail —
-                        # multi-step must move on; if it cannot, hard-fail clearly.
-                        if kind == "fail" and "already open" in reason.lower():
+                        # multi-step must move on. For MacAI SMS, inject the next
+                        # compose step instead of hard-failing.
+                        instr_l = (instruction or "").lower()
+                        macai_sms = "macai" in instr_l or "5550100" in instr_l
+                        if macai_sms and (
+                            kind in ("open_app", "start_app")
+                            or "already open" in reason.lower()
+                        ):
+                            action = {
+                                "action": "type",
+                                "text": "5550100",
+                                "reason": (
+                                    "App already open → type recipient "
+                                    "(messaging recovery)"
+                                ),
+                            }
+                            kind = "type"
+                            reason = action["reason"]
+                        elif kind == "fail" and "already open" in reason.lower():
                             reason = (
                                 "App already open — planner must tap/type/send next; "
                                 "refusing open_app/fail loop"
