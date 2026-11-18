@@ -179,7 +179,9 @@ def main() -> int:
         for blob in (str(s.get("verify") or ""), str(s.get("action") or "")):
             if "tree_ms=" in blob:
                 try:
-                    build_ms.append(float(blob.split("tree_ms=")[1].split()[0].strip("·")))
+                    build_ms.append(
+                        float(blob.split("tree_ms=")[1].split()[0].strip("·"))
+                    )
                 except Exception:
                     pass
 
