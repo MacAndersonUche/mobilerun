@@ -306,7 +306,7 @@ export class MobilerunStack extends cdk.Stack {
     stepFn.grantInvoke(stepFn);
     httpFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
     stepFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
-    stepFn.addEnvironment('AGENT_STEP_CHAIN', '4');
+    stepFn.addEnvironment('AGENT_STEP_CHAIN', '6');
 
     // === HTTP API (cheaper than REST API Gateway) ===
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {

@@ -364,8 +364,8 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
     updated = run_one_agent_step(job)
     # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
-    # 1-minute ticks (target <5s/step when the device/LLM cooperate).
-    chain_budget = int(os.environ.get("AGENT_STEP_CHAIN") or "4")
+    # 1-minute ticks (target <3–5s/step; humanize sleeps happen inside each step).
+    chain_budget = int(os.environ.get("AGENT_STEP_CHAIN") or "6")
     for _ in range(max(0, chain_budget - 1)):
         if updated.get("status") != "running":
             break

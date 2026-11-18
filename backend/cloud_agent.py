@@ -96,12 +96,36 @@ def _key_presence() -> Dict[str, bool]:
     }
 
 
-def _compress_tree(tree: str, limit: int = 12000) -> str:
+def _compress_tree(tree: str, limit: int = 8000) -> str:
+    """Keep LLM prompts small — prefer compact APK dumps over fat classic XML."""
     if not tree:
         return "(empty UI tree — accessibility may be off)"
     # Drop deeply nested whitespace
     compact = re.sub(r"[ \t]+", " ", tree)
     compact = re.sub(r"\n{3,}", "\n\n", compact)
+    # Prefer interactive rows (t=/d=/e=/c=) when still too large
+    if len(compact) > limit:
+        lines = [
+            ln
+            for ln in compact.splitlines()
+            if any(
+                tok in ln
+                for tok in (
+                    ' c="1"',
+                    ' e="1"',
+                    ' d="',
+                    ' t="',
+                    ' h="',
+                    "clickable",
+                    "editable",
+                    "<hierarchy",
+                    "<w ",
+                )
+            )
+            or ln.strip().startswith("</")
+        ]
+        if lines:
+            compact = "\n".join(lines)
     if len(compact) <= limit:
         return compact
     return compact[:limit] + "\n...[truncated]"
@@ -1223,13 +1247,32 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         from device_rpc import call_device
     except ImportError:
         from backend.device_rpc import call_device  # type: ignore
+    try:
+        from agent_humanize import jitter_tap
+    except ImportError:
+        from backend.agent_humanize import jitter_tap  # type: ignore
 
     kind = str(action.get("action") or "").lower()
     if kind == "tap":
+        ox, oy = int(action["x"]), int(action["y"])
+        bounds = action.get("bounds") or action.get("b")
+        b_tuple = None
+        if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+            b_tuple = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
+        elif isinstance(bounds, str) and "," in bounds:
+            try:
+                parts = [int(p) for p in bounds.split(",")[:4]]
+                if len(parts) == 4:
+                    b_tuple = (parts[0], parts[1], parts[2], parts[3])
+            except ValueError:
+                b_tuple = None
+        jx, jy = jitter_tap(ox, oy, bounds=b_tuple)
+        action["_tap_raw"] = (ox, oy)
+        action["_tap_jitter"] = (jx, jy)
         raw = call_device(
             device_id,
             "tap",
-            {"x": int(action["x"]), "y": int(action["y"])},
+            {"x": jx, "y": jy, "humanize": True},
             timeout_s=12,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
@@ -1243,7 +1286,7 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         ).strip()
         if label:
             return f'Tapped "{label[:60]}"'
-        return f"tap({action.get('x')},{action.get('y')})"
+        return f"tap({jx},{jy})"
     if kind == "swipe":
         raw = call_device(
             device_id,
@@ -1262,11 +1305,16 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         return "Swiped"
     if kind in ("type", "type_text", "input_text"):
         text = str(action.get("text") or "")
+        # Device chunks SET_TEXT with human-like inter-chunk delays (not paste)
         raw = call_device(
             device_id,
             "input_text",
-            {"text": text, "clear": bool(action.get("clear"))},
-            timeout_s=12,
+            {
+                "text": text,
+                "clear": bool(action.get("clear")),
+                "humanize": True,
+            },
+            timeout_s=20,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
             action["_timing"] = raw["timing"]
@@ -1464,15 +1512,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["completed_at"] = now
             return job
         state["offline_streak"] = 0
-    if not _llm_keys_present():
-        job["status"] = "failed"
-        job["error"] = (
-            f"{LLM_UNAVAILABLE_LABEL} — No LLM API key configured on the AWS backend"
-        )
-        state["last_action"] = "no_llm_key"
-        state["planner"] = None
-        job["state"] = state
-        return job
+    # LLM keys are only required when deterministic fast-paths cannot plan.
+    # DM / messaging / open-app heuristics run without an LLM round-trip.
     if step >= max_steps:
         job["status"] = "completed"
         job["result"] = state.get("last_action") or f"Reached max_steps={max_steps}"
@@ -1513,6 +1554,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         wait_reconnect_s=30.0,
     )
 
+    step_t0 = time.time()
     try:
         tree_info = _fetch_ui_tree_retry(device_id, call_device)
         ui_tree = tree_info["tree"]
@@ -1577,15 +1619,32 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         np_streak = int(state.get("no_progress_streak") or 0)
-        action = plan_next_action(
-            instruction,
-            ui_tree,
-            history,
-            image_b64=image_b64 if use_vision else None,
-            no_progress_streak=np_streak,
-            last_tap_key=state.get("last_tap_key"),
-            package=str(tree_info.get("package") or ""),
-        )
+        try:
+            action = plan_next_action(
+                instruction,
+                ui_tree,
+                history,
+                image_b64=image_b64 if use_vision else None,
+                no_progress_streak=np_streak,
+                last_tap_key=state.get("last_tap_key"),
+                package=str(tree_info.get("package") or ""),
+            )
+        except RuntimeError as plan_err:
+            # Surface missing-LLM only after heuristics could not plan
+            if (
+                not _llm_keys_present()
+                and LLM_UNAVAILABLE_LABEL.lower() in str(plan_err).lower()
+            ):
+                job["status"] = "failed"
+                job["error"] = (
+                    f"{LLM_UNAVAILABLE_LABEL} — No LLM API key configured "
+                    "on the AWS backend (and no deterministic fast-path matched)"
+                )
+                state["last_action"] = "no_llm_key"
+                state["planner"] = None
+                job["state"] = state
+                return job
+            raise
         kind = str(action.get("action") or "").lower()
         reason = str(action.get("reason") or "")
         planner = action.get("planner") or "llm"
@@ -1794,10 +1853,20 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             state["last_action"] = f"done: {reason}"
             history.append(f"done: {reason}")
             state["history"] = history
+            try:
+                from agent_humanize import update_step_timing_stats
+            except ImportError:
+                from backend.agent_humanize import update_step_timing_stats  # type: ignore
+
+            stats = update_step_timing_stats(state, (time.time() - step_t0) * 1000.0)
             _record_step(f"done: {reason}", screenshot_key=shot_key)
             job["state"] = state
             job["status"] = "completed"
             job["result"] = reason or "Goal completed"
+            if stats.get("p50_ms") is not None:
+                job[
+                    "result"
+                ] += f" · p50={stats['p50_ms']:.0f}ms p95={stats.get('p95_ms') or 0:.0f}ms"
             job["completed_at"] = int(time.time())
             return job
         if kind == "fail":
@@ -2163,10 +2232,44 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job["completed_at"] = int(time.time())
             return job
 
-        # ~1s between steps (was 2s) — target ≤10s wall per step overall
-        job["next_run_at"] = int(time.time()) + 1
+        # Human-like inter-step gap (0.3–1.5s) then immediate next tick.
+        # Chained step_worker invokes sleep in-process; next_run_at stays due now.
+        try:
+            from agent_humanize import sleep_inter_step, update_step_timing_stats
+        except ImportError:
+            from backend.agent_humanize import (  # type: ignore
+                sleep_inter_step,
+                update_step_timing_stats,
+            )
+
+        wall_ms = (time.time() - step_t0) * 1000.0
+        stats = update_step_timing_stats(state, wall_ms)
+        delay_s = 0.0
+        planner_l = str(planner or "").lower()
+        # Deterministic fast-paths already skip LLM — only short human gap
+        if kind not in ("done", "fail"):
+            delay_s = sleep_inter_step(seed=f"{job.get('job_id')}:{step}:{kind}")
+        state["last_human_delay_s"] = round(delay_s, 3)
+        state["last_step_wall_ms"] = round(wall_ms, 1)
+        job["state"] = state
+        if stats.get("p50_ms") is not None:
+            job["result"] = (
+                f"{job.get('result') or ''} · step_ms={wall_ms:.0f} "
+                f"p50={stats['p50_ms']:.0f} p95={stats.get('p95_ms') or 0:.0f}"
+            ).strip(" ·")
+        # Due immediately — step worker self-kick / chain handles pacing
+        job["next_run_at"] = int(time.time())
         job["updated_at"] = int(time.time())
         _kick_self(job.get("job_id"))
+        logger.info(
+            "agent step done job=%s planner=%s wall_ms=%.0f delay_s=%.2f p50=%.0f p95=%.0f",
+            job.get("job_id"),
+            planner_l,
+            wall_ms,
+            delay_s,
+            stats.get("p50_ms") or 0,
+            stats.get("p95_ms") or 0,
+        )
         return job
     except Exception as e:
         logger.exception("agent step failed job=%s", job.get("job_id"))

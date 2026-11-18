@@ -142,10 +142,31 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     // === Device Control Methods ===
 
-    fun tap(x: Int, y: Int, callback: (Boolean) -> Unit) {
-        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+    fun tap(
+        x: Int,
+        y: Int,
+        callback: (Boolean) -> Unit,
+        humanize: Boolean = true,
+    ) {
+        // Slight jitter so taps are not pixel-perfect robotic
+        val jx: Int
+        val jy: Int
+        if (humanize) {
+            val r = java.util.concurrent.ThreadLocalRandom.current()
+            jx = x + r.nextInt(-10, 11)
+            jy = y + r.nextInt(-10, 11)
+        } else {
+            jx = x
+            jy = y
+        }
+        val path = Path().apply { moveTo(jx.toFloat(), jy.toFloat()) }
+        val pressMs = if (humanize) {
+            java.util.concurrent.ThreadLocalRandom.current().nextLong(45, 85)
+        } else {
+            50L
+        }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, pressMs))
             .build()
         val ok = dispatchGesture(
             gesture,
@@ -159,8 +180,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     /** Fire-and-forget tap — used when the cloud ACKs immediately. */
-    fun tapFireAndForget(x: Int, y: Int) {
-        tap(x, y) { /* async verify is the cloud's job */ }
+    fun tapFireAndForget(x: Int, y: Int, humanize: Boolean = true) {
+        tap(x, y, { /* async verify is the cloud's job */ }, humanize)
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, callback: (Boolean) -> Unit) {
@@ -924,36 +945,69 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
         }
 
-    fun inputText(text: String, clear: Boolean = false): Boolean {
+    fun inputText(
+        text: String,
+        clear: Boolean = false,
+        humanize: Boolean = true,
+    ): Boolean {
         val root = rootInActiveWindow ?: return false
         var target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         if (target == null || !target.isEditable) {
             target = findEditable(root)
         }
-        if (target == null) {
+        val edit = target
+        if (edit == null) {
             try {
                 root.recycle()
             } catch (_: Exception) {
             }
             return false
         }
-        if (clear) {
+        fun setText(value: String): Boolean {
             val args = android.os.Bundle()
             args.putCharSequence(
                 AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                "",
+                value,
             )
-            target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            return edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         }
-        val args = android.os.Bundle()
-        val existing = if (clear) "" else (target.text?.toString() ?: "")
-        args.putCharSequence(
-            AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-            existing + text,
-        )
-        val ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (clear) {
+            setText("")
+        }
+        val existing = if (clear) "" else (edit.text?.toString() ?: "")
+        // Human-like: type in small chunks with variance — not one instant paste
+        val ok = if (!humanize || text.length <= 2) {
+            setText(existing + text)
+        } else {
+            val rng = java.util.concurrent.ThreadLocalRandom.current()
+            var built = existing
+            var i = 0
+            var success = true
+            while (i < text.length) {
+                val chunk = rng.nextInt(2, 5).coerceAtMost(text.length - i)
+                built += text.substring(i, i + chunk)
+                if (!setText(built)) {
+                    success = false
+                    break
+                }
+                i += chunk
+                if (i < text.length) {
+                    // ~30–110ms between chunks; occasional brief pause
+                    val pause = if (rng.nextDouble() < 0.12) {
+                        rng.nextLong(120, 280)
+                    } else {
+                        rng.nextLong(30, 110)
+                    }
+                    try {
+                        Thread.sleep(pause)
+                    } catch (_: InterruptedException) {
+                    }
+                }
+            }
+            success
+        }
         try {
-            target.recycle()
+            edit.recycle()
         } catch (_: Exception) {
         }
         try {

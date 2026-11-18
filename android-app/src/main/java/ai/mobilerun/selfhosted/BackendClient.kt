@@ -1043,14 +1043,16 @@ class BackendClient(private val context: Context) {
                     "tap" -> {
                         val x = (params?.get("x") as? Number)?.toInt() ?: 0
                         val y = (params?.get("y") as? Number)?.toInt() ?: 0
+                        val humanize = params?.get("humanize") as? Boolean ?: true
                         // ACK immediately; gesture completes asynchronously
-                        a11yService!!.tapFireAndForget(x, y)
+                        a11yService!!.tapFireAndForget(x, y, humanize)
                         sendAgentEvent(null, null, "tap", "tap($x,$y)")
                         mapOf(
                             "ok" to true,
                             "acked" to true,
                             "x" to x,
                             "y" to y,
+                            "humanize" to humanize,
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),
@@ -1090,13 +1092,15 @@ class BackendClient(private val context: Context) {
                     "input_text", "type_text" -> {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
-                        val ok = a11yService!!.inputText(text, clear)
+                        val humanize = params?.get("humanize") as? Boolean ?: true
+                        val ok = a11yService!!.inputText(text, clear, humanize)
                         sendAgentEvent(null, null, "type", "type(${text.take(40)})")
                         if (!ok) throw Exception("input_text failed — focus a text field")
-                        // ACK right after SET_TEXT; cloud verifies via next get_ui_tree
+                        // ACK after chunked SET_TEXT; cloud verifies via next get_ui_tree
                         mapOf(
                             "ok" to true,
                             "acked" to true,
+                            "humanize" to humanize,
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),
@@ -1120,7 +1124,9 @@ class BackendClient(private val context: Context) {
                         val launched = openAppByNameOrPackage(app, pkg)
                         sendAgentEvent(null, null, "open_app", "open_app($app)")
                         if (launched == null) throw Exception("Could not open app: $app")
-                        Thread.sleep(600)
+                        // Brief settle — keep agent steps under the 3–5s budget
+                        val settle = 280L + kotlin.random.Random.nextLong(0, 180)
+                        Thread.sleep(settle)
                         val activePkg = a11yService?.activePackageName().orEmpty()
                         mapOf(
                             "ok" to true,
