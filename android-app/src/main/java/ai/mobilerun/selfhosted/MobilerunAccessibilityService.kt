@@ -1045,7 +1045,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
         humanize: Boolean = true,
     ): Boolean {
         val root = rootInActiveWindow ?: return false
-        var target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        // Prefer chat compose (WhatsApp entry / Message hint) over search EditTexts
+        var target = findComposeEditable(root)
+        if (target == null) {
+            target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (target != null && !target.isEditable) {
+                try {
+                    target.recycle()
+                } catch (_: Exception) {
+                }
+                target = null
+            }
+        }
         if (target == null || !target.isEditable) {
             target = findEditable(root)
         }
@@ -1057,13 +1068,22 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
             return false
         }
+        try {
+            edit.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            edit.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        } catch (_: Exception) {
+        }
         fun setText(value: String): Boolean {
             val args = android.os.Bundle()
             args.putCharSequence(
                 AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                 value,
             )
-            return edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                return true
+            }
+            // Clipboard paste fallback (some OEM/Secure Folder windows reject SET_TEXT)
+            return pasteViaClipboard(edit, value)
         }
         if (clear) {
             setText("")
@@ -1115,6 +1135,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
             success
         }
+        // Verify text landed when possible
+        val verified = try {
+            val now = edit.text?.toString().orEmpty()
+            ok && (text.isEmpty() || now.contains(text.take(12)))
+        } catch (_: Exception) {
+            ok
+        }
         try {
             edit.recycle()
         } catch (_: Exception) {
@@ -1123,7 +1150,90 @@ class MobilerunAccessibilityService : AccessibilityService() {
             root.recycle()
         } catch (_: Exception) {
         }
-        return ok
+        return verified
+    }
+
+    private fun pasteViaClipboard(edit: AccessibilityNodeInfo, value: String): Boolean {
+        return try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("mobilerun", value))
+            edit.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            edit.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } catch (e: Exception) {
+            Log.w(TAG, "clipboard paste failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Prefer WhatsApp/IG/etc compose boxes over search fields.
+     * Matches resource-id `…:id/entry` and hints like "Message".
+     */
+    private fun findComposeEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val preferred = ArrayList<AccessibilityNodeInfo>()
+        val searchy = ArrayList<AccessibilityNodeInfo>()
+        collectEditables(node, preferred, searchy)
+        val hit = preferred.firstOrNull() ?: searchy.firstOrNull()
+        // Recycle losers
+        for (n in preferred) {
+            if (n !== hit) {
+                try {
+                    n.recycle()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        for (n in searchy) {
+            if (n !== hit) {
+                try {
+                    n.recycle()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        return hit
+    }
+
+    private fun collectEditables(
+        node: AccessibilityNodeInfo,
+        preferred: MutableList<AccessibilityNodeInfo>,
+        searchy: MutableList<AccessibilityNodeInfo>,
+    ) {
+        if (node.isEditable) {
+            val id = node.viewIdResourceName.orEmpty().lowercase()
+            val hint = (node.hintText?.toString() ?: "").lowercase()
+            val desc = (node.contentDescription?.toString() ?: "").lowercase()
+            val text = (node.text?.toString() ?: "").lowercase()
+            val blob = "$id $hint $desc $text"
+            val isSearch = blob.contains("search") || id.endsWith("/search") ||
+                id.contains("search_input") || id.contains("search_src")
+            val isCompose = id.endsWith("/entry") || id.endsWith(":id/entry") ||
+                id.contains("entry") || id.contains("compose") ||
+                hint.contains("message") || desc == "message" ||
+                hint.contains("type a message") || hint.contains("write a message")
+            val copy = AccessibilityNodeInfo.obtain(node)
+            if (isCompose && !isSearch) {
+                preferred.add(copy)
+            } else if (isSearch) {
+                searchy.add(copy)
+            } else {
+                // Neutral editable — treat as weak preferred (bottom compose often lacks hint)
+                preferred.add(copy)
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = try {
+                node.getChild(i)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            collectEditables(child, preferred, searchy)
+            try {
+                child.recycle()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {

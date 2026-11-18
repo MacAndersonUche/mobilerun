@@ -2502,14 +2502,21 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             timing=step_timing or None,
         )
         job["state"] = state
+        dry_tag = (
+            "[DRY RUN] " if bool(job.get("dry_run") or state.get("dry_run")) else ""
+        )
         if planner == "heuristic":
-            job["result"] = f"Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
+            job["result"] = (
+                f"{dry_tag}Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
+            )
         else:
-            job["result"] = f"Step {step + 1}: {summary}"
+            job["result"] = f"{dry_tag}Step {step + 1}: {summary}"
             if verify_msg:
                 job["result"] += f" · {verify_msg}"
             if step_timing.get("build_ms") is not None:
                 job["result"] += f" · tree_ms={step_timing.get('build_ms')}"
+        if dry_tag and not str(job.get("result") or "").startswith("[DRY RUN]"):
+            job["result"] = dry_tag + str(job.get("result") or "")
 
         # Pure open_app goal → complete once PackageManager launched
         open_target = _trivial_open_app_target(instruction)
