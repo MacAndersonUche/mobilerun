@@ -16,6 +16,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("mobilerun.cloud_agent")
+# e2e-nudge-1: retrigger prod-agent-e2e consecutive green
 
 SYSTEM_PROMPT = """You are MobileRun, controlling an Android phone via accessibility.
 Given the goal and a compressed UI tree (and optional screenshot), pick ONE next action as JSON only:
