@@ -6,7 +6,7 @@ apps run in a Knox work profile (often user `150`).
 ## What we do
 1. If `open_app` cannot resolve the package in the main profile, launch
    `com.samsung.knox.securefolder`.
-2. Wait up to ~60s for fingerprint / PIN unlock (detect unlock UI via tree text).
+2. Wait up to ~75s for fingerprint / PIN unlock (detect unlock UI via tree text).
 3. Tap the app icon inside the Folder grid when visible, or retry PackageManager.
 4. Mark the RPC with `a11y_cross_user_limited=true` so the cloud agent **forces
    screenshot + vision** on the next step.

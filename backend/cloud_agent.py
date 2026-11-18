@@ -1593,7 +1593,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         from backend.dm_heuristics import detect_dm_app  # type: ignore
     if detect_dm_app(instruction) and not state.get("ime_ensured"):
         try:
-            ime_res = call_device(device_id, "ensure_ime", {}, timeout_s=12)
+            # Short timeout: old APKs ignore ensure_ime and would burn the
+            # reconnect/idle budget if we wait longer.
+            ime_res = call_device(device_id, "ensure_ime", {}, timeout_s=8)
             state["ime_ensured"] = True
             state["ime_status"] = (
                 ime_res if isinstance(ime_res, dict) else {"raw": ime_res}
@@ -1607,11 +1609,16 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
             )
             state["history"] = history[-40:]
+            state["last_progress_at"] = now
         except Exception as e:
             logger.warning("ensure_ime failed (will use a11y SET_TEXT): %s", e)
             state["ime_ensured"] = True  # don't retry every step
             history.append(f"ensure_ime failed: {e}")
             state["history"] = history[-40:]
+            # Soft-fail must count as progress so a missing IME on an old
+            # build does not trip the 240s idle watchdog before get_ui_tree.
+            state["last_progress_at"] = now
+            state["offline_streak"] = 0
     # Absolute wall-clock cap
     if now - created > TASK_TIMEOUT_S:
         job["status"] = "failed"
