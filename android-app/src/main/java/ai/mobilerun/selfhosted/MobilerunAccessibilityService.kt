@@ -68,9 +68,12 @@ class MobilerunAccessibilityService : AccessibilityService() {
         Thread(r, "mr-screenshot").also { it.isDaemon = true }
     }
 
-    // Dedicated dump thread — never block main or OkHttp/WS callbacks
+    // Dedicated dump thread — orchestrates cache/gzip; never used for a11y IPC.
+    // AccessibilityNodeInfo / windows() binder calls hang or return empty when
+    // invoked off the service main looper (S21+ and emulator both hit this).
     private val dumpThread = HandlerThread("mr-a11y-dump").also { it.start() }
     private val dumpHandler = Handler(dumpThread.looper)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val contentGeneration = AtomicLong(0)
     private val cacheLock = Any()
@@ -171,6 +174,24 @@ class MobilerunAccessibilityService : AccessibilityService() {
     fun pressRecents(): Boolean = performGlobalAction(GLOBAL_ACTION_RECENTS)
 
     fun activePackageName(): String? {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return activePackageNameOnMain()
+        }
+        val ref = AtomicReference<String?>(null)
+        val latch = CountDownLatch(1)
+        mainHandler.post {
+            try {
+                ref.set(activePackageNameOnMain())
+            } finally {
+                latch.countDown()
+            }
+        }
+        // Short timeout — never stall open_app / heartbeats on a11y IPC
+        latch.await(400, TimeUnit.MILLISECONDS)
+        return ref.get()
+    }
+
+    private fun activePackageNameOnMain(): String? {
         rootInActiveWindow?.packageName?.toString()?.let { return it }
         windows?.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
             ?.root?.packageName?.toString()?.let { return it }
@@ -270,7 +291,12 @@ class MobilerunAccessibilityService : AccessibilityService() {
     fun getUITree(): String = getUITreeDetailed(allowCache = true).tree
 
     /**
-     * Build (or serve cached) compact UI tree off the main thread with a soft deadline.
+     * Build (or serve cached) compact UI tree.
+     *
+     * Orchestration + gzip run on [dumpThread] so WS / commandExecutor never walk
+     * the tree. AccessibilityNodeInfo IPC runs on the service main looper (required —
+     * off-main dumps hang ~5s and return empty on real devices and emulators).
+     * Soft deadline returns a partial tree within ~3s rather than nothing.
      */
     fun getUITreeDetailed(allowCache: Boolean = true): TreeResult {
         val gen = contentGeneration.get()
@@ -287,10 +313,15 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Prefer dump thread; never run a deep walk on the caller's WS/main thread
+        // Already on dump thread — build directly
         if (Looper.myLooper() == dumpThread.looper) {
             return dumpAndCache(gen)
         }
+        // Already on main — walk here, gzip inline (fast path for tests)
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return dumpAndCache(gen)
+        }
+
         val latch = CountDownLatch(1)
         val result = AtomicReference<TreeResult?>(null)
         dumpHandler.post {
@@ -298,73 +329,99 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 result.set(dumpAndCache(gen))
             } catch (e: Exception) {
                 Log.w(TAG, "dump failed: ${e.message}")
-                result.set(
-                    TreeResult(
-                        tree = """<hierarchy windows="0" nodes="0" empty="true" reason="dump_error"/>""",
-                        packageName = "",
-                        empty = true,
-                        chars = 0,
-                        nodes = 0,
-                        partial = true,
-                        cached = false,
-                        buildMs = 0,
-                        bytes = 0,
-                        treeGzB64 = null,
-                        anrDismissed = false,
-                    ),
-                )
+                result.set(emptyTreeResult(reason = "dump_error", buildMs = 0))
             } finally {
                 latch.countDown()
             }
         }
         val ok = latch.await(HARD_AWAIT_MS, TimeUnit.MILLISECONDS)
         if (!ok) {
+            // Soft-deadline walk may still finish and populate cache for the next call
             Log.w(TAG, "getUITreeDetailed hard await timed out after ${HARD_AWAIT_MS}ms")
-            return TreeResult(
-                tree = """<hierarchy windows="0" nodes="0" empty="true" reason="dump_timeout" soft="${SOFT_DEADLINE_MS}"/>""",
-                packageName = "",
-                empty = true,
-                chars = 0,
-                nodes = 0,
-                partial = true,
-                cached = false,
-                buildMs = HARD_AWAIT_MS,
-                bytes = 0,
-                treeGzB64 = null,
-                anrDismissed = false,
-            )
+            synchronized(cacheLock) {
+                val late = cachedResult
+                if (late != null && cachedGeneration == gen && !late.empty) {
+                    return late.copy(cached = true, partial = true, buildMs = HARD_AWAIT_MS)
+                }
+            }
+            return emptyTreeResult(reason = "dump_timeout", buildMs = HARD_AWAIT_MS)
         }
-        return result.get() ?: TreeResult(
-            tree = """<hierarchy windows="0" nodes="0" empty="true" reason="dump_null"/>""",
+        return result.get() ?: emptyTreeResult(reason = "dump_null", buildMs = 0)
+    }
+
+    private fun emptyTreeResult(reason: String, buildMs: Long): TreeResult =
+        TreeResult(
+            tree = """<hierarchy windows="0" nodes="0" empty="true" reason="$reason" soft="$SOFT_DEADLINE_MS"/>""",
             packageName = "",
             empty = true,
             chars = 0,
             nodes = 0,
             partial = true,
             cached = false,
-            buildMs = 0,
+            buildMs = buildMs,
             bytes = 0,
             treeGzB64 = null,
             anrDismissed = false,
         )
-    }
 
+    /**
+     * Walk a11y tree on main looper; gzip + cache on the calling (dump) thread.
+     */
     private fun dumpAndCache(gen: Long): TreeResult {
         val t0 = SystemClock.elapsedRealtime()
-        val anr = try {
-            dismissSystemAnrIfPresent()
-        } catch (e: Exception) {
-            Log.w(TAG, "ANR dismiss failed: ${e.message}")
-            false
+        val deadlineMs = t0 + SOFT_DEADLINE_MS
+        val walkRef = AtomicReference<TreeResult?>(null)
+
+        fun walkOnMain() {
+            val anr = try {
+                dismissSystemAnrIfPresent()
+            } catch (e: Exception) {
+                Log.w(TAG, "ANR dismiss failed: ${e.message}")
+                false
+            }
+            val built = dumpUITreeCompact(deadlineMs = deadlineMs)
+            walkRef.set(built.copy(anrDismissed = anr))
         }
-        val built = dumpUITreeCompact(deadlineMs = t0 + SOFT_DEADLINE_MS)
-        val buildMs = SystemClock.elapsedRealtime() - t0
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            walkOnMain()
+        } else {
+            val latch = CountDownLatch(1)
+            mainHandler.post {
+                try {
+                    walkOnMain()
+                } catch (e: Exception) {
+                    Log.w(TAG, "main dump failed: ${e.message}")
+                    walkRef.set(emptyTreeResult(reason = "main_dump_error", buildMs = 0))
+                } finally {
+                    latch.countDown()
+                }
+            }
+            // Soft deadline + small slack for posting; return whatever we have
+            if (!latch.await(SOFT_DEADLINE_MS + 250, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "main dump soft deadline exceeded (${SOFT_DEADLINE_MS}ms)")
+                // Prefer a late partial if the walk finished just after the wait
+                val late = walkRef.get()
+                if (late == null) {
+                    return emptyTreeResult(
+                        reason = "soft_deadline",
+                        buildMs = SystemClock.elapsedRealtime() - t0,
+                    )
+                }
+            }
+        }
+
+        val built = walkRef.get() ?: emptyTreeResult(
+            reason = "walk_null",
+            buildMs = SystemClock.elapsedRealtime() - t0,
+        )
+        // Gzip on dump/background thread — never on the a11y callback path
         val gz = gzipB64(built.tree)
+        val buildMs = SystemClock.elapsedRealtime() - t0
         val result = built.copy(
             buildMs = buildMs,
             bytes = built.tree.toByteArray(Charsets.UTF_8).size,
             treeGzB64 = gz,
-            anrDismissed = anr,
             cached = false,
         )
         synchronized(cacheLock) {
@@ -375,7 +432,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         Log.i(
             TAG,
             "tree buildMs=$buildMs nodes=${result.nodes} chars=${result.chars} " +
-                "bytes=${result.bytes} partial=${result.partial} gz=${gz?.length ?: 0} anr=$anr",
+                "bytes=${result.bytes} partial=${result.partial} gz=${gz?.length ?: 0} " +
+                "anr=${result.anrDismissed} empty=${result.empty}",
         )
         return result
     }
@@ -395,52 +453,14 @@ class MobilerunAccessibilityService : AccessibilityService() {
             return false
         }
 
-        val winList = try {
-            windows?.toList()
+        // Prefer active root first — cheapest reliable source; windows() can be slow
+        val active = try {
+            rootInActiveWindow
         } catch (e: Exception) {
-            Log.w(TAG, "windows() failed: ${e.message}")
+            Log.w(TAG, "rootInActiveWindow failed: ${e.message}")
             null
         }
-
-        if (!winList.isNullOrEmpty()) {
-            val ordered = winList.sortedByDescending { w ->
-                when (w.type) {
-                    AccessibilityWindowInfo.TYPE_APPLICATION -> 3
-                    AccessibilityWindowInfo.TYPE_SYSTEM -> 2
-                    else -> 1
-                }
-            }
-            for (window in ordered) {
-                if (pastDeadline() || counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
-                val root = try {
-                    window.root
-                } catch (_: Exception) {
-                    null
-                } ?: continue
-                windowCount++
-                val pkg = root.packageName?.toString().orEmpty()
-                if (pkg.isNotEmpty()) pkgs.add(pkg)
-                val title = try {
-                    window.title?.toString().orEmpty()
-                } catch (_: Exception) {
-                    ""
-                }
-                // Compact window header
-                sb.append("<w id=\"${window.id}\" t=\"${window.type}\" ")
-                sb.append("p=\"${xmlEsc(pkg)}\" ")
-                if (title.isNotEmpty()) sb.append("title=\"${xmlEsc(title)}\" ")
-                sb.append("f=\"${if (window.isFocused) 1 else 0}\">\n")
-                buildCompactNodes(root, " ", sb, counter, 0, deadlineMs) { partial = true }
-                sb.append("</w>\n")
-                try {
-                    root.recycle()
-                } catch (_: Exception) {
-                }
-            }
-        }
-
-        val active = rootInActiveWindow
-        if (active != null && windowCount == 0 && !pastDeadline()) {
+        if (active != null && !pastDeadline()) {
             windowCount = 1
             val pkg = active.packageName?.toString().orEmpty()
             if (pkg.isNotEmpty()) pkgs.add(pkg)
@@ -451,10 +471,52 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 active.recycle()
             } catch (_: Exception) {
             }
-        } else if (active != null) {
-            try {
-                active.recycle()
-            } catch (_: Exception) {
+        }
+
+        // Enrich with other interactive windows when budget remains
+        if (!pastDeadline() && counter[0] < MAX_NODES) {
+            val winList = try {
+                windows?.toList()
+            } catch (e: Exception) {
+                Log.w(TAG, "windows() failed: ${e.message}")
+                null
+            }
+            if (!winList.isNullOrEmpty()) {
+                val ordered = winList.sortedByDescending { w ->
+                    when (w.type) {
+                        AccessibilityWindowInfo.TYPE_APPLICATION -> 3
+                        AccessibilityWindowInfo.TYPE_SYSTEM -> 2
+                        else -> 1
+                    }
+                }
+                for (window in ordered) {
+                    if (pastDeadline() || counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
+                    // Skip the active window we already dumped
+                    if (window.isActive && windowCount > 0) continue
+                    val root = try {
+                        window.root
+                    } catch (_: Exception) {
+                        null
+                    } ?: continue
+                    windowCount++
+                    val pkg = root.packageName?.toString().orEmpty()
+                    if (pkg.isNotEmpty()) pkgs.add(pkg)
+                    val title = try {
+                        window.title?.toString().orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    sb.append("<w id=\"${window.id}\" t=\"${window.type}\" ")
+                    sb.append("p=\"${xmlEsc(pkg)}\" ")
+                    if (title.isNotEmpty()) sb.append("title=\"${xmlEsc(title)}\" ")
+                    sb.append("f=\"${if (window.isFocused) 1 else 0}\">\n")
+                    buildCompactNodes(root, " ", sb, counter, 0, deadlineMs) { partial = true }
+                    sb.append("</w>\n")
+                    try {
+                        root.recycle()
+                    } catch (_: Exception) {
+                    }
+                }
             }
         }
 
