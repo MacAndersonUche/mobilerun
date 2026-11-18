@@ -160,7 +160,6 @@ def _persist_device(
             "authed": bool(owner) or role == "ui",
             "owner": owner or "",
             "name": name,
-            "connected_at": int(time.time()),
         },
     )
     # One live device socket — drop older duplicates (Samsung reconnect leaves ghosts)

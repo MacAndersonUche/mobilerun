@@ -28,7 +28,7 @@ class BootReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             Log.w(TAG, "ConnectionService.start failed: ${e.message}")
         }
-        // Delayed a11y rebind — Settings may not be ready at BOOT_COMPLETED
+        // Delayed a11y rebind + WS ensure — Application may already hold BackendClient
         Handler(Looper.getMainLooper()).postDelayed({
             try {
                 val ok = PermissionStatus.tryRecoverAccessibilityBinding(context.applicationContext)
@@ -36,11 +36,14 @@ class BootReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 Log.w(TAG, "a11y rebind failed: ${e.message}")
             }
-            // Keep FGS alive — WS reconnect happens when the user opens the app
-            // or when MainActivity is already warm; do not force a UI launch.
             try {
                 ConnectionService.start(context.applicationContext)
             } catch (_: Exception) {
+            }
+            try {
+                MobilerunApp.client()?.ensureServerConnected("boot:$action")
+            } catch (e: Exception) {
+                Log.w(TAG, "ensureServerConnected after boot: ${e.message}")
             }
         }, 8_000L)
     }

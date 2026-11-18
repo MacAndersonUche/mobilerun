@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -20,8 +22,10 @@ import androidx.core.app.NotificationCompat
 /**
  * Sticky foreground service so the APK keeps the WebSocket alive in the background.
  * Holds a partial wake lock + wifi lock while running so Samsung Doze does not
- * freeze the socket mid-task. Periodically best-effort rebinds Accessibility when
- * Settings says enabled but the service instance is null.
+ * freeze the socket mid-task. Periodically:
+ *  - rebinds Accessibility when Settings says enabled but the service instance is null
+ *  - ensures [BackendClient] is server-acked Connected (reconnect after app switch /
+ *    screen off / process restart)
  */
 class ConnectionService : Service() {
     companion object {
@@ -31,6 +35,7 @@ class ConnectionService : Service() {
         private const val NOTIF_ID = 41
         private const val TAG = "MobilerunConn"
         private const val A11Y_WATCHDOG_MS = 45_000L
+        private const val WS_WATCHDOG_MS = 20_000L
 
         fun start(context: Context) {
             val intent = Intent(context, ConnectionService::class.java).setAction(ACTION_START)
@@ -51,6 +56,8 @@ class ConnectionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private val handler = Handler(Looper.getMainLooper())
+    private var screenReceiver: BroadcastReceiver? = null
+
     private val a11yWatchdog = object : Runnable {
         override fun run() {
             try {
@@ -65,12 +72,34 @@ class ConnectionService : Service() {
         }
     }
 
+    private val wsWatchdog = object : Runnable {
+        override fun run() {
+            try {
+                val client = MobilerunApp.client()
+                if (client == null) {
+                    Log.w(TAG, "ws watchdog: no BackendClient yet")
+                } else {
+                    val ok = client.ensureServerConnected("fgs_watchdog")
+                    refreshNotification(client.statusFlow.value)
+                    Log.d(TAG, "ws watchdog ensureConnected=$ok status=${client.statusFlow.value}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "ws watchdog: ${e.message}")
+            }
+            // Refresh wake lock lease so Samsung does not drop it mid-task
+            acquireLocks()
+            handler.postDelayed(this, WS_WATCHDOG_MS)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 handler.removeCallbacks(a11yWatchdog)
+                handler.removeCallbacks(wsWatchdog)
+                unregisterScreenReceiver()
                 releaseLocks()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -78,7 +107,9 @@ class ConnectionService : Service() {
             }
             else -> {
                 createChannel()
-                val notification = buildNotification()
+                val notification = buildNotification(
+                    MobilerunApp.client()?.statusFlow?.value ?: "starting…",
+                )
                 if (Build.VERSION.SDK_INT >= 34) {
                     startForeground(
                         NOTIF_ID,
@@ -91,8 +122,12 @@ class ConnectionService : Service() {
                     startForeground(NOTIF_ID, notification)
                 }
                 acquireLocks()
+                registerScreenReceiver()
                 handler.removeCallbacks(a11yWatchdog)
+                handler.removeCallbacks(wsWatchdog)
                 handler.postDelayed(a11yWatchdog, A11Y_WATCHDOG_MS)
+                // Immediate WS ensure — do not wait for first watchdog tick
+                handler.post(wsWatchdog)
             }
         }
         // START_STICKY → system restarts us after kill; BootReceiver covers reboot
@@ -101,8 +136,45 @@ class ConnectionService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(a11yWatchdog)
+        handler.removeCallbacks(wsWatchdog)
+        unregisterScreenReceiver()
         releaseLocks()
         super.onDestroy()
+    }
+
+    private fun registerScreenReceiver() {
+        if (screenReceiver != null) return
+        screenReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val action = intent?.action.orEmpty()
+                Log.i(TAG, "screen/user event $action → ensure WS")
+                try {
+                    MobilerunApp.client()?.ensureServerConnected("screen:$action")
+                } catch (e: Exception) {
+                    Log.w(TAG, "screen ensureConnected: ${e.message}")
+                }
+                acquireLocks()
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(screenReceiver, filter)
+        }
+    }
+
+    private fun unregisterScreenReceiver() {
+        try {
+            screenReceiver?.let { unregisterReceiver(it) }
+        } catch (_: Exception) {
+        }
+        screenReceiver = null
     }
 
     private fun acquireLocks() {
@@ -115,6 +187,12 @@ class ConnectionService : Service() {
                 ).also {
                     it.setReferenceCounted(false)
                     it.acquire(6 * 60 * 60 * 1000L) // 6h max; refreshed while service runs
+                }
+            } else {
+                // Re-acquire to refresh the 6h lease under Samsung Doze
+                try {
+                    wakeLock?.acquire(6 * 60 * 60 * 1000L)
+                } catch (_: Exception) {
                 }
             }
         } catch (_: Exception) {
@@ -161,15 +239,28 @@ class ConnectionService : Service() {
         )
     }
 
-    private fun buildNotification(): Notification {
+    private fun refreshNotification(status: String) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(NOTIF_ID, buildNotification(status))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun buildNotification(status: String): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val title = if (status == "Connected") {
+            "MobileRun connected"
+        } else {
+            "MobileRun · $status"
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("MobileRun connected")
+            .setContentTitle(title)
             .setContentText("Keeping the wireless executor online")
             .setSmallIcon(R.drawable.ic_stat_mobilerun)
             .setContentIntent(open)

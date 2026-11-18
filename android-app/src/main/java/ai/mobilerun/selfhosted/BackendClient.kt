@@ -57,9 +57,12 @@ class BackendClient(private val context: Context) {
 
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
-    /** Dedicated command executor — slow get_ui_tree/tap must not starve heartbeats. */
+    /**
+     * Parallel command pool — a hung get_ui_tree must not block tap/open_app ACKs.
+     * Heartbeats stay on [scope] (Dispatchers.IO), independent of this pool.
+     */
     private val commandExecutor: ExecutorService =
-        Executors.newSingleThreadExecutor { r ->
+        Executors.newFixedThreadPool(3) { r ->
             Thread(r, "mr-cmd").also { it.isDaemon = true }
         }
     private val discovery = LanDiscovery(context)
@@ -84,12 +87,14 @@ class BackendClient(private val context: Context) {
 
         /** Wait for register/ack before claiming Connected. */
         const val REGISTER_ACK_TIMEOUT_MS = 8_000L
-        /** App-level heartbeat; keeps API GW idle (10m) and Dynamo last_seen fresh. */
-        const val HEARTBEAT_INTERVAL_MS = 15_000L
-        /** Reconnect if no server pong within this window. */
-        const val HEARTBEAT_STALE_MS = 45_000L
+        /** App-level ping; keeps API GW idle (10m) and Dynamo last_seen fresh. */
+        const val HEARTBEAT_INTERVAL_MS = 30_000L
+        /** Reconnect if no server pong within this window (~1 missed ping + slack). */
+        const val HEARTBEAT_STALE_MS = 75_000L
         /** Proactive socket refresh before API GW 2h max / long-idle edges. */
         const val PROACTIVE_REFRESH_MS = 8 * 60_000L
+        /** Soft deadline so a hung a11y call still emits an RPC error response. */
+        const val COMMAND_SOFT_TIMEOUT_MS = 35_000L
 
         const val SECURE_FOLDER_PKG = "com.samsung.knox.securefolder"
 
@@ -175,6 +180,27 @@ class BackendClient(private val context: Context) {
     }
 
     fun isPaired(): Boolean = !sessionToken.isNullOrBlank()
+
+    fun publicDeviceId(): String = deviceId
+
+    /** True only when Dynamo would see a live authed socket (server ack + fresh pong). */
+    fun isServerConnectedPublic(): Boolean = isServerConnected()
+
+    /**
+     * Called from [ConnectionService] watchdog / screen-on so the socket survives
+     * MainActivity teardown, app switch, and Samsung Doze without a UI reopen.
+     */
+    fun ensureServerConnected(reason: String = "ensure"): Boolean {
+        if (userDisconnected) return false
+        if (isServerConnected() && _statusFlow.value == "Connected") {
+            Log.d(tag, "ensureServerConnected($reason): already acked")
+            return true
+        }
+        Log.i(tag, "ensureServerConnected($reason): status=${_statusFlow.value} — reconnect")
+        userDisconnected = false
+        scope.launch { connectBest(force = true) }
+        return false
+    }
 
     fun setCloudEndpoints(http: String, ws: String?) {
         cloudHttp = http.trimEnd('/')
@@ -707,7 +733,9 @@ class BackendClient(private val context: Context) {
         updateRouteUi()
         _statusFlow.value = "Connecting (${candidate.route})…"
 
-        val request = Request.Builder().url(candidate.ws).build()
+        // Put device_id on $connect so Dynamo is keyed correctly even before register
+        val wsUrl = appendConnectQuery(candidate.ws, deviceId)
+        val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             private fun isCurrent(): Boolean = socketGeneration.get() == gen
 
@@ -1105,15 +1133,41 @@ class BackendClient(private val context: Context) {
         webSocket?.send(gson.toJson(msg))
     }
 
+    private fun appendConnectQuery(ws: String, did: String): String {
+        return try {
+            val b = Uri.parse(ws).buildUpon()
+            b.appendQueryParameter("device_id", did)
+            b.appendQueryParameter("role", "device")
+            b.appendQueryParameter("platform", "android")
+            b.build().toString()
+        } catch (_: Exception) {
+            val sep = if (ws.contains("?")) "&" else "?"
+            "$ws${sep}device_id=${Uri.encode(did)}&role=device&platform=android"
+        }
+    }
+
     private fun handleCommand(message: Map<String, Any?>) {
         val command = message["command"] as? String ?: return
         val requestId = message["request_id"] as? String ?: return
         @Suppress("UNCHECKED_CAST")
         val params = message["params"] as? Map<String, Any?>
 
-        // Dedicated executor so a slow tree dump cannot starve heartbeat scope
+        // Parallel pool + soft timeout so a hung tree/tap still replies (RPC poll
+        // otherwise expires while heartbeats keep the connection row fresh).
         commandExecutor.execute {
             val t0 = SystemClock.elapsedRealtime()
+            val done = java.util.concurrent.atomic.AtomicBoolean(false)
+            val watchdog = scope.launch {
+                delay(COMMAND_SOFT_TIMEOUT_MS)
+                if (done.compareAndSet(false, true)) {
+                    Log.e(tag, "command soft-timeout $command rid=$requestId")
+                    sendCommandResponse(
+                        requestId,
+                        null,
+                        "Command $command soft-timeout after ${COMMAND_SOFT_TIMEOUT_MS}ms",
+                    )
+                }
+            }
             try {
                 // open_app uses PackageManager — must work even if a11y unbound
                 val a11yService = MobilerunAccessibilityService.instance
@@ -1365,9 +1419,15 @@ class BackendClient(private val context: Context) {
                     else -> throw Exception("Unknown command: $command")
                 }
 
-                sendCommandResponse(requestId, result, null)
+                if (done.compareAndSet(false, true)) {
+                    watchdog.cancel()
+                    sendCommandResponse(requestId, result, null)
+                }
             } catch (e: Exception) {
-                sendCommandResponse(requestId, null, e.message ?: "Unknown error")
+                if (done.compareAndSet(false, true)) {
+                    watchdog.cancel()
+                    sendCommandResponse(requestId, null, e.message ?: "Unknown error")
+                }
             }
         }
     }
