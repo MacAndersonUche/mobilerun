@@ -20,7 +20,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.os.SystemClock
 import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
@@ -54,6 +57,11 @@ class BackendClient(private val context: Context) {
 
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
+    /** Dedicated command executor — slow get_ui_tree/tap must not starve heartbeats. */
+    private val commandExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { r ->
+            Thread(r, "mr-cmd").also { it.isDaemon = true }
+        }
     private val discovery = LanDiscovery(context)
 
     private var webSocket: WebSocket? = null
@@ -987,10 +995,11 @@ class BackendClient(private val context: Context) {
         @Suppress("UNCHECKED_CAST")
         val params = message["params"] as? Map<String, Any?>
 
-        scope.launch {
+        // Dedicated executor so a slow tree dump cannot starve heartbeat scope
+        commandExecutor.execute {
+            val t0 = SystemClock.elapsedRealtime()
             try {
                 // open_app uses PackageManager — must work even if a11y unbound
-                // (Samsung One UI / emulator overload can drop the service briefly).
                 val a11yService = MobilerunAccessibilityService.instance
                 val needsA11y = command !in setOf(
                     "open_app",
@@ -998,18 +1007,28 @@ class BackendClient(private val context: Context) {
                     "get_device_info",
                     "get_ui_tree",
                     "screenshot",
+                    "dismiss_anr",
                 )
                 if (needsA11y && a11yService == null) {
                     throw Exception("Accessibility service not connected")
                 }
 
-                val result = when (command) {
+                val result: Any = when (command) {
                     "tap" -> {
                         val x = (params?.get("x") as? Number)?.toInt() ?: 0
                         val y = (params?.get("y") as? Number)?.toInt() ?: 0
-                        a11yService!!.tapAsync(x, y)
+                        // ACK immediately; gesture completes asynchronously
+                        a11yService!!.tapFireAndForget(x, y)
                         sendAgentEvent(null, null, "tap", "tap($x,$y)")
-                        "OK"
+                        mapOf(
+                            "ok" to true,
+                            "acked" to true,
+                            "x" to x,
+                            "y" to y,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
                     }
                     "swipe" -> {
                         val x1 = (params?.get("x1") as? Number)?.toInt() ?: 0
@@ -1017,9 +1036,15 @@ class BackendClient(private val context: Context) {
                         val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
                         val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
                         val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
-                        a11yService!!.swipeAsync(x1, y1, x2, y2, duration)
+                        a11yService!!.swipeFireAndForget(x1, y1, x2, y2, duration)
                         sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
-                        "OK"
+                        mapOf(
+                            "ok" to true,
+                            "acked" to true,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
                     }
                     "press_button" -> {
                         val button = params?.get("button") as? String
@@ -1029,7 +1054,12 @@ class BackendClient(private val context: Context) {
                             "recents" -> a11yService!!.pressRecents()
                             else -> false
                         }
-                        "OK"
+                        mapOf(
+                            "ok" to true,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
                     }
                     "input_text", "type_text" -> {
                         val text = params?.get("text") as? String ?: ""
@@ -1037,7 +1067,24 @@ class BackendClient(private val context: Context) {
                         val ok = a11yService!!.inputText(text, clear)
                         sendAgentEvent(null, null, "type", "type(${text.take(40)})")
                         if (!ok) throw Exception("input_text failed — focus a text field")
-                        "OK"
+                        // ACK right after SET_TEXT; cloud verifies via next get_ui_tree
+                        mapOf(
+                            "ok" to true,
+                            "acked" to true,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "dismiss_anr" -> {
+                        val dismissed = a11yService?.dismissSystemAnrIfPresent() == true
+                        mapOf(
+                            "ok" to true,
+                            "dismissed" to dismissed,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
                     }
                     "open_app", "start_app" -> {
                         val app = (params?.get("app") as? String)
@@ -1047,7 +1094,7 @@ class BackendClient(private val context: Context) {
                         val launched = openAppByNameOrPackage(app, pkg)
                         sendAgentEvent(null, null, "open_app", "open_app($app)")
                         if (launched == null) throw Exception("Could not open app: $app")
-                        Thread.sleep(900)
+                        Thread.sleep(600)
                         val activePkg = a11yService?.activePackageName().orEmpty()
                         mapOf(
                             "ok" to true,
@@ -1056,6 +1103,9 @@ class BackendClient(private val context: Context) {
                             "active_package" to activePkg,
                             "launched" to true,
                             "a11y" to (a11yService != null),
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
                         )
                     }
                     "get_ui_tree" -> {
@@ -1066,24 +1116,43 @@ class BackendClient(private val context: Context) {
                                 "empty" to true,
                                 "chars" to 0,
                                 "a11y" to false,
+                                "timing" to mapOf(
+                                    "build_ms" to 0,
+                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
+                                    "bytes" to 0,
+                                    "cached" to false,
+                                    "partial" to true,
+                                ),
                             )
                         } else {
-                            // Cap for API Gateway WS (~128KB); dump already soft-caps
-                            val treeRaw = a11yService.getUITree()
-                            val tree = if (treeRaw.length > 70_000) {
-                                treeRaw.take(70_000) + "\n<!-- ws_truncated -->\n</hierarchy>"
-                            } else {
-                                treeRaw
-                            }
-                            val pkg = a11yService.activePackageName().orEmpty()
-                            mapOf(
+                            val detailed = a11yService.getUITreeDetailed(allowCache = true)
+                            val tree = detailed.tree
+                            val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
-                                "package" to pkg,
-                                "empty" to (tree.contains("empty=\"true\"") || tree.length < 40),
-                                "chars" to tree.length,
+                                "package" to detailed.packageName.ifBlank {
+                                    a11yService.activePackageName().orEmpty()
+                                },
+                                "empty" to detailed.empty,
+                                "chars" to detailed.chars,
+                                "nodes" to detailed.nodes,
                                 "a11y" to true,
-                                "truncated" to (treeRaw.length > 70_000 || tree.contains("truncated=\"true\"")),
+                                "truncated" to detailed.partial,
+                                "partial" to detailed.partial,
+                                "anr_dismissed" to detailed.anrDismissed,
+                                "timing" to mapOf(
+                                    "build_ms" to detailed.buildMs,
+                                    "bytes" to detailed.bytes,
+                                    "nodes" to detailed.nodes,
+                                    "cached" to detailed.cached,
+                                    "partial" to detailed.partial,
+                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
+                                ),
                             )
+                            if (!detailed.treeGzB64.isNullOrBlank()) {
+                                out["tree_gz"] = detailed.treeGzB64
+                                out["encoding"] = "gzip+base64"
+                            }
+                            out
                         }
                     }
                     "screenshot" -> {
@@ -1092,13 +1161,20 @@ class BackendClient(private val context: Context) {
                             quality = 42,
                         )
                         if (b64.isNullOrBlank()) {
-                            mapOf("ok" to false, "error" to "screenshot unavailable", "a11y" to (a11yService != null))
+                            mapOf(
+                                "ok" to false,
+                                "error" to "screenshot unavailable",
+                                "a11y" to (a11yService != null),
+                            )
                         } else {
                             mapOf(
                                 "ok" to true,
                                 "mime" to "image/jpeg",
                                 "encoding" to "base64",
                                 "data" to b64,
+                                "timing" to mapOf(
+                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
+                                ),
                             )
                         }
                     }
@@ -1135,10 +1211,15 @@ class BackendClient(private val context: Context) {
             val safe: Any? = when (result) {
                 is Map<*, *> -> {
                     val tree = result["tree"]
-                    if (tree is String && tree.length > 80_000) {
+                    if (tree is String && tree.length > 24_000) {
                         @Suppress("UNCHECKED_CAST")
                         val m = (result as Map<String, Any?>).toMutableMap()
-                        m["tree"] = tree.take(60_000) + "\n<!-- force_truncated -->\n"
+                        // Prefer gzip-only when plain is still large
+                        if (m["tree_gz"] != null) {
+                            m["tree"] = """<hierarchy empty="false" reason="see_tree_gz" chars="${tree.length}"/>"""
+                        } else {
+                            m["tree"] = tree.take(18_000) + "\n<!-- force_truncated -->\n"
+                        }
                         m["truncated"] = true
                         m["chars"] = (m["tree"] as String).length
                         m
