@@ -1147,27 +1147,49 @@ PY
 adb logcat -c || true
 adb shell "am start -a android.intent.action.VIEW -d '$CLOUD_ONLY_URL'" || true
 # Wait until a new device_id appears on the prod ci-e2e account
-BEFORE_IDS="$BEFORE_IDS" python3 - <<PY
-import json, os, time, urllib.request
+# Concurrent deploys can 503; deep-link may need a second fire after pm clear.
+BEFORE_IDS="$BEFORE_IDS" CLOUD_ONLY_URL="$CLOUD_ONLY_URL" python3 - <<PY
+import json, os, subprocess, time, urllib.error, urllib.request
 prod = os.environ.get("PROD_API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
 token = """$PROD_TOKEN"""
 code = """$PROD_CODE"""
+pair_url = os.environ.get("CLOUD_ONLY_URL") or ""
 artifacts = os.environ["ARTIFACTS_DIR"]
 before = {x for x in os.environ.get("BEFORE_IDS", "").split(",") if x}
 device_id = None
-for i in range(40):
-    req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
-    devices = json.load(urllib.request.urlopen(req))
-    open(os.path.join(artifacts, "prod_cloud_devices.json"), "w").write(
-        json.dumps(devices, indent=2, default=str)
-    )
-    for d in devices or []:
-        did = d.get("device_id") or d.get("id")
-        if did and str(did) not in before:
-            device_id = str(did)
+for i in range(50):
+    try:
+        req = urllib.request.Request(
+            prod + "/api/devices", headers={"Authorization": f"Bearer {token}"}
+        )
+        devices = json.load(urllib.request.urlopen(req, timeout=25))
+        open(os.path.join(artifacts, "prod_cloud_devices.json"), "w").write(
+            json.dumps(devices, indent=2, default=str)
+        )
+        for d in devices or []:
+            did = d.get("device_id") or d.get("id")
+            if did and str(did) not in before:
+                device_id = str(did)
+                break
+        if device_id:
             break
-    if device_id:
-        break
+    except Exception as e:
+        open(os.path.join(artifacts, "prod_cloud_devices_err.txt"), "a").write(
+            f"tick {i}: {e}\n"
+        )
+        print(f"prod_cloud_poll_error tick={i}: {e}", flush=True)
+    # Re-fire deep link periodically — pm clear can leave first open as a no-op
+    if pair_url and i in (5, 12, 20, 30):
+        try:
+            subprocess.run(
+                ["adb", "shell", "am", "start", "-a", "android.intent.action.VIEW",
+                 "-d", pair_url],
+                check=False,
+                timeout=15,
+            )
+            print(f"re-fired cloud-only deep link at tick={i}", flush=True)
+        except Exception as e:
+            print(f"re-fire failed: {e}", flush=True)
     time.sleep(2)
 assert device_id, f"cloud-only short-code {code} did not register on prod (before={sorted(before)})"
 open(os.path.join(artifacts, "prod_cloud_device_id.txt"), "w").write(device_id)
