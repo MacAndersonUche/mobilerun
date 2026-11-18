@@ -2569,10 +2569,19 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         return job
 
 
+def _step_worker_target() -> Optional[str]:
+    """ARN/name for step-worker invoke without CloudFormation self-refs."""
+    return (
+        os.environ.get("STEP_WORKER_ARN")
+        or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+        or None
+    )
+
+
 def _kick_self(job_id: Optional[str]) -> None:
     if not job_id:
         return
-    arn = os.environ.get("STEP_WORKER_ARN")
+    arn = _step_worker_target()
     if not arn or os.environ.get("USE_AWS_STORAGE", "").lower() != "true":
         return
     try:

@@ -313,8 +313,10 @@ export class MobilerunStack extends cdk.Stack {
         ],
       })
     );
+    // Only Http needs STEP_WORKER_ARN as a CFN Ref. The step worker self-invokes
+    // via AWS_LAMBDA_FUNCTION_NAME / context at runtime — setting STEP_WORKER_ARN
+    // on stepFn to its own ARN creates a CloudFormation circular dependency.
     httpFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
-    stepFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
     stepFn.addEnvironment('AGENT_STEP_CHAIN', '6');
 
     // === HTTP API (cheaper than REST API Gateway) ===

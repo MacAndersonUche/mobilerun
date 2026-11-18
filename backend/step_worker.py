@@ -19,7 +19,7 @@ import os
 import random
 import time
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
     from storage import get_device_connections, get_job, list_due_jobs, put_job
@@ -492,11 +492,20 @@ def run_social_step(job: Dict[str, Any]) -> Dict[str, Any]:
     return job
 
 
+def _step_worker_target() -> Optional[str]:
+    """ARN/name for self-invoke; avoid STEP_WORKER_ARN self-Ref on this Lambda."""
+    return (
+        os.environ.get("STEP_WORKER_ARN")
+        or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+        or None
+    )
+
+
 def _kick_job_later(job_id: str, delay_s: int = 2) -> None:
     """Best-effort async re-invoke for dry-run live activity (no EventBridge wait)."""
     if not job_id:
         return
-    arn = os.environ.get("STEP_WORKER_ARN")
+    arn = _step_worker_target()
     if not arn or os.environ.get("USE_AWS_STORAGE", "").lower() != "true":
         return
     # Schedule via next_run_at; EventBridge will pick up. Also try immediate
