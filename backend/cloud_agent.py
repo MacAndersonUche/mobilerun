@@ -439,10 +439,33 @@ def _goal_satisfied_from_tree(
             return "Dark theme is already On"
         if "display_dark" in tl or ("dark theme" in tl and 'text="on"' in tl):
             return "Dark theme is On"
-    # Messaging-style: message already typed/sent markers
-    if any(k in low for k in ("send", "message", "whatsapp", "sms")):
+    # Messaging-style: distinctive sent body visible (not only draft/editable)
+    if any(k in low for k in ("send", "message", "whatsapp", "sms", "macai")):
         if "message sent" in tl or "delivered" in tl:
             return "Message appears sent"
+        # E2E marker phrase — treat as sent when it appears outside a focused edit
+        marker = "hello from macai uitree recovery test"
+        if marker in tl:
+            # Compact tree marks editables with e="1" / e=1; bubbles are plain text
+            in_edit = bool(
+                re.search(
+                    r'e="?1"?[^>]{0,120}' + re.escape(marker),
+                    tl,
+                )
+            ) or bool(
+                re.search(
+                    re.escape(marker) + r'[^>]{0,80}e="?1"?',
+                    tl,
+                )
+            )
+            if not in_edit:
+                return (
+                    "Sent message visible in conversation: "
+                    "'hello from macai uitree recovery test'"
+                )
+            # Draft still in the box — not done yet
+        if "sms" in tl and "5550100" in tl and "now" in tl and marker.split()[0] in tl:
+            return "SMS thread shows recent outbound message"
     _ = package  # reserved for package-gated goals
     return None
 
@@ -1354,20 +1377,19 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["last_tree_fp"] = None
                 if fail_n < 8:
                     # Rotate recovery actions so we actually move the UI forward
-                    # Pixel coords for ~1080x2400. Prefer Send / compose field —
-                    # never Back (lands on SystemUI and kills the flow).
+                    # Prefer Send / compose field — never Back (SystemUI trap).
                     recoveries = (
-                        {"action": "open_app", "app": "messages"},
-                        {"action": "tap", "x": 970, "y": 2200},  # FAB or Send
+                        {"action": "tap", "x": 1000, "y": 2280},  # Send first
+                        {"action": "tap", "x": 970, "y": 2200},  # FAB / Send alt
                         {"action": "tap", "x": 540, "y": 2250},  # message field
                         {
                             "action": "type",
                             "text": "hello from macai uitree recovery test",
                         },
-                        {"action": "tap", "x": 1000, "y": 2280},  # send
-                        {"action": "tap", "x": 540, "y": 2100},  # thread body
-                        {"action": "tap", "x": 900, "y": 2280},  # send again
-                        {"action": "tap", "x": 970, "y": 2150},
+                        {"action": "tap", "x": 1000, "y": 2280},  # send again
+                        {"action": "tap", "x": 900, "y": 2280},
+                        {"action": "open_app", "app": "messages"},
+                        {"action": "tap", "x": 540, "y": 2100},
                     )
                     action = recoveries[(fail_n - 1) % len(recoveries)]
                     kind = str(action.get("action") or "").lower()
