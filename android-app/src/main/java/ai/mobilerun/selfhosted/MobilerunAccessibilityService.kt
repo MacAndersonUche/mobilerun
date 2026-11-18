@@ -38,8 +38,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "MobilerunA11y"
-        // Compact dumps — rich enough for WhatsApp lists (content-desc / clickable
-        // parents) while staying under WS payload limits.
+        // Compact dumps — rich enough for Social/Dating apps (content-desc /
+        // clickable parents, Compose-ish rows) while staying under WS limits.
         private const val MAX_NODES = 220
         private const val MAX_DEPTH = 18
         private const val MAX_TREE_CHARS = 28_000
@@ -97,8 +97,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         serviceInfo = serviceInfo?.apply {
-            // INCLUDE_NOT_IMPORTANT_VIEWS is required for WhatsApp / Compose UIs —
-            // without it RecyclerView rows and ImageButton Send often vanish.
+            // INCLUDE_NOT_IMPORTANT_VIEWS is required for Compose / custom-view UIs
+            // (IG, TikTok, dating apps) — without it rows and icon buttons vanish.
             flags = flags or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or

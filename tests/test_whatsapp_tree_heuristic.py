@@ -35,7 +35,9 @@ def test_parse_whatsapp_instruction_mac_s21_goal():
 
 
 def test_parse_whatsapp_instruction_variants():
-    p = _parse_whatsapp_instruction("open whatsapp message Jane Doe and say hello there")
+    p = _parse_whatsapp_instruction(
+        "open whatsapp message Jane Doe and say hello there"
+    )
     assert p == {"contact": "Jane Doe", "message": "hello there"}
     assert _parse_whatsapp_instruction("open settings") is None
     assert _parse_whatsapp_instruction("send sms to 5550100") is None
@@ -209,9 +211,7 @@ def test_swipe_loop_only_launcher_unchanged():
 
     # Tree change resets streak to 1 (current swipe counted as fresh)
     state = {"launcher_swipe_unchanged": 2}
-    assert not _launcher_swipe_abort(
-        state, "com.android.launcher3", True, "swipe"
-    )
+    assert not _launcher_swipe_abort(state, "com.android.launcher3", True, "swipe")
     assert state["launcher_swipe_unchanged"] == 1
 
     # Trailing swipe counter still works for soft hints

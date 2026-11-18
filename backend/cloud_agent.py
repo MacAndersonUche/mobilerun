@@ -34,8 +34,9 @@ Rules:
 - NEVER call open_app again once RECENT ACTIONS already show Opened X / open_ok, or
   the UI tree package already matches the target. Move on (search, tap, type, send).
 - Prefer clickable/text nodes with center=(x,y) from the tree. Never invent coordinates.
-- If the tree is empty/thin but a screenshot is provided, estimate taps from the image
-  or use open_app / fail.
+- If the tree is empty/thin (<15 nodes) but a screenshot is provided, use VISION:
+  estimate tap coordinates from the image (screen origin top-left; x,y in pixels).
+  Prefer labeled icons (Search, Send, Messages, Inbox) visible in the screenshot.
 - Do NOT repeat the same swipe. If stuck, use open_app (once), back, or fail.
 - Do NOT repeat the same tap (same x,y) when the UI did not change. If NO PROGRESS is
   noted, change strategy: different node, swipe, back, type, done, or fail.
@@ -452,31 +453,61 @@ def _goal_satisfied_from_tree(
         if "display_dark" in tl or ("dark theme" in tl and 'text="on"' in tl):
             return "Dark theme is On"
     # Messaging-style: distinctive sent body visible (not only draft/editable)
-    if any(k in low for k in ("send", "message", "whatsapp", "sms", "macai")):
+    if any(
+        k in low
+        for k in (
+            "send",
+            "message",
+            "whatsapp",
+            "instagram",
+            "messenger",
+            "telegram",
+            "tinder",
+            "bumble",
+            "hinge",
+            "sms",
+            "macai",
+            "dm ",
+        )
+    ):
         if "message sent" in tl or "delivered" in tl:
             return "Message appears sent"
         # E2E marker phrase — treat as sent when it appears outside a focused edit
         markers = ["hello from macai uitree recovery test"]
-        wa = _parse_whatsapp_instruction(instruction)
-        if wa and wa.get("message"):
-            markers.append(wa["message"].lower())
+        dm = _parse_dm_instruction(instruction)
+        if dm and dm.get("message"):
+            markers.append(dm["message"].lower())
         for marker in markers:
-            if marker and marker in tl:
-                # Compact tree marks editables with e="1" / e=1; bubbles are plain text
-                in_edit = bool(
-                    re.search(
-                        r'e="?1"?[^>]{0,120}' + re.escape(marker),
-                        tl,
-                    )
-                ) or bool(
-                    re.search(
-                        re.escape(marker) + r'[^>]{0,80}e="?1"?',
-                        tl,
-                    )
+            if not marker:
+                continue
+            # Require the marker inside a text/desc/hint attribute — never match
+            # short words like "hi" against XML tag names (e.g. "hierarchy").
+            marker_in_label = bool(
+                re.search(
+                    rf'(?:t|d|h|text|content-desc)="[^"]*{re.escape(marker)}[^"]*"',
+                    tl,
+                    re.I,
                 )
-                if not in_edit:
-                    return f"Sent message visible in conversation: '{marker}'"
-                # Draft still in the box — not done yet
+            )
+            if not marker_in_label:
+                continue
+            # Compact tree marks editables with e="1" / e=1; bubbles are plain text
+            in_edit = bool(
+                re.search(
+                    r'e="?1"?[^>]{0,120}'
+                    + rf'(?:t|d|h)="[^"]*{re.escape(marker)}[^"]*"',
+                    tl,
+                )
+            ) or bool(
+                re.search(
+                    rf'(?:t|d|h)="[^"]*{re.escape(marker)}[^"]*"'
+                    + r'[^>]{0,80}e="?1"?',
+                    tl,
+                )
+            )
+            if not in_edit:
+                return f"Sent message visible in conversation: '{marker}'"
+            # Draft still in the box — not done yet
         marker0 = markers[0]
         if "sms" in tl and "5550100" in tl and "now" in tl and marker0.split()[0] in tl:
             return "SMS thread shows recent outbound message"
@@ -525,20 +556,36 @@ def plan_next_action(
     if msg_heur:
         return msg_heur
 
-    # WhatsApp: open → Search → type contact → tap result → compose → type → Send
-    wa_heur = _heuristic_whatsapp_send(instruction, ui_tree, history, package)
-    if wa_heur:
-        return wa_heur
+    # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, Tinder, …)
+    dm_heur = _heuristic_dm_send(instruction, ui_tree, history, package)
+    if dm_heur:
+        return dm_heur
 
     open_target = _trivial_open_app_target(instruction)
     hist_blob = " ".join(history).lower()
     hist = "\n".join(history[-8:]) or "(none)"
     tree_note = ""
-    if not ui_tree or 'empty="true"' in ui_tree or len(ui_tree) < 80:
+    try:
+        from dm_heuristics import tree_is_sparse as _sparse
+    except ImportError:
+        from backend.dm_heuristics import tree_is_sparse as _sparse  # type: ignore
+
+    if (
+        not ui_tree
+        or 'empty="true"' in ui_tree
+        or len(ui_tree) < 80
+        or _sparse(ui_tree)
+        or image_b64
+    ):
         tree_note = (
-            "\nNOTE: UI tree is empty/thin (common on Samsung One UI). "
+            "\nNOTE: UI tree is empty/thin (Compose/custom views / One UI). "
             "Prefer open_app for launching apps. "
-            + ("A screenshot is attached.\n" if image_b64 else "No screenshot.\n")
+            + (
+                "A screenshot is attached — use vision to pick tap (x,y) "
+                "from visible icons/labels (Search, Send, Messages, Inbox).\n"
+                if image_b64
+                else "No screenshot.\n"
+            )
         )
     open_hint = ""
     already_opened = _history_shows_app_opened(hist_blob, open_target or "")
@@ -694,48 +741,43 @@ def _is_launcher_package(package: str) -> bool:
     return any(m in pkg for m in _LAUNCHER_PKG_MARKERS)
 
 
-def _parse_whatsapp_instruction(instruction: str) -> Optional[Dict[str, str]]:
-    """Extract {contact, message} from WhatsApp send goals.
+def _parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
+    """Extract {app, contact, message} for supported Social/Dating DM apps."""
+    try:
+        from dm_heuristics import parse_dm_instruction
+    except ImportError:
+        from backend.dm_heuristics import parse_dm_instruction  # type: ignore
 
-    Examples:
-      go on whatsapp message precious achalugo and say hi baby
-      open whatsapp, message Jane Doe and say hello
-      whatsapp text bob say hey
-    """
-    text = (instruction or "").strip()
-    if not text:
+    return parse_dm_instruction(instruction)
+
+
+def _parse_whatsapp_instruction(instruction: str) -> Optional[Dict[str, str]]:
+    """Back-compat: WhatsApp-only parse returning {contact, message}."""
+    parsed = _parse_dm_instruction(instruction)
+    if not parsed or parsed.get("app") != "whatsapp":
         return None
-    low = text.lower()
-    if "whatsapp" not in low and not re.search(r"\bwa\b", low):
-        return None
-    if not any(k in low for k in ("message", "msg", "text", "chat", "say", "send")):
-        return None
-    patterns = (
-        r"(?:go\s+on\s+|open\s+|launch\s+)?whatsapp\s+"
-        r"(?:message|msg|text|chat(?:\s+with)?)\s+(.+?)\s+"
-        r"(?:and\s+)?(?:say|send|tell)\s+(.+)$",
-        r"whatsapp[,:]?\s+(?:message|msg|text)\s+(.+?)\s+"
-        r"(?:and\s+)?(?:say|send)\s+(.+)$",
-        r"(?:message|msg|text)\s+(.+?)\s+on\s+whatsapp\s+"
-        r"(?:and\s+)?(?:say|send)\s+(.+)$",
-        r"whatsapp\s+(.+?)\s+(?:and\s+)?(?:say|send)\s+(.+)$",
+    return {"contact": parsed["contact"], "message": parsed["message"]}
+
+
+def _heuristic_dm_send(
+    instruction: str,
+    ui_tree: str,
+    history: List[str],
+    package: str = "",
+) -> Optional[Dict[str, Any]]:
+    """DM fast-path for WhatsApp / Instagram / Messenger / Telegram / dating apps."""
+    try:
+        from dm_heuristics import heuristic_dm_send
+    except ImportError:
+        from backend.dm_heuristics import heuristic_dm_send  # type: ignore
+
+    return heuristic_dm_send(
+        instruction,
+        ui_tree,
+        history,
+        package,
+        goal_satisfied=_goal_satisfied_from_tree,
     )
-    for pat in patterns:
-        m = re.search(pat, text, re.I)
-        if not m:
-            continue
-        contact = re.sub(r"\s+", " ", m.group(1)).strip(" .,\"'")
-        message = re.sub(r"\s+", " ", m.group(2)).strip(" .,\"'")
-        # Strip leading verbs left on contact
-        contact = re.sub(
-            r"^(?:message|msg|text|chat(?:\s+with)?)\s+",
-            "",
-            contact,
-            flags=re.I,
-        ).strip()
-        if contact and message and len(contact) <= 80 and len(message) <= 500:
-            return {"contact": contact, "message": message}
-    return None
 
 
 def _heuristic_whatsapp_send(
@@ -744,275 +786,11 @@ def _heuristic_whatsapp_send(
     history: List[str],
     package: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Deterministic WhatsApp path: Search → contact → compose → Send → verify.
-
-    open WhatsApp → tap Search (content-desc) → type contact → tap result →
-    tap Message/compose EditText → type body → tap Send → done when bubble shows.
-    """
-    parsed = _parse_whatsapp_instruction(instruction)
-    if not parsed:
+    """Back-compat wrapper around the generic DM heuristic."""
+    parsed = _parse_dm_instruction(instruction)
+    if not parsed or parsed.get("app") != "whatsapp":
         return None
-    contact = parsed["contact"]
-    message = parsed["message"]
-    hist = " ".join(history[-16:]).lower()
-    pkg = (package or "").lower()
-    tl = (ui_tree or "").lower()
-    # Prefer reported package — tree XML can mention com.whatsapp even when
-    # the launcher is still foreground (stale dump / packages= attr).
-    wa_fg = "whatsapp" in pkg
-    if not wa_fg and pkg and not _is_launcher_package(pkg):
-        wa_fg = 'p="com.whatsapp"' in tl or "packages=\"com.whatsapp\"" in tl
-
-    # Already sent — bubble visible outside edit
-    sat = _goal_satisfied_from_tree(instruction, ui_tree, package)
-    if sat and message.lower() in (ui_tree or "").lower():
-        return {
-            "action": "done",
-            "reason": sat,
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # ANR
-    if "isn't responding" in tl or "not responding" in tl:
-        return {
-            "action": "tap",
-            "x": 540,
-            "y": 1395,
-            "reason": "Dismiss ANR Wait (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    opened = (
-        "opened whatsapp" in hist
-        or "open_app(whatsapp)" in hist
-        or ("open_ok" in hist and "whatsapp" in hist)
-        or wa_fg
-    )
-
-    if not opened:
-        return {
-            "action": "open_app",
-            "app": "WhatsApp",
-            "reason": "Open WhatsApp (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    typed_contact = (
-        contact.lower() in hist
-        and ("type contact" in hist or f'type("{contact.lower()}")' in hist
-             or f"typed {contact.lower()}" in hist or "type(" in hist)
-    )
-    # Broader: any type of the contact string
-    if not typed_contact:
-        typed_contact = any(
-            contact.lower() in str(h).lower()
-            and ("type" in str(h).lower() or "typed" in str(h).lower())
-            for h in history[-16:]
-        )
-    tapped_contact = any(
-        contact.lower() in str(h).lower()
-        and ("tap contact" in str(h).lower() or "select contact" in str(h).lower()
-             or "matching" in str(h).lower())
-        for h in history[-16:]
-    )
-    # Contact row tap may just be tap(x,y) — after typing, next tap on contact name counts
-    if typed_contact and not tapped_contact:
-        # If compose field already visible, treat contact as selected
-        if _tree_editable_center(ui_tree) and (
-            "type a message" in tl or "message" in tl or 'e="1"' in tl or "e=1" in tl
-        ):
-            # Heuristic: after typing contact, if we see compose hints we may be in chat
-            pass
-
-    tapped_search = "tap search" in hist or (
-        "search" in hist and "tap(" in hist and "whatsapp" in hist
-    )
-    typed_message = any(
-        message.lower() in str(h).lower()
-        and ("type" in str(h).lower() or "typed" in str(h).lower())
-        for h in history[-16:]
-    )
-    tapped_send = any(
-        "tap send" in str(h).lower() or "send (whatsapp" in str(h).lower()
-        for h in history[-16:]
-    )
-    focused_compose = any(
-        "compose" in str(h).lower() or "message field" in str(h).lower()
-        for h in history[-16:]
-    )
-
-    # 1) Tap Search icon (content-desc Search)
-    if not typed_contact and not tapped_search:
-        c = _tree_node_center(ui_tree, "Search", "search")
-        if c:
-            return {
-                "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": "Tap Search (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-        # Fallback: top-right Search on S21+ (~1080x)
-        return {
-            "action": "tap",
-            "x": 980,
-            "y": 160,
-            "reason": "Tap Search coords fallback (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # 2) Type contact name (into search EditText — already focused after Search)
-    if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
-        return {
-            "action": "type",
-            "text": contact,
-            "reason": f"Type contact '{contact}' (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # 3) Tap matching contact result
-    if typed_contact and not tapped_contact and not typed_message:
-        # Prefer full name, then first token
-        tokens = [contact] + ([contact.split()[0]] if " " in contact else [])
-        c = _tree_node_center(ui_tree, *tokens)
-        if c:
-            return {
-                "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": f"Tap matching contact '{contact}' (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-        # Scroll/search list a bit if no match yet
-        if hist.count("swipe") < 2:
-            return {
-                "action": "swipe",
-                "x1": 540,
-                "y1": 1600,
-                "x2": 540,
-                "y2": 800,
-                "reason": "Scroll contact results (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-        return {
-            "action": "tap",
-            "x": 540,
-            "y": 420,
-            "reason": f"Tap first search result for '{contact}' (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # 4) Focus compose EditText
-    if (tapped_contact or typed_contact) and not typed_message and not focused_compose:
-        ec = _tree_editable_center(ui_tree)
-        c = _tree_node_center(
-            ui_tree, "Type a message", "Message", "Write a message", "type a message"
-        )
-        if ec or c:
-            x, y = ec or c
-            return {
-                "action": "tap",
-                "x": x,
-                "y": y,
-                "reason": "Focus compose Message field (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-        return {
-            "action": "tap",
-            "x": 540,
-            "y": 2250,
-            "reason": "Focus compose coords fallback (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # 5) Type message body
-    if focused_compose and not typed_message:
-        return {
-            "action": "type",
-            "text": message,
-            "reason": f"Type message '{message}' (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-    # If we somehow typed contact+selected but skipped focus flag, still type
-    if typed_contact and (tapped_contact or focused_compose) and not typed_message:
-        return {
-            "action": "type",
-            "text": message,
-            "reason": f"Type message '{message}' (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # 6) Tap Send (content-desc Send)
-    if typed_message and not tapped_send:
-        c = _tree_node_center(ui_tree, "Send", "send")
-        x, y = c if c else (1000, 2280)
-        return {
-            "action": "tap",
-            "x": x,
-            "y": y,
-            "reason": "Tap Send (whatsapp heuristic)",
-            "planner": "whatsapp_heuristic",
-            "llm_provider": None,
-        }
-
-    # 7) Re-tap Send / verify
-    if tapped_send:
-        sat2 = _goal_satisfied_from_tree(instruction, ui_tree, package)
-        if sat2:
-            return {
-                "action": "done",
-                "reason": sat2,
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-        if hist.count("tap send") + hist.count("re-tap send") < 3:
-            c = _tree_node_center(ui_tree, "Send", "send")
-            x, y = c if c else (1000, 2280)
-            return {
-                "action": "tap",
-                "x": x,
-                "y": y,
-                "reason": "Re-tap Send (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-
-    # Keep driving inside WhatsApp — never swipe the launcher
-    if wa_fg:
-        ec = _tree_editable_center(ui_tree)
-        if ec and not typed_message:
-            return {
-                "action": "tap",
-                "x": ec[0],
-                "y": ec[1],
-                "reason": "Continue compose (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-        c = _tree_node_center(ui_tree, "Search", "search")
-        if c and not typed_contact:
-            return {
-                "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": "Retry Search (whatsapp heuristic)",
-                "planner": "whatsapp_heuristic",
-                "llm_provider": None,
-            }
-    return None
+    return _heuristic_dm_send(instruction, ui_tree, history, package)
 
 
 def _heuristic_messaging_send(
@@ -1772,14 +1550,31 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             state["empty_tree_streak"] = 0
 
         image_b64 = None
-        # Skip screenshot when tree is healthy — cuts ~5-10s per step
+        # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
         try:
-            if tree_info["empty"]:
+            from dm_heuristics import tree_is_sparse
+        except ImportError:
+            from backend.dm_heuristics import tree_is_sparse  # type: ignore
+
+        sparse_tree = tree_info.get("empty") or tree_is_sparse(
+            ui_tree, tree_info.get("nodes")
+        )
+        try:
+            if sparse_tree:
                 image_b64 = _fetch_screenshot_b64(device_id)
         except Exception as shot_err:
             logger.warning("screenshot skipped: %s", shot_err)
             image_b64 = None
-        use_vision = bool(image_b64) and tree_info["empty"]
+        use_vision = bool(image_b64) and sparse_tree
+        if use_vision:
+            state["vision_fallback"] = True
+            state["tree_sparse"] = True
+            logger.info(
+                "vision fallback job=%s nodes=%s empty=%s",
+                job.get("job_id"),
+                tree_info.get("nodes"),
+                tree_info.get("empty"),
+            )
 
         np_streak = int(state.get("no_progress_streak") or 0)
         action = plan_next_action(
@@ -2133,15 +1928,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = action["reason"]
                 history.append("hint: launcher-swipe → messaging Start chat")
                 state["history"] = history[-40:]
-            elif _parse_whatsapp_instruction(instruction):
+            elif _parse_dm_instruction(instruction):
+                dm = _parse_dm_instruction(instruction) or {}
+                app_name = {
+                    "whatsapp": "WhatsApp",
+                    "instagram": "Instagram",
+                    "messenger": "Messenger",
+                    "telegram": "Telegram",
+                    "tinder": "Tinder",
+                    "bumble": "Bumble",
+                    "hinge": "Hinge",
+                }.get(str(dm.get("app") or ""), "WhatsApp")
                 action = {
                     "action": "open_app",
-                    "app": "WhatsApp",
-                    "reason": "launcher-swipe → open WhatsApp (whatsapp heuristic)",
+                    "app": app_name,
+                    "reason": f"launcher-swipe → open {app_name} (dm heuristic)",
                 }
                 kind = "open_app"
                 reason = action["reason"]
-                history.append("hint: launcher-swipe → open WhatsApp")
+                history.append(f"hint: launcher-swipe → open {app_name}")
                 state["history"] = history[-40:]
 
         summary = execute_action(device_id, action)
@@ -2215,7 +2020,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["no_progress_streak"] = 0
             state["last_tree_fp"] = fp
             # Launcher swipe loop: only abort after ≥3 unchanged launcher swipes
-            if _launcher_swipe_abort(state, after_pkg or str(tree_info.get("package") or ""), tree_changed, kind):
+            if _launcher_swipe_abort(
+                state,
+                after_pkg or str(tree_info.get("package") or ""),
+                tree_changed,
+                kind,
+            ):
                 state["last_action"] = "swipe_loop"
                 history.append("swipe_loop: launcher unchanged ×3")
                 state["history"] = history[-40:]

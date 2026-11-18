@@ -1,0 +1,11 @@
+<hierarchy windows="2" nodes="24" partial="false" empty="false" mode="compact" packages="com.instagram.android">
+<w id="active" t="active" p="com.instagram.android" f="1">
+ <n t="Instagram" xy="120,90" b="0,40,400,160"/>
+ <n d="Messages" c="1" xy="980,150" b="900,80,1060,220"/>
+ <n d="New message" c="1" xy="1040,150" b="1000,80,1080,220"/>
+ <n t="Home" c="1" xy="108,2280" b="40,2220,180,2340"/>
+ <n t="Search and explore" d="Search and explore" c="1" xy="324,2280" b="250,2220,400,2340"/>
+ <n t="Reels" c="1" xy="540,2280" b="470,2220,610,2340"/>
+ <n d="Messages" c="1" xy="860,150" b="800,80,920,220"/>
+</w>
+</hierarchy>
