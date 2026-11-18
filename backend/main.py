@@ -1385,8 +1385,9 @@ async def submit_task(
                 "max_steps": request.max_steps or 15,
                 "state": {"steps": 0, "history": []},
             }
-            # Run up to a few steps inline for local backends
-            for _ in range(min(8, int(request.max_steps or 15))):
+            # Run steps inline for local backends (emulator bench needs full
+            # open→search→compose→send loops; callers may also /tick).
+            for _ in range(int(request.max_steps or 15)):
                 if job.get("status") != "running":
                     break
                 job = run_one_agent_step(job)

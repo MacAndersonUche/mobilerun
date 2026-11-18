@@ -239,9 +239,10 @@ def poll_task(token: str, task_id: str, timeout_s: int = 240) -> Dict[str, Any]:
     deadline = time.time() + timeout_s
     last: Dict[str, Any] = {}
     while time.time() < deadline:
-        # Local/dev: step worker is inline — keep ticking until terminal.
+        # Local/dev: keep advancing the job via tick until terminal.
+        tick: Dict[str, Any] = {}
         try:
-            req(
+            tick = req(
                 "POST",
                 f"/api/jobs/{task_id}/tick",
                 {},
@@ -252,21 +253,16 @@ def poll_task(token: str, task_id: str, timeout_s: int = 240) -> Dict[str, Any]:
         except Exception as e:
             print(f"    tick_err={e!s}"[:180], flush=True)
         last = req("GET", f"/api/tasks/{task_id}", token=token, timeout=45, retries=10)
-        # Prefer job state when task mirror is thin
-        try:
-            job = req("GET", f"/api/jobs/{task_id}", token=token, timeout=30, retries=3)
-            if isinstance(job, dict) and job.get("status"):
-                # Merge useful fields onto last for logging
-                last = {
-                    **last,
-                    "status": job.get("status") or last.get("status"),
-                    "result": job.get("result") or last.get("result"),
-                    "error": job.get("error") or last.get("error"),
-                    "steps": (job.get("state") or {}).get("steps_detail")
-                    or last.get("steps"),
-                }
-        except Exception:
-            pass
+        if isinstance(tick, dict) and tick.get("status"):
+            last = {
+                **last,
+                "status": tick.get("status") or last.get("status"),
+            }
+            act = tick.get("activity") or {}
+            if act.get("steps_detail"):
+                last["steps"] = act["steps_detail"]
+            if act.get("result"):
+                last["result"] = act.get("result")
         status = (last.get("status") or "").lower()
         steps = last.get("steps") or []
         nsteps = len(steps) if isinstance(steps, list) else int(steps or 0)
