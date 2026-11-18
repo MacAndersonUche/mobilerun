@@ -1095,14 +1095,17 @@ class BackendClient(private val context: Context) {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
                         val humanize = params?.get("humanize") as? Boolean ?: true
+                        // Run typing on this commandExecutor thread (already off
+                        // the WS/heartbeat thread). inputText caps sleep ≤1.5s so
+                        // ACK returns quickly and heartbeats keep flowing.
                         val ok = a11yService!!.inputText(text, clear, humanize)
                         sendAgentEvent(null, null, "type", "type(${text.take(40)})")
                         if (!ok) throw Exception("input_text failed — focus a text field")
-                        // ACK after chunked SET_TEXT; cloud verifies via next get_ui_tree
                         mapOf(
                             "ok" to true,
                             "acked" to true,
                             "humanize" to humanize,
+                            "chars" to text.length,
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),

@@ -996,7 +996,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
             setText("")
         }
         val existing = if (clear) "" else (edit.text?.toString() ?: "")
-        // Human-like: type in small chunks with variance — not one instant paste
+        // Human-like chunks, but HARD-CAP total sleep so command ACK never
+        // approaches the cloud's input_text timeout (was causing WS offline).
+        val maxHumanizeBudgetMs = 1_500L
         val ok = if (!humanize || text.length <= 2) {
             setText(existing + text)
         } else {
@@ -1004,24 +1006,37 @@ class MobilerunAccessibilityService : AccessibilityService() {
             var built = existing
             var i = 0
             var success = true
+            var slept = 0L
+            // Longer strings: bigger chunks so we finish under budget
+            val minChunk = if (text.length > 24) 4 else 2
+            val maxChunk = if (text.length > 24) 8 else 5
             while (i < text.length) {
-                val chunk = rng.nextInt(2, 5).coerceAtMost(text.length - i)
+                val remaining = text.length - i
+                val chunk = if (slept >= maxHumanizeBudgetMs) {
+                    remaining // paste the rest — do not block heartbeats
+                } else {
+                    rng.nextInt(minChunk, maxChunk + 1).coerceAtMost(remaining)
+                }
                 built += text.substring(i, i + chunk)
                 if (!setText(built)) {
                     success = false
                     break
                 }
                 i += chunk
-                if (i < text.length) {
-                    // ~30–110ms between chunks; occasional brief pause
+                if (i < text.length && slept < maxHumanizeBudgetMs) {
                     val pause = if (rng.nextDouble() < 0.12) {
-                        rng.nextLong(120, 280)
+                        rng.nextLong(80, 160)
                     } else {
-                        rng.nextLong(30, 110)
+                        rng.nextLong(20, 70)
                     }
-                    try {
-                        Thread.sleep(pause)
-                    } catch (_: InterruptedException) {
+                    val allowed = (maxHumanizeBudgetMs - slept).coerceAtLeast(0L)
+                    val actual = pause.coerceAtMost(allowed)
+                    if (actual > 0L) {
+                        try {
+                            Thread.sleep(actual)
+                        } catch (_: InterruptedException) {
+                        }
+                        slept += actual
                     }
                 }
             }

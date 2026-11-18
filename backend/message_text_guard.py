@@ -33,20 +33,29 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
       … and say hi baby
       … say "hello there"
       … send: hello
+      … tell her hi baby   → hi baby (strips her/him/them)
+      … find and message X tell her Y
     """
     text = (instruction or "").strip()
     if not text:
         return None
     patterns = (
         r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']\s*$",
-        r"(?:and\s+)?(?:say|send|tell)\s+(.+)$",
+        # tell her / tell him / tell them / say / send
+        r"(?:and\s+)?(?:say|send|tell(?:\s+(?:her|him|them))?)\s+(.+)$",
     )
     for pat in patterns:
         m = re.search(pat, text, re.I)
         if not m:
             continue
         body = _norm(m.group(1))
-        # Strip trailing filler
+        # Strip leftover pronouns / instruction words from the body
+        body = re.sub(
+            r"^(?:her|him|them|that|to\s+her|to\s+him)\s+",
+            "",
+            body,
+            flags=re.I,
+        ).strip()
         body = re.sub(r"\s+(please|now|for me)\s*$", "", body, flags=re.I).strip()
         if body and len(body) <= 2000:
             return body

@@ -157,6 +157,8 @@ class TaskRequest(BaseModel):
     mode: str = "normal"
     # Shared humanizer: fast | balanced | careful
     speed_preset: str = "balanced"
+    # dry_run: navigate + fill compose, but do NOT tap Send; final screenshot kept
+    dry_run: bool = False
 
 
 class TaskStep(BaseModel):
@@ -172,6 +174,8 @@ class TaskStep(BaseModel):
     verify: Optional[str] = None
     ts: Optional[int] = None
     dry_run: Optional[bool] = None
+    planner: Optional[str] = None
+    fastpath_step: Optional[str] = None
 
 
 class TaskStatus(BaseModel):
@@ -1318,9 +1322,14 @@ async def submit_task(
                 "max_steps": request.max_steps or 15,
                 "speed_preset": speed,
                 "mode": mode,
+                "dry_run": bool(request.dry_run),
                 "created_at": int(datetime.now().timestamp()),
                 "next_run_at": int(datetime.now().timestamp()),
-                "state": {"steps": 0, "history": []},
+                "state": {
+                    "steps": 0,
+                    "history": [],
+                    "dry_run": bool(request.dry_run),
+                },
                 "ttl": int(datetime.now().timestamp()) + 86400,
                 "result": "Queued for cloud agent",
             }
@@ -1557,6 +1566,8 @@ def _task_steps_from_state(st: Dict[str, Any]) -> List[TaskStep]:
                 verify=s.get("verify"),
                 ts=s.get("ts"),
                 dry_run=s.get("dry_run"),
+                planner=s.get("planner"),
+                fastpath_step=s.get("fastpath_step"),
             )
         )
     # Fallback: derive from flat history strings

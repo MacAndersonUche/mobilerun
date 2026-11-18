@@ -563,6 +563,7 @@ def plan_next_action(
     no_progress_streak: int = 0,
     last_tap_key: Optional[str] = None,
     package: str = "",
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Plan one action. Multi-step goals require a real LLM (Gemini or OpenAI).
 
@@ -596,7 +597,9 @@ def plan_next_action(
         return _guard(msg_heur)
 
     # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, Tinder, …)
-    dm_heur = _heuristic_dm_send(instruction, ui_tree, history, package)
+    dm_heur = _heuristic_dm_send(
+        instruction, ui_tree, history, package, dry_run=dry_run
+    )
     if dm_heur:
         return _guard(dm_heur)
 
@@ -804,6 +807,8 @@ def _heuristic_dm_send(
     ui_tree: str,
     history: List[str],
     package: str = "",
+    *,
+    dry_run: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """DM fast-path for WhatsApp / Instagram / Messenger / Telegram / dating apps."""
     try:
@@ -817,6 +822,7 @@ def _heuristic_dm_send(
         history,
         package,
         goal_satisfied=_goal_satisfied_from_tree,
+        dry_run=dry_run,
     )
 
 
@@ -825,12 +831,14 @@ def _heuristic_whatsapp_send(
     ui_tree: str,
     history: List[str],
     package: str = "",
+    *,
+    dry_run: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Back-compat wrapper around the generic DM heuristic."""
     parsed = _parse_dm_instruction(instruction)
     if not parsed or parsed.get("app") != "whatsapp":
         return None
-    return _heuristic_dm_send(instruction, ui_tree, history, package)
+    return _heuristic_dm_send(instruction, ui_tree, history, package, dry_run=dry_run)
 
 
 def _heuristic_messaging_send(
@@ -1341,7 +1349,8 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             raise RuntimeError(str(guarded.get("reason") or "message text guard"))
         action.update(guarded)
         text = str(action.get("text") or "")
-        # Device chunks SET_TEXT with human-like inter-chunk delays (not paste)
+        # Device ACK is fast (typing may continue briefly). Cap wait well above
+        # the old 20s wall that caused offline_streak after chunked SET_TEXT.
         raw = call_device(
             device_id,
             "input_text",
@@ -1350,7 +1359,7 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                 "clear": bool(action.get("clear")),
                 "humanize": True,
             },
-            timeout_s=20,
+            timeout_s=45,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
             action["_timing"] = raw["timing"]
@@ -1712,6 +1721,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             ),
                             last_tap_key=state.get("last_tap_key"),
                             package=str(tree_info.get("package") or ""),
+                            dry_run=bool(job.get("dry_run") or state.get("dry_run")),
                         )
                         kind = str(action.get("action") or "").lower()
                         reason = str(action.get("reason") or "")
@@ -1811,6 +1821,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
             np_streak = int(state.get("no_progress_streak") or 0)
+            job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
             try:
                 action = plan_next_action(
                     instruction,
@@ -1820,6 +1831,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     no_progress_streak=np_streak,
                     last_tap_key=state.get("last_tap_key"),
                     package=str(tree_info.get("package") or ""),
+                    dry_run=job_dry_run,
                 )
             except RuntimeError as plan_err:
                 # Recover instead of failing when possible
@@ -1947,6 +1959,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         image_b64=image_b64 if use_vision else None,
                         no_progress_streak=np_streak,
                         last_tap_key=state.get("last_tap_key"),
+                        dry_run=bool(job.get("dry_run") or state.get("dry_run")),
                         package=str(tree_info.get("package") or ""),
                     )
                     kind = str(action.get("action") or "").lower()
@@ -2029,6 +2042,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 "screenshot_key": screenshot_key,
                 "verify": verify,
                 "ts": int(time.time()),
+                "planner": action.get("planner") if isinstance(action, dict) else None,
+                "fastpath_step": (
+                    (action.get("fastpath_step") or action.get("_fastpath_step"))
+                    if isinstance(action, dict)
+                    else None
+                ),
+                "dry_run": bool(job.get("dry_run") or state.get("dry_run")),
             }
             # Per-command timings from APK (build_ms / bytes / round_trip_ms)
             tinfo = timing or tree_info.get("timing") or {}
@@ -2056,7 +2076,35 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 str(job.get("job_id") or ""), step + 1, image_b64
             )
 
+        # dry_run: never tap Send — stop once compose is filled
+        if bool(job.get("dry_run") or state.get("dry_run")) and kind == "tap":
+            low_r = (reason or "").lower()
+            if "tap send" in low_r or low_r.startswith("tap send"):
+                kind = "done"
+                reason = f"dry_run — compose filled; send skipped ({reason})"
+                action = {
+                    **action,
+                    "action": "done",
+                    "reason": reason,
+                    "screenshot": True,
+                    "dry_run": True,
+                }
+
         if kind == "done":
+            # Always capture a final screenshot for dry-run compose verification
+            if not shot_key and (
+                bool(job.get("dry_run") or state.get("dry_run"))
+                or action.get("screenshot")
+            ):
+                try:
+                    final_b64 = _fetch_screenshot_b64(device_id)
+                    if final_b64:
+                        shot_key = _store_step_screenshot(
+                            str(job.get("job_id") or ""), step + 1, final_b64
+                        )
+                        state["final_screenshot_key"] = shot_key
+                except Exception as se:
+                    logger.warning("dry_run final screenshot failed: %s", se)
             state["steps"] = step + 1
             state["last_progress_at"] = int(time.time())
             state["last_action"] = f"done: {reason}"
