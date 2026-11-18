@@ -37,6 +37,11 @@ Rules:
 - If the tree is empty/thin (<15 nodes) but a screenshot is provided, use VISION:
   estimate tap coordinates from the image (screen origin top-left; x,y in pixels).
   Prefer labeled icons (Search, Send, Messages, Inbox) visible in the screenshot.
+- HARD RULE — MESSAGE TEXT: Never invent, rewrite, paraphrase, or “improve” a
+  message body. AI/vision is for NAVIGATION only (open chat, dismiss prompts,
+  focus the compose field). When typing a message, the "text" field MUST be the
+  exact user-provided phrase from the GOAL (e.g. after “say …”) or a verbatim
+  message-bank / template entry. Contact/search queries may use names/numbers.
 - Do NOT repeat the same swipe. If stuck, use open_app (once), back, or fail.
 - Do NOT repeat the same tap (same x,y) when the UI did not change. If NO PROGRESS is
   noted, change strategy: different node, swipe, back, type, done, or fail.
@@ -575,15 +580,25 @@ def plan_next_action(
             "llm_provider": None,
         }
 
+    try:
+        from message_text_guard import enforce_message_text as _enforce_msg
+    except ImportError:
+        from backend.message_text_guard import (  # type: ignore
+            enforce_message_text as _enforce_msg,
+        )
+
+    def _guard(action: Dict[str, Any]) -> Dict[str, Any]:
+        return _enforce_msg(action, instruction, history=history)
+
     # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
     msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
     if msg_heur:
-        return msg_heur
+        return _guard(msg_heur)
 
     # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, Tinder, …)
     dm_heur = _heuristic_dm_send(instruction, ui_tree, history, package)
     if dm_heur:
-        return dm_heur
+        return _guard(dm_heur)
 
     open_target = _trivial_open_app_target(instruction)
     hist_blob = " ".join(history).lower()
@@ -701,7 +716,8 @@ def plan_next_action(
     action = _parse_action_json(raw)
     action["planner"] = "llm"
     action["llm_provider"] = provider_used
-    return action
+    # Hard rule: never let the LLM invent message body text
+    return _guard(action)
 
 
 def _tree_node_center(tree: str, *needles: str) -> Optional[tuple]:
@@ -1304,6 +1320,26 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             action["_timing"] = raw["timing"]
         return "Swiped"
     if kind in ("type", "type_text", "input_text"):
+        # Final gate: bank / user text only (defense in depth vs LLM rewrite)
+        try:
+            from message_text_guard import enforce_message_text
+        except ImportError:
+            from backend.message_text_guard import enforce_message_text  # type: ignore
+
+        instr = str(action.get("_instruction") or action.get("instruction") or "")
+        guarded = enforce_message_text(
+            action,
+            instr,
+            job=action.get("_job") if isinstance(action.get("_job"), dict) else None,
+            history=(
+                action.get("_history")
+                if isinstance(action.get("_history"), list)
+                else None
+            ),
+        )
+        if str(guarded.get("action") or "").lower() == "fail":
+            raise RuntimeError(str(guarded.get("reason") or "message text guard"))
+        action.update(guarded)
         text = str(action.get("text") or "")
         # Device chunks SET_TEXT with human-like inter-chunk delays (not paste)
         raw = call_device(
@@ -2196,6 +2232,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 history.append(f"hint: launcher-swipe → open {app_name}")
                 state["history"] = history[-40:]
 
+        # Stamp instruction/job for message-text guard inside execute_action
+        action["_instruction"] = instruction
+        action["_job"] = {
+            k: job.get(k)
+            for k in (
+                "message_text",
+                "bank_text",
+                "selected_message",
+                "allowed_message_text",
+                "message_bank",
+                "allowed_messages",
+                "bank_messages",
+                "opener_library",
+            )
+            if job.get(k) is not None
+        }
+        action["_history"] = list(history[-16:])
         summary = execute_action(device_id, action)
 
         # Verify: re-fetch tree / package after action (retry empty/offline)

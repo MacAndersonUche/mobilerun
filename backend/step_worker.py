@@ -113,14 +113,9 @@ def _compose_for_step(
 
     raw_lib = job.get("opener_library") or state.get("opener_library")
     lib = merge_with_defaults(raw_lib if isinstance(raw_lib, dict) else None)
-    # Honour job-level / global opener mode
-    mode = (
-        job.get("opener_mode")
-        or state.get("opener_mode")
-        or lib.opener_mode
-        or "templates"
-    )
-    lib.opener_mode = str(mode).lower()
+    # HARD RULE: message bodies come ONLY from the template/message bank —
+    # never AI-generated or rewritten copy (navigation may still use LLM elsewhere).
+    lib.opener_mode = "templates"
     package = (
         state.get("current_app")
         or job.get("current_app")
@@ -130,32 +125,46 @@ def _compose_for_step(
     match_id = state.get("current_match_id") or f"match_{state.get('steps', 0)}"
     profile = state.get("current_profile_name") or ""
 
-    ai_calls = {"n": 0}
-
-    def ai_callable(**kwargs):
-        ai_calls["n"] += 1
-        custom = job.get("ai_callable_result")
-        if custom:
-            return custom
-        if kwargs.get("is_opener"):
-            return f"[AI opener]"
-        return f"[AI reply]"
+    # Explicit user/bank override on the job wins
+    forced = (
+        job.get("message_text")
+        or job.get("bank_text")
+        or job.get("selected_message")
+        or state.get("message_text")
+        or state.get("bank_text")
+    )
+    if forced:
+        text = str(forced).strip()
+        state["last_composed_text"] = text
+        state["last_composed_source"] = "job_bank_or_user"
+        return {
+            "text": text,
+            "source": "job_bank_or_user",
+            "used_llm": False,
+            "is_opener": action == "opener",
+            "ai_calls": 0,
+        }
 
     try:
+        # Always template path (is_opener=True) so replies also use the bank
         result = compose_dating_message(
-            is_opener=(action == "opener"),
+            is_opener=True,
             lib=lib,
             match_id=str(match_id),
             package_name=str(package),
             profile_name=profile or None,
             rng=rng,
-            ai_callable=ai_callable,
-            inbound_preview=state.get("inbound_preview") or "",
+            ai_callable=None,
+            inbound_preview="",
         )
-        result["ai_calls"] = ai_calls["n"]
+        result["ai_calls"] = 0
+        result["used_llm"] = False
+        result["source"] = result.get("source") or "template"
         # Persist rotation state back onto job for subsequent ticks
         state["opener_library"] = lib.to_dict()
         job["opener_library"] = lib.to_dict()
+        state["last_composed_text"] = result.get("text")
+        state["last_composed_source"] = "template"
         return result
     except Exception:
         logger.exception("compose for step failed action=%s", action)

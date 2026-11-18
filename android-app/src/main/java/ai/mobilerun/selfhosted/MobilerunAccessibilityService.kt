@@ -145,8 +145,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
     fun tap(
         x: Int,
         y: Int,
-        callback: (Boolean) -> Unit,
         humanize: Boolean = true,
+        callback: (Boolean) -> Unit,
     ) {
         // Slight jitter so taps are not pixel-perfect robotic
         val jx: Int
@@ -181,7 +181,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     /** Fire-and-forget tap — used when the cloud ACKs immediately. */
     fun tapFireAndForget(x: Int, y: Int, humanize: Boolean = true) {
-        tap(x, y, { /* async verify is the cloud's job */ }, humanize)
+        tap(x, y, humanize) { /* async verify is the cloud's job */ }
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, callback: (Boolean) -> Unit) {

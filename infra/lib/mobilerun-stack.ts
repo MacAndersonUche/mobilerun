@@ -300,10 +300,19 @@ export class MobilerunStack extends cdk.Stack {
       screenshotBucket.grantReadWrite(fn);
     }
 
-    // Allow HTTP Lambda + step worker itself to invoke step worker for
-    // back-to-back agent ticks (avoid waiting on the 1-minute EventBridge rule).
+    // Allow HTTP Lambda to invoke step worker. Self-invoke uses a wildcard
+    // policy (not grantInvoke(stepFn)) to avoid a CloudFormation circular
+    // dependency between the function and its default policy.
     stepFn.grantInvoke(httpFn);
-    stepFn.grantInvoke(stepFn);
+    stepFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'],
+        // Wildcard avoids Function↔Policy circular deps; scoped by account/region.
+        resources: [
+          `arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`,
+        ],
+      })
+    );
     httpFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
     stepFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
     stepFn.addEnvironment('AGENT_STEP_CHAIN', '6');
