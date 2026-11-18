@@ -43,10 +43,12 @@ class MobilerunAccessibilityService : AccessibilityService() {
         private const val MAX_DEPTH = 10
         private const val MAX_TREE_CHARS = 12_000
         // Soft budget for the main-looper walk itself (partial tree > empty)
-        // Target p95 < 1.5s wall including gzip/scheduling
-        private const val SOFT_DEADLINE_MS = 1_100L
-        // Caller await: soft walk + main-looper scheduling + gzip slack
-        private const val HARD_AWAIT_MS = 1_450L
+        // Soft walk budget once main looper actually starts the dump.
+        // Hard await must absorb main-thread scheduling delay on slow/ANR-busy
+        // emulators (accel-off) so we never return before a late non-empty walk.
+        private const val SOFT_DEADLINE_MS = 1_600L
+        // Caller await: main scheduling + soft walk + gzip. Keep > soft+1s.
+        private const val HARD_AWAIT_MS = 4_000L
         // Serve unchanged content from cache aggressively
         private const val CACHE_TTL_MS = 4_000L
         // Keep a slightly older non-empty dump to avoid feeding empty trees after drops
@@ -605,9 +607,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
             body
         }
         val primaryPkg = pkgs.firstOrNull().orEmpty()
+        val nodeCount = counter[0]
+        // Soft-deadline can leave a window shell with zero nodes — treat as empty
+        // so callers retry / serve stale instead of planning on a hollow tree.
+        val isEmpty = nodeCount == 0
         val tree = buildString {
-            append("<hierarchy windows=\"$windowCount\" nodes=\"${counter[0]}\" ")
-            append("partial=\"$truncated\" ")
+            append("<hierarchy windows=\"$windowCount\" nodes=\"$nodeCount\" ")
+            append("partial=\"$truncated\" empty=\"$isEmpty\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
             append("</hierarchy>")
@@ -615,9 +621,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
         return TreeResult(
             tree = tree,
             packageName = primaryPkg,
-            empty = false,
+            empty = isEmpty,
             chars = tree.length,
-            nodes = counter[0],
+            nodes = nodeCount,
             partial = truncated,
             cached = false,
             buildMs = 0,
