@@ -679,12 +679,15 @@ def _heuristic_messaging_send(
                 "llm_provider": None,
             }
 
+    opened = "opened messages" in hist or "open_app(messages)" in hist
+    started_chat = "start chat" in hist or "845,2200" in hist
+    typed_recipient = "5550100" in hist
+    typed_marker = marker in hist or "type marker" in hist
+    tapped_send = "tap send" in hist or "1000,2280" in hist or "send coords" in hist
     messaging_fg = "messaging" in pkg or "messaging" in tl
-    if (
-        not messaging_fg
-        and "opened messages" not in hist
-        and "open_app(messages)" not in hist
-    ):
+
+    # History-driven state machine (thin trees after Start chat are common)
+    if not opened and not messaging_fg:
         return {
             "action": "open_app",
             "app": "messages",
@@ -692,18 +695,7 @@ def _heuristic_messaging_send(
             "planner": "messaging_heuristic",
             "llm_provider": None,
         }
-    if not messaging_fg:
-        # Opened once but left the app — reopen
-        return {
-            "action": "open_app",
-            "app": "messages",
-            "reason": "Re-open Messages (messaging heuristic)",
-            "planner": "messaging_heuristic",
-            "llm_provider": None,
-        }
-
-    # Start chat FAB
-    if "start chat" in tl or "start_chat" in tl:
+    if messaging_fg and ("start chat" in tl or "start_chat" in tl) and not started_chat:
         c = _tree_node_center(ui_tree, "Start chat", "start chat")
         x, y = c if c else (845, 2200)
         return {
@@ -714,68 +706,44 @@ def _heuristic_messaging_send(
             "planner": "messaging_heuristic",
             "llm_provider": None,
         }
-
-    # Recipient field
-    if (
-        'text="to"' in tl
-        or "type a name" in tl
-        or "phone number" in tl
-        or "new conversation" in tl
-    ) and marker not in tl:
-        if "5550100" not in hist and "5550100" not in tl:
-            return {
-                "action": "type",
-                "text": "5550100",
-                "reason": "Type recipient 5550100 (messaging heuristic)",
-                "planner": "messaging_heuristic",
-                "llm_provider": None,
-            }
-        # Select suggestion / confirm
-        c = _tree_node_center(ui_tree, "5550100", "555-0100", "MacAITest")
-        if c:
+    if not started_chat and (messaging_fg or opened):
+        return {
+            "action": "tap",
+            "x": 845,
+            "y": 2200,
+            "reason": "Tap Start chat FAB coords (messaging heuristic)",
+            "planner": "messaging_heuristic",
+            "llm_provider": None,
+        }
+    if started_chat and not typed_recipient:
+        return {
+            "action": "type",
+            "text": "5550100",
+            "reason": "Type recipient 5550100 (messaging heuristic)",
+            "planner": "messaging_heuristic",
+            "llm_provider": None,
+        }
+    if typed_recipient and not typed_marker:
+        if "select recipient" not in hist and "540,450" not in hist:
+            c = _tree_node_center(ui_tree, "5550100", "555-0100", "MacAITest")
+            if c:
+                return {
+                    "action": "tap",
+                    "x": c[0],
+                    "y": c[1],
+                    "reason": "Select recipient (messaging heuristic)",
+                    "planner": "messaging_heuristic",
+                    "llm_provider": None,
+                }
             return {
                 "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": "Select recipient (messaging heuristic)",
+                "x": 540,
+                "y": 450,
+                "reason": "Tap recipient suggestion (messaging heuristic)",
                 "planner": "messaging_heuristic",
                 "llm_provider": None,
             }
-        return {
-            "action": "tap",
-            "x": 540,
-            "y": 450,
-            "reason": "Tap recipient suggestion (messaging heuristic)",
-            "planner": "messaging_heuristic",
-            "llm_provider": None,
-        }
-
-    # Compose / Send
-    send_c = _tree_node_center(ui_tree, "Send SMS", "Send message", "Send")
-    if marker in tl and send_c:
-        return {
-            "action": "tap",
-            "x": send_c[0],
-            "y": send_c[1],
-            "reason": "Tap Send (messaging heuristic)",
-            "planner": "messaging_heuristic",
-            "llm_provider": None,
-        }
-    if marker in tl:
-        # Marker in draft — tap common Send coords
-        return {
-            "action": "tap",
-            "x": 1000,
-            "y": 2280,
-            "reason": "Tap Send coords (messaging heuristic)",
-            "planner": "messaging_heuristic",
-            "llm_provider": None,
-        }
-
-    # Need to type marker into compose
-    if "compose" in tl or "text message" in tl or "message" in tl or "edittext" in tl:
-        # Focus field then type
-        if "type:" not in hist[-80:] and marker not in hist:
+        if "focus compose" not in hist and "540,2250" not in hist:
             return {
                 "action": "tap",
                 "x": 540,
@@ -791,14 +759,35 @@ def _heuristic_messaging_send(
             "planner": "messaging_heuristic",
             "llm_provider": None,
         }
-
-    # Fallback: Start chat coords if list-ish
-    if "conversation list" in tl or "search" in tl:
+    if typed_marker and not tapped_send:
+        send_c = _tree_node_center(ui_tree, "Send SMS", "Send message", "Send")
+        x, y = send_c if send_c else (1000, 2280)
+        return {
+            "action": "tap",
+            "x": x,
+            "y": y,
+            "reason": "Tap Send (messaging heuristic)",
+            "planner": "messaging_heuristic",
+            "llm_provider": None,
+        }
+    if tapped_send and hist.count("tap send") + hist.count("re-tap send") < 3:
+        send_c = _tree_node_center(ui_tree, "Send SMS", "Send message", "Send")
+        x, y = send_c if send_c else (1000, 2280)
+        return {
+            "action": "tap",
+            "x": x,
+            "y": y,
+            "reason": "Re-tap Send (messaging heuristic)",
+            "planner": "messaging_heuristic",
+            "llm_provider": None,
+        }
+    # Never emit open_app again once opened — keep driving compose
+    if opened or messaging_fg:
         return {
             "action": "tap",
             "x": 845,
             "y": 2200,
-            "reason": "Tap Start chat FAB coords (messaging heuristic)",
+            "reason": "Continue Start chat / FAB (messaging heuristic)",
             "planner": "messaging_heuristic",
             "llm_provider": None,
         }
