@@ -172,9 +172,7 @@ def test_goal_satisfied_whatsapp_bubble():
         'type("hi baby") — Type message (whatsapp heuristic)',
         "tap(1000,2280) — Tap Send (whatsapp heuristic)",
     ]
-    reason = _goal_satisfied_from_tree(
-        INSTR, sent, "com.whatsapp", history=hist
-    )
+    reason = _goal_satisfied_from_tree(INSTR, sent, "com.whatsapp", history=hist)
     assert reason is not None
     assert "hi baby" in reason.lower()
     # dry_run never completes via bubble detection
