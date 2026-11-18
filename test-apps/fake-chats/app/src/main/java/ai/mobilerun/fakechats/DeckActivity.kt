@@ -39,6 +39,17 @@ class DeckActivity : AppCompatActivity() {
         val progress = getSharedPreferences("deck_progress", MODE_PRIVATE)
         index = progress.getInt("index", 0).coerceIn(0, profiles.size)
         likes = progress.getInt("likes", 0).coerceAtLeast(0)
+        // Prefer SwipeLog high-water mark when prefs were lost mid-run.
+        var loggedLikes = 0
+        for (row in SwipeLog.readAll(this)) {
+            val idx = row.optInt("index", -1) + 1
+            if (idx > index) index = idx
+            if (row.optString("action") in setOf("like", "superlike")) {
+                loggedLikes += 1
+            }
+        }
+        likes = maxOf(likes, loggedLikes)
+        index = index.coerceIn(0, profiles.size)
         if (intent?.getBooleanExtra("clear_log", false) == true) {
             SentLog.clear(this)
             SwipeLog.clear(this)
@@ -46,7 +57,7 @@ class DeckActivity : AppCompatActivity() {
             MatchStore.clear(this)
             index = 0
             likes = 0
-            progress.edit().clear().apply()
+            progress.edit().clear().commit()
         }
 
         findViewById<View>(R.id.deck_card).remapId(this, ids.deckCard)
