@@ -1,0 +1,11 @@
+<hierarchy windows="2" nodes="24" partial="false" empty="false" mode="compact" packages="com.whatsapp">
+<w id="active" t="active" p="com.whatsapp" f="1">
+ <n d="Back" c="1" xy="80,150" b="20,90,140,210"/>
+ <n t="Precious Achalugo" c="1" xy="400,150" b="160,90,800,210"/>
+ <n s="1" xy="540,1100" b="0,260,1080,2000"/>
+ <n t="hey" xy="700,520" b="400,480,1000,560"/>
+ <n t="hi baby" xy="720,700" b="420,640,1020,760"/>
+ <n e="1" h="Type a message" xy="480,2280" b="120,2200,900,2360"/>
+ <n d="Send" c="1" xy="1000,2280" b="920,2200,1080,2360"/>
+</w>
+</hierarchy>

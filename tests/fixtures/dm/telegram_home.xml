@@ -1,0 +1,9 @@
+<hierarchy windows="2" nodes="16" partial="false" empty="false" mode="compact" packages="org.telegram.messenger">
+<w id="active" t="active" p="org.telegram.messenger" f="1">
+ <n t="Telegram" xy="200,140" b="40,80,400,200"/>
+ <n d="Search" c="1" xy="980,150" b="900,80,1060,220"/>
+ <n t="Chats" c="1" xy="180,2280" b="40,2220,320,2340"/>
+ <n t="Jane Doe" c="1" xy="540,480" b="0,400,1080,560"/>
+ <n d="New Message" c="1" xy="960,2100" b="880,2020,1040,2180"/>
+</w>
+</hierarchy>

@@ -19,7 +19,7 @@ import os
 import random
 import time
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
     from storage import get_device_connections, get_job, list_due_jobs, put_job
@@ -113,14 +113,9 @@ def _compose_for_step(
 
     raw_lib = job.get("opener_library") or state.get("opener_library")
     lib = merge_with_defaults(raw_lib if isinstance(raw_lib, dict) else None)
-    # Honour job-level / global opener mode
-    mode = (
-        job.get("opener_mode")
-        or state.get("opener_mode")
-        or lib.opener_mode
-        or "templates"
-    )
-    lib.opener_mode = str(mode).lower()
+    # HARD RULE: message bodies come ONLY from the template/message bank —
+    # never AI-generated or rewritten copy (navigation may still use LLM elsewhere).
+    lib.opener_mode = "templates"
     package = (
         state.get("current_app")
         or job.get("current_app")
@@ -130,32 +125,46 @@ def _compose_for_step(
     match_id = state.get("current_match_id") or f"match_{state.get('steps', 0)}"
     profile = state.get("current_profile_name") or ""
 
-    ai_calls = {"n": 0}
-
-    def ai_callable(**kwargs):
-        ai_calls["n"] += 1
-        custom = job.get("ai_callable_result")
-        if custom:
-            return custom
-        if kwargs.get("is_opener"):
-            return f"[AI opener]"
-        return f"[AI reply]"
+    # Explicit user/bank override on the job wins
+    forced = (
+        job.get("message_text")
+        or job.get("bank_text")
+        or job.get("selected_message")
+        or state.get("message_text")
+        or state.get("bank_text")
+    )
+    if forced:
+        text = str(forced).strip()
+        state["last_composed_text"] = text
+        state["last_composed_source"] = "job_bank_or_user"
+        return {
+            "text": text,
+            "source": "job_bank_or_user",
+            "used_llm": False,
+            "is_opener": action == "opener",
+            "ai_calls": 0,
+        }
 
     try:
+        # Always template path (is_opener=True) so replies also use the bank
         result = compose_dating_message(
-            is_opener=(action == "opener"),
+            is_opener=True,
             lib=lib,
             match_id=str(match_id),
             package_name=str(package),
             profile_name=profile or None,
             rng=rng,
-            ai_callable=ai_callable,
-            inbound_preview=state.get("inbound_preview") or "",
+            ai_callable=None,
+            inbound_preview="",
         )
-        result["ai_calls"] = ai_calls["n"]
+        result["ai_calls"] = 0
+        result["used_llm"] = False
+        result["source"] = result.get("source") or "template"
         # Persist rotation state back onto job for subsequent ticks
         state["opener_library"] = lib.to_dict()
         job["opener_library"] = lib.to_dict()
+        state["last_composed_text"] = result.get("text")
+        state["last_composed_source"] = "template"
         return result
     except Exception:
         logger.exception("compose for step failed action=%s", action)
@@ -363,6 +372,17 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         from backend.cloud_agent import run_one_agent_step  # type: ignore
 
     updated = run_one_agent_step(job)
+    # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
+    # 1-minute ticks (target <3–5s/step; humanize sleeps happen inside each step).
+    chain_budget = int(os.environ.get("AGENT_STEP_CHAIN") or "6")
+    for _ in range(max(0, chain_budget - 1)):
+        if updated.get("status") != "running":
+            break
+        nra = int(updated.get("next_run_at") or 0)
+        # Respect intentional backoff (rate-limit / offline waits)
+        if nra > int(time.time()) + 3:
+            break
+        updated = run_one_agent_step(updated)
     if updated.get("status") in ("completed", "failed", "stopped"):
         updated["completed_at"] = int(time.time())
     updated["updated_at"] = int(time.time())
@@ -472,11 +492,20 @@ def run_social_step(job: Dict[str, Any]) -> Dict[str, Any]:
     return job
 
 
+def _step_worker_target() -> Optional[str]:
+    """ARN/name for self-invoke; avoid STEP_WORKER_ARN self-Ref on this Lambda."""
+    return (
+        os.environ.get("STEP_WORKER_ARN")
+        or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+        or None
+    )
+
+
 def _kick_job_later(job_id: str, delay_s: int = 2) -> None:
     """Best-effort async re-invoke for dry-run live activity (no EventBridge wait)."""
     if not job_id:
         return
-    arn = os.environ.get("STEP_WORKER_ARN")
+    arn = _step_worker_target()
     if not arn or os.environ.get("USE_AWS_STORAGE", "").lower() != "true":
         return
     # Schedule via next_run_at; EventBridge will pick up. Also try immediate

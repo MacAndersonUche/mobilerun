@@ -1,0 +1,14 @@
+<hierarchy windows="2" nodes="22" partial="false" empty="false" mode="compact" packages="com.whatsapp">
+<w id="active" t="active" p="com.whatsapp" f="1">
+ <n d="Back" c="1" xy="80,150" b="20,90,140,210"/>
+ <n t="Precious Achalugo" c="1" xy="400,150" b="160,90,800,210"/>
+ <n t="online" xy="400,200" b="160,180,600,230"/>
+ <n s="1" xy="540,1100" b="0,260,1080,2000"/>
+ <n t="Yesterday" xy="540,400" b="400,360,680,440"/>
+ <n t="hey" xy="700,520" b="400,480,1000,560"/>
+ <n e="1" h="Type a message" t="" xy="480,2280" b="120,2200,900,2360"/>
+ <n d="Send" c="1" xy="1000,2280" b="920,2200,1080,2360"/>
+ <n d="Emoji" c="1" xy="80,2280" b="20,2200,140,2360"/>
+ <n d="Attach" c="1" xy="200,2280" b="140,2200,260,2360"/>
+</w>
+</hierarchy>

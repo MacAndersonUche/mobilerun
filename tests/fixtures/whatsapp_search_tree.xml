@@ -1,0 +1,9 @@
+<hierarchy windows="2" nodes="18" partial="false" empty="false" mode="compact" packages="com.whatsapp">
+<w id="active" t="active" p="com.whatsapp" f="1">
+ <n d="Back" c="1" xy="80,150" b="20,90,140,210"/>
+ <n e="1" h="Search…" xy="540,150" b="160,90,980,210"/>
+ <n t="Precious Achalugo" c="1" xy="540,420" b="0,340,1080,500"/>
+ <n t="Precious" c="1" xy="540,560" b="0,500,1080,620"/>
+ <n t="Messages" xy="200,720" b="40,680,400,760"/>
+</w>
+</hierarchy>

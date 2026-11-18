@@ -10,14 +10,18 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 /**
  * Sticky foreground service so the APK keeps the WebSocket alive in the background.
  * Holds a partial wake lock + wifi lock while running so Samsung Doze does not
- * freeze the socket mid-task.
+ * freeze the socket mid-task. Periodically best-effort rebinds Accessibility when
+ * Settings says enabled but the service instance is null.
  */
 class ConnectionService : Service() {
     companion object {
@@ -25,6 +29,8 @@ class ConnectionService : Service() {
         const val ACTION_STOP = "ai.mobilerun.selfhosted.CONN_STOP"
         private const val CHANNEL_ID = "mobilerun_connection"
         private const val NOTIF_ID = 41
+        private const val TAG = "MobilerunConn"
+        private const val A11Y_WATCHDOG_MS = 45_000L
 
         fun start(context: Context) {
             val intent = Intent(context, ConnectionService::class.java).setAction(ACTION_START)
@@ -44,12 +50,27 @@ class ConnectionService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val a11yWatchdog = object : Runnable {
+        override fun run() {
+            try {
+                if (!PermissionStatus.isAccessibilityBound()) {
+                    val ok = PermissionStatus.tryRecoverAccessibilityBinding(applicationContext)
+                    Log.i(TAG, "a11y watchdog rebind ok=$ok")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "a11y watchdog: ${e.message}")
+            }
+            handler.postDelayed(this, A11Y_WATCHDOG_MS)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                handler.removeCallbacks(a11yWatchdog)
                 releaseLocks()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -70,12 +91,16 @@ class ConnectionService : Service() {
                     startForeground(NOTIF_ID, notification)
                 }
                 acquireLocks()
+                handler.removeCallbacks(a11yWatchdog)
+                handler.postDelayed(a11yWatchdog, A11Y_WATCHDOG_MS)
             }
         }
+        // START_STICKY → system restarts us after kill; BootReceiver covers reboot
         return START_STICKY
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(a11yWatchdog)
         releaseLocks()
         super.onDestroy()
     }

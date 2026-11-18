@@ -1,0 +1,9 @@
+<hierarchy windows="2" nodes="18" partial="false" empty="false" mode="compact" packages="com.instagram.android">
+<w id="active" t="active" p="com.instagram.android" f="1">
+ <n d="Back" c="1" xy="80,150" b="20,90,140,210"/>
+ <n t="jane_doe" xy="400,150" b="160,90,700,210"/>
+ <n e="1" h="Message…" xy="480,2280" b="120,2200,900,2360"/>
+ <n d="Send" c="1" xy="1000,2280" b="920,2200,1080,2360"/>
+ <n t="earlier note" xy="700,700" b="400,640,1000,760"/>
+</w>
+</hierarchy>

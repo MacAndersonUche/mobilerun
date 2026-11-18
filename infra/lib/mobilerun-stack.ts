@@ -280,12 +280,12 @@ export class MobilerunStack extends cdk.Stack {
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
-    // Step worker — one dating/agent step per invocation (no 15-min long loop)
+    // Step worker — dating/agent steps (chains a few agent ticks per invoke)
     const stepFn = new lambda.Function(this, 'StepWorkerFunction', {
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'backend.step_worker.handler',
       code,
-      timeout: cdk.Duration.minutes(2),
+      timeout: cdk.Duration.minutes(5),
       memorySize: 512,
       environment: envVars,
       logRetention: logs.RetentionDays.ONE_WEEK,
@@ -300,9 +300,24 @@ export class MobilerunStack extends cdk.Stack {
       screenshotBucket.grantReadWrite(fn);
     }
 
-    // Allow HTTP Lambda to invoke step worker / manage WS connections later
+    // Allow HTTP Lambda to invoke step worker. Self-invoke uses a wildcard
+    // policy (not grantInvoke(stepFn)) to avoid a CloudFormation circular
+    // dependency between the function and its default policy.
     stepFn.grantInvoke(httpFn);
+    stepFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['lambda:InvokeFunction'],
+        // Wildcard avoids Function↔Policy circular deps; scoped by account/region.
+        resources: [
+          `arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`,
+        ],
+      })
+    );
+    // Only Http needs STEP_WORKER_ARN as a CFN Ref. The step worker self-invokes
+    // via AWS_LAMBDA_FUNCTION_NAME / context at runtime — setting STEP_WORKER_ARN
+    // on stepFn to its own ARN creates a CloudFormation circular dependency.
     httpFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
+    stepFn.addEnvironment('AGENT_STEP_CHAIN', '6');
 
     // === HTTP API (cheaper than REST API Gateway) ===
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
