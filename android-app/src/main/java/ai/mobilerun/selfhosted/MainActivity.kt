@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -75,7 +76,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        backendClient = BackendClient(this)
+        // Process-wide client — ConnectionService keeps WS alive without this Activity
+        backendClient = MobilerunApp.client() ?: BackendClient(applicationContext).also {
+            Log.w("MainActivity", "MobilerunApp.client() null — created fallback")
+        }
         backendClient.onStreamPermissionNeeded = { fps, quality ->
             // Live View only — not part of onboarding checklist
             pendingFps = fps
@@ -90,6 +94,7 @@ class MainActivity : ComponentActivity() {
         }
 
         intent?.data?.let { handleDeepLink(it) }
+        backendClient.ensureServerConnected("main_onCreate")
 
         setContent {
             MaterialTheme {
@@ -132,6 +137,7 @@ class MainActivity : ComponentActivity() {
         }
         if (::backendClient.isInitialized) {
             backendClient.reportPermissions(mediaProjectionGranted)
+            backendClient.ensureServerConnected("main_onResume")
             if (backendClient.isPaired()) {
                 runAutoGrantChain(fromCallback = false)
             }
@@ -341,7 +347,8 @@ fun MainScreen(
                     }
                 }
             } else {
-                StatusCard("Status", connectionStatus, connectionStatus.contains("Connected"))
+                // Green only when server-acked Connected — not "Registering…" / stale.
+                StatusCard("Status", connectionStatus, connectionStatus == "Connected")
                 StatusCard(
                     "Active route",
                     routeStatus,
@@ -453,6 +460,30 @@ fun MainScreen(
                         },
                         true,
                     )
+                    val keyboardSelected = remember(snap) {
+                        ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(activity)
+                    }
+                    if (!keyboardSelected) {
+                        Text(
+                            "Required for reliable typing: enable Mobilerun Keyboard " +
+                                "(our controlled IME — search vs compose is then deterministic).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            onClick = {
+                                val r = ai.mobilerun.selfhosted.input.ImeSessionController
+                                    .ensureSelected(activity)
+                                if (r["needs_user"] == true || r["selected"] != true) {
+                                    PermissionStatus.openInputMethodSettings(activity)
+                                }
+                                refreshPerms()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Enable Mobilerun Keyboard")
+                        }
+                    }
                 }
 
                 // Live view is optional / on-demand, not onboarding

@@ -135,6 +135,25 @@ object PermissionStatus {
     }
 
     /** Deep-link to this app's AccessibilityService details when possible. */
+    fun openInputMethodSettings(context: Context) {
+        try {
+            context.startActivity(
+                Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        } catch (_: Exception) {
+            try {
+                context.startActivity(
+                    Intent(Settings.ACTION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     fun openAccessibilitySettings(context: Context) {
         val cn = ComponentName(context, MobilerunAccessibilityService::class.java)
         // String constant — Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS is API 31+

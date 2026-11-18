@@ -158,7 +158,19 @@ def poll_task(token: str, task_id: str, timeout_s: int = 300) -> Dict[str, Any]:
     deadline = time.time() + timeout_s
     last: Dict[str, Any] = {}
     while time.time() < deadline:
-        last = req("GET", f"/api/tasks/{task_id}", token=token)
+        # API Gateway can 503 for minutes during CDK alias flips — keep polling.
+        try:
+            last = req(
+                "GET",
+                f"/api/tasks/{task_id}",
+                token=token,
+                timeout=45,
+                retries=14,
+            )
+        except Exception as e:
+            print(f"    {task_id} poll_error={e!s}"[:200], flush=True)
+            time.sleep(5)
+            continue
         status = (last.get("status") or "").lower()
         steps = last.get("steps") or []
         print(

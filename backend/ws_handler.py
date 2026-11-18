@@ -160,7 +160,6 @@ def _persist_device(
             "authed": bool(owner) or role == "ui",
             "owner": owner or "",
             "name": name,
-            "connected_at": int(time.time()),
         },
     )
     # One live device socket — drop older duplicates (Samsung reconnect leaves ghosts)
@@ -218,6 +217,10 @@ def handler(event: Dict[str, Any], context: Any):
             if pairing:
                 expires = float(pairing.get("expires_at", 0))
                 if time.time() > expires:
+                    logger.info(
+                        "ws $connect rejected expired token connection=%s",
+                        connection_id,
+                    )
                     return _ok({"error": "token expired"}, 401)
                 device_id = pairing.get("device_id") or device_id
                 owner = pairing.get("owner")
@@ -232,11 +235,36 @@ def handler(event: Dict[str, Any], context: Any):
                 "owner": owner or "",
             },
         )
+        logger.info(
+            "ws $connect ok connection=%s device=%s role=%s owner=%s authed=%s",
+            connection_id,
+            device_id,
+            role,
+            owner or "",
+            bool(token) or role == "ui",
+        )
         return _ok()
 
     if route == "$disconnect":
+        prev = None
         if connection_id:
+            try:
+                from storage import get_connection
+            except ImportError:
+                from backend.storage import get_connection  # type: ignore
+
+            try:
+                prev = get_connection(connection_id)
+            except Exception:
+                prev = None
             delete_connection(connection_id)
+        logger.info(
+            "ws $disconnect connection=%s device=%s role=%s owner=%s reason=api_gw",
+            connection_id,
+            (prev or {}).get("device_id"),
+            (prev or {}).get("role"),
+            (prev or {}).get("owner"),
+        )
         return _ok()
 
     try:
@@ -271,6 +299,14 @@ def handler(event: Dict[str, Any], context: Any):
         "permission_status",
     ):
         device_id, owner = _persist_device(body, connection_id)
+        logger.info(
+            "ws %s connection=%s device=%s owner=%s role=%s",
+            msg_type,
+            connection_id,
+            device_id,
+            owner or "",
+            body.get("role") or "device",
+        )
         try:
             _post(
                 client,
@@ -281,10 +317,16 @@ def handler(event: Dict[str, Any], context: Any):
                     "type": "ack" if msg_type == "register" else "heartbeat_ack",
                     "echo_type": msg_type,
                     "owner": owner,
+                    "server_ts": int(time.time()),
                 },
             )
         except Exception as e:
-            logger.warning("post_to_connection failed: %s", e)
+            logger.warning(
+                "post_to_connection failed connection=%s device=%s: %s",
+                connection_id,
+                device_id,
+                e,
+            )
         return _ok({"received": True, "device_id": device_id})
 
     if connection_id and device_id:

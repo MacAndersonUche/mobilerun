@@ -132,7 +132,10 @@ route = None
 latency = None
 device_id = None
 connected = False
-for _ in range(30):
+allowed = ("lan", "discovered", "wifi", "cloud")
+# HTTP claim can register a device_id before the WS is live — do NOT break
+# early on bare device_id while route is still "pending"/disconnected.
+for _ in range(45):
     try:
         req = urllib.request.Request(host + "/api/devices")
         if token:
@@ -146,16 +149,16 @@ for _ in range(30):
             route = d.get("route") or d.get("connection_type")
             latency = d.get("latency_ms")
             connected = bool(d.get("connected") or d.get("online") or d.get("status") == "online")
-            if connected or device_id:
+            route_ok = str(route or "").lower() in allowed
+            if device_id and connected and route_ok:
                 break
     except Exception as e:
         open(os.path.join(artifacts, "devices_err.txt"), "a").write(str(e) + "\n")
     time.sleep(1)
 print("device_id", device_id, "route", route, "latency_ms", latency, "connected", connected)
 assert device_id, "short-code pair did not register a device"
-# Soft assert: if device registered, route should be lan/discovered/wifi/cloud (not requiring USB)
-if route:
-    assert str(route).lower() in ("lan", "discovered", "wifi", "cloud"), route
+assert connected, f"device registered but WS not connected (route={route})"
+assert str(route).lower() in allowed, route
 open(os.path.join(artifacts, "connection_route.txt"), "w").write(f"{route}\n{latency}\n{device_id}\n")
 open(os.path.join(artifacts, "paired_device_id.txt"), "w").write(str(device_id))
 PY
@@ -1108,13 +1111,31 @@ PROD_API="${PROD_API_URL:-https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
 adb shell pm clear ai.mobilerun.selfhosted || true
 adb shell settings put secure enabled_accessibility_services "$A11Y" || true
 adb shell settings put secure accessibility_enabled 1 || true
-PROD_TOKEN=$(curl -sfS -X POST "$PROD_API/api/auth/login" \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-PROD_PAIR=$(curl -sfS -X POST "$PROD_API/api/auth/pair/create" \
-  -H "Authorization: Bearer ${PROD_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{"device_name":"emu-cloud-only","platform":"android"}')
+# Concurrent deploys can 503 for a while after /health — retry login + pair.
+PROD_TOKEN=""
+for i in $(seq 1 15); do
+  if PROD_TOKEN=$(curl -sfS --max-time 25 -X POST "$PROD_API/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"ci-e2e","password":"admin"}' \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])"); then
+    break
+  fi
+  echo "prod login attempt $i failed; sleeping..."
+  sleep $(( i < 5 ? 5 : 12 ))
+done
+test -n "$PROD_TOKEN"
+PROD_PAIR=""
+for i in $(seq 1 12); do
+  if PROD_PAIR=$(curl -sfS --max-time 25 -X POST "$PROD_API/api/auth/pair/create" \
+    -H "Authorization: Bearer ${PROD_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d '{"device_name":"emu-cloud-only","platform":"android"}'); then
+    break
+  fi
+  echo "prod pair create attempt $i failed; sleeping..."
+  sleep $(( i < 4 ? 5 : 10 ))
+done
+test -n "$PROD_PAIR"
 echo "$PROD_PAIR" | tee "$ARTIFACTS_DIR/prod_cloud_pair.json"
 PROD_CODE=$(echo "$PROD_PAIR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 # Code alone — same as typing in-app; baked DEFAULT_CLOUD_HTTP, zero LAN params
@@ -1144,27 +1165,49 @@ PY
 adb logcat -c || true
 adb shell "am start -a android.intent.action.VIEW -d '$CLOUD_ONLY_URL'" || true
 # Wait until a new device_id appears on the prod ci-e2e account
-BEFORE_IDS="$BEFORE_IDS" python3 - <<PY
-import json, os, time, urllib.request
+# Concurrent deploys can 503; deep-link may need a second fire after pm clear.
+BEFORE_IDS="$BEFORE_IDS" CLOUD_ONLY_URL="$CLOUD_ONLY_URL" python3 - <<PY
+import json, os, subprocess, time, urllib.error, urllib.request
 prod = os.environ.get("PROD_API_URL", "https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com")
 token = """$PROD_TOKEN"""
 code = """$PROD_CODE"""
+pair_url = os.environ.get("CLOUD_ONLY_URL") or ""
 artifacts = os.environ["ARTIFACTS_DIR"]
 before = {x for x in os.environ.get("BEFORE_IDS", "").split(",") if x}
 device_id = None
-for i in range(40):
-    req = urllib.request.Request(prod + "/api/devices", headers={"Authorization": f"Bearer {token}"})
-    devices = json.load(urllib.request.urlopen(req))
-    open(os.path.join(artifacts, "prod_cloud_devices.json"), "w").write(
-        json.dumps(devices, indent=2, default=str)
-    )
-    for d in devices or []:
-        did = d.get("device_id") or d.get("id")
-        if did and str(did) not in before:
-            device_id = str(did)
+for i in range(50):
+    try:
+        req = urllib.request.Request(
+            prod + "/api/devices", headers={"Authorization": f"Bearer {token}"}
+        )
+        devices = json.load(urllib.request.urlopen(req, timeout=25))
+        open(os.path.join(artifacts, "prod_cloud_devices.json"), "w").write(
+            json.dumps(devices, indent=2, default=str)
+        )
+        for d in devices or []:
+            did = d.get("device_id") or d.get("id")
+            if did and str(did) not in before:
+                device_id = str(did)
+                break
+        if device_id:
             break
-    if device_id:
-        break
+    except Exception as e:
+        open(os.path.join(artifacts, "prod_cloud_devices_err.txt"), "a").write(
+            f"tick {i}: {e}\n"
+        )
+        print(f"prod_cloud_poll_error tick={i}: {e}", flush=True)
+    # Re-fire deep link periodically — pm clear can leave first open as a no-op
+    if pair_url and i in (5, 12, 20, 30):
+        try:
+            subprocess.run(
+                ["adb", "shell", "am", "start", "-a", "android.intent.action.VIEW",
+                 "-d", pair_url],
+                check=False,
+                timeout=15,
+            )
+            print(f"re-fired cloud-only deep link at tick={i}", flush=True)
+        except Exception as e:
+            print(f"re-fire failed: {e}", flush=True)
     time.sleep(2)
 assert device_id, f"cloud-only short-code {code} did not register on prod (before={sorted(before)})"
 open(os.path.join(artifacts, "prod_cloud_device_id.txt"), "w").write(device_id)

@@ -23,9 +23,29 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Chats", "New chat"),
         "new_chat_labels": ("New chat", "New Chat"),
         "search_labels": ("Search", "search", "Search…", "Search..."),
+        "search_ids": (
+            "com.whatsapp:id/menuitem_search",
+            "com.whatsapp:id/search_src_text",
+            "com.whatsapp:id/search_input",
+            "id/menuitem_search",
+            "id/search_src_text",
+        ),
         "search_fallback": (980, 160),
+        "result_ids": (
+            "com.whatsapp:id/contact_row_container",
+            "com.whatsapp:id/conversations_row_contact_name",
+            "com.whatsapp:id/resultlist",
+            "id/contact_row_container",
+        ),
+        "header_ids": (
+            "com.whatsapp:id/conversation_contact_name",
+            "com.whatsapp:id/toolbar",
+            "id/conversation_contact_name",
+        ),
         "compose_labels": ("Type a message", "Message", "Write a message"),
+        "compose_ids": ("com.whatsapp:id/entry", "id/entry", ":id/entry"),
         "send_labels": ("Send",),
+        "send_ids": ("com.whatsapp:id/send", "id/send", ":id/send"),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -44,9 +64,33 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         ),
         "new_chat_labels": ("New message", "New Message"),
         "search_labels": ("Search", "Search…", "Search...", "To:"),
+        "search_ids": (
+            "com.instagram.android:id/search_edit_text",
+            "com.instagram.android:id/action_bar_search_edit_text",
+            "id/search_edit_text",
+        ),
         "search_fallback": (980, 160),
+        "result_ids": (
+            "com.instagram.android:id/row_inbox_container",
+            "com.instagram.android:id/row_search_user_container",
+            "id/row_inbox_container",
+        ),
+        "header_ids": (
+            "com.instagram.android:id/thread_title",
+            "com.instagram.android:id/action_bar_title",
+            "id/thread_title",
+        ),
         "compose_labels": ("Message…", "Message...", "Message", "Write a message"),
+        "compose_ids": (
+            "com.instagram.android:id/row_thread_composer_edittext",
+            "com.instagram.android:id/message_edit_text",
+            "id/row_thread_composer_edittext",
+        ),
         "send_labels": ("Send", "Send message"),
+        "send_ids": (
+            "com.instagram.android:id/row_thread_composer_button_send",
+            "id/row_thread_composer_button_send",
+        ),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -58,9 +102,24 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Chats", "Messages", "New message", "Compose"),
         "new_chat_labels": ("New message", "Compose"),
         "search_labels": ("Search", "Search…", "Search Messenger"),
+        "search_ids": (
+            "com.facebook.orca:id/search_edit_text",
+            "id/search_edit_text",
+        ),
         "search_fallback": (540, 200),
+        "result_ids": ("com.facebook.orca:id/thread_list_item",),
+        "header_ids": ("com.facebook.orca:id/thread_title_view",),
         "compose_labels": ("Aa", "Message", "Write a message", "Send a message"),
+        "compose_ids": (
+            "com.facebook.orca:id/composer_text",
+            "com.facebook.orca:id/composer_edit_text",
+            "id/composer_text",
+        ),
         "send_labels": ("Send", "Send message"),
+        "send_ids": (
+            "com.facebook.orca:id/composer_send_button",
+            "id/composer_send_button",
+        ),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -72,9 +131,23 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Chats", "New Message", "New message"),
         "new_chat_labels": ("New Message", "New message"),
         "search_labels": ("Search", "Search…"),
+        "search_ids": (
+            "org.telegram.messenger:id/search_field",
+            "id/search_field",
+        ),
         "search_fallback": (980, 160),
+        "result_ids": (),
+        "header_ids": ("org.telegram.messenger:id/action_bar_title",),
         "compose_labels": ("Message", "Write a message"),
+        "compose_ids": (
+            "org.telegram.messenger:id/chat_message_edit",
+            "id/chat_message_edit",
+        ),
         "send_labels": ("Send",),
+        "send_ids": (
+            "org.telegram.messenger:id/chat_send_button",
+            "id/chat_send_button",
+        ),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -86,14 +159,19 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Chat", "Chats", "Messages", "Matches", "Inbox"),
         "new_chat_labels": ("Matches", "Chat"),
         "search_labels": ("Search", "Search matches", "Search…"),
+        "search_ids": (),
         "search_fallback": (540, 200),
+        "result_ids": (),
+        "header_ids": (),
         "compose_labels": (
             "Type a message",
             "Message",
             "Send a message",
             "Say something",
         ),
+        "compose_ids": (),
         "send_labels": ("Send",),
+        "send_ids": (),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -105,9 +183,14 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Messages", "Connections", "Chats", "Inbox"),
         "new_chat_labels": ("Messages", "Connections"),
         "search_labels": ("Search", "Search…"),
+        "search_ids": (),
         "search_fallback": (980, 160),
+        "result_ids": (),
+        "header_ids": (),
         "compose_labels": ("Type a message", "Message", "Say something"),
+        "compose_ids": (),
         "send_labels": ("Send",),
+        "send_ids": (),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -119,14 +202,19 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Matches", "Messages", "Chats", "Liked You", "Inbox"),
         "new_chat_labels": ("Matches", "Liked You"),
         "search_labels": ("Search", "Search…"),
+        "search_ids": (),
         "search_fallback": (980, 160),
+        "result_ids": (),
+        "header_ids": (),
         "compose_labels": (
             "Type a message",
             "Message",
             "Your message",
             "Say something",
         ),
+        "compose_ids": (),
         "send_labels": ("Send",),
+        "send_ids": (),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -198,6 +286,55 @@ def _tree_editable_center(tree: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _tree_id_center(tree: str, *id_needles: str) -> Optional[Tuple[int, int]]:
+    """Locate a node by resource-id suffix (e.g. com.whatsapp:id/entry)."""
+    for n in _parse_compact_nodes(tree):
+        vid = str(n.get("id") or "").lower()
+        if not vid:
+            continue
+        for needle in id_needles:
+            want = (needle or "").lower().strip()
+            if not want:
+                continue
+            if vid == want or vid.endswith(want) or want in vid:
+                return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def find_compose_center(
+    tree: str,
+    compose_labels: Sequence[str],
+    compose_ids: Sequence[str] = (),
+    search_labels: Sequence[str] = (),
+) -> Optional[Tuple[int, int]]:
+    """Prefer WhatsApp entry id, then Message hint, then bottom editable."""
+    c = _tree_id_center(tree, *tuple(compose_ids))
+    if c:
+        return c
+    c = _tree_node_center(tree, *tuple(compose_labels))
+    if c:
+        return c
+    for n in _parse_compact_nodes(tree):
+        if not n.get("editable"):
+            continue
+        if _is_searchish_node(n, search_labels):
+            continue
+        hint = str(n.get("hint") or "").lower()
+        label = str(n.get("label") or "").lower()
+        if "message" in hint or "message" in label or n.get("y", 0) > 1800:
+            return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def find_send_center(
+    tree: str, send_labels: Sequence[str], send_ids: Sequence[str] = ()
+) -> Optional[Tuple[int, int]]:
+    c = _tree_id_center(tree, *tuple(send_ids))
+    if c:
+        return c
+    return _tree_node_center(tree, *tuple(send_labels))
+
+
 _NODE_TAG_RE = re.compile(r"<(?:n|node)\b([^>]*)/?>", re.I)
 
 
@@ -235,16 +372,22 @@ def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
         if cx is None or cy is None:
             continue
         label = " ".join(p for p in (text, desc, hint) if p).strip()
+        view_id = _attr(attrs, "i", "resource-id", "viewIdResourceName")
+        cls = _attr(attrs, "cls", "class", "className")
+        focused = _attr(attrs, "f") in ("1", "true", "True")
         out.append(
             {
                 "text": text,
                 "desc": desc,
                 "hint": hint,
                 "label": label,
+                "id": view_id,
+                "cls": cls,
                 "x": cx,
                 "y": cy,
                 "editable": editable,
                 "clickable": clickable,
+                "focused": focused,
             }
         )
     return out
@@ -393,6 +536,28 @@ def chat_screen_verified(
             return True
     # Soft pass: compose present and no search field
     return True
+
+
+def outgoing_bubble_present(tree: str, message: str) -> bool:
+    """True when the typed message appears as an outgoing bubble in the tree.
+
+    Heuristic: message text is visible on a non-editable node in the lower
+    half of the screen (chat transcript), not only in the compose EditText.
+    """
+    needle = (message or "").strip()
+    if len(needle) < 2:
+        return False
+    low_needle = needle.lower()
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable"):
+            continue
+        blob = f"{n.get('label') or ''} {n.get('hint') or ''}".lower()
+        if low_needle not in blob and low_needle[:12] not in blob:
+            continue
+        y = int(n.get("y") or 0)
+        if y > 700:  # below header / search
+            return True
+    return False
 
 
 def focused_is_compose_not_search(
@@ -623,7 +788,10 @@ def heuristic_dm_send(
     )
     typed_message = _hist_has_type(history, message)
     tapped_send = any(
-        "tap send" in str(h).lower() or f"send ({planner}" in str(h).lower()
+        "tap send" in str(h).lower()
+        or "ime_send" in str(h).lower()
+        or "ime_action" in str(h).lower()
+        or f"send ({planner}" in str(h).lower()
         for h in history[-16:]
     )
     focused_compose = any(
@@ -672,16 +840,19 @@ def heuristic_dm_send(
                     "open_inbox_fallback",
                 )
 
-    # 1) Search
+    # 1) Search — prefer resource-id (deterministic), never vision
     if not typed_contact and not tapped_search:
-        c = _tree_node_center(ui_tree, *search_labels)
+        search_ids = tuple(profile.get("search_ids") or ())
+        c = _tree_id_center(ui_tree, *search_ids) if search_ids else None
+        if c is None:
+            c = _tree_node_center(ui_tree, *search_labels)
         if c:
             return _fp(
                 {
                     "action": "tap",
                     "x": c[0],
                     "y": c[1],
-                    "reason": f"Tap Search ({planner})",
+                    "reason": f"Tap Search id/label ({planner})",
                     "planner": planner,
                     "llm_provider": None,
                 },
@@ -840,33 +1011,28 @@ def heuristic_dm_send(
 
     # 4) Focus compose — only when chat verified
     if chat_ok and not typed_message and not focused_compose:
-        # Prefer compose label / bottom editable, never search
-        c = _tree_node_center(ui_tree, *compose_labels)
+        compose_ids = tuple(profile.get("compose_ids") or ())
+        c = find_compose_center(
+            ui_tree, compose_labels, compose_ids, search_labels=search_labels
+        )
         if c:
             return _fp(
                 {
                     "action": "tap",
                     "x": c[0],
                     "y": c[1],
-                    "reason": f"Focus compose Message field ({planner})",
+                    "reason": (f"Focus compose Message/entry field ({planner})"),
                     "planner": planner,
                     "llm_provider": None,
                 },
                 "focus_compose",
             )
-        for n in _parse_compact_nodes(ui_tree):
-            if n.get("editable") and not _is_searchish_node(n, search_labels):
-                return _fp(
-                    {
-                        "action": "tap",
-                        "x": n["x"],
-                        "y": n["y"],
-                        "reason": f"Focus compose editable ({planner})",
-                        "planner": planner,
-                        "llm_provider": None,
-                    },
-                    "focus_compose_editable",
-                )
+        # No entry/Message in tree (common on Secure Folder / sparse dumps) —
+        # defer to vision rather than blind coords that miss the box.
+        if tree_is_sparse(ui_tree) or not compose_field_present(
+            ui_tree, compose_labels
+        ):
+            return None
         cx, cy = profile["compose_fallback"]
         return _fp(
             {
@@ -907,7 +1073,7 @@ def heuristic_dm_send(
             "type_message",
         )
 
-    # 6) Send — or dry-run stop with compose filled
+    # 6) Send — IME_ACTION_SEND first; else tap send id. Dry-run stops here.
     if typed_message and not tapped_send:
         if dry_run:
             return _fp(
@@ -924,7 +1090,19 @@ def heuristic_dm_send(
                 },
                 "dry_run_stop",
             )
-        c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
+        # Prefer our keyboard's performEditorAction(SEND)
+        if "ime_send" not in hist and "ime_action" not in hist:
+            return _fp(
+                {
+                    "action": "ime_send",
+                    "reason": f"IME_ACTION_SEND via Mobilerun Keyboard ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "ime_send",
+            )
+        send_ids = tuple(profile.get("send_ids") or ())
+        c = find_send_center(ui_tree, tuple(profile["send_labels"]), send_ids=send_ids)
         sx, sy = profile["send_fallback"]
         x, y = c if c else (sx, sy)
         return _fp(
@@ -932,15 +1110,29 @@ def heuristic_dm_send(
                 "action": "tap",
                 "x": x,
                 "y": y,
-                "reason": f"Tap Send ({planner})",
+                "reason": f"Tap Send id/send ({planner})",
                 "planner": planner,
                 "llm_provider": None,
             },
             "tap_send",
         )
 
-    # 7) Verify / re-send
+    # 7) Verify outgoing bubble / re-send
     if tapped_send:
+        if outgoing_bubble_present(ui_tree, message):
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"Outgoing bubble confirmed for '{message}' "
+                        f"to {contact} ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "outgoing_confirmed": True,
+                },
+                "done_outgoing_bubble",
+            )
         if goal_satisfied:
             sat2 = goal_satisfied(instruction, ui_tree, package)
             if sat2:
@@ -953,7 +1145,10 @@ def heuristic_dm_send(
                     },
                     "done_after_send",
                 )
-        if hist.count("tap send") + hist.count("re-tap send") < 3:
+        if (
+            hist.count("tap send") + hist.count("re-tap send") + hist.count("ime_send")
+            < 3
+        ):
             c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
             sx, sy = profile["send_fallback"]
             x, y = c if c else (sx, sy)

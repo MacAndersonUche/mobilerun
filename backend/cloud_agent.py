@@ -1293,6 +1293,19 @@ def _store_step_screenshot(job_id: str, step_n: int, b64: str) -> Optional[str]:
         return None
 
 
+def _maybe_restore_ime(job: Dict[str, Any], device_id: str, call_device) -> None:
+    """Restore the user's keyboard after a messaging task ends."""
+    state = job.get("state") if isinstance(job.get("state"), dict) else {}
+    if not state.get("ime_ensured") or state.get("ime_restored"):
+        return
+    try:
+        call_device(device_id, "restore_ime", {}, timeout_s=10)
+        state["ime_restored"] = True
+        job["state"] = state
+    except Exception as e:
+        logger.warning("restore_ime failed: %s", e)
+
+
 def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     try:
         from device_rpc import call_device
@@ -1324,7 +1337,7 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             device_id,
             "tap",
             {"x": jx, "y": jy, "humanize": True},
-            timeout_s=12,
+            timeout_s=20,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
             action["_timing"] = raw["timing"]
@@ -1388,13 +1401,50 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             },
             timeout_s=45,
         )
-        if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
-            action["_timing"] = raw["timing"]
+        if isinstance(raw, dict):
+            if isinstance(raw.get("timing"), dict):
+                action["_timing"] = raw["timing"]
+            if isinstance(raw.get("focus"), dict):
+                action["_focus"] = raw["focus"]
+            action["_via"] = raw.get("via")
         preview = text[:48]
         return f'Typed "{preview}"' if preview else "Typed text"
+    if kind in ("ime_send", "ime_action"):
+        action_name = str(action.get("ime_action") or action.get("name") or "send")
+        raw = call_device(
+            device_id,
+            "ime_action",
+            {"action": action_name},
+            timeout_s=20,
+        )
+        if isinstance(raw, dict):
+            action["_timing"] = raw.get("timing") or {}
+            action["_focus"] = raw.get("focus")
+            action["_via"] = raw.get("via")
+        return f"IME action {action_name}"
+    if kind in ("ensure_ime", "switch_ime"):
+        try:
+            raw = call_device(device_id, "ensure_ime", {}, timeout_s=5)
+            if isinstance(raw, dict):
+                action["_ime"] = raw
+            selected = bool(isinstance(raw, dict) and raw.get("selected"))
+            return (
+                "Ensured Mobilerun Keyboard"
+                if selected
+                else "IME not selected — will use a11y SET_TEXT"
+            )
+        except Exception as e:
+            action["_ime"] = {"ok": False, "error": str(e), "fallback": "a11y"}
+            return f"IME ensure skipped ({e}) — a11y SET_TEXT fallback"
+    if kind == "restore_ime":
+        raw = call_device(device_id, "restore_ime", {}, timeout_s=15)
+        if isinstance(raw, dict):
+            action["_ime"] = raw
+        return "Restored user keyboard"
     if kind == "back":
+        # Always GLOBAL_ACTION_BACK — never a guessed on-screen back glyph
         call_device(device_id, "press_button", {"button": "back"})
-        return "Went back"
+        return "Went back (GLOBAL_ACTION_BACK)"
     if kind == "home":
         call_device(device_id, "press_button", {"button": "home"})
         return "Went home"
@@ -1404,8 +1454,9 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             device_id,
             "open_app",
             {"app": app, "package": action.get("package")},
-            timeout_s=20,
-            wait_reconnect_s=60,
+            # Secure Folder fingerprint wait can take ~75s on device
+            timeout_s=90,
+            wait_reconnect_s=90,
         )
         pkg = ""
         if isinstance(raw, dict):
@@ -1415,6 +1466,10 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             # Stash for completion checks
             action["_rpc_package"] = pkg
             action["_rpc_ok"] = bool(raw.get("ok") or raw.get("launched") or pkg)
+            action["_secure_folder"] = bool(raw.get("secure_folder"))
+            action["_a11y_cross_user_limited"] = bool(
+                raw.get("a11y_cross_user_limited")
+            )
         # Human-readable primary; keep [package] for rpc_ok / history matching
         nice = app or pkg or "app"
         if nice.startswith("com.") or nice.startswith("ai."):
@@ -1539,6 +1594,32 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["status"] = "failed"
         job["error"] = "No instruction on job"
         return job
+
+    # Own keyboard: switch to Mobilerun IME once per messaging job (restore on done)
+    try:
+        from dm_heuristics import detect_dm_app
+    except ImportError:
+        from backend.dm_heuristics import detect_dm_app  # type: ignore
+    if detect_dm_app(instruction) and not state.get("ime_ensured"):
+        # Do not hard-require ensure_ime. Old APKs ignore the command (timeout);
+        # phones without Mobilerun Keyboard selected still type via a11y SET_TEXT.
+        # Ultra-short probe only — never burn reconnect/idle on a missing IME.
+        try:
+            ime_res = call_device(device_id, "ensure_ime", {}, timeout_s=3)
+            state["ime_status"] = (
+                ime_res if isinstance(ime_res, dict) else {"raw": ime_res}
+            )
+            selected = bool(isinstance(ime_res, dict) and ime_res.get("selected"))
+            history.append(f"ensure_ime selected={selected}")
+            state["history"] = history[-40:]
+            state["last_progress_at"] = now
+        except Exception as e:
+            logger.warning("ensure_ime skipped (a11y SET_TEXT fallback): %s", e)
+            history.append(f"ensure_ime skipped: {e}")
+            state["history"] = history[-40:]
+            state["last_progress_at"] = now
+            state["offline_streak"] = 0
+        state["ime_ensured"] = True  # never retry — typing falls back itself
     # Absolute wall-clock cap
     if now - created > TASK_TIMEOUT_S:
         job["status"] = "failed"
@@ -1630,6 +1711,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job.get("job_id"),
         )
 
+    dry_run_job = bool(job.get("dry_run") or state.get("dry_run"))
     push_to_device(
         device_id,
         {
@@ -1637,7 +1719,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             "action": "cloud_step",
             "task_id": job.get("job_id"),
             "step": step + 1,
-            "instruction": instruction,
+            "instruction": (f"[DRY RUN] {instruction}" if dry_run_job else instruction),
+            "dry_run": dry_run_job,
         },
         wait_reconnect_s=30.0,
     )
@@ -1808,6 +1891,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         image_b64 = locals().get("image_b64")
         use_vision = bool(locals().get("use_vision"))
+        # Always bind before any path that may skip plan_next_action — recovery
+        # empty-tree fallthrough used to hit UnboundLocalError on np_streak.
+        np_streak = int(state.get("no_progress_streak") or 0)
+        job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
         if not _skip_plan:
             image_b64 = None
             # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
@@ -1823,19 +1910,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if force_vision:
                 state["force_vision_once"] = False
             try:
-                if (
-                    sparse_tree
-                    or force_vision
-                    or int(state.get("no_progress_streak") or 0) >= 2
-                ):
+                if sparse_tree or force_vision or np_streak >= 2:
                     image_b64 = _fetch_screenshot_b64(device_id)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
             use_vision = bool(image_b64) and (
-                sparse_tree
-                or force_vision
-                or int(state.get("no_progress_streak") or 0) >= 2
+                sparse_tree or force_vision or np_streak >= 2
             )
             if use_vision:
                 state["vision_fallback"] = True
@@ -1847,8 +1928,6 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     tree_info.get("empty"),
                 )
 
-            np_streak = int(state.get("no_progress_streak") or 0)
-            job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
             try:
                 action = plan_next_action(
                     instruction,
@@ -2160,6 +2239,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "result"
                 ] += f" · p50={stats['p50_ms']:.0f}ms p95={stats.get('p95_ms') or 0:.0f}ms"
             job["completed_at"] = int(time.time())
+            _maybe_restore_ime(job, device_id, call_device)
             return job
         if kind == "fail":
             low_reason = (reason or "").lower()
@@ -2333,6 +2413,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         }
         action["_history"] = list(history[-16:])
         summary = execute_action(device_id, action)
+        # Secure Folder (Samsung user 150): main-profile a11y often cannot see
+        # Folder windows — force screenshot+vision on the next plan tick.
+        if action.get("_secure_folder") or action.get("_a11y_cross_user_limited"):
+            state["force_vision_once"] = True
+            state["secure_folder"] = True
+            history.append("hint: Secure Folder — prefer vision if tree empty/sparse")
+            state["history"] = history[-40:]
 
         # Verify: re-fetch tree / package after action (retry empty/offline)
         verify_msg = ""
@@ -2391,6 +2478,51 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # Track tree fingerprint — same hash after an action = no progress
             after_tree = str(after.get("tree") or "")
             after_pkg = str(after.get("package") or "")
+            # Deterministic post-action checks for type / send (no vision)
+            if kind in ("type", "type_text", "input_text"):
+                typed = str(action.get("text") or "")
+                focus = (
+                    action.get("_focus")
+                    if isinstance(action.get("_focus"), dict)
+                    else {}
+                )
+                # Prefer focus metadata from IME response when present
+                if isinstance(action.get("_timing"), dict):
+                    pass
+                landed = bool(typed) and typed.lower()[:12] in after_tree.lower()
+                if landed:
+                    verify_msg = (verify_msg + " · text_landed").strip(" ·")
+                else:
+                    verify_msg = (verify_msg + " · text_missing").strip(" ·")
+                if focus.get("isSearch"):
+                    verify_msg = (verify_msg + " · focus=search").strip(" ·")
+                elif focus.get("isCompose"):
+                    verify_msg = (verify_msg + " · focus=compose").strip(" ·")
+            if kind in ("ime_send", "ime_action") or (
+                kind == "tap" and "send" in str(action.get("reason") or "").lower()
+            ):
+                try:
+                    from dm_heuristics import outgoing_bubble_present
+                except ImportError:
+                    from backend.dm_heuristics import (  # type: ignore
+                        outgoing_bubble_present,
+                    )
+                msg_guess = ""
+                for h in reversed(history[-12:]):
+                    hs = str(h)
+                    if "type" in hs.lower() and "'" in hs:
+                        # Typed 'hi baby'
+                        m = re.search(r"[Tt]yped\s+'([^']+)'", hs)
+                        if m:
+                            msg_guess = m.group(1)
+                            break
+                if not msg_guess:
+                    msg_guess = str(
+                        job.get("message_text") or job.get("bank_text") or ""
+                    )
+                if msg_guess and outgoing_bubble_present(after_tree, msg_guess):
+                    verify_msg = (verify_msg + " · outgoing_bubble").strip(" ·")
+                    state["outgoing_confirmed"] = True
             fp = _tree_fingerprint(after_tree, after_pkg)
             prev_fp = state.get("last_tree_fp")
             tree_changed = not (prev_fp and prev_fp == fp)
@@ -2494,14 +2626,21 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             timing=step_timing or None,
         )
         job["state"] = state
+        dry_tag = (
+            "[DRY RUN] " if bool(job.get("dry_run") or state.get("dry_run")) else ""
+        )
         if planner == "heuristic":
-            job["result"] = f"Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
+            job["result"] = (
+                f"{dry_tag}Step {step + 1}: {summary} ({LLM_UNAVAILABLE_LABEL})"
+            )
         else:
-            job["result"] = f"Step {step + 1}: {summary}"
+            job["result"] = f"{dry_tag}Step {step + 1}: {summary}"
             if verify_msg:
                 job["result"] += f" · {verify_msg}"
             if step_timing.get("build_ms") is not None:
                 job["result"] += f" · tree_ms={step_timing.get('build_ms')}"
+        if dry_tag and not str(job.get("result") or "").startswith("[DRY RUN]"):
+            job["result"] = dry_tag + str(job.get("result") or "")
 
         # Pure open_app goal → complete once PackageManager launched
         open_target = _trivial_open_app_target(instruction)
@@ -2541,6 +2680,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     f"(pkg={rpc_pkg or 'n/a'}; {verify_msg or summary})"
                 )
                 job["completed_at"] = int(time.time())
+                _maybe_restore_ime(job, device_id, call_device)
                 return job
 
         # Multi-step goals: if the answer is now on screen, complete
@@ -2550,6 +2690,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if verify_msg:
                 job["result"] += f" · {verify_msg}"
             job["completed_at"] = int(time.time())
+            _maybe_restore_ime(job, device_id, call_device)
             return job
 
         # Human-like inter-step gap (0.3–1.5s) then immediate next tick.

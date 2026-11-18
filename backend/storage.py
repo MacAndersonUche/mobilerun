@@ -102,13 +102,22 @@ def save_connection(
     table = _table("CONNECTIONS_TABLE")
     if table is None:
         return
+    now = int(time.time())
+    # Preserve role/owner/authed from meta; always refresh connected_at + TTL so
+    # heartbeats keep device_is_ws_connected() true under the same connection_id.
     item = {
         "connection_id": connection_id,
         "device_id": device_id,
-        "connected_at": int(time.time()),
-        "ttl": int(time.time()) + 86400,
+        "connected_at": now,
+        "last_seen": now,
+        "ttl": now + 86400,
         **(meta or {}),
     }
+    # meta may override connected_at — force freshness for heartbeats
+    item["connected_at"] = now
+    item["last_seen"] = now
+    item["device_id"] = device_id
+    item["connection_id"] = connection_id
     table.put_item(Item=item)
 
 
@@ -416,12 +425,21 @@ def device_is_ws_connected(device_id: str, *, max_age_s: int = 90) -> bool:
 def cleanup_stale_connections(
     *, pending_max_age_s: int = 120, stale_max_age_s: int = 300
 ) -> int:
-    """Delete pending_* and aged-out connection rows. Best-effort."""
+    """Delete pending_* and aged-out connection rows. Best-effort.
+
+    Authed device sockets are kept longer (15m) so a brief heartbeat gap or
+    Lambda blip does not wipe the only live row while the phone still thinks
+    it is Connected. pending_* placeholders still expire quickly.
+    """
+    import logging
+
+    log = logging.getLogger("mobilerun.storage")
     table = _table("CONNECTIONS_TABLE")
     if table is None:
         return 0
     removed = 0
     now = int(time.time())
+    authed_max_age_s = max(stale_max_age_s * 3, 900)
     try:
         # Scan is OK for small connection tables; TTL also cleans eventually
         resp = table.scan(Limit=200)
@@ -437,16 +455,30 @@ def cleanup_stale_connections(
         connected_at = int(c.get("connected_at") or 0)
         age = now - connected_at if connected_at else 10_000
         drop = False
+        reason = ""
         if did.startswith("pending_") and age > pending_max_age_s:
             drop = True
+            reason = "pending_expired"
         elif c.get("role") != "ui" and age > stale_max_age_s and not c.get("authed"):
             drop = True
-        elif age > max(stale_max_age_s * 2, 600):
+            reason = "unauthed_stale"
+        elif c.get("authed") and age > authed_max_age_s:
             drop = True
+            reason = "authed_stale"
+        elif (not c.get("authed")) and age > max(stale_max_age_s * 2, 600):
+            drop = True
+            reason = "unauthed_max"
         if drop and cid:
             try:
                 delete_connection(cid)
                 removed += 1
+                log.info(
+                    "cleanup_stale dropped connection=%s device=%s age=%ss reason=%s",
+                    cid,
+                    did,
+                    age,
+                    reason,
+                )
             except Exception:
                 pass
     return removed

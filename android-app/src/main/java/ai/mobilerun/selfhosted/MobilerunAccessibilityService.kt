@@ -58,6 +58,30 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
         @Volatile
         var instance: MobilerunAccessibilityService? = null
+
+        /** Portal MobilerunAccessibilityService.calculateInputText — single SET_TEXT payload. */
+        fun calculateInputText(
+            currentText: String?,
+            hintText: String?,
+            newText: String,
+            clear: Boolean,
+            selectionStart: Int? = null,
+            selectionEnd: Int? = null,
+        ): String {
+            if (clear) return newText
+            val safeCurrentText = currentText.orEmpty()
+            if (hintText != null && safeCurrentText == hintText) return newText
+            val length = safeCurrentText.length
+            val rawStart = selectionStart ?: length
+            val rawEnd = selectionEnd ?: rawStart
+            val start = rawStart.coerceIn(0, length)
+            val end = rawEnd.coerceIn(0, length)
+            val replaceStart = minOf(start, end)
+            val replaceEnd = maxOf(start, end)
+            val before = safeCurrentText.take(replaceStart)
+            val after = safeCurrentText.substring(replaceEnd)
+            return before + newText + after
+        }
     }
 
     data class TreeResult(
@@ -179,9 +203,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (!ok) callback(false)
     }
 
-    /** Fire-and-forget tap — used when the cloud ACKs immediately. */
+    /** Fire-and-forget tap — Portal GestureController (dispatch only, no callback wait). */
     fun tapFireAndForget(x: Int, y: Int, humanize: Boolean = true) {
-        tap(x, y, humanize) { /* async verify is the cloud's job */ }
+        GestureController.tap(x, y, humanize = humanize)
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, callback: (Boolean) -> Unit) {
@@ -204,7 +228,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     fun swipeFireAndForget(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long) {
-        swipe(x1, y1, x2, y2, durationMs) { }
+        GestureController.swipe(x1, y1, x2, y2, durationMs.toInt())
     }
 
     fun pressBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
@@ -348,6 +372,96 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 null
             } ?: continue
             val found = findNodeByText(child, labels)
+            try {
+                child.recycle()
+            } catch (_: Exception) {
+            }
+            if (found != null) return found
+        }
+        return null
+    }
+
+    /**
+     * Tap a visible node whose text/contentDescription equals (or contains, if
+     * [fuzzy]) [label]. Used for Secure Folder app icons and similar grids.
+     */
+    fun tapByVisibleText(label: String, fuzzy: Boolean = true): Boolean {
+        val want = label.trim()
+        if (want.isEmpty()) return false
+        val root = rootInActiveWindow ?: return false
+        return try {
+            val exact = findNodeByText(root, listOf(want))
+            val node = exact ?: if (fuzzy) findNodeContainingText(root, want) else null
+            if (node == null) return false
+            val bounds = android.graphics.Rect()
+            try {
+                node.getBoundsInScreen(bounds)
+            } catch (_: Exception) {
+            }
+            val tapped = try {
+                val clickOk = if (node.isClickable) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } else {
+                    var p: AccessibilityNodeInfo? = node.parent
+                    var ok = false
+                    while (p != null) {
+                        if (p.isClickable) {
+                            ok = p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            break
+                        }
+                        val next = p.parent
+                        try {
+                            p.recycle()
+                        } catch (_: Exception) {
+                        }
+                        p = next
+                    }
+                    ok
+                }
+                // Portal fallback: coordinate gesture when ACTION_CLICK fails
+                if (clickOk) {
+                    true
+                } else if (!bounds.isEmpty) {
+                    GestureController.tap(
+                        (bounds.left + bounds.right) / 2,
+                        (bounds.top + bounds.bottom) / 2,
+                        humanize = false,
+                    )
+                } else {
+                    false
+                }
+            } finally {
+                try {
+                    node.recycle()
+                } catch (_: Exception) {
+                }
+            }
+            Log.i(TAG, "tapByVisibleText('$want') ok=$tapped")
+            tapped
+        } catch (e: Exception) {
+            Log.w(TAG, "tapByVisibleText failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun findNodeContainingText(
+        node: AccessibilityNodeInfo?,
+        needle: String,
+    ): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val n = needle.lowercase()
+        val t = node.text?.toString().orEmpty()
+        val d = node.contentDescription?.toString().orEmpty()
+        if (t.lowercase().contains(n) || d.lowercase().contains(n)) {
+            return AccessibilityNodeInfo.obtain(node)
+        }
+        for (i in 0 until node.childCount) {
+            val child = try {
+                node.getChild(i)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            val found = findNodeContainingText(child, needle)
             try {
                 child.recycle()
             } catch (_: Exception) {
@@ -782,8 +896,25 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } else {
             ""
         }
-        val viewId = node.viewIdResourceName.orEmpty().let { id ->
-            if (id.contains('/')) id.substringAfterLast('/') else id.takeLast(40)
+        // Portal-compatible: keep full resource-id (com.whatsapp:id/entry)
+        val viewId = node.viewIdResourceName.orEmpty().take(96)
+        val className = node.className?.toString().orEmpty().let { cn ->
+            when {
+                cn.endsWith("EditText") -> "EditText"
+                cn.endsWith("TextView") -> "TextView"
+                cn.endsWith("Button") -> "Button"
+                cn.endsWith("ImageButton") -> "ImageButton"
+                cn.endsWith("ImageView") -> "ImageView"
+                cn.endsWith("RecyclerView") -> "RecyclerView"
+                cn.endsWith("ListView") -> "ListView"
+                cn.contains('.') -> cn.substringAfterLast('.').take(32)
+                else -> cn.take(32)
+            }
+        }
+        val inputType = try {
+            if (node.isEditable) node.inputType else 0
+        } catch (_: Exception) {
+            0
         }
         val visible = try {
             node.isVisibleToUser
@@ -842,8 +973,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (contentDesc.isNotEmpty()) sb.append(" d=\"${xmlEsc(contentDesc)}\"")
         if (hint.isNotEmpty()) sb.append(" h=\"${xmlEsc(hint)}\"")
         if (viewId.isNotEmpty()) sb.append(" i=\"${xmlEsc(viewId)}\"")
+        if (className.isNotEmpty()) sb.append(" cls=\"${xmlEsc(className)}\"")
+        if (inputType != 0) sb.append(" it=\"$inputType\"")
         if (node.isClickable) sb.append(" c=\"1\"")
         if (node.isEditable) sb.append(" e=\"1\"")
+        if (node.isFocused) sb.append(" f=\"1\"")
         if (node.isCheckable) sb.append(" k=\"${if (node.isChecked) 1 else 0}\"")
         if (node.isScrollable) sb.append(" s=\"1\"")
         sb.append(" xy=\"$cx,$cy\"")
@@ -966,91 +1100,191 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
         }
 
+    /**
+     * Portal-compatible text input: single ACTION_SET_TEXT with calculateInputText
+     * (append vs clear + selection). Our additions kept on top:
+     * prefer WhatsApp compose entry, ACTION_CLICK focus, clipboard paste fallback.
+     * [humanize] is retained for API compat but no longer chunk-sleeps (timeouts).
+     */
     fun inputText(
         text: String,
         clear: Boolean = false,
         humanize: Boolean = true,
     ): Boolean {
+        @Suppress("UNUSED_PARAMETER")
+        val _humanize = humanize
         val root = rootInActiveWindow ?: return false
-        var target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (target == null || !target.isEditable) {
-            target = findEditable(root)
+        // Prefer chat compose (WhatsApp entry / Message hint) over search EditTexts
+        var targetNode = findComposeEditable(root)
+        if (targetNode == null) {
+            targetNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (targetNode != null && !targetNode.isEditable) {
+                try {
+                    targetNode.recycle()
+                } catch (_: Exception) {
+                }
+                targetNode = null
+            }
         }
-        val edit = target
-        if (edit == null) {
+        if (targetNode == null) {
+            targetNode = findEditable(root)
+        }
+        if (targetNode == null) {
             try {
                 root.recycle()
             } catch (_: Exception) {
             }
             return false
         }
-        fun setText(value: String): Boolean {
-            val args = android.os.Bundle()
-            args.putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                value,
+        try {
+            try {
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } catch (_: Exception) {
+            }
+
+            val currentText = targetNode.text?.toString()
+            val hintText = try {
+                targetNode.hintText?.toString()
+            } catch (_: Exception) {
+                null
+            }
+            val effectiveCurrent =
+                if (!hintText.isNullOrEmpty() && currentText == hintText) ""
+                else currentText.orEmpty()
+            val currentLength = effectiveCurrent.length
+            val rawStart = try {
+                targetNode.textSelectionStart
+            } catch (_: Exception) {
+                -1
+            }
+            val rawEnd = try {
+                targetNode.textSelectionEnd
+            } catch (_: Exception) {
+                -1
+            }
+            val selectionStart =
+                if (rawStart >= 0) rawStart.coerceIn(0, currentLength) else currentLength
+            val selectionEnd =
+                if (rawEnd >= 0) rawEnd.coerceIn(0, currentLength) else selectionStart
+
+            val finalText = calculateInputText(
+                currentText = currentText,
+                hintText = hintText,
+                newText = text,
+                clear = clear,
+                selectionStart = selectionStart,
+                selectionEnd = selectionEnd,
             )
-            return edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+            val arguments = android.os.Bundle()
+            arguments.putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                finalText,
+            )
+            val setTextSuccess =
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            if (setTextSuccess) {
+                return true
+            }
+            // Clipboard paste fallback (OEM / Secure Folder windows that reject SET_TEXT)
+            return pasteViaClipboard(targetNode, finalText)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting text via accessibility: ${e.message}")
+            return false
+        } finally {
+            try {
+                if (targetNode !== root) targetNode.recycle()
+            } catch (_: Exception) {
+            }
+            try {
+                root.recycle()
+            } catch (_: Exception) {
+            }
         }
-        if (clear) {
-            setText("")
+    }
+
+    private fun pasteViaClipboard(edit: AccessibilityNodeInfo, value: String): Boolean {
+        return try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("mobilerun", value))
+            edit.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            edit.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } catch (e: Exception) {
+            Log.w(TAG, "clipboard paste failed: ${e.message}")
+            false
         }
-        val existing = if (clear) "" else (edit.text?.toString() ?: "")
-        // Human-like chunks, but HARD-CAP total sleep so command ACK never
-        // approaches the cloud's input_text timeout (was causing WS offline).
-        val maxHumanizeBudgetMs = 1_500L
-        val ok = if (!humanize || text.length <= 2) {
-            setText(existing + text)
-        } else {
-            val rng = java.util.concurrent.ThreadLocalRandom.current()
-            var built = existing
-            var i = 0
-            var success = true
-            var slept = 0L
-            // Longer strings: bigger chunks so we finish under budget
-            val minChunk = if (text.length > 24) 4 else 2
-            val maxChunk = if (text.length > 24) 8 else 5
-            while (i < text.length) {
-                val remaining = text.length - i
-                val chunk = if (slept >= maxHumanizeBudgetMs) {
-                    remaining // paste the rest — do not block heartbeats
-                } else {
-                    rng.nextInt(minChunk, maxChunk + 1).coerceAtMost(remaining)
-                }
-                built += text.substring(i, i + chunk)
-                if (!setText(built)) {
-                    success = false
-                    break
-                }
-                i += chunk
-                if (i < text.length && slept < maxHumanizeBudgetMs) {
-                    val pause = if (rng.nextDouble() < 0.12) {
-                        rng.nextLong(80, 160)
-                    } else {
-                        rng.nextLong(20, 70)
-                    }
-                    val allowed = (maxHumanizeBudgetMs - slept).coerceAtLeast(0L)
-                    val actual = pause.coerceAtMost(allowed)
-                    if (actual > 0L) {
-                        try {
-                            Thread.sleep(actual)
-                        } catch (_: InterruptedException) {
-                        }
-                        slept += actual
-                    }
+    }
+
+    /**
+     * Prefer WhatsApp/IG/etc compose boxes over search fields.
+     * Matches resource-id `…:id/entry` and hints like "Message".
+     */
+    private fun findComposeEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val preferred = ArrayList<AccessibilityNodeInfo>()
+        val searchy = ArrayList<AccessibilityNodeInfo>()
+        collectEditables(node, preferred, searchy)
+        val hit = preferred.firstOrNull() ?: searchy.firstOrNull()
+        // Recycle losers
+        for (n in preferred) {
+            if (n !== hit) {
+                try {
+                    n.recycle()
+                } catch (_: Exception) {
                 }
             }
-            success
         }
-        try {
-            edit.recycle()
-        } catch (_: Exception) {
+        for (n in searchy) {
+            if (n !== hit) {
+                try {
+                    n.recycle()
+                } catch (_: Exception) {
+                }
+            }
         }
-        try {
-            root.recycle()
-        } catch (_: Exception) {
+        return hit
+    }
+
+    private fun collectEditables(
+        node: AccessibilityNodeInfo,
+        preferred: MutableList<AccessibilityNodeInfo>,
+        searchy: MutableList<AccessibilityNodeInfo>,
+    ) {
+        if (node.isEditable) {
+            val id = node.viewIdResourceName.orEmpty().lowercase()
+            val hint = (node.hintText?.toString() ?: "").lowercase()
+            val desc = (node.contentDescription?.toString() ?: "").lowercase()
+            val text = (node.text?.toString() ?: "").lowercase()
+            val blob = "$id $hint $desc $text"
+            val isSearch = blob.contains("search") || id.endsWith("/search") ||
+                id.contains("search_input") || id.contains("search_src")
+            val isCompose = id.endsWith("/entry") || id.endsWith(":id/entry") ||
+                id.contains("entry") || id.contains("compose") ||
+                hint.contains("message") || desc == "message" ||
+                hint.contains("type a message") || hint.contains("write a message")
+            val copy = AccessibilityNodeInfo.obtain(node)
+            if (isCompose && !isSearch) {
+                preferred.add(copy)
+            } else if (isSearch) {
+                searchy.add(copy)
+            } else {
+                // Neutral editable — treat as weak preferred (bottom compose often lacks hint)
+                preferred.add(copy)
+            }
         }
-        return ok
+        for (i in 0 until node.childCount) {
+            val child = try {
+                node.getChild(i)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            collectEditables(child, preferred, searchy)
+            try {
+                child.recycle()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
@@ -1070,5 +1304,59 @@ class MobilerunAccessibilityService : AccessibilityService() {
             if (found != null) return found
         }
         return null
+    }
+
+    /**
+     * Portal-style focused editable metadata for IME / cloud: package, viewId,
+     * hint, inputType, className, text — used to tell search vs compose.
+     */
+    fun focusedEditableMeta(): Map<String, Any?> {
+        val root = rootInActiveWindow
+        var target: AccessibilityNodeInfo? = null
+        try {
+            target = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (target == null || !target.isEditable) {
+                try {
+                    target?.recycle()
+                } catch (_: Exception) {
+                }
+                target = findComposeEditable(root) ?: findEditable(root)
+            }
+            if (target == null) {
+                return mapOf("ok" to false)
+            }
+            val hint = try {
+                if (Build.VERSION.SDK_INT >= 26) target.hintText?.toString() else null
+            } catch (_: Exception) {
+                null
+            }
+            return mapOf(
+                "ok" to true,
+                "packageName" to target.packageName?.toString(),
+                "viewId" to target.viewIdResourceName,
+                "hint" to hint,
+                "inputType" to try {
+                    target.inputType
+                } catch (_: Exception) {
+                    0
+                },
+                "className" to target.className?.toString(),
+                "text" to target.text?.toString(),
+                "editable" to target.isEditable,
+                "focused" to target.isFocused,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "focusedEditableMeta: ${e.message}")
+            return mapOf("ok" to false, "error" to (e.message ?: "error"))
+        } finally {
+            try {
+                target?.recycle()
+            } catch (_: Exception) {
+            }
+            try {
+                root?.recycle()
+            } catch (_: Exception) {
+            }
+        }
     }
 }

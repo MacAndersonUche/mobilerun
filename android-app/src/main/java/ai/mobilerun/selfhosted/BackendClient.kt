@@ -57,10 +57,17 @@ class BackendClient(private val context: Context) {
 
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
-    /** Dedicated command executor — slow get_ui_tree/tap must not starve heartbeats. */
-    private val commandExecutor: ExecutorService =
-        Executors.newSingleThreadExecutor { r ->
-            Thread(r, "mr-cmd").also { it.isDaemon = true }
+    /**
+     * Fast gestures (tap/swipe/press) must NEVER wait behind get_ui_tree.
+     * Heartbeats stay on [scope]; slow RPCs use [slowCommandExecutor].
+     */
+    private val fastCommandExecutor: ExecutorService =
+        Executors.newCachedThreadPool { r ->
+            Thread(r, "mr-cmd-fast").also { it.isDaemon = true }
+        }
+    private val slowCommandExecutor: ExecutorService =
+        Executors.newFixedThreadPool(2) { r ->
+            Thread(r, "mr-cmd-slow").also { it.isDaemon = true }
         }
     private val discovery = LanDiscovery(context)
 
@@ -82,6 +89,19 @@ class BackendClient(private val context: Context) {
         val DEFAULT_CLOUD_HTTP: String = BuildConfig.DEFAULT_CLOUD_HTTP
         val DEFAULT_CLOUD_WS: String = BuildConfig.DEFAULT_CLOUD_WS
 
+        /** Wait for register/ack before claiming Connected. */
+        const val REGISTER_ACK_TIMEOUT_MS = 8_000L
+        /** App-level ping; keeps API GW idle (10m) and Dynamo last_seen fresh. */
+        const val HEARTBEAT_INTERVAL_MS = 30_000L
+        /** Reconnect if no server pong within this window (~1 missed ping + slack). */
+        const val HEARTBEAT_STALE_MS = 75_000L
+        /** Proactive socket refresh before API GW 2h max / long-idle edges. */
+        const val PROACTIVE_REFRESH_MS = 8 * 60_000L
+        /** Soft deadline so a hung a11y call still emits an RPC error response. */
+        const val COMMAND_SOFT_TIMEOUT_MS = 35_000L
+
+        const val SECURE_FOLDER_PKG = "com.samsung.knox.securefolder"
+
         /** Map known HTTP API → WS API (they are separate API Gateways). */
         fun cloudWsForHttp(http: String?): String? {
             if (http.isNullOrBlank()) return null
@@ -96,12 +116,16 @@ class BackendClient(private val context: Context) {
 
     private var activeRoute: String = "none"
     private var lastLatencyMs: Double? = null
+    /** 0 until the server acks register/heartbeat — UI must not show Connected before that. */
     @Volatile private var lastHeartbeatAckAtMs: Long = 0L
+    @Volatile private var serverAcked: Boolean = false
     private val reconnectAttempt = AtomicInteger(0)
     /** Bumped on every openSocket so stale cancel/failure callbacks cannot stomp a newer socket. */
     private val socketGeneration = AtomicInteger(0)
     private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
+    private var registerAckJob: Job? = null
+    private var proactiveRefreshJob: Job? = null
     private var userDisconnected = false
     @Volatile private var connecting = false
     @Volatile private var lastOpenAtMs: Long = 0L
@@ -160,6 +184,27 @@ class BackendClient(private val context: Context) {
     }
 
     fun isPaired(): Boolean = !sessionToken.isNullOrBlank()
+
+    fun publicDeviceId(): String = deviceId
+
+    /** True only when Dynamo would see a live authed socket (server ack + fresh pong). */
+    fun isServerConnectedPublic(): Boolean = isServerConnected()
+
+    /**
+     * Called from [ConnectionService] watchdog / screen-on so the socket survives
+     * MainActivity teardown, app switch, and Samsung Doze without a UI reopen.
+     */
+    fun ensureServerConnected(reason: String = "ensure"): Boolean {
+        if (userDisconnected) return false
+        if (isServerConnected() && _statusFlow.value == "Connected") {
+            Log.d(tag, "ensureServerConnected($reason): already acked")
+            return true
+        }
+        Log.i(tag, "ensureServerConnected($reason): status=${_statusFlow.value} — reconnect")
+        userDisconnected = false
+        scope.launch { connectBest(force = true) }
+        return false
+    }
 
     fun setCloudEndpoints(http: String, ws: String?) {
         cloudHttp = http.trimEnd('/')
@@ -596,12 +641,20 @@ class BackendClient(private val context: Context) {
         return list.distinctBy { it.ws }
     }
 
+    private fun isServerConnected(): Boolean =
+        serverAcked &&
+            webSocket != null &&
+            lastHeartbeatAckAtMs > 0 &&
+            System.currentTimeMillis() - lastHeartbeatAckAtMs < HEARTBEAT_STALE_MS
+
     private suspend fun connectBest(force: Boolean = false) {
         if (userDisconnected) return
         // Serialize connects: force=true used to barge in and cancel a socket that
         // just opened, producing an open→cancel→open storm (Socket is closed).
         if (connecting) return
-        if (!force && webSocket != null && _statusFlow.value == "Connected") return
+        // Only skip when we have a *server-acked* live socket — local "Connected"
+        // used to lie when Dynamo had no row.
+        if (!force && isServerConnected() && _statusFlow.value == "Connected") return
         // Grace window after a successful open — ignore duplicate force reconnects
         if (force && lastOpenAtMs > 0 && System.currentTimeMillis() - lastOpenAtMs < 2_500) {
             Log.d(tag, "skip connectBest(force): opened ${System.currentTimeMillis() - lastOpenAtMs}ms ago")
@@ -684,7 +737,9 @@ class BackendClient(private val context: Context) {
         updateRouteUi()
         _statusFlow.value = "Connecting (${candidate.route})…"
 
-        val request = Request.Builder().url(candidate.ws).build()
+        // Put device_id on $connect so Dynamo is keyed correctly even before register
+        val wsUrl = appendConnectQuery(candidate.ws, deviceId)
+        val request = Request.Builder().url(wsUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             private fun isCurrent(): Boolean = socketGeneration.get() == gen
 
@@ -700,7 +755,11 @@ class BackendClient(private val context: Context) {
                 Log.d(tag, "WebSocket opened via ${candidate.route} gen=$gen")
                 reconnectAttempt.set(0)
                 lastOpenAtMs = System.currentTimeMillis()
-                _statusFlow.value = "Connected"
+                // Do NOT claim Connected until the server acks register —
+                // otherwise the UI lies while Dynamo has no connection row.
+                serverAcked = false
+                lastHeartbeatAckAtMs = 0L
+                _statusFlow.value = "Registering with server…"
                 _pairErrorFlow.value = null
                 prefs().edit().putString("last_pair_error", "").apply()
                 val snap = PermissionStatus.snapshot(context, mediaProjectionGranted = false)
@@ -724,6 +783,7 @@ class BackendClient(private val context: Context) {
                 }
                 webSocket.send(gson.toJson(msg))
                 startHeartbeat()
+                armRegisterAckWatch(gen)
                 // Explicit permission_status so Devices page updates immediately
                 reportPermissions(mediaProjectionGranted = false)
             }
@@ -740,6 +800,10 @@ class BackendClient(private val context: Context) {
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 if (!isCurrent()) return
+                serverAcked = false
+                lastHeartbeatAckAtMs = 0L
+                registerAckJob?.cancel()
+                proactiveRefreshJob?.cancel()
                 _statusFlow.value = "Disconnected"
                 stopStreamInternal()
                 scheduleReconnect()
@@ -751,6 +815,10 @@ class BackendClient(private val context: Context) {
                     return
                 }
                 Log.e(tag, "WebSocket error via ${candidate.route}", t)
+                serverAcked = false
+                lastHeartbeatAckAtMs = 0L
+                registerAckJob?.cancel()
+                proactiveRefreshJob?.cancel()
                 _statusFlow.value = "Error: ${t.message}"
                 stopStreamInternal()
                 // Single reconnect path with backoff — do not immediately openSocket
@@ -760,6 +828,58 @@ class BackendClient(private val context: Context) {
         })
     }
 
+    /** Only flip UI to Connected after a server ack; otherwise reconnect. */
+    private fun armRegisterAckWatch(gen: Int) {
+        registerAckJob?.cancel()
+        registerAckJob = scope.launch {
+            delay(REGISTER_ACK_TIMEOUT_MS)
+            if (socketGeneration.get() != gen) return@launch
+            if (serverAcked && lastHeartbeatAckAtMs > 0) return@launch
+            Log.w(tag, "no server register ack within ${REGISTER_ACK_TIMEOUT_MS}ms — reconnect")
+            _statusFlow.value = "No server ack — reconnecting…"
+            _pairErrorFlow.value = "Socket opened but server never registered this device"
+            try {
+                webSocket?.cancel()
+            } catch (_: Exception) {
+            }
+            webSocket = null
+            serverAcked = false
+            scheduleReconnect()
+        }
+    }
+
+    private fun markServerAcked() {
+        serverAcked = true
+        lastHeartbeatAckAtMs = System.currentTimeMillis()
+        _statusFlow.value = "Connected"
+        registerAckJob?.cancel()
+        ConnectionService.start(context)
+        armProactiveRefresh()
+    }
+
+    /** Refresh the socket before API Gateway idle/max-connection edges. */
+    private fun armProactiveRefresh() {
+        proactiveRefreshJob?.cancel()
+        proactiveRefreshJob = scope.launch {
+            delay(PROACTIVE_REFRESH_MS)
+            if (userDisconnected) return@launch
+            if (!isServerConnected()) return@launch
+            Log.i(tag, "proactive WS refresh after ${PROACTIVE_REFRESH_MS}ms")
+            _statusFlow.value = "Refreshing connection…"
+            serverAcked = false
+            try {
+                webSocket?.close(1000, "proactive_refresh")
+            } catch (_: Exception) {
+                try {
+                    webSocket?.cancel()
+                } catch (_: Exception) {
+                }
+            }
+            webSocket = null
+            scheduleReconnect()
+        }
+    }
+
     private fun updateRouteUi() {
         val lat = lastLatencyMs?.let { "${it.toInt()} ms" } ?: "—"
         _routeFlow.value = "Route: ${activeRoute.uppercase()} · $lat"
@@ -767,14 +887,15 @@ class BackendClient(private val context: Context) {
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
-        lastHeartbeatAckAtMs = System.currentTimeMillis()
+        // Do not pretend we have an ack — wait for heartbeat_ack / register ack.
         heartbeatJob = scope.launch {
             while (isActive && webSocket != null) {
                 val t0 = System.nanoTime()
                 val now = System.currentTimeMillis()
                 // Force reconnect if server stopped acking (half-open socket)
-                if (lastHeartbeatAckAtMs > 0 && now - lastHeartbeatAckAtMs > 45_000) {
+                if (lastHeartbeatAckAtMs > 0 && now - lastHeartbeatAckAtMs > HEARTBEAT_STALE_MS) {
                     Log.w(tag, "heartbeat ack stale ${now - lastHeartbeatAckAtMs}ms — reconnect")
+                    serverAcked = false
                     _statusFlow.value = "Connection stale — reconnecting…"
                     try {
                         webSocket?.cancel()
@@ -798,11 +919,12 @@ class BackendClient(private val context: Context) {
                 authToken?.let { hb["auth_token"] = it }
                 val sent = webSocket?.send(gson.toJson(hb)) == true
                 if (!sent) {
+                    serverAcked = false
                     _statusFlow.value = "Disconnected — reconnecting…"
                     scheduleReconnect()
                     break
                 }
-                delay(12_000)
+                delay(HEARTBEAT_INTERVAL_MS)
                 if (lastLatencyMs != null) {
                     webSocket?.send(
                         gson.toJson(
@@ -840,8 +962,12 @@ class BackendClient(private val context: Context) {
             @Suppress("UNCHECKED_CAST")
             val message = gson.fromJson(text, Map::class.java) as Map<String, Any?>
             when (message["type"] as? String ?: message["status"] as? String) {
-                "connected", null -> {
-                    if (message["status"] == "connected" || message["session_token"] != null) {
+                "connected", "ack", null -> {
+                    if (
+                        message["status"] == "connected" ||
+                        message["type"] == "ack" ||
+                        message["session_token"] != null
+                    ) {
                         (message["session_token"] as? String)?.let {
                             sessionToken = it
                             prefs().edit().putString("session_token", it)
@@ -857,19 +983,15 @@ class BackendClient(private val context: Context) {
                             lastLatencyMs = it.toDouble()
                         }
                         updateRouteUi()
-                        _statusFlow.value = "Connected"
-                        ConnectionService.start(context)
+                        markServerAcked()
                         reportPermissions(
                             ScreenCaptureService.instance != null,
                         )
                     }
                 }
                 "heartbeat_ack" -> {
-                    lastHeartbeatAckAtMs = System.currentTimeMillis()
                     lastLatencyMs = lastLatencyMs ?: 20.0
-                    if (_statusFlow.value != "Connected") {
-                        _statusFlow.value = "Connected"
-                    }
+                    markServerAcked()
                     updateRouteUi()
                 }
                 "command" -> handleCommand(message)
@@ -890,10 +1012,13 @@ class BackendClient(private val context: Context) {
                     val action = message["action"] as? String ?: ""
                     val instruction = message["instruction"] as? String ?: ""
                     val step = (message["step"] as? Number)?.toInt()
+                    val dry = message["dry_run"] == true ||
+                        instruction.contains("[DRY RUN]", ignoreCase = true)
+                    val dryTag = if (dry) "[DRY RUN] " else ""
                     _taskFlow.value = when {
-                        action == "start" -> "Cloud agent starting…"
-                        step != null -> "Cloud step $step"
-                        else -> action.ifBlank { "agent" }
+                        action == "start" -> "${dryTag}Cloud agent starting…"
+                        step != null -> "${dryTag}Cloud step $step"
+                        else -> dryTag + action.ifBlank { "agent" }
                     }
                     sendAgentEvent(null, step, action, instruction)
                 }
@@ -1015,15 +1140,130 @@ class BackendClient(private val context: Context) {
         webSocket?.send(gson.toJson(msg))
     }
 
+    private fun appendConnectQuery(ws: String, did: String): String {
+        return try {
+            val b = Uri.parse(ws).buildUpon()
+            b.appendQueryParameter("device_id", did)
+            b.appendQueryParameter("role", "device")
+            b.appendQueryParameter("platform", "android")
+            b.build().toString()
+        } catch (_: Exception) {
+            val sep = if (ws.contains("?")) "&" else "?"
+            "$ws${sep}device_id=${Uri.encode(did)}&role=device&platform=android"
+        }
+    }
+
     private fun handleCommand(message: Map<String, Any?>) {
         val command = message["command"] as? String ?: return
         val requestId = message["request_id"] as? String ?: return
         @Suppress("UNCHECKED_CAST")
         val params = message["params"] as? Map<String, Any?>
+        val t0 = SystemClock.elapsedRealtime()
 
-        // Dedicated executor so a slow tree dump cannot starve heartbeat scope
-        commandExecutor.execute {
-            val t0 = SystemClock.elapsedRealtime()
+        // CRITICAL: ACK tap/swipe/press on the OkHttp reader thread BEFORE any
+        // executor queue. Fresh heartbeats + timed-out taps meant hung get_ui_tree
+        // starved the single command pool while Dynamo still looked online.
+        when (command) {
+            "tap" -> {
+                val x = (params?.get("x") as? Number)?.toInt() ?: 0
+                val y = (params?.get("y") as? Number)?.toInt() ?: 0
+                val humanize = params?.get("humanize") as? Boolean ?: true
+                val a11y = MobilerunAccessibilityService.instance
+                if (a11y == null) {
+                    sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    return
+                }
+                sendCommandResponse(
+                    requestId,
+                    mapOf(
+                        "ok" to true,
+                        "acked" to true,
+                        "x" to x,
+                        "y" to y,
+                        "humanize" to humanize,
+                        "timing" to mapOf("ack_ms" to (SystemClock.elapsedRealtime() - t0)),
+                    ),
+                    null,
+                )
+                fastCommandExecutor.execute {
+                    try {
+                        a11y.tapFireAndForget(x, y, humanize)
+                        sendAgentEvent(null, null, "tap", "tap($x,$y)")
+                    } catch (e: Exception) {
+                        Log.w(tag, "tap gesture after ACK failed: ${e.message}")
+                    }
+                }
+                return
+            }
+            "swipe" -> {
+                val x1 = (params?.get("x1") as? Number)?.toInt() ?: 0
+                val y1 = (params?.get("y1") as? Number)?.toInt() ?: 0
+                val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
+                val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
+                val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
+                val a11y = MobilerunAccessibilityService.instance
+                if (a11y == null) {
+                    sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    return
+                }
+                sendCommandResponse(
+                    requestId,
+                    mapOf(
+                        "ok" to true,
+                        "acked" to true,
+                        "timing" to mapOf("ack_ms" to (SystemClock.elapsedRealtime() - t0)),
+                    ),
+                    null,
+                )
+                fastCommandExecutor.execute {
+                    try {
+                        a11y.swipeFireAndForget(x1, y1, x2, y2, duration)
+                        sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
+                    } catch (e: Exception) {
+                        Log.w(tag, "swipe gesture after ACK failed: ${e.message}")
+                    }
+                }
+                return
+            }
+            "press_button" -> {
+                val button = params?.get("button") as? String
+                val a11y = MobilerunAccessibilityService.instance
+                if (a11y == null) {
+                    sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    return
+                }
+                val ok = when (button) {
+                    "back" -> a11y.pressBack()
+                    "home" -> a11y.pressHome()
+                    "recents" -> a11y.pressRecents()
+                    else -> false
+                }
+                sendCommandResponse(
+                    requestId,
+                    mapOf(
+                        "ok" to ok,
+                        "timing" to mapOf("ack_ms" to (SystemClock.elapsedRealtime() - t0)),
+                    ),
+                    null,
+                )
+                return
+            }
+        }
+
+        // Slow path: tree / type / open_app / screenshot — never blocks tap ACK
+        slowCommandExecutor.execute {
+            val done = java.util.concurrent.atomic.AtomicBoolean(false)
+            val watchdog = scope.launch {
+                delay(COMMAND_SOFT_TIMEOUT_MS)
+                if (done.compareAndSet(false, true)) {
+                    Log.e(tag, "command soft-timeout $command rid=$requestId")
+                    sendCommandResponse(
+                        requestId,
+                        null,
+                        "Command $command soft-timeout after ${COMMAND_SOFT_TIMEOUT_MS}ms",
+                    )
+                }
+            }
             try {
                 // open_app uses PackageManager — must work even if a11y unbound
                 val a11yService = MobilerunAccessibilityService.instance
@@ -1036,76 +1276,144 @@ class BackendClient(private val context: Context) {
                     "dismiss_anr",
                     "dismiss_dialogs",
                     "rebind_a11y",
+                    "ensure_ime",
+                    "switch_ime",
+                    "restore_ime",
+                    "get_focused_input",
+                    "focused_input",
                 )
                 if (needsA11y && a11yService == null) {
                     throw Exception("Accessibility service not connected")
                 }
 
                 val result: Any = when (command) {
-                    "tap" -> {
-                        val x = (params?.get("x") as? Number)?.toInt() ?: 0
-                        val y = (params?.get("y") as? Number)?.toInt() ?: 0
-                        val humanize = params?.get("humanize") as? Boolean ?: true
-                        // ACK immediately; gesture completes asynchronously
-                        a11yService!!.tapFireAndForget(x, y, humanize)
-                        sendAgentEvent(null, null, "tap", "tap($x,$y)")
-                        mapOf(
-                            "ok" to true,
-                            "acked" to true,
-                            "x" to x,
-                            "y" to y,
-                            "humanize" to humanize,
-                            "timing" to mapOf(
-                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
-                            ),
-                        )
-                    }
-                    "swipe" -> {
-                        val x1 = (params?.get("x1") as? Number)?.toInt() ?: 0
-                        val y1 = (params?.get("y1") as? Number)?.toInt() ?: 0
-                        val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
-                        val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
-                        val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
-                        a11yService!!.swipeFireAndForget(x1, y1, x2, y2, duration)
-                        sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
-                        mapOf(
-                            "ok" to true,
-                            "acked" to true,
-                            "timing" to mapOf(
-                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
-                            ),
-                        )
-                    }
-                    "press_button" -> {
-                        val button = params?.get("button") as? String
-                        when (button) {
-                            "back" -> a11yService!!.pressBack()
-                            "home" -> a11yService!!.pressHome()
-                            "recents" -> a11yService!!.pressRecents()
-                            else -> false
-                        }
-                        mapOf(
-                            "ok" to true,
-                            "timing" to mapOf(
-                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
-                            ),
-                        )
-                    }
                     "input_text", "type_text" -> {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
                         val humanize = params?.get("humanize") as? Boolean ?: true
-                        // Run typing on this commandExecutor thread (already off
-                        // the WS/heartbeat thread). inputText caps sleep ≤1.5s so
-                        // ACK returns quickly and heartbeats keep flowing.
-                        val ok = a11yService!!.inputText(text, clear, humanize)
-                        sendAgentEvent(null, null, "type", "type(${text.take(40)})")
-                        if (!ok) throw Exception("input_text failed — focus a text field")
+                        // Best-effort IME select (never blocks on picker). Prefer our
+                        // keyboard when already enabled; otherwise a11y SET_TEXT.
+                        try {
+                            ai.mobilerun.selfhosted.input.ImeSessionController.ensureSelected(context)
+                        } catch (e: Exception) {
+                            Log.w(tag, "ensureSelected before type: ${e.message}")
+                        }
+                        val focus = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME
+                            .getInstance()?.focusedFieldInfo()
+                            ?: a11yService?.focusedEditableMeta().orEmpty()
+                        val via = when (
+                            ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.tryAutomationInput(
+                                context,
+                                text,
+                                clear,
+                                humanize,
+                            )
+                        ) {
+                            ai.mobilerun.selfhosted.input.AutomationInput.DONE -> "ime"
+                            ai.mobilerun.selfhosted.input.AutomationInput.STUCK,
+                            ai.mobilerun.selfhosted.input.AutomationInput.FALLBACK -> {
+                                val svc = a11yService
+                                    ?: throw Exception(
+                                        "input_text needs accessibility when IME unavailable",
+                                    )
+                                val ok = svc.inputText(text, clear, humanize)
+                                if (!ok) {
+                                    throw Exception("input_text failed — focus a text field")
+                                }
+                                "a11y"
+                            }
+                        }
+                        sendAgentEvent(null, null, "type", "type(${text.take(40)}) via=$via")
                         mapOf(
                             "ok" to true,
                             "acked" to true,
+                            "via" to via,
                             "humanize" to humanize,
                             "chars" to text.length,
+                            "focus" to focus,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "ensure_ime", "switch_ime" -> {
+                        // Always reply quickly — never open settings from the RPC
+                        // path (that waits on a human and looks like a command timeout).
+                        val r = try {
+                            ai.mobilerun.selfhosted.input.ImeSessionController
+                                .ensureSelected(context)
+                        } catch (e: Exception) {
+                            Log.w(tag, "ensure_ime: ${e.message}")
+                            mapOf(
+                                "ok" to false,
+                                "selected" to false,
+                                "needs_user" to true,
+                                "error" to (e.message ?: "ensure_ime failed"),
+                            )
+                        }
+                        sendAgentEvent(null, null, "ime", "ensure_ime selected=${r["selected"]}")
+                        r + mapOf(
+                            "fallback" to "a11y_set_text",
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "restore_ime" -> {
+                        val r = ai.mobilerun.selfhosted.input.ImeSessionController.restore(context)
+                        sendAgentEvent(null, null, "ime", "restore_ime ok=${r["ok"]}")
+                        r + mapOf(
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "ime_action", "keyboard_action" -> {
+                        val actionName = (params?.get("action") as? String) ?: "send"
+                        val ime = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.getInstance()
+                        val focus = ime?.focusedFieldInfo()
+                            ?: a11yService?.focusedEditableMeta().orEmpty()
+                        val ok = if (ime != null && ime.hasInputConnection()) {
+                            ime.performImeAction(actionName)
+                        } else {
+                            false
+                        }
+                        if (!ok && actionName.equals("send", ignoreCase = true)) {
+                            // Fall back to tapping known send ids via a11y tree
+                            val tree = a11yService?.getUITree().orEmpty()
+                            val sendHit = Regex(
+                                """i="[^"]*(?:id/)?send[^"]*"[^>]*\bxy="(\d+),(\d+)"""",
+                                RegexOption.IGNORE_CASE,
+                            ).find(tree)
+                            if (sendHit != null) {
+                                val x = sendHit.groupValues[1].toInt()
+                                val y = sendHit.groupValues[2].toInt()
+                                GestureController.tap(x, y, humanize = false)
+                            } else {
+                                throw Exception("ime_action=$actionName failed — no IME connection")
+                            }
+                        }
+                        sendAgentEvent(null, null, "ime_action", "ime_action($actionName)")
+                        mapOf(
+                            "ok" to true,
+                            "action" to actionName,
+                            "via" to if (ok) "ime" else "tap_send",
+                            "focus" to focus,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "get_focused_input", "focused_input" -> {
+                        val ime = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.getInstance()
+                        val focus = ime?.focusedFieldInfo()
+                            ?: a11yService?.focusedEditableMeta()
+                            ?: mapOf("ok" to false)
+                        focus + mapOf(
+                            "ime_selected" to
+                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(context),
+                            "ime_available" to
+                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isAvailable(),
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),
@@ -1138,9 +1446,34 @@ class BackendClient(private val context: Context) {
                             ?: (params?.get("package") as? String)
                             ?: ""
                         val pkg = params?.get("package") as? String
-                        val launched = openAppByNameOrPackage(app, pkg)
+                        var launched = openAppByNameOrPackage(app, pkg)
+                        var viaSecureFolder = false
+                        var secureFolderWaitMs = 0L
+                        if (launched == null) {
+                            val sf = openAppViaSecureFolder(app, pkg)
+                            launched = sf.packageName
+                            viaSecureFolder = sf.openedSecureFolder
+                            secureFolderWaitMs = sf.waitMs
+                            if (sf.needsFingerprint) {
+                                sendAgentEvent(
+                                    null,
+                                    null,
+                                    "secure_folder_unlock",
+                                    "Unlock Secure Folder with fingerprint to open $app",
+                                )
+                            }
+                        }
                         sendAgentEvent(null, null, "open_app", "open_app($app)")
-                        if (launched == null) throw Exception("Could not open app: $app")
+                        if (launched == null) {
+                            throw Exception(
+                                "Could not open app: $app" +
+                                    if (secureFolderInstalled()) {
+                                        " (not in main profile; Secure Folder unlock failed or timed out)"
+                                    } else {
+                                        ""
+                                    },
+                            )
+                        }
                         // Brief settle — keep agent steps under the 3–5s budget
                         val settle = 280L + kotlin.random.Random.nextLong(0, 180)
                         Thread.sleep(settle)
@@ -1151,7 +1484,11 @@ class BackendClient(private val context: Context) {
                             "package" to launched,
                             "active_package" to activePkg,
                             "launched" to true,
+                            "secure_folder" to viaSecureFolder,
+                            "secure_folder_wait_ms" to secureFolderWaitMs,
                             "a11y" to (a11yService != null),
+                            // Main-profile a11y often cannot see Secure Folder (user 150)
+                            "a11y_cross_user_limited" to viaSecureFolder,
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),
@@ -1246,9 +1583,15 @@ class BackendClient(private val context: Context) {
                     else -> throw Exception("Unknown command: $command")
                 }
 
-                sendCommandResponse(requestId, result, null)
+                if (done.compareAndSet(false, true)) {
+                    watchdog.cancel()
+                    sendCommandResponse(requestId, result, null)
+                }
             } catch (e: Exception) {
-                sendCommandResponse(requestId, null, e.message ?: "Unknown error")
+                if (done.compareAndSet(false, true)) {
+                    watchdog.cancel()
+                    sendCommandResponse(requestId, null, e.message ?: "Unknown error")
+                }
             }
         }
     }
@@ -1407,6 +1750,135 @@ class BackendClient(private val context: Context) {
      * Launch via PackageManager.getLaunchIntentForPackage — never by hunting
      * launcher icons. Returns the package that was launched, or null.
      */
+    private data class SecureFolderLaunch(
+        val packageName: String?,
+        val openedSecureFolder: Boolean,
+        val needsFingerprint: Boolean,
+        val waitMs: Long,
+    )
+
+    private fun secureFolderInstalled(): Boolean {
+        return try {
+            context.packageManager.getPackageInfo(SECURE_FOLDER_PKG, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Samsung Secure Folder (Knox user ~150): apps like WhatsApp may live only there.
+     * Open Secure Folder, wait up to ~60s for fingerprint unlock, then try the app
+     * again / tap its icon. Main-profile Accessibility often cannot see Folder windows
+     * — callers should fall back to screenshot+vision when a11y_cross_user_limited.
+     */
+    private fun openAppViaSecureFolder(app: String, pkg: String?): SecureFolderLaunch {
+        if (!secureFolderInstalled()) {
+            return SecureFolderLaunch(null, false, false, 0)
+        }
+        val launchSf = context.packageManager.getLaunchIntentForPackage(SECURE_FOLDER_PKG)
+            ?: Intent().setClassName(
+                SECURE_FOLDER_PKG,
+                "com.samsung.knox.securefolder.presentation.switcher.SwitcherActivity",
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!startUiActivity(launchSf)) {
+            Log.w(tag, "Secure Folder present but could not launch")
+            return SecureFolderLaunch(null, true, false, 0)
+        }
+        sendAgentEvent(
+            null,
+            null,
+            "secure_folder",
+            "Opened Secure Folder — waiting for fingerprint unlock",
+        )
+        val a11y = MobilerunAccessibilityService.instance
+        val t0 = SystemClock.elapsedRealtime()
+        var needsFp = false
+        // Wait long enough for Mac to place a finger; cloud open_app timeout is 90s.
+        val deadline = t0 + 75_000L
+        var unlocked = false
+        var lastFpNudgeMs = 0L
+        while (SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(900)
+            val tree = try {
+                a11y?.getUITree().orEmpty()
+            } catch (_: Exception) {
+                ""
+            }
+            val low = tree.lowercase()
+            val active = a11y?.activePackageName().orEmpty()
+            if (
+                low.contains("fingerprint") ||
+                low.contains("confirm pattern") ||
+                low.contains("confirm pin") ||
+                low.contains("use biometrics") ||
+                low.contains("authenticate") ||
+                low.contains("unlock") && low.contains("secure")
+            ) {
+                needsFp = true
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastFpNudgeMs > 5_000L) {
+                    lastFpNudgeMs = now
+                    sendAgentEvent(
+                        null,
+                        null,
+                        "secure_folder_unlock",
+                        "Fingerprint prompt — unlock Secure Folder to continue ($app)",
+                    )
+                }
+                continue
+            }
+            // Folder home / app grid likely unlocked
+            if (
+                active == SECURE_FOLDER_PKG ||
+                low.contains("secure folder") ||
+                low.contains("whatsapp") ||
+                low.contains("instagram") ||
+                low.contains("tinder") ||
+                low.contains("bumble") ||
+                low.contains("hinge") ||
+                low.contains("telegram") ||
+                low.contains("messenger")
+            ) {
+                // Prefer tapping the requested app icon inside the Folder UI
+                val label = app.trim().removePrefix("open ").trim()
+                if (label.isNotBlank() && a11y != null) {
+                    val tapped = try {
+                        a11y.tapByVisibleText(label, fuzzy = true)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (tapped) {
+                        Thread.sleep(700)
+                        unlocked = true
+                        break
+                    }
+                }
+                // Retry PackageManager launch — some OEMs resolve after Folder unlock
+                val again = openAppByNameOrPackage(app, pkg)
+                if (again != null) {
+                    return SecureFolderLaunch(
+                        again,
+                        true,
+                        needsFp,
+                        SystemClock.elapsedRealtime() - t0,
+                    )
+                }
+                unlocked = true
+                break
+            }
+        }
+        val wait = SystemClock.elapsedRealtime() - t0
+        if (!unlocked) {
+            return SecureFolderLaunch(null, true, needsFp || wait > 2_000, wait)
+        }
+        val resolved = resolvePackageName(
+            app.trim().lowercase().removePrefix("open ").trim(),
+            pkg,
+        ) ?: pkg?.takeIf { it.contains('.') } ?: app
+        return SecureFolderLaunch(resolved, true, needsFp, wait)
+    }
+
     private fun openAppByNameOrPackage(app: String, pkg: String?): String? {
         val name = app.trim()
         val lower = name.lowercase().removePrefix("open ").trim()
@@ -1569,9 +2041,13 @@ class BackendClient(private val context: Context) {
         userDisconnected = true
         reconnectJob?.cancel()
         heartbeatJob?.cancel()
+        registerAckJob?.cancel()
+        proactiveRefreshJob?.cancel()
         stopStreamInternal()
         webSocket?.close(1000, "User disconnect")
         webSocket = null
+        serverAcked = false
+        lastHeartbeatAckAtMs = 0L
         _statusFlow.value = "Disconnected"
         _routeFlow.value = "Route: —"
     }
