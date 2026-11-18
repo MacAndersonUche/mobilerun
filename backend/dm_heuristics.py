@@ -540,25 +540,48 @@ def chat_screen_verified(
 
 
 def outgoing_bubble_present(tree: str, message: str) -> bool:
-    """True when the typed message appears as an outgoing bubble in the tree.
+    """True when the typed message appears as a NEW outgoing bubble in the tree.
 
-    Heuristic: message text is visible on a non-editable node in the lower
-    half of the screen (chat transcript), not only in the compose EditText.
+    Heuristic: message text is visible on a non-editable node in the chat
+    transcript, not only in the compose EditText. Fake-chats (and similar
+    fixtures) seed an "Old outgoing message: …" bubble with the same text —
+    those must NOT count as success.
     """
     needle = (message or "").strip()
     if len(needle) < 2:
         return False
     low_needle = needle.lower()
+    saw_new_marker = False
+    saw_unmarked = False
     for n in _parse_compact_nodes(tree):
         if n.get("editable"):
             continue
-        blob = f"{n.get('label') or ''} {n.get('hint') or ''}".lower()
-        if low_needle not in blob and low_needle[:12] not in blob:
+        text = str(n.get("text") or "").strip()
+        desc = str(n.get("desc") or "").strip()
+        hint = str(n.get("hint") or "").strip()
+        blob = f"{text} {desc} {hint}".lower()
+        # Explicit seed marker from fake-chats ConversationActivity
+        if "old outgoing" in blob:
             continue
+        text_low = text.lower()
+        # Exact text match on the bubble (reject "Precious Achalugohi baby")
+        if text_low != low_needle and f": {low_needle}" not in blob:
+            if low_needle not in blob and low_needle[:12] not in blob:
+                continue
+            if text_low and low_needle in text_low and text_low != low_needle:
+                continue
         y = int(n.get("y") or 0)
-        if y > 700:  # below header / search
-            return True
-    return False
+        # Header / status band is roughly y < 280 on phones; chat bubbles sit
+        # just below. Explicit "new outgoing" markers always count.
+        if "new outgoing" in blob:
+            saw_new_marker = True
+            continue
+        if y < 280:
+            continue
+        saw_unmarked = True
+    # Prefer explicit new markers when the tree uses them; otherwise unmarked
+    # bubbles (real WhatsApp) still count.
+    return saw_new_marker or saw_unmarked
 
 
 def focused_is_compose_not_search(
@@ -872,8 +895,21 @@ def heuristic_dm_send(
             "tap_search_fallback",
         )
 
-    # 2) Type contact into search
+    # 2) Type contact into search — never into the message compose box
     if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
+        if focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
+            # Compose has focus (leftover conversation) — leave chat, re-open search
+            return _fp(
+                {
+                    "action": "back",
+                    "reason": (
+                        f"Compose focused before contact typed — back then search ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "back_before_type_contact",
+            )
         return _fp(
             {
                 "action": "type",

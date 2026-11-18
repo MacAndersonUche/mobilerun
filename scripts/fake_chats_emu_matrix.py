@@ -150,17 +150,25 @@ def read_sent_log(pkg: str) -> List[Dict[str, Any]]:
 
 
 def launch_inbox(pkg: str) -> None:
+    # Cold start each case so leftover ConversationActivity (seed "hi baby"
+    # bubble + compose focus) cannot poison search→contact→send.
+    adb("shell", "am", "force-stop", pkg, check=False)
+    time.sleep(0.4)
     adb(
         "shell",
         "am",
         "start",
+        "-W",
         "-n",
         f"{pkg}/ai.mobilerun.fakechats.InboxActivity",
+        "-f",
+        "0x10008000",  # NEW_TASK | CLEAR_TASK
         "--ez",
         "clear_log",
         "true",
     )
     time.sleep(1.2)
+    adb("shell", "am", "broadcast", "-a", "android.intent.action.CLOSE_SYSTEM_DIALOGS", check=False)
 
 
 def set_ime(enabled: bool) -> None:

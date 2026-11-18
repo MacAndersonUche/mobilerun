@@ -538,6 +538,18 @@ def _goal_satisfied_from_tree(
             )
             if not marker_in_label:
                 continue
+            # Fake-chats (and fixtures) seed an "Old outgoing message: …" bubble
+            # with the same text — that must not satisfy the send goal.
+            if re.search(
+                rf'old outgoing message:\s*{re.escape(marker)}',
+                tl,
+                re.I,
+            ) and not re.search(
+                rf'new outgoing message[^"]*{re.escape(marker)}',
+                tl,
+                re.I,
+            ):
+                continue
             in_edit = bool(
                 re.search(
                     r'e="?1"?[^>]{0,120}'
