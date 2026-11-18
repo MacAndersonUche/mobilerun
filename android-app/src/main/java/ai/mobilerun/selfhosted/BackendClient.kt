@@ -58,12 +58,16 @@ class BackendClient(private val context: Context) {
     private val gson = Gson()
     private val scope = CoroutineScope(Dispatchers.IO)
     /**
-     * Parallel command pool — a hung get_ui_tree must not block tap/open_app ACKs.
-     * Heartbeats stay on [scope] (Dispatchers.IO), independent of this pool.
+     * Fast gestures (tap/swipe/press) must NEVER wait behind get_ui_tree.
+     * Heartbeats stay on [scope]; slow RPCs use [slowCommandExecutor].
      */
-    private val commandExecutor: ExecutorService =
-        Executors.newFixedThreadPool(3) { r ->
-            Thread(r, "mr-cmd").also { it.isDaemon = true }
+    private val fastCommandExecutor: ExecutorService =
+        Executors.newCachedThreadPool { r ->
+            Thread(r, "mr-cmd-fast").also { it.isDaemon = true }
+        }
+    private val slowCommandExecutor: ExecutorService =
+        Executors.newFixedThreadPool(2) { r ->
+            Thread(r, "mr-cmd-slow").also { it.isDaemon = true }
         }
     private val discovery = LanDiscovery(context)
 
@@ -1008,10 +1012,13 @@ class BackendClient(private val context: Context) {
                     val action = message["action"] as? String ?: ""
                     val instruction = message["instruction"] as? String ?: ""
                     val step = (message["step"] as? Number)?.toInt()
+                    val dry = message["dry_run"] == true ||
+                        instruction.contains("[DRY RUN]", ignoreCase = true)
+                    val dryTag = if (dry) "[DRY RUN] " else ""
                     _taskFlow.value = when {
-                        action == "start" -> "Cloud agent starting…"
-                        step != null -> "Cloud step $step"
-                        else -> action.ifBlank { "agent" }
+                        action == "start" -> "${dryTag}Cloud agent starting…"
+                        step != null -> "${dryTag}Cloud step $step"
+                        else -> dryTag + action.ifBlank { "agent" }
                     }
                     sendAgentEvent(null, step, action, instruction)
                 }
@@ -1151,11 +1158,100 @@ class BackendClient(private val context: Context) {
         val requestId = message["request_id"] as? String ?: return
         @Suppress("UNCHECKED_CAST")
         val params = message["params"] as? Map<String, Any?>
+        val t0 = SystemClock.elapsedRealtime()
 
-        // Parallel pool + soft timeout so a hung tree/tap still replies (RPC poll
-        // otherwise expires while heartbeats keep the connection row fresh).
-        commandExecutor.execute {
-            val t0 = SystemClock.elapsedRealtime()
+        // CRITICAL: ACK tap/swipe/press on the OkHttp reader thread BEFORE any
+        // executor queue. Fresh heartbeats + timed-out taps meant hung get_ui_tree
+        // starved the single command pool while Dynamo still looked online.
+        when (command) {
+            "tap" -> {
+                val x = (params?.get("x") as? Number)?.toInt() ?: 0
+                val y = (params?.get("y") as? Number)?.toInt() ?: 0
+                val humanize = params?.get("humanize") as? Boolean ?: true
+                val a11y = MobilerunAccessibilityService.instance
+                if (a11y == null) {
+                    sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    return
+                }
+                sendCommandResponse(
+                    requestId,
+                    mapOf(
+                        "ok" to true,
+                        "acked" to true,
+                        "x" to x,
+                        "y" to y,
+                        "humanize" to humanize,
+                        "timing" to mapOf("ack_ms" to (SystemClock.elapsedRealtime() - t0)),
+                    ),
+                    null,
+                )
+                fastCommandExecutor.execute {
+                    try {
+                        a11y.tapFireAndForget(x, y, humanize)
+                        sendAgentEvent(null, null, "tap", "tap($x,$y)")
+                    } catch (e: Exception) {
+                        Log.w(tag, "tap gesture after ACK failed: ${e.message}")
+                    }
+                }
+                return
+            }
+            "swipe" -> {
+                val x1 = (params?.get("x1") as? Number)?.toInt() ?: 0
+                val y1 = (params?.get("y1") as? Number)?.toInt() ?: 0
+                val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
+                val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
+                val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
+                val a11y = MobilerunAccessibilityService.instance
+                if (a11y == null) {
+                    sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    return
+                }
+                sendCommandResponse(
+                    requestId,
+                    mapOf(
+                        "ok" to true,
+                        "acked" to true,
+                        "timing" to mapOf("ack_ms" to (SystemClock.elapsedRealtime() - t0)),
+                    ),
+                    null,
+                )
+                fastCommandExecutor.execute {
+                    try {
+                        a11y.swipeFireAndForget(x1, y1, x2, y2, duration)
+                        sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
+                    } catch (e: Exception) {
+                        Log.w(tag, "swipe gesture after ACK failed: ${e.message}")
+                    }
+                }
+                return
+            }
+            "press_button" -> {
+                val button = params?.get("button") as? String
+                val a11y = MobilerunAccessibilityService.instance
+                if (a11y == null) {
+                    sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    return
+                }
+                val ok = when (button) {
+                    "back" -> a11y.pressBack()
+                    "home" -> a11y.pressHome()
+                    "recents" -> a11y.pressRecents()
+                    else -> false
+                }
+                sendCommandResponse(
+                    requestId,
+                    mapOf(
+                        "ok" to ok,
+                        "timing" to mapOf("ack_ms" to (SystemClock.elapsedRealtime() - t0)),
+                    ),
+                    null,
+                )
+                return
+            }
+        }
+
+        // Slow path: tree / type / open_app / screenshot — never blocks tap ACK
+        slowCommandExecutor.execute {
             val done = java.util.concurrent.atomic.AtomicBoolean(false)
             val watchdog = scope.launch {
                 delay(COMMAND_SOFT_TIMEOUT_MS)
@@ -1186,62 +1282,11 @@ class BackendClient(private val context: Context) {
                 }
 
                 val result: Any = when (command) {
-                    "tap" -> {
-                        val x = (params?.get("x") as? Number)?.toInt() ?: 0
-                        val y = (params?.get("y") as? Number)?.toInt() ?: 0
-                        val humanize = params?.get("humanize") as? Boolean ?: true
-                        // ACK immediately; gesture completes asynchronously
-                        a11yService!!.tapFireAndForget(x, y, humanize)
-                        sendAgentEvent(null, null, "tap", "tap($x,$y)")
-                        mapOf(
-                            "ok" to true,
-                            "acked" to true,
-                            "x" to x,
-                            "y" to y,
-                            "humanize" to humanize,
-                            "timing" to mapOf(
-                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
-                            ),
-                        )
-                    }
-                    "swipe" -> {
-                        val x1 = (params?.get("x1") as? Number)?.toInt() ?: 0
-                        val y1 = (params?.get("y1") as? Number)?.toInt() ?: 0
-                        val x2 = (params?.get("x2") as? Number)?.toInt() ?: 0
-                        val y2 = (params?.get("y2") as? Number)?.toInt() ?: 0
-                        val duration = (params?.get("duration_ms") as? Number)?.toLong() ?: 300
-                        a11yService!!.swipeFireAndForget(x1, y1, x2, y2, duration)
-                        sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
-                        mapOf(
-                            "ok" to true,
-                            "acked" to true,
-                            "timing" to mapOf(
-                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
-                            ),
-                        )
-                    }
-                    "press_button" -> {
-                        val button = params?.get("button") as? String
-                        when (button) {
-                            "back" -> a11yService!!.pressBack()
-                            "home" -> a11yService!!.pressHome()
-                            "recents" -> a11yService!!.pressRecents()
-                            else -> false
-                        }
-                        mapOf(
-                            "ok" to true,
-                            "timing" to mapOf(
-                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
-                            ),
-                        )
-                    }
                     "input_text", "type_text" -> {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
                         val humanize = params?.get("humanize") as? Boolean ?: true
-                        // Run typing on this commandExecutor thread (already off
-                        // the WS/heartbeat thread). inputText caps sleep ≤1.5s so
-                        // ACK returns quickly and heartbeats keep flowing.
+                        // Slow executor — inputText caps sleep ≤1.5s.
                         val ok = a11yService!!.inputText(text, clear, humanize)
                         sendAgentEvent(null, null, "type", "type(${text.take(40)})")
                         if (!ok) throw Exception("input_text failed — focus a text field")
@@ -1630,7 +1675,8 @@ class BackendClient(private val context: Context) {
         val a11y = MobilerunAccessibilityService.instance
         val t0 = SystemClock.elapsedRealtime()
         var needsFp = false
-        val deadline = t0 + 60_000L
+        // Cap well under open_app RPC timeout (45s) so we still ACK
+        val deadline = t0 + 28_000L
         var unlocked = false
         while (SystemClock.elapsedRealtime() < deadline) {
             Thread.sleep(900)

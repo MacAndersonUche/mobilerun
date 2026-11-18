@@ -1635,6 +1635,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job.get("job_id"),
         )
 
+    dry_run_job = bool(job.get("dry_run") or state.get("dry_run"))
     push_to_device(
         device_id,
         {
@@ -1642,7 +1643,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             "action": "cloud_step",
             "task_id": job.get("job_id"),
             "step": step + 1,
-            "instruction": instruction,
+            "instruction": (f"[DRY RUN] {instruction}" if dry_run_job else instruction),
+            "dry_run": dry_run_job,
         },
         wait_reconnect_s=30.0,
     )

@@ -25,7 +25,9 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "search_labels": ("Search", "search", "Search…", "Search..."),
         "search_fallback": (980, 160),
         "compose_labels": ("Type a message", "Message", "Write a message"),
+        "compose_ids": ("com.whatsapp:id/entry", "id/entry", ":id/entry"),
         "send_labels": ("Send",),
+        "send_ids": ("com.whatsapp:id/send", "id/send", ":id/send"),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -198,6 +200,55 @@ def _tree_editable_center(tree: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _tree_id_center(tree: str, *id_needles: str) -> Optional[Tuple[int, int]]:
+    """Locate a node by resource-id suffix (e.g. com.whatsapp:id/entry)."""
+    for n in _parse_compact_nodes(tree):
+        vid = str(n.get("id") or "").lower()
+        if not vid:
+            continue
+        for needle in id_needles:
+            want = (needle or "").lower().strip()
+            if not want:
+                continue
+            if vid == want or vid.endswith(want) or want in vid:
+                return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def find_compose_center(
+    tree: str,
+    compose_labels: Sequence[str],
+    compose_ids: Sequence[str] = (),
+    search_labels: Sequence[str] = (),
+) -> Optional[Tuple[int, int]]:
+    """Prefer WhatsApp entry id, then Message hint, then bottom editable."""
+    c = _tree_id_center(tree, *tuple(compose_ids))
+    if c:
+        return c
+    c = _tree_node_center(tree, *tuple(compose_labels))
+    if c:
+        return c
+    for n in _parse_compact_nodes(tree):
+        if not n.get("editable"):
+            continue
+        if _is_searchish_node(n, search_labels):
+            continue
+        hint = str(n.get("hint") or "").lower()
+        label = str(n.get("label") or "").lower()
+        if "message" in hint or "message" in label or n.get("y", 0) > 1800:
+            return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def find_send_center(
+    tree: str, send_labels: Sequence[str], send_ids: Sequence[str] = ()
+) -> Optional[Tuple[int, int]]:
+    c = _tree_id_center(tree, *tuple(send_ids))
+    if c:
+        return c
+    return _tree_node_center(tree, *tuple(send_labels))
+
+
 _NODE_TAG_RE = re.compile(r"<(?:n|node)\b([^>]*)/?>", re.I)
 
 
@@ -235,12 +286,14 @@ def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
         if cx is None or cy is None:
             continue
         label = " ".join(p for p in (text, desc, hint) if p).strip()
+        view_id = _attr(attrs, "i", "resource-id", "viewIdResourceName")
         out.append(
             {
                 "text": text,
                 "desc": desc,
                 "hint": hint,
                 "label": label,
+                "id": view_id,
                 "x": cx,
                 "y": cy,
                 "editable": editable,
@@ -840,33 +893,28 @@ def heuristic_dm_send(
 
     # 4) Focus compose — only when chat verified
     if chat_ok and not typed_message and not focused_compose:
-        # Prefer compose label / bottom editable, never search
-        c = _tree_node_center(ui_tree, *compose_labels)
+        compose_ids = tuple(profile.get("compose_ids") or ())
+        c = find_compose_center(
+            ui_tree, compose_labels, compose_ids, search_labels=search_labels
+        )
         if c:
             return _fp(
                 {
                     "action": "tap",
                     "x": c[0],
                     "y": c[1],
-                    "reason": f"Focus compose Message field ({planner})",
+                    "reason": (f"Focus compose Message/entry field ({planner})"),
                     "planner": planner,
                     "llm_provider": None,
                 },
                 "focus_compose",
             )
-        for n in _parse_compact_nodes(ui_tree):
-            if n.get("editable") and not _is_searchish_node(n, search_labels):
-                return _fp(
-                    {
-                        "action": "tap",
-                        "x": n["x"],
-                        "y": n["y"],
-                        "reason": f"Focus compose editable ({planner})",
-                        "planner": planner,
-                        "llm_provider": None,
-                    },
-                    "focus_compose_editable",
-                )
+        # No entry/Message in tree (common on Secure Folder / sparse dumps) —
+        # defer to vision rather than blind coords that miss the box.
+        if tree_is_sparse(ui_tree) or not compose_field_present(
+            ui_tree, compose_labels
+        ):
+            return None
         cx, cy = profile["compose_fallback"]
         return _fp(
             {
@@ -924,7 +972,8 @@ def heuristic_dm_send(
                 },
                 "dry_run_stop",
             )
-        c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
+        send_ids = tuple(profile.get("send_ids") or ())
+        c = find_send_center(ui_tree, tuple(profile["send_labels"]), send_ids=send_ids)
         sx, sy = profile["send_fallback"]
         x, y = c if c else (sx, sy)
         return _fp(
@@ -932,7 +981,7 @@ def heuristic_dm_send(
                 "action": "tap",
                 "x": x,
                 "y": y,
-                "reason": f"Tap Send ({planner})",
+                "reason": f"Tap Send id/send ({planner})",
                 "planner": planner,
                 "llm_provider": None,
             },
