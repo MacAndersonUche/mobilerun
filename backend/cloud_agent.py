@@ -457,11 +457,22 @@ def _extract_android_version(tree: str) -> Optional[str]:
 
 
 def _goal_satisfied_from_tree(
-    instruction: str, tree: str, package: str = ""
+    instruction: str,
+    tree: str,
+    package: str = "",
+    *,
+    history: Optional[List[str]] = None,
+    dry_run: bool = False,
 ) -> Optional[str]:
-    """If the UI already shows the goal answer, return a done reason string."""
+    """If the UI already shows the goal answer, return a done reason string.
+
+    For DM/send goals we require THIS job to have typed the message body
+    (and tapped Send, unless dry_run). Old chat bubbles / WhatsApp
+    'delivered' status strings must NOT false-complete a new task.
+    """
     low = (instruction or "").lower()
     tl = (tree or "").lower()
+    hist = " ".join(str(h) for h in (history or [])).lower()
     if not tl or len(tl) < 40:
         return None
     # Read Android version (Settings → About phone)
@@ -481,7 +492,7 @@ def _goal_satisfied_from_tree(
             return "Dark theme is already On"
         if "display_dark" in tl or ("dark theme" in tl and 'text="on"' in tl):
             return "Dark theme is On"
-    # Messaging-style: distinctive sent body visible (not only draft/editable)
+    # Messaging-style goals
     if any(
         k in low
         for k in (
@@ -497,20 +508,27 @@ def _goal_satisfied_from_tree(
             "sms",
             "macai",
             "dm ",
+            "tell ",
         )
     ):
-        if "message sent" in tl or "delivered" in tl:
-            return "Message appears sent"
-        # E2E marker phrase — treat as sent when it appears outside a focused edit
-        markers = ["hello from macai uitree recovery test"]
         dm = _parse_dm_instruction(instruction)
+        markers = ["hello from macai uitree recovery test"]
         if dm and dm.get("message"):
             markers.append(dm["message"].lower())
+        # Must have typed the body in THIS job before we accept "sent"
+        typed_here = ("type" in hist or "typed" in hist) and any(
+            m and m in hist for m in markers
+        )
+        if not typed_here:
+            return None
+        if dry_run:
+            # dry_run completes via heuristic dry_run_stop, not bubble detection
+            return None
+        if "tap send" not in hist and "re-tap send" not in hist:
+            return None
         for marker in markers:
             if not marker:
                 continue
-            # Require the marker inside a text/desc/hint attribute — never match
-            # short words like "hi" against XML tag names (e.g. "hierarchy").
             marker_in_label = bool(
                 re.search(
                     rf'(?:t|d|h|text|content-desc)="[^"]*{re.escape(marker)}[^"]*"',
@@ -520,7 +538,6 @@ def _goal_satisfied_from_tree(
             )
             if not marker_in_label:
                 continue
-            # Compact tree marks editables with e="1" / e=1; bubbles are plain text
             in_edit = bool(
                 re.search(
                     r'e="?1"?[^>]{0,120}'
@@ -536,7 +553,6 @@ def _goal_satisfied_from_tree(
             )
             if not in_edit:
                 return f"Sent message visible in conversation: '{marker}'"
-            # Draft still in the box — not done yet
         marker0 = markers[0]
         if "sms" in tl and "5550100" in tl and "now" in tl and marker0.split()[0] in tl:
             return "SMS thread shows recent outbound message"
@@ -572,7 +588,13 @@ def plan_next_action(
     multi-step verification tasks.
     """
     # Deterministic short-circuit: goal already visible → done (avoids tap loops)
-    satisfied = _goal_satisfied_from_tree(instruction, ui_tree, package)
+    satisfied = _goal_satisfied_from_tree(
+        instruction,
+        ui_tree,
+        package,
+        history=history,
+        dry_run=dry_run,
+    )
     if satisfied:
         return {
             "action": "done",
@@ -816,12 +838,17 @@ def _heuristic_dm_send(
     except ImportError:
         from backend.dm_heuristics import heuristic_dm_send  # type: ignore
 
+    def _sat(instr: str, tree: str, pkg: str = "") -> Optional[str]:
+        return _goal_satisfied_from_tree(
+            instr, tree, pkg, history=history, dry_run=dry_run
+        )
+
     return heuristic_dm_send(
         instruction,
         ui_tree,
         history,
         package,
-        goal_satisfied=_goal_satisfied_from_tree,
+        goal_satisfied=_sat,
         dry_run=dry_run,
     )
 
@@ -879,7 +906,7 @@ def _heuristic_messaging_send(
         and "edittext" not in tl[max(0, tl.find(marker) - 200) : tl.find(marker) + 80]
     ):
         # rough: marker present and not clearly in an edit — goal detect handles better
-        sat = _goal_satisfied_from_tree(instruction, ui_tree, package)
+        sat = _goal_satisfied_from_tree(instruction, ui_tree, package, history=history)
         if sat:
             return {
                 "action": "done",
@@ -1905,7 +1932,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             and np_streak >= 1
         ):
             sat = _goal_satisfied_from_tree(
-                instruction, ui_tree, str(tree_info.get("package") or "")
+                instruction,
+                ui_tree,
+                str(tree_info.get("package") or ""),
+                history=history,
+                dry_run=bool(job.get("dry_run") or state.get("dry_run")),
             )
             if sat:
                 kind = "done"
@@ -2001,7 +2032,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Hard-stop after too many no-progress steps (same tree forever)
         if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
             sat = _goal_satisfied_from_tree(
-                instruction, ui_tree, str(tree_info.get("package") or "")
+                instruction,
+                ui_tree,
+                str(tree_info.get("package") or ""),
+                history=history,
+                dry_run=bool(job.get("dry_run") or state.get("dry_run")),
             )
             if sat:
                 kind = "done"
@@ -2403,7 +2438,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 state["same_tap_streak"] = 0
             # Goal became visible after this action → finish now (no tap loop)
-            sat_after = _goal_satisfied_from_tree(instruction, after_tree, after_pkg)
+            sat_after = _goal_satisfied_from_tree(
+                instruction,
+                after_tree,
+                after_pkg,
+                history=history + [f"{summary} — {reason}".strip(" —")],
+                dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+            )
             if isinstance(after.get("timing"), dict):
                 state["last_tree_timing"] = after["timing"]
                 if after["timing"].get("build_ms") is not None:
