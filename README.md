@@ -277,7 +277,7 @@ safety scan
 <!-- LATEST_APK_START -->
 ## 📱 Install Latest Android App
 
-**Version:** 1.0.339 | **Build:** [#339](https://github.com/MacAndersonUche/mobilerun/actions/runs/44297760208) | **Commit:** [`18caca5`](https://github.com/MacAndersonUche/mobilerun/commit/18caca523335e1d86e6981828608a17aa3f1d854)
+**Version:** 1.0.342 | **Build:** [#342](https://github.com/MacAndersonUche/mobilerun/actions/runs/44312672895) | **Commit:** [`2a649c9`](https://github.com/MacAndersonUche/mobilerun/commit/2a649c913500b539ca8d99f08af3beb1cc0ab9e3)
 
 [![Release](https://img.shields.io/badge/download-mobilerun.apk-blue?style=for-the-badge&logo=android)](https://github.com/MacAndersonUche/mobilerun/releases/latest/download/mobilerun.apk)
 
@@ -297,7 +297,7 @@ safety scan
 |--------|------|
 | **Latest APK** | [mobilerun.apk](https://github.com/MacAndersonUche/mobilerun/releases/latest/download/mobilerun.apk) |
 | **All Releases** | [View all releases](https://github.com/MacAndersonUche/mobilerun/releases) |
-| **This Build** | [Release apk-339](https://github.com/MacAndersonUche/mobilerun/releases/tag/apk-339) |
+| **This Build** | [Release apk-342](https://github.com/MacAndersonUche/mobilerun/releases/tag/apk-342) |
 
 ### Installation Notes
 
