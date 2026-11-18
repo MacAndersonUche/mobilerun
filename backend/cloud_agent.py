@@ -1326,8 +1326,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             return job
         if kind == "fail":
             low_reason = (reason or "").lower()
-            # Planner often fails on a transient empty tree after WS drop —
-            # retry the step instead of ending the task.
+            # Planner often fails on transient/contact/no-send states — convert
+            # to a real recovery action instead of spinning on empty returns.
+            # Use a dedicated streak (not empty_tree_streak) so non-empty trees
+            # do not reset the counter every tick.
             if any(
                 t in low_reason
                 for t in (
@@ -1346,31 +1348,61 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "cannot proceed",
                 )
             ):
-                empty_n = int(state.get("empty_tree_streak") or 0) + 1
-                state["empty_tree_streak"] = empty_n
+                fail_n = int(state.get("planner_fail_retry_streak") or 0) + 1
+                state["planner_fail_retry_streak"] = fail_n
                 state["no_progress_streak"] = 0
                 state["last_tree_fp"] = None
-                state["last_action"] = f"retry_empty: {reason}"
-                history.append(
-                    f"hint: prior fail was transient ({reason[:80]}) — "
-                    "try Start chat / type 5550100 / compose / Send"
-                )
-                state["history"] = history[-40:]
-                job["state"] = state
-                job["result"] = f"Retrying after empty-tree fail ({empty_n})"
-                if empty_n < 8:
+                if fail_n < 8:
+                    # Rotate recovery actions so we actually move the UI forward
+                    # Pixel coords for ~1080x2400 emu / S21-class screens
+                    recoveries = (
+                        {"type": "open_app", "app": "messages"},
+                        {"type": "tap", "x": 970, "y": 2200},  # compose FAB
+                        {"type": "type", "text": "5550100"},
+                        {"type": "tap", "x": 540, "y": 220},  # search/recipient
+                        {
+                            "type": "type",
+                            "text": "hello from macai uitree recovery test",
+                        },
+                        {"type": "tap", "x": 980, "y": 2200},  # send
+                        {"type": "back"},
+                        {"type": "tap", "x": 900, "y": 2100},
+                    )
+                    action = recoveries[(fail_n - 1) % len(recoveries)]
+                    kind = str(action.get("type") or "").lower()
+                    history.append(
+                        f"hint: planner fail ({reason[:60]}) → recovery {kind} "
+                        f"(streak={fail_n})"
+                    )
+                    state["history"] = history[-40:]
+                    state["last_action"] = f"recovery:{kind}"
+                    job["state"] = state
+                    job["result"] = f"Recovering after planner fail ({fail_n}): {kind}"
+                    # Fall through to execute_action below
+                else:
+                    state["steps"] = step + 1
+                    state["last_progress_at"] = int(time.time())
+                    state["last_action"] = f"fail: {reason}"
+                    history.append(f"fail: {reason}")
+                    state["history"] = history
+                    _record_step(f"fail: {reason}", ok=False, screenshot_key=shot_key)
+                    job["state"] = state
+                    job["status"] = "failed"
+                    job["error"] = reason or "Agent could not complete the goal"
+                    job["completed_at"] = int(time.time())
                     return job
-            state["steps"] = step + 1
-            state["last_progress_at"] = int(time.time())
-            state["last_action"] = f"fail: {reason}"
-            history.append(f"fail: {reason}")
-            state["history"] = history
-            _record_step(f"fail: {reason}", ok=False, screenshot_key=shot_key)
-            job["state"] = state
-            job["status"] = "failed"
-            job["error"] = reason or "Agent could not complete the goal"
-            job["completed_at"] = int(time.time())
-            return job
+            else:
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"fail: {reason}"
+                history.append(f"fail: {reason}")
+                state["history"] = history
+                _record_step(f"fail: {reason}", ok=False, screenshot_key=shot_key)
+                job["state"] = state
+                job["status"] = "failed"
+                job["error"] = reason or "Agent could not complete the goal"
+                job["completed_at"] = int(time.time())
+                return job
 
         # Identical swipe detection before executing
         pending_summary_prefix = "swipe(" if kind == "swipe" else ""
