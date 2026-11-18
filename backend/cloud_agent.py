@@ -1375,21 +1375,40 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["planner_fail_retry_streak"] = fail_n
                 state["no_progress_streak"] = 0
                 state["last_tree_fp"] = None
-                if fail_n < 8:
-                    # Rotate recovery actions so we actually move the UI forward
-                    # Prefer Send / compose field — never Back (SystemUI trap).
+                if fail_n < 12:
+                    # Rotate recovery actions so we actually move the UI forward.
+                    # If we left Messages (SystemUI/launcher), open_app first;
+                    # then focus compose, type marker, tap Send. Never Back.
+                    pkg_l = str(tree_info.get("package") or "").lower()
+                    off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
                     recoveries = (
-                        {"action": "tap", "x": 1000, "y": 2280},  # Send first
-                        {"action": "tap", "x": 970, "y": 2200},  # FAB / Send alt
-                        {"action": "tap", "x": 540, "y": 2250},  # message field
-                        {
-                            "action": "type",
-                            "text": "hello from macai uitree recovery test",
-                        },
-                        {"action": "tap", "x": 1000, "y": 2280},  # send again
-                        {"action": "tap", "x": 900, "y": 2280},
-                        {"action": "open_app", "app": "messages"},
-                        {"action": "tap", "x": 540, "y": 2100},
+                        (
+                            {"action": "open_app", "app": "messages"},
+                            {"action": "tap", "x": 540, "y": 2250},  # compose field
+                            {
+                                "action": "type",
+                                "text": "hello from macai uitree recovery test",
+                            },
+                            {"action": "tap", "x": 1000, "y": 2280},  # Send
+                            {"action": "tap", "x": 970, "y": 2200},  # Send alt
+                            {"action": "tap", "x": 900, "y": 2280},
+                            {"action": "tap", "x": 540, "y": 2100},
+                            {"action": "open_app", "app": "messages"},
+                        )
+                        if off_messages
+                        else (
+                            {"action": "tap", "x": 1000, "y": 2280},  # Send first
+                            {"action": "tap", "x": 970, "y": 2200},  # FAB / Send alt
+                            {"action": "tap", "x": 540, "y": 2250},  # message field
+                            {
+                                "action": "type",
+                                "text": "hello from macai uitree recovery test",
+                            },
+                            {"action": "tap", "x": 1000, "y": 2280},  # send again
+                            {"action": "tap", "x": 900, "y": 2280},
+                            {"action": "open_app", "app": "messages"},
+                            {"action": "tap", "x": 540, "y": 2100},
+                        )
                     )
                     action = recoveries[(fail_n - 1) % len(recoveries)]
                     kind = str(action.get("action") or "").lower()
