@@ -1324,7 +1324,7 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             device_id,
             "tap",
             {"x": jx, "y": jy, "humanize": True},
-            timeout_s=12,
+            timeout_s=20,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
             action["_timing"] = raw["timing"]
@@ -1404,7 +1404,8 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             device_id,
             "open_app",
             {"app": app, "package": action.get("package")},
-            timeout_s=20,
+            # Secure Folder / Samsung cold-start can exceed 20s
+            timeout_s=45,
             wait_reconnect_s=60,
         )
         pkg = ""
@@ -1415,6 +1416,10 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             # Stash for completion checks
             action["_rpc_package"] = pkg
             action["_rpc_ok"] = bool(raw.get("ok") or raw.get("launched") or pkg)
+            action["_secure_folder"] = bool(raw.get("secure_folder"))
+            action["_a11y_cross_user_limited"] = bool(
+                raw.get("a11y_cross_user_limited")
+            )
         # Human-readable primary; keep [package] for rpc_ok / history matching
         nice = app or pkg or "app"
         if nice.startswith("com.") or nice.startswith("ai."):
@@ -1808,6 +1813,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         image_b64 = locals().get("image_b64")
         use_vision = bool(locals().get("use_vision"))
+        # Always bind before any path that may skip plan_next_action — recovery
+        # empty-tree fallthrough used to hit UnboundLocalError on np_streak.
+        np_streak = int(state.get("no_progress_streak") or 0)
+        job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
         if not _skip_plan:
             image_b64 = None
             # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
@@ -1823,19 +1832,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if force_vision:
                 state["force_vision_once"] = False
             try:
-                if (
-                    sparse_tree
-                    or force_vision
-                    or int(state.get("no_progress_streak") or 0) >= 2
-                ):
+                if sparse_tree or force_vision or np_streak >= 2:
                     image_b64 = _fetch_screenshot_b64(device_id)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
             use_vision = bool(image_b64) and (
-                sparse_tree
-                or force_vision
-                or int(state.get("no_progress_streak") or 0) >= 2
+                sparse_tree or force_vision or np_streak >= 2
             )
             if use_vision:
                 state["vision_fallback"] = True
@@ -1847,8 +1850,6 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     tree_info.get("empty"),
                 )
 
-            np_streak = int(state.get("no_progress_streak") or 0)
-            job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
             try:
                 action = plan_next_action(
                     instruction,
@@ -2333,6 +2334,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         }
         action["_history"] = list(history[-16:])
         summary = execute_action(device_id, action)
+        # Secure Folder (Samsung user 150): main-profile a11y often cannot see
+        # Folder windows — force screenshot+vision on the next plan tick.
+        if action.get("_secure_folder") or action.get("_a11y_cross_user_limited"):
+            state["force_vision_once"] = True
+            state["secure_folder"] = True
+            history.append("hint: Secure Folder — prefer vision if tree empty/sparse")
+            state["history"] = history[-40:]
 
         # Verify: re-fetch tree / package after action (retry empty/offline)
         verify_msg = ""

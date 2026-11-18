@@ -341,7 +341,8 @@ fun MainScreen(
                     }
                 }
             } else {
-                StatusCard("Status", connectionStatus, connectionStatus.contains("Connected"))
+                // Green only when server-acked Connected — not "Registering…" / stale.
+                StatusCard("Status", connectionStatus, connectionStatus == "Connected")
                 StatusCard(
                     "Active route",
                     routeStatus,

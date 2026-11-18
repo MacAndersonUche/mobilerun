@@ -357,6 +357,79 @@ class MobilerunAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /**
+     * Tap a visible node whose text/contentDescription equals (or contains, if
+     * [fuzzy]) [label]. Used for Secure Folder app icons and similar grids.
+     */
+    fun tapByVisibleText(label: String, fuzzy: Boolean = true): Boolean {
+        val want = label.trim()
+        if (want.isEmpty()) return false
+        val root = rootInActiveWindow ?: return false
+        return try {
+            val exact = findNodeByText(root, listOf(want))
+            val node = exact ?: if (fuzzy) findNodeContainingText(root, want) else null
+            if (node == null) return false
+            val tapped = try {
+                if (node.isClickable) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                } else {
+                    var p: AccessibilityNodeInfo? = node.parent
+                    var ok = false
+                    while (p != null) {
+                        if (p.isClickable) {
+                            ok = p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            break
+                        }
+                        val next = p.parent
+                        try {
+                            p.recycle()
+                        } catch (_: Exception) {
+                        }
+                        p = next
+                    }
+                    ok
+                }
+            } finally {
+                try {
+                    node.recycle()
+                } catch (_: Exception) {
+                }
+            }
+            Log.i(TAG, "tapByVisibleText('$want') ok=$tapped")
+            tapped
+        } catch (e: Exception) {
+            Log.w(TAG, "tapByVisibleText failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun findNodeContainingText(
+        node: AccessibilityNodeInfo?,
+        needle: String,
+    ): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val n = needle.lowercase()
+        val t = node.text?.toString().orEmpty()
+        val d = node.contentDescription?.toString().orEmpty()
+        if (t.lowercase().contains(n) || d.lowercase().contains(n)) {
+            return AccessibilityNodeInfo.obtain(node)
+        }
+        for (i in 0 until node.childCount) {
+            val child = try {
+                node.getChild(i)
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            val found = findNodeContainingText(child, needle)
+            try {
+                child.recycle()
+            } catch (_: Exception) {
+            }
+            if (found != null) return found
+        }
+        return null
+    }
+
     /** Back-compat string dump used by older callers. */
     fun getUITree(): String = getUITreeDetailed(allowCache = true).tree
 
