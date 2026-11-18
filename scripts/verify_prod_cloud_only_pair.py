@@ -94,14 +94,32 @@ def main() -> None:
         headers={"Authorization": f"Bearer {tok}"},
     )
     print("remove", json.load(urllib.request.urlopen(req, timeout=15)))
-    left = json.load(
-        urllib.request.urlopen(
-            urllib.request.Request(
-                PROD + "/api/devices", headers={"Authorization": f"Bearer {tok}"}
-            ),
-            timeout=15,
+    left: list = []
+    for attempt in range(1, 8):
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    PROD + f"/api/devices/{did}",
+                    method="DELETE",
+                    headers={"Authorization": f"Bearer {tok}"},
+                ),
+                timeout=15,
+            ).read()
+        except Exception:
+            pass
+        left = json.load(
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    PROD + "/api/devices",
+                    headers={"Authorization": f"Bearer {tok}"},
+                ),
+                timeout=15,
+            )
         )
-    )
+        if not any(d.get("device_id") == did for d in left):
+            break
+        print(f"remove_retry {attempt} still listed; sleeping...")
+        time.sleep(attempt)
     assert not any(d.get("device_id") == did for d in left), left
     print("PROD_CLOUD_ONLY_PAIR_OK", code)
 
