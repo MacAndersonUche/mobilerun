@@ -16,10 +16,12 @@ import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.Toast
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
 
 /** Outcome for cloud command routing (mirrors Portal ApiHandler.keyboardInput). */
@@ -70,17 +72,176 @@ class MobilerunKeyboardIME : InputMethodService() {
          * Portal order: try IME when selected+available, else FALLBACK to a11y.
          * AcceptedUnverified / session-changed → STUCK (no a11y double-input).
          */
-        fun tryAutomationInput(context: android.content.Context, text: String, clear: Boolean): AutomationInput {
+        fun tryAutomationInput(
+            context: android.content.Context,
+            text: String,
+            clear: Boolean,
+            humanize: Boolean = true,
+        ): AutomationInput {
             if (!isAvailable() || !isSelected(context)) return AutomationInput.FALLBACK
             val ime = getInstance() ?: return AutomationInput.FALLBACK
             if (!ime.hasInputConnection()) return AutomationInput.FALLBACK
-            return when (ime.inputTextResult(text, clear)) {
-                TextInputResult.Verified -> AutomationInput.DONE
+            val result = if (humanize && text.length > 2) {
+                ime.inputTextHumanPaced(text, clear)
+            } else {
+                ime.inputTextResult(text, clear)
+            }
+            return when (result) {
+                TextInputResult.Verified,
+                TextInputResult.AcceptedUnverified -> AutomationInput.DONE
                 TextInputResult.Rejected -> AutomationInput.FALLBACK
-                TextInputResult.AcceptedUnverified,
                 TextInputResult.CommitOutcomeUnknown,
                 TextInputResult.InputSessionChanged -> AutomationInput.STUCK
             }
+        }
+    }
+
+    /** Focused EditorInfo + heuristics for search vs compose (WhatsApp id/entry). */
+    fun focusedFieldInfo(): Map<String, Any?> {
+        val ei = currentInputEditorInfo
+        val pkg = ei?.packageName
+        val viewId = try {
+            if (ei != null && ei.fieldId != 0 && pkg != null) {
+                // fieldId alone is not a resource name; prefer a11y when available
+                null
+            } else null
+        } catch (_: Exception) {
+            null
+        }
+        val hint = ei?.hintText?.toString()
+        val inputType = ei?.inputType ?: 0
+        val imeAction = if (ei != null) ei.imeOptions and EditorInfo.IME_MASK_ACTION else 0
+        val a11y = ai.mobilerun.selfhosted.MobilerunAccessibilityService.instance
+            ?.focusedEditableMeta()
+        val resolvedId = (a11y?.get("viewId") as? String) ?: viewId
+        val resolvedHint = (a11y?.get("hint") as? String)?.takeIf { it.isNotBlank() } ?: hint
+        val resolvedPkg = (a11y?.get("packageName") as? String) ?: pkg
+        val idLow = resolvedId.orEmpty().lowercase()
+        val hintLow = resolvedHint.orEmpty().lowercase()
+        val isSearch = imeAction == EditorInfo.IME_ACTION_SEARCH ||
+            idLow.contains("search") ||
+            hintLow.contains("search") ||
+            hintLow.startsWith("to:")
+        val isCompose = !isSearch && (
+            idLow.endsWith("/entry") ||
+                idLow.endsWith(":id/entry") ||
+                idLow.contains("entry") ||
+                idLow.contains("compose") ||
+                hintLow.contains("message") ||
+                hintLow.contains("type a message") ||
+                hintLow.contains("write a message") ||
+                imeAction == EditorInfo.IME_ACTION_SEND
+            )
+        return mapOf(
+            "packageName" to resolvedPkg,
+            "viewId" to resolvedId,
+            "hint" to resolvedHint,
+            "inputType" to inputType,
+            "imeAction" to imeAction,
+            "imeActionName" to imeActionName(imeAction),
+            "isSearch" to isSearch,
+            "isCompose" to isCompose,
+            "hasConnection" to hasInputConnection(),
+            "selected" to isSelected(this),
+            "text" to (a11y?.get("text") as? String),
+            "className" to (a11y?.get("className") as? String),
+        )
+    }
+
+    private fun imeActionName(action: Int): String = when (action) {
+        EditorInfo.IME_ACTION_SEND -> "send"
+        EditorInfo.IME_ACTION_SEARCH -> "search"
+        EditorInfo.IME_ACTION_GO -> "go"
+        EditorInfo.IME_ACTION_DONE -> "done"
+        EditorInfo.IME_ACTION_NEXT -> "next"
+        EditorInfo.IME_ACTION_PREVIOUS -> "previous"
+        EditorInfo.IME_ACTION_NONE -> "none"
+        else -> "unspecified"
+    }
+
+    /**
+     * Human-paced InputConnection.commitText in small chunks (Portal-style control
+     * of our own keyboard — not a11y SET_TEXT).
+     */
+    internal fun inputTextHumanPaced(text: String, clear: Boolean = true): TextInputResult {
+        if (text.isEmpty()) return inputTextResult("", clear)
+        if (clear) {
+            val cleared = clearTextResult()
+            if (cleared == TextInputResult.Rejected ||
+                cleared == TextInputResult.InputSessionChanged
+            ) {
+                return cleared
+            }
+        }
+        val rng = ThreadLocalRandom.current()
+        var i = 0
+        var last: TextInputResult = TextInputResult.Rejected
+        val budgetMs = 2_500L
+        var slept = 0L
+        while (i < text.length) {
+            val remaining = text.length - i
+            val chunk = if (slept >= budgetMs) {
+                remaining
+            } else {
+                rng.nextInt(2, 6).coerceAtMost(remaining)
+            }
+            val piece = text.substring(i, i + chunk)
+            last = inputTextResult(piece, clear = false)
+            if (last == TextInputResult.Rejected ||
+                last == TextInputResult.InputSessionChanged
+            ) {
+                return last
+            }
+            i += chunk
+            if (i < text.length && slept < budgetMs) {
+                val pause = rng.nextLong(35, 95)
+                val allowed = (budgetMs - slept).coerceAtLeast(0L)
+                val actual = pause.coerceAtMost(allowed)
+                if (actual > 0) {
+                    SystemClock.sleep(actual)
+                    slept += actual
+                }
+            }
+        }
+        return when (last) {
+            TextInputResult.Verified,
+            TextInputResult.AcceptedUnverified -> TextInputResult.Verified
+            else -> last
+        }
+    }
+
+    /** performEditorAction — SEND when the field supports it (WhatsApp compose). */
+    fun performImeAction(action: String = "send"): Boolean {
+        val ic = currentInputConnection ?: return false
+        val ei = currentInputEditorInfo
+        val want = when (action.lowercase()) {
+            "send" -> EditorInfo.IME_ACTION_SEND
+            "search" -> EditorInfo.IME_ACTION_SEARCH
+            "go" -> EditorInfo.IME_ACTION_GO
+            "done" -> EditorInfo.IME_ACTION_DONE
+            "next" -> EditorInfo.IME_ACTION_NEXT
+            else -> EditorInfo.IME_ACTION_SEND
+        }
+        val fieldAction = ei?.let { it.imeOptions and EditorInfo.IME_MASK_ACTION }
+            ?: EditorInfo.IME_ACTION_UNSPECIFIED
+        val target = when {
+            fieldAction == want -> want
+            fieldAction != EditorInfo.IME_ACTION_UNSPECIFIED &&
+                fieldAction != EditorInfo.IME_ACTION_NONE -> fieldAction
+            else -> want
+        }
+        return try {
+            val ok = ic.performEditorAction(target)
+            Log.i(TAG, "performEditorAction action=$action target=$target ok=$ok")
+            if (!ok && action.equals("send", ignoreCase = true)) {
+                // Fallback: ENTER key for apps that don't wire IME_ACTION_SEND
+                sendKeyEventDirect(KeyEvent.KEYCODE_ENTER)
+            } else {
+                ok
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "performEditorAction failed: ${e.message}")
+            false
         }
     }
 

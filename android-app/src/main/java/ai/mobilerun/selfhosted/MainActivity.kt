@@ -465,14 +465,19 @@ fun MainScreen(
                     }
                     if (!keyboardSelected) {
                         Text(
-                            "Optional (matches original Portal): enable Mobilerun Keyboard " +
-                                "as the input method for reliable WhatsApp typing.",
+                            "Required for reliable typing: enable Mobilerun Keyboard " +
+                                "(our controlled IME — search vs compose is then deterministic).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        OutlinedButton(
+                        Button(
                             onClick = {
-                                PermissionStatus.openInputMethodSettings(activity)
+                                val r = ai.mobilerun.selfhosted.input.ImeSessionController
+                                    .ensureSelected(activity)
+                                if (r["needs_user"] == true || r["selected"] != true) {
+                                    PermissionStatus.openInputMethodSettings(activity)
+                                }
+                                refreshPerms()
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {

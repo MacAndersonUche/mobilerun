@@ -896,8 +896,25 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } else {
             ""
         }
-        val viewId = node.viewIdResourceName.orEmpty().let { id ->
-            if (id.contains('/')) id.substringAfterLast('/') else id.takeLast(40)
+        // Portal-compatible: keep full resource-id (com.whatsapp:id/entry)
+        val viewId = node.viewIdResourceName.orEmpty().take(96)
+        val className = node.className?.toString().orEmpty().let { cn ->
+            when {
+                cn.endsWith("EditText") -> "EditText"
+                cn.endsWith("TextView") -> "TextView"
+                cn.endsWith("Button") -> "Button"
+                cn.endsWith("ImageButton") -> "ImageButton"
+                cn.endsWith("ImageView") -> "ImageView"
+                cn.endsWith("RecyclerView") -> "RecyclerView"
+                cn.endsWith("ListView") -> "ListView"
+                cn.contains('.') -> cn.substringAfterLast('.').take(32)
+                else -> cn.take(32)
+            }
+        }
+        val inputType = try {
+            if (node.isEditable) node.inputType else 0
+        } catch (_: Exception) {
+            0
         }
         val visible = try {
             node.isVisibleToUser
@@ -956,8 +973,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (contentDesc.isNotEmpty()) sb.append(" d=\"${xmlEsc(contentDesc)}\"")
         if (hint.isNotEmpty()) sb.append(" h=\"${xmlEsc(hint)}\"")
         if (viewId.isNotEmpty()) sb.append(" i=\"${xmlEsc(viewId)}\"")
+        if (className.isNotEmpty()) sb.append(" cls=\"${xmlEsc(className)}\"")
+        if (inputType != 0) sb.append(" it=\"$inputType\"")
         if (node.isClickable) sb.append(" c=\"1\"")
         if (node.isEditable) sb.append(" e=\"1\"")
+        if (node.isFocused) sb.append(" f=\"1\"")
         if (node.isCheckable) sb.append(" k=\"${if (node.isChecked) 1 else 0}\"")
         if (node.isScrollable) sb.append(" s=\"1\"")
         sb.append(" xy=\"$cx,$cy\"")
@@ -1284,5 +1304,59 @@ class MobilerunAccessibilityService : AccessibilityService() {
             if (found != null) return found
         }
         return null
+    }
+
+    /**
+     * Portal-style focused editable metadata for IME / cloud: package, viewId,
+     * hint, inputType, className, text — used to tell search vs compose.
+     */
+    fun focusedEditableMeta(): Map<String, Any?> {
+        val root = rootInActiveWindow
+        var target: AccessibilityNodeInfo? = null
+        try {
+            target = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (target == null || !target.isEditable) {
+                try {
+                    target?.recycle()
+                } catch (_: Exception) {
+                }
+                target = findComposeEditable(root) ?: findEditable(root)
+            }
+            if (target == null) {
+                return mapOf("ok" to false)
+            }
+            val hint = try {
+                if (Build.VERSION.SDK_INT >= 26) target.hintText?.toString() else null
+            } catch (_: Exception) {
+                null
+            }
+            return mapOf(
+                "ok" to true,
+                "packageName" to target.packageName?.toString(),
+                "viewId" to target.viewIdResourceName,
+                "hint" to hint,
+                "inputType" to try {
+                    target.inputType
+                } catch (_: Exception) {
+                    0
+                },
+                "className" to target.className?.toString(),
+                "text" to target.text?.toString(),
+                "editable" to target.isEditable,
+                "focused" to target.isFocused,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "focusedEditableMeta: ${e.message}")
+            return mapOf("ok" to false, "error" to (e.message ?: "error"))
+        } finally {
+            try {
+                target?.recycle()
+            } catch (_: Exception) {
+            }
+            try {
+                root?.recycle()
+            } catch (_: Exception) {
+            }
+        }
     }
 }

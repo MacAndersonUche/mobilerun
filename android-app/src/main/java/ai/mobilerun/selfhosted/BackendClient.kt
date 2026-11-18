@@ -1276,6 +1276,11 @@ class BackendClient(private val context: Context) {
                     "dismiss_anr",
                     "dismiss_dialogs",
                     "rebind_a11y",
+                    "ensure_ime",
+                    "switch_ime",
+                    "restore_ime",
+                    "get_focused_input",
+                    "focused_input",
                 )
                 if (needsA11y && a11yService == null) {
                     throw Exception("Accessibility service not connected")
@@ -1287,11 +1292,17 @@ class BackendClient(private val context: Context) {
                         val clear = params?.get("clear") as? Boolean ?: false
                         val humanize = params?.get("humanize") as? Boolean ?: true
                         // Portal order: Mobilerun Keyboard IME first, then a11y SET_TEXT.
+                        // Prefer our own keyboard; fall back to a11y SET_TEXT.
+                        ai.mobilerun.selfhosted.input.ImeSessionController.ensureSelected(context)
+                        val focus = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME
+                            .getInstance()?.focusedFieldInfo()
+                            ?: a11yService?.focusedEditableMeta().orEmpty()
                         val via = when (
                             ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.tryAutomationInput(
                                 context,
                                 text,
                                 clear,
+                                humanize,
                             )
                         ) {
                             ai.mobilerun.selfhosted.input.AutomationInput.DONE -> "ime"
@@ -1315,6 +1326,80 @@ class BackendClient(private val context: Context) {
                             "via" to via,
                             "humanize" to humanize,
                             "chars" to text.length,
+                            "focus" to focus,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "ensure_ime", "switch_ime" -> {
+                        val r = ai.mobilerun.selfhosted.input.ImeSessionController
+                            .ensureSelected(context)
+                        if (r["needs_user"] == true) {
+                            PermissionStatus.openInputMethodSettings(context)
+                        }
+                        sendAgentEvent(null, null, "ime", "ensure_ime selected=${r["selected"]}")
+                        r + mapOf(
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "restore_ime" -> {
+                        val r = ai.mobilerun.selfhosted.input.ImeSessionController.restore(context)
+                        sendAgentEvent(null, null, "ime", "restore_ime ok=${r["ok"]}")
+                        r + mapOf(
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "ime_action", "keyboard_action" -> {
+                        val actionName = (params?.get("action") as? String) ?: "send"
+                        val ime = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.getInstance()
+                        val focus = ime?.focusedFieldInfo()
+                            ?: a11yService?.focusedEditableMeta().orEmpty()
+                        val ok = if (ime != null && ime.hasInputConnection()) {
+                            ime.performImeAction(actionName)
+                        } else {
+                            false
+                        }
+                        if (!ok && actionName.equals("send", ignoreCase = true)) {
+                            // Fall back to tapping known send ids via a11y tree
+                            val tree = a11yService?.getUITree().orEmpty()
+                            val sendHit = Regex(
+                                """i="[^"]*(?:id/)?send[^"]*"[^>]*\bxy="(\d+),(\d+)"""",
+                                RegexOption.IGNORE_CASE,
+                            ).find(tree)
+                            if (sendHit != null) {
+                                val x = sendHit.groupValues[1].toInt()
+                                val y = sendHit.groupValues[2].toInt()
+                                GestureController.tap(x, y, humanize = false)
+                            } else {
+                                throw Exception("ime_action=$actionName failed — no IME connection")
+                            }
+                        }
+                        sendAgentEvent(null, null, "ime_action", "ime_action($actionName)")
+                        mapOf(
+                            "ok" to true,
+                            "action" to actionName,
+                            "via" to if (ok) "ime" else "tap_send",
+                            "focus" to focus,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "get_focused_input", "focused_input" -> {
+                        val ime = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.getInstance()
+                        val focus = ime?.focusedFieldInfo()
+                            ?: a11yService?.focusedEditableMeta()
+                            ?: mapOf("ok" to false)
+                        focus + mapOf(
+                            "ime_selected" to
+                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(context),
+                            "ime_available" to
+                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isAvailable(),
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),
