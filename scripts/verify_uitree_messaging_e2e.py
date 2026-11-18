@@ -106,8 +106,39 @@ def ensure_a11y_bound() -> None:
 
 
 def seed_contact() -> None:
-    """Best-effort seed a Messages-friendly contact + open SMS compose."""
+    """Best-effort seed a Messages-friendly contact + leave SMS compose open."""
     ensure_a11y_bound()
+    # Resolve next raw_contact_id instead of assuming 1
+    rid = "1"
+    try:
+        out = subprocess.run(
+            [
+                "adb",
+                "-s",
+                SERIAL,
+                "shell",
+                "content",
+                "query",
+                "--uri",
+                "content://com.android.contacts/raw_contacts",
+                "--projection",
+                "_id",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        ids = []
+        for line in out.splitlines():
+            if "_id=" in line:
+                try:
+                    ids.append(int(line.split("_id=")[1].split(",")[0].split(" ")[0]))
+                except ValueError:
+                    pass
+        if ids:
+            rid = str(max(ids) + 1)
+    except Exception:
+        rid = "1"
     adb(
         "shell",
         "content",
@@ -126,7 +157,7 @@ def seed_contact() -> None:
         "--uri",
         "content://com.android.contacts/data",
         "--bind",
-        "raw_contact_id:i:1",
+        f"raw_contact_id:i:{rid}",
         "--bind",
         "mimetype:s:vnd.android.cursor.item/name",
         "--bind",
@@ -139,7 +170,7 @@ def seed_contact() -> None:
         "--uri",
         "content://com.android.contacts/data",
         "--bind",
-        "raw_contact_id:i:1",
+        f"raw_contact_id:i:{rid}",
         "--bind",
         "mimetype:s:vnd.android.cursor.item/phone_v2",
         "--bind",
@@ -147,7 +178,16 @@ def seed_contact() -> None:
         "--bind",
         "data2:i:2",
     )
-    # Pre-open SMS compose so the agent does not depend on contact search alone
+    # Warm Messages to the conversation list (full open→search→chat path)
+    adb(
+        "shell",
+        "am",
+        "start",
+        "-n",
+        "com.google.android.apps.messaging/.main.MainActivity",
+    )
+    time.sleep(1.5)
+    # Also stage compose once so recipient 5550100 is in recents, then back out
     adb(
         "shell",
         "am",
@@ -158,10 +198,13 @@ def seed_contact() -> None:
         "sms:5550100",
         "--es",
         "sms_body",
-        "hello",
+        "hello from macai uitree recovery test",
     )
     time.sleep(1.5)
+    adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    time.sleep(0.5)
     adb("shell", "input", "keyevent", "KEYCODE_HOME")
+    time.sleep(0.5)
 
 
 def percentile(vals: List[float], p: float) -> Optional[float]:
@@ -187,12 +230,16 @@ def main() -> int:
     ]
     instr = os.environ.get(
         "E2E_INSTRUCTION",
-        "Open Messages. Tap Start chat / New conversation / Compose if shown. "
-        "Enter recipient 5550100 or MacAITest, open the thread, type "
-        "'hello from macai uitree recovery test' in the message box, tap Send, "
-        "and confirm the sent text is visible in the conversation. Prefer typing "
-        "the phone number directly if search shows no contacts. Keep taking UI "
-        "steps until send is confirmed.",
+        "Complete a full Messages flow with many UI steps: (1) open Messages, "
+        "(2) tap Start chat / New conversation / compose pencil FAB, (3) type "
+        "5550100 or MacAITest in the recipient field, (4) open that chat, "
+        "(5) tap the message text box, (6) type 'hello from macai uitree "
+        "recovery test', (7) tap Send, (8) wait/confirm the text appears in "
+        "the thread, (9) scroll the thread if needed, (10) re-check the sent "
+        "bubble is visible. Prefer the phone number over contact search. If "
+        "search is empty, tap the typed number / Next / Done to open compose "
+        "anyway. Never fail only because contacts look missing — keep tapping "
+        "and typing until Send is confirmed.",
     )
     print("START", instr, flush=True)
     task = req(

@@ -1337,9 +1337,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "no further actions",
                     "no ui elements",
                     "not found in the ui",
+                    "contact",
+                    "no send",
+                    "send button",
                     "accessibility",
                     "same screen/tree hash",
                     "no ui progress",
+                    "cannot proceed",
                 )
             ):
                 empty_n = int(state.get("empty_tree_streak") or 0) + 1
