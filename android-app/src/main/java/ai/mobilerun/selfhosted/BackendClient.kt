@@ -1125,7 +1125,12 @@ class BackendClient(private val context: Context) {
                                 ),
                             )
                         } else {
-                            val detailed = a11yService.getUITreeDetailed(allowCache = true)
+                            var detailed = a11yService.getUITreeDetailed(allowCache = true)
+                            // One forced rebuild if empty — covers post-reconnect a11y blips
+                            if (detailed.empty) {
+                                Thread.sleep(120)
+                                detailed = a11yService.getUITreeDetailed(allowCache = false)
+                            }
                             val tree = detailed.tree
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,

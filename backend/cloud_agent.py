@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -45,8 +46,12 @@ Rules:
 - Reply with JSON only.
 """
 
-# Wall-clock timeout for a cloud agent job (seconds)
-TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "300")
+# Wall-clock timeout for a cloud agent job (seconds). Default 15 min so a
+# 10–20 step messaging flow is not killed by tree/LLM latency alone.
+TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "900")
+# Fail only when no step progress for this long (still progressing → keep going
+# until TASK_TIMEOUT_S).
+TASK_IDLE_TIMEOUT_S = int(os.environ.get("AGENT_IDLE_TIMEOUT_S") or "240")
 # Max identical swipe summaries before hard-fail
 MAX_SWIPE_LOOPS = 2
 # Same tree fingerprint after an action → no-progress streak before forcing strategy
@@ -715,6 +720,92 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _fetch_ui_tree_retry(
+    device_id: str,
+    call_device,
+    *,
+    attempts: int = 4,
+) -> Dict[str, Any]:
+    """Fetch a UI tree; retry on empty/timeout/offline so the planner never
+    plans on a blank hierarchy after a WS drop or a11y blip."""
+    last: Dict[str, Any] = {
+        "tree": '<hierarchy windows="0" nodes="0" empty="true" reason="no_attempt"/>',
+        "package": "",
+        "empty": True,
+        "chars": 0,
+        "nodes": 0,
+        "partial": True,
+        "anr_dismissed": False,
+        "timing": {},
+    }
+    for attempt in range(max(1, attempts)):
+        wait_reconnect = 20.0 if attempt == 0 else 45.0
+        timeout_s = 8.0 if attempt == 0 else 12.0
+        try:
+            raw = (
+                call_device(
+                    device_id,
+                    "get_ui_tree",
+                    {},
+                    timeout_s=timeout_s,
+                    wait_reconnect_s=wait_reconnect,
+                )
+                or ""
+            )
+            info = _normalize_tree_payload(raw)
+            last = info
+            if not info.get("empty"):
+                return info
+            logger.warning(
+                "get_ui_tree empty attempt=%s/%s chars=%s",
+                attempt + 1,
+                attempts,
+                info.get("chars"),
+            )
+        except Exception as tree_err:
+            low = str(tree_err).lower()
+            if any(
+                t in low
+                for t in (
+                    "timed out",
+                    "timeout",
+                    "accessibility",
+                    "offline",
+                    "failed to push",
+                    "503",
+                    "unavailable",
+                )
+            ):
+                logger.warning(
+                    "get_ui_tree retryable error attempt=%s: %s",
+                    attempt + 1,
+                    tree_err,
+                )
+                reason_attr = (
+                    str(tree_err)[:80]
+                    .replace("&", "&amp;")
+                    .replace('"', "&quot;")
+                    .replace("<", "&lt;")
+                )
+                last = {
+                    "tree": (
+                        '<hierarchy windows="0" nodes="0" empty="true" '
+                        f'reason="{reason_attr}"/>'
+                    ),
+                    "package": "",
+                    "empty": True,
+                    "chars": 0,
+                    "nodes": 0,
+                    "partial": True,
+                    "anr_dismissed": False,
+                    "timing": {},
+                }
+            else:
+                raise
+        time.sleep(0.35 * (attempt + 1))
+    return last
+
+
 def _fetch_screenshot_b64(device_id: str) -> Optional[str]:
     try:
         from device_rpc import call_device
@@ -892,11 +983,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["status"] = "failed"
         job["error"] = "No instruction on job"
         return job
-    # Stale running tasks time out
+    # Absolute wall-clock cap
     if now - created > TASK_TIMEOUT_S:
         job["status"] = "failed"
         job["error"] = f"Task timed out after {TASK_TIMEOUT_S}s"
         state["last_action"] = "timeout"
+        job["state"] = state
+        job["completed_at"] = now
+        return job
+    # Idle cap — only when no step has landed recently (progress resets this)
+    last_progress = int(state.get("last_progress_at") or created)
+    if now - last_progress > TASK_IDLE_TIMEOUT_S:
+        job["status"] = "failed"
+        job["error"] = (
+            f"Task idle for {TASK_IDLE_TIMEOUT_S}s with no step progress "
+            f"(wall={TASK_TIMEOUT_S}s)"
+        )
+        state["last_action"] = "idle_timeout"
         job["state"] = state
         job["completed_at"] = now
         return job
@@ -910,13 +1013,21 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reconnect_wait_budget,
             )
 
-        budget = reconnect_wait_budget(device_id, 45.0)
+        budget = reconnect_wait_budget(device_id, 90.0)
         if budget <= 0 or not wait_until_reachable(device_id, timeout_s=budget):
-            job["status"] = "failed"
-            job["error"] = "Device offline — no live WebSocket"
-            state["last_action"] = "device_offline"
+            # Do not hard-fail on a single offline tick — leave running so the
+            # next EventBridge tick can resume after reconnect.
+            offline_n = int(state.get("offline_streak") or 0) + 1
+            state["offline_streak"] = offline_n
+            state["last_action"] = "device_offline_wait"
             job["state"] = state
+            job["result"] = f"Waiting for device reconnect ({offline_n})"
+            if offline_n >= 8:
+                job["status"] = "failed"
+                job["error"] = "Device offline — no live WebSocket"
+                job["completed_at"] = now
             return job
+        state["offline_streak"] = 0
     if not _llm_keys_present():
         job["status"] = "failed"
         job["error"] = (
@@ -961,50 +1072,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        try:
-            tree_raw = (
-                call_device(
-                    device_id,
-                    "get_ui_tree",
-                    {},
-                    timeout_s=12,
-                    wait_reconnect_s=45,
-                )
-                or ""
-            )
-        except Exception as tree_err:
-            # Overloaded OEM/emulator a11y can hang; still allow open_app.
-            # Also soft-fail offline briefly — reconnect wait already ran.
-            low = str(tree_err).lower()
-            if any(
-                t in low
-                for t in (
-                    "timed out",
-                    "timeout",
-                    "accessibility",
-                    "offline",
-                    "failed to push",
-                )
-            ):
-                logger.warning("get_ui_tree failed, using empty tree: %s", tree_err)
-                reason_attr = (
-                    str(tree_err)[:80]
-                    .replace("&", "&amp;")
-                    .replace('"', "&quot;")
-                    .replace("<", "&lt;")
-                )
-                tree_raw = {
-                    "tree": (
-                        '<hierarchy windows="0" nodes="0" empty="true" '
-                        f'reason="{reason_attr}"/>'
-                    ),
-                    "empty": True,
-                    "chars": 0,
-                    "package": "",
-                }
-            else:
-                raise
-        tree_info = _normalize_tree_payload(tree_raw)
+        tree_info = _fetch_ui_tree_retry(device_id, call_device)
         ui_tree = tree_info["tree"]
         # Auto-dismiss System UI ANR overlays before planning
         tree_l = (ui_tree or "").lower()
@@ -1022,20 +1090,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     timeout_s=8,
                     wait_reconnect_s=10,
                 )
-                tree_raw = (
-                    call_device(
-                        device_id,
-                        "get_ui_tree",
-                        {},
-                        timeout_s=8,
-                        wait_reconnect_s=15,
-                    )
-                    or tree_raw
-                )
-                tree_info = _normalize_tree_payload(tree_raw)
+                tree_info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
                 ui_tree = tree_info["tree"]
             except Exception as anr_err:
                 logger.warning("dismiss_anr failed: %s", anr_err)
+        # Never feed an empty tree to the planner — retry / wait / vision instead
+        if tree_info.get("empty"):
+            empty_n = int(state.get("empty_tree_streak") or 0) + 1
+            state["empty_tree_streak"] = empty_n
+            job["state"] = state
+            job["result"] = f"Retrying empty UI tree ({empty_n})"
+            if empty_n < 5:
+                # Leave job running; next tick re-syncs after reconnect / a11y bind
+                return job
+            # Last resort: vision screenshot so we do not invent taps on nothing
+        else:
+            state["empty_tree_streak"] = 0
+
         image_b64 = None
         # Skip screenshot when tree is healthy — cuts ~5-10s per step
         try:
@@ -1243,6 +1314,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         if kind == "done":
             state["steps"] = step + 1
+            state["last_progress_at"] = int(time.time())
             state["last_action"] = f"done: {reason}"
             history.append(f"done: {reason}")
             state["history"] = history
@@ -1253,7 +1325,28 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job["completed_at"] = int(time.time())
             return job
         if kind == "fail":
+            low_reason = (reason or "").lower()
+            # Planner often fails on a transient empty tree after WS drop —
+            # retry the step instead of ending the task.
+            if any(
+                t in low_reason
+                for t in (
+                    "ui tree is empty",
+                    "empty tree",
+                    "no contacts",
+                    "no further actions",
+                    "accessibility",
+                )
+            ):
+                empty_n = int(state.get("empty_tree_streak") or 0) + 1
+                state["empty_tree_streak"] = empty_n
+                state["last_action"] = f"retry_empty: {reason}"
+                job["state"] = state
+                job["result"] = f"Retrying after empty-tree fail ({empty_n})"
+                if empty_n < 6:
+                    return job
             state["steps"] = step + 1
+            state["last_progress_at"] = int(time.time())
             state["last_action"] = f"fail: {reason}"
             history.append(f"fail: {reason}")
             state["history"] = history
@@ -1276,21 +1369,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         summary = execute_action(device_id, action)
 
-        # Verify: re-fetch tree / package after action (short timeout)
+        # Verify: re-fetch tree / package after action (retry empty/offline)
         verify_msg = ""
         rpc_pkg = str(action.get("_rpc_package") or "")
         rpc_ok_flag = bool(action.get("_rpc_ok"))
         try:
-            after = _normalize_tree_payload(
-                call_device(
-                    device_id,
-                    "get_ui_tree",
-                    {},
-                    timeout_s=12,
-                    wait_reconnect_s=30,
-                )
-                or ""
-            )
+            after = _fetch_ui_tree_retry(device_id, call_device, attempts=3)
             if kind in ("open_app", "start_app"):
                 app_l = str(action.get("app") or "").lower()
                 pkg_l = (after.get("package") or rpc_pkg or "").lower()
@@ -1386,6 +1470,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 verify_msg = f"verify_error={ve}"
 
         state["steps"] = step + 1
+        state["last_progress_at"] = int(time.time())
+        state["offline_streak"] = 0
+        state["empty_tree_streak"] = 0
         state["last_action"] = summary
         state["last_reason"] = reason
         state["last_verify"] = verify_msg

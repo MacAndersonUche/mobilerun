@@ -1456,6 +1456,7 @@ async def get_task_status(
                 from cloud_agent import TASK_TIMEOUT_S
             except ImportError:
                 from backend.cloud_agent import TASK_TIMEOUT_S  # type: ignore
+            timed_out = False
             if isinstance(created, (int, float)) and (
                 time.time() - float(created) > TASK_TIMEOUT_S
             ):
@@ -1464,6 +1465,26 @@ async def get_task_status(
                 job["error"] = (
                     job.get("error") or f"Task timed out after {TASK_TIMEOUT_S}s"
                 )
+                timed_out = True
+            else:
+                # Idle timeout on read path (matches cloud_agent tick)
+                try:
+                    from cloud_agent import TASK_IDLE_TIMEOUT_S
+                except ImportError:
+                    from backend.cloud_agent import TASK_IDLE_TIMEOUT_S  # type: ignore
+
+                st_job = job.get("state") or {}
+                last_p = st_job.get("last_progress_at") or created
+                if isinstance(last_p, (int, float)) and (
+                    time.time() - float(last_p) > TASK_IDLE_TIMEOUT_S
+                ):
+                    status = "failed"
+                    job["status"] = "failed"
+                    job["error"] = job.get("error") or (
+                        f"Task idle for {TASK_IDLE_TIMEOUT_S}s with no step progress"
+                    )
+                    timed_out = True
+            if timed_out:
                 try:
                     from storage import put_job as _put
 

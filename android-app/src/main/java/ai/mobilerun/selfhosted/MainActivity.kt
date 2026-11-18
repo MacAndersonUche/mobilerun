@@ -125,6 +125,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Auto-recover Accessibility stuck in Binding after install/update
+        val snap = PermissionStatus.snapshot(this, mediaProjectionGranted)
+        if (snap.accessibilityStuckBinding) {
+            PermissionStatus.tryRecoverAccessibilityBinding(this)
+        }
         if (::backendClient.isInitialized) {
             backendClient.reportPermissions(mediaProjectionGranted)
             if (backendClient.isPaired()) {
@@ -353,11 +358,12 @@ fun MainScreen(
                 // Slim setup: hide everything already granted
                 val showRestricted = PermissionStatus.restrictedSettingsNeeded(activity) && !snap.accessibility
                 val showA11y = !snap.accessibility
+                val showA11yStuck = snap.accessibilityStuckBinding
                 val showNotifs = !snap.notifications
                 val showBattery = !snap.batteryOptimization
-                val setupDone = snap.accessibility && snap.notifications && snap.batteryOptimization
+                val setupDone = snap.readyForAgent && snap.notifications && snap.batteryOptimization
 
-                if (!setupDone || showRestricted) {
+                if (!setupDone || showRestricted || showA11yStuck) {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(
                             Modifier.padding(16.dp),
@@ -365,10 +371,13 @@ fun MainScreen(
                         ) {
                             Text("Setup", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                if (showA11y) {
-                                    "One manual step: turn on Accessibility. Notifications and battery are requested automatically."
-                                } else {
-                                    "Finishing automatic system prompts…"
+                                when {
+                                    showA11yStuck ->
+                                        "Accessibility is stuck Binding after install. Tap Recover — or toggle it Off/On in system settings."
+                                    showA11y ->
+                                        "One manual step: turn on Accessibility. Notifications and battery are requested automatically."
+                                    else ->
+                                        "Finishing automatic system prompts…"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -383,6 +392,20 @@ fun MainScreen(
                                         refreshPerms()
                                     },
                                 )
+                            }
+                            if (showA11yStuck) {
+                                Button(
+                                    onClick = {
+                                        val ok = PermissionStatus.tryRecoverAccessibilityBinding(activity)
+                                        if (!ok) {
+                                            onEnableAccessibility()
+                                        }
+                                        refreshPerms()
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("Recover Accessibility bind")
+                                }
                             }
                             if (showA11y) {
                                 Button(
@@ -423,7 +446,11 @@ fun MainScreen(
                 } else {
                     StatusCard(
                         "Setup",
-                        "Ready — Accessibility on · notifications + battery OK",
+                        if (snap.accessibilityBound) {
+                            "Ready — Accessibility bound · notifications + battery OK"
+                        } else {
+                            "Ready — Accessibility on · notifications + battery OK"
+                        },
                         true,
                     )
                 }

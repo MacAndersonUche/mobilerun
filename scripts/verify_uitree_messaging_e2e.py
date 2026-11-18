@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import statistics
 import subprocess
 import sys
 import time
@@ -28,6 +27,8 @@ DROP = os.environ.get("FORCE_DROP", "1") not in ("0", "false", "no")
 SERIAL = os.environ.get("ANDROID_SERIAL", "emulator-5554")
 os.makedirs(ARTIFACTS, exist_ok=True)
 
+A11Y = "ai.mobilerun.selfhosted/ai.mobilerun.selfhosted.MobilerunAccessibilityService"
+
 
 def req(
     method: str,
@@ -35,26 +36,40 @@ def req(
     body: Optional[Dict[str, Any]] = None,
     token: Optional[str] = None,
     timeout: float = 90,
+    retries: int = 5,
 ) -> Any:
+    """HTTP helper with exponential backoff on 502/503/504."""
     data = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    r = urllib.request.Request(API + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
-            raw = resp.read().decode()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        err = e.read().decode()
-        raise RuntimeError(f"{method} {path} -> {e.code}: {err[:600]}") from e
+    last_err: Optional[Exception] = None
+    for attempt in range(max(1, retries)):
+        r = urllib.request.Request(
+            API + path, data=data, headers=headers, method=method
+        )
+        try:
+            with urllib.request.urlopen(r, timeout=timeout) as resp:
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            err = e.read().decode()
+            last_err = RuntimeError(f"{method} {path} -> {e.code}: {err[:600]}")
+            if e.code in (502, 503, 504) and attempt + 1 < retries:
+                time.sleep(min(16.0, 0.6 * (2**attempt)))
+                continue
+            raise last_err from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            last_err = RuntimeError(f"{method} {path} -> {e}")
+            if attempt + 1 < retries:
+                time.sleep(min(16.0, 0.6 * (2**attempt)))
+                continue
+            raise last_err from e
+    raise last_err or RuntimeError(f"{method} {path} failed")
 
 
 def adb(*args: str) -> None:
     subprocess.run(["adb", "-s", SERIAL, *args], check=False, capture_output=True)
-
-
-A11Y = "ai.mobilerun.selfhosted/ai.mobilerun.selfhosted.MobilerunAccessibilityService"
 
 
 def ensure_a11y_bound() -> None:
@@ -93,7 +108,6 @@ def ensure_a11y_bound() -> None:
 def seed_contact() -> None:
     """Best-effort seed a Messages-friendly contact on the emulator."""
     ensure_a11y_bound()
-    # Insert via contacts provider (avoid spaces in bind values — adb splits them)
     adb(
         "shell",
         "content",
@@ -159,10 +173,10 @@ def main() -> int:
     ]
     instr = os.environ.get(
         "E2E_INSTRUCTION",
-        "Open Messages. Start a new conversation with MacAI Test or 5550100 if shown, "
-        "type hello from macai uitree recovery test, then try to send. "
-        "If you cannot send, type into search or compose and continue navigating "
-        "Messages until at least several UI steps complete.",
+        "Open Messages. Search for contact MacAITest or number 5550100, open that "
+        "chat (or start a new conversation), type hello from macai uitree recovery "
+        "test into the compose field, send it, and confirm the message appears in "
+        "the thread. Keep taking UI steps until send is confirmed.",
     )
     print("START", instr, flush=True)
     task = req(
@@ -171,7 +185,7 @@ def main() -> int:
         {
             "device_id": DEVICE_ID,
             "instruction": instr,
-            "max_steps": 16,
+            "max_steps": 24,
             "mode": "normal",
             "speed_preset": "fast",
         },
@@ -182,8 +196,13 @@ def main() -> int:
 
     dropped = False
     last: Dict[str, Any] = {}
-    for i in range(160):
-        last = req("GET", f"/api/tasks/{tid}", token=tok)
+    for i in range(360):  # up to ~12 min with 2s poll
+        try:
+            last = req("GET", f"/api/tasks/{tid}", token=tok)
+        except RuntimeError as e:
+            print(f"  [{i}] poll error: {e}", flush=True)
+            time.sleep(4)
+            continue
         st = (last.get("status") or "").lower()
         steps = last.get("steps") or []
         print(
@@ -207,12 +226,14 @@ def main() -> int:
                 "1",
             )
             dropped = True
-            time.sleep(6)
+            time.sleep(8)
         if st in ("completed", "failed", "stopped", "cancelled"):
             break
-        if len(steps) >= 10:
+        if len(steps) >= 10 and st == "completed":
             break
-        time.sleep(3)
+        if len(steps) >= 12:
+            break
+        time.sleep(2)
 
     steps = last.get("steps") or []
     build_ms: List[float] = []
@@ -223,7 +244,6 @@ def main() -> int:
                 build_ms.append(float(t["build_ms"]))
             except (TypeError, ValueError):
                 pass
-        # also parse tree_ms= from verify/result strings
         for blob in (str(s.get("verify") or ""), str(s.get("action") or "")):
             if "tree_ms=" in blob:
                 try:
@@ -250,7 +270,6 @@ def main() -> int:
         "timings": [s.get("timing") for s in steps if s.get("timing")],
     }
     ok = len(steps) >= 10 or (last.get("status") or "").lower() == "completed"
-    # Permanent offline after drop with almost no progress = fail
     if (
         dropped
         and (last.get("status") or "").lower() == "failed"
