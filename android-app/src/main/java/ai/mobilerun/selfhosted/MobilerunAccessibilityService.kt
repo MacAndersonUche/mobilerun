@@ -58,6 +58,30 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
         @Volatile
         var instance: MobilerunAccessibilityService? = null
+
+        /** Portal MobilerunAccessibilityService.calculateInputText — single SET_TEXT payload. */
+        fun calculateInputText(
+            currentText: String?,
+            hintText: String?,
+            newText: String,
+            clear: Boolean,
+            selectionStart: Int? = null,
+            selectionEnd: Int? = null,
+        ): String {
+            if (clear) return newText
+            val safeCurrentText = currentText.orEmpty()
+            if (hintText != null && safeCurrentText == hintText) return newText
+            val length = safeCurrentText.length
+            val rawStart = selectionStart ?: length
+            val rawEnd = selectionEnd ?: rawStart
+            val start = rawStart.coerceIn(0, length)
+            val end = rawEnd.coerceIn(0, length)
+            val replaceStart = minOf(start, end)
+            val replaceEnd = maxOf(start, end)
+            val before = safeCurrentText.take(replaceStart)
+            val after = safeCurrentText.substring(replaceEnd)
+            return before + newText + after
+        }
     }
 
     data class TreeResult(
@@ -179,9 +203,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (!ok) callback(false)
     }
 
-    /** Fire-and-forget tap — used when the cloud ACKs immediately. */
+    /** Fire-and-forget tap — Portal GestureController (dispatch only, no callback wait). */
     fun tapFireAndForget(x: Int, y: Int, humanize: Boolean = true) {
-        tap(x, y, humanize) { /* async verify is the cloud's job */ }
+        GestureController.tap(x, y, humanize = humanize)
     }
 
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long, callback: (Boolean) -> Unit) {
@@ -204,7 +228,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     fun swipeFireAndForget(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long) {
-        swipe(x1, y1, x2, y2, durationMs) { }
+        GestureController.swipe(x1, y1, x2, y2, durationMs.toInt())
     }
 
     fun pressBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
@@ -369,8 +393,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
             val exact = findNodeByText(root, listOf(want))
             val node = exact ?: if (fuzzy) findNodeContainingText(root, want) else null
             if (node == null) return false
+            val bounds = android.graphics.Rect()
+            try {
+                node.getBoundsInScreen(bounds)
+            } catch (_: Exception) {
+            }
             val tapped = try {
-                if (node.isClickable) {
+                val clickOk = if (node.isClickable) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 } else {
                     var p: AccessibilityNodeInfo? = node.parent
@@ -388,6 +417,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
                         p = next
                     }
                     ok
+                }
+                // Portal fallback: coordinate gesture when ACTION_CLICK fails
+                if (clickOk) {
+                    true
+                } else if (!bounds.isEmpty) {
+                    GestureController.tap(
+                        (bounds.left + bounds.right) / 2,
+                        (bounds.top + bounds.bottom) / 2,
+                        humanize = false,
+                    )
+                } else {
+                    false
                 }
             } finally {
                 try {
@@ -1039,29 +1080,36 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
         }
 
+    /**
+     * Portal-compatible text input: single ACTION_SET_TEXT with calculateInputText
+     * (append vs clear + selection). Our additions kept on top:
+     * prefer WhatsApp compose entry, ACTION_CLICK focus, clipboard paste fallback.
+     * [humanize] is retained for API compat but no longer chunk-sleeps (timeouts).
+     */
     fun inputText(
         text: String,
         clear: Boolean = false,
         humanize: Boolean = true,
     ): Boolean {
+        @Suppress("UNUSED_PARAMETER")
+        val _humanize = humanize
         val root = rootInActiveWindow ?: return false
         // Prefer chat compose (WhatsApp entry / Message hint) over search EditTexts
-        var target = findComposeEditable(root)
-        if (target == null) {
-            target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (target != null && !target.isEditable) {
+        var targetNode = findComposeEditable(root)
+        if (targetNode == null) {
+            targetNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (targetNode != null && !targetNode.isEditable) {
                 try {
-                    target.recycle()
+                    targetNode.recycle()
                 } catch (_: Exception) {
                 }
-                target = null
+                targetNode = null
             }
         }
-        if (target == null || !target.isEditable) {
-            target = findEditable(root)
+        if (targetNode == null) {
+            targetNode = findEditable(root)
         }
-        val edit = target
-        if (edit == null) {
+        if (targetNode == null) {
             try {
                 root.recycle()
             } catch (_: Exception) {
@@ -1069,88 +1117,71 @@ class MobilerunAccessibilityService : AccessibilityService() {
             return false
         }
         try {
-            edit.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            edit.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        } catch (_: Exception) {
-        }
-        fun setText(value: String): Boolean {
-            val args = android.os.Bundle()
-            args.putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                value,
+            try {
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            } catch (_: Exception) {
+            }
+
+            val currentText = targetNode.text?.toString()
+            val hintText = try {
+                targetNode.hintText?.toString()
+            } catch (_: Exception) {
+                null
+            }
+            val effectiveCurrent =
+                if (!hintText.isNullOrEmpty() && currentText == hintText) ""
+                else currentText.orEmpty()
+            val currentLength = effectiveCurrent.length
+            val rawStart = try {
+                targetNode.textSelectionStart
+            } catch (_: Exception) {
+                -1
+            }
+            val rawEnd = try {
+                targetNode.textSelectionEnd
+            } catch (_: Exception) {
+                -1
+            }
+            val selectionStart =
+                if (rawStart >= 0) rawStart.coerceIn(0, currentLength) else currentLength
+            val selectionEnd =
+                if (rawEnd >= 0) rawEnd.coerceIn(0, currentLength) else selectionStart
+
+            val finalText = calculateInputText(
+                currentText = currentText,
+                hintText = hintText,
+                newText = text,
+                clear = clear,
+                selectionStart = selectionStart,
+                selectionEnd = selectionEnd,
             )
-            if (edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+
+            val arguments = android.os.Bundle()
+            arguments.putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                finalText,
+            )
+            val setTextSuccess =
+                targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+            if (setTextSuccess) {
                 return true
             }
-            // Clipboard paste fallback (some OEM/Secure Folder windows reject SET_TEXT)
-            return pasteViaClipboard(edit, value)
-        }
-        if (clear) {
-            setText("")
-        }
-        val existing = if (clear) "" else (edit.text?.toString() ?: "")
-        // Human-like chunks, but HARD-CAP total sleep so command ACK never
-        // approaches the cloud's input_text timeout (was causing WS offline).
-        val maxHumanizeBudgetMs = 1_500L
-        val ok = if (!humanize || text.length <= 2) {
-            setText(existing + text)
-        } else {
-            val rng = java.util.concurrent.ThreadLocalRandom.current()
-            var built = existing
-            var i = 0
-            var success = true
-            var slept = 0L
-            // Longer strings: bigger chunks so we finish under budget
-            val minChunk = if (text.length > 24) 4 else 2
-            val maxChunk = if (text.length > 24) 8 else 5
-            while (i < text.length) {
-                val remaining = text.length - i
-                val chunk = if (slept >= maxHumanizeBudgetMs) {
-                    remaining // paste the rest — do not block heartbeats
-                } else {
-                    rng.nextInt(minChunk, maxChunk + 1).coerceAtMost(remaining)
-                }
-                built += text.substring(i, i + chunk)
-                if (!setText(built)) {
-                    success = false
-                    break
-                }
-                i += chunk
-                if (i < text.length && slept < maxHumanizeBudgetMs) {
-                    val pause = if (rng.nextDouble() < 0.12) {
-                        rng.nextLong(80, 160)
-                    } else {
-                        rng.nextLong(20, 70)
-                    }
-                    val allowed = (maxHumanizeBudgetMs - slept).coerceAtLeast(0L)
-                    val actual = pause.coerceAtMost(allowed)
-                    if (actual > 0L) {
-                        try {
-                            Thread.sleep(actual)
-                        } catch (_: InterruptedException) {
-                        }
-                        slept += actual
-                    }
-                }
+            // Clipboard paste fallback (OEM / Secure Folder windows that reject SET_TEXT)
+            return pasteViaClipboard(targetNode, finalText)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting text via accessibility: ${e.message}")
+            return false
+        } finally {
+            try {
+                if (targetNode !== root) targetNode.recycle()
+            } catch (_: Exception) {
             }
-            success
+            try {
+                root.recycle()
+            } catch (_: Exception) {
+            }
         }
-        // Verify text landed when possible
-        val verified = try {
-            val now = edit.text?.toString().orEmpty()
-            ok && (text.isEmpty() || now.contains(text.take(12)))
-        } catch (_: Exception) {
-            ok
-        }
-        try {
-            edit.recycle()
-        } catch (_: Exception) {
-        }
-        try {
-            root.recycle()
-        } catch (_: Exception) {
-        }
-        return verified
     }
 
     private fun pasteViaClipboard(edit: AccessibilityNodeInfo, value: String): Boolean {

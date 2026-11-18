@@ -460,6 +460,25 @@ fun MainScreen(
                         },
                         true,
                     )
+                    val keyboardSelected = remember(snap) {
+                        ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(activity)
+                    }
+                    if (!keyboardSelected) {
+                        Text(
+                            "Optional (matches original Portal): enable Mobilerun Keyboard " +
+                                "as the input method for reliable WhatsApp typing.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                PermissionStatus.openInputMethodSettings(activity)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Enable Mobilerun Keyboard")
+                        }
+                    }
                 }
 
                 // Live view is optional / on-demand, not onboarding

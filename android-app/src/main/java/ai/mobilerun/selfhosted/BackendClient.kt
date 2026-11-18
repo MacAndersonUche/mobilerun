@@ -1286,13 +1286,33 @@ class BackendClient(private val context: Context) {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
                         val humanize = params?.get("humanize") as? Boolean ?: true
-                        // Slow executor — inputText caps sleep ≤1.5s.
-                        val ok = a11yService!!.inputText(text, clear, humanize)
-                        sendAgentEvent(null, null, "type", "type(${text.take(40)})")
-                        if (!ok) throw Exception("input_text failed — focus a text field")
+                        // Portal order: Mobilerun Keyboard IME first, then a11y SET_TEXT.
+                        val via = when (
+                            ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.tryAutomationInput(
+                                context,
+                                text,
+                                clear,
+                            )
+                        ) {
+                            ai.mobilerun.selfhosted.input.AutomationInput.DONE -> "ime"
+                            ai.mobilerun.selfhosted.input.AutomationInput.STUCK ->
+                                throw Exception(
+                                    "input_text via IME accepted but unverified — " +
+                                        "enable Mobilerun Keyboard or focus the field",
+                                )
+                            ai.mobilerun.selfhosted.input.AutomationInput.FALLBACK -> {
+                                val ok = a11yService!!.inputText(text, clear, humanize)
+                                if (!ok) {
+                                    throw Exception("input_text failed — focus a text field")
+                                }
+                                "a11y"
+                            }
+                        }
+                        sendAgentEvent(null, null, "type", "type(${text.take(40)}) via=$via")
                         mapOf(
                             "ok" to true,
                             "acked" to true,
+                            "via" to via,
                             "humanize" to humanize,
                             "chars" to text.length,
                             "timing" to mapOf(
