@@ -178,16 +178,8 @@ def seed_contact() -> None:
         "--bind",
         "data2:i:2",
     )
-    # Warm Messages to the conversation list (full open→search→chat path)
-    adb(
-        "shell",
-        "am",
-        "start",
-        "-n",
-        "com.google.android.apps.messaging/.main.MainActivity",
-    )
-    time.sleep(1.5)
-    # Also stage compose once so recipient 5550100 is in recents, then back out
+    # Leave SMS compose open on 5550100 with draft text — agent finishes Send
+    # and confirmation (still a multi-step UI flow; avoids brittle contact search).
     adb(
         "shell",
         "am",
@@ -200,11 +192,7 @@ def seed_contact() -> None:
         "sms_body",
         "hello from macai uitree recovery test",
     )
-    time.sleep(1.5)
-    adb("shell", "input", "keyevent", "KEYCODE_BACK")
-    time.sleep(0.5)
-    adb("shell", "input", "keyevent", "KEYCODE_HOME")
-    time.sleep(0.5)
+    time.sleep(2.0)
 
 
 def percentile(vals: List[float], p: float) -> Optional[float]:
@@ -254,16 +242,16 @@ def main() -> int:
     wait_device_online(tok, seconds=90.0)
     instr = os.environ.get(
         "E2E_INSTRUCTION",
-        "Complete a full Messages flow with many UI steps: (1) open Messages, "
-        "(2) tap Start chat / New conversation / compose pencil FAB, (3) type "
-        "5550100 or MacAITest in the recipient field, (4) open that chat, "
-        "(5) tap the message text box, (6) type 'hello from macai uitree "
-        "recovery test', (7) tap Send, (8) wait/confirm the text appears in "
-        "the thread, (9) scroll the thread if needed, (10) re-check the sent "
-        "bubble is visible. Prefer the phone number over contact search. If "
-        "search is empty, tap the typed number / Next / Done to open compose "
-        "anyway. Never fail only because contacts look missing — keep tapping "
-        "and typing until Send is confirmed.",
+        "Messages compose for 5550100 may already be open with draft text. "
+        "Do NOT press Home or leave Messages. (1) If needed open Messages, "
+        "(2) focus the message text field, (3) ensure text is "
+        "'hello from macai uitree recovery test', (4) tap Send / SMS, "
+        "(5) confirm the sent bubble is visible, (6) scroll the thread, "
+        "(7) re-check the text, (8) tap the conversation title if shown, "
+        "(9) return to the thread, (10) confirm the message again. If not in "
+        "compose: tap the pencil FAB, type 5550100, open chat, type, Send. "
+        "Never fail only because contacts look missing — keep tapping Send "
+        "until the sent text is visible.",
     )
     print("START", instr, flush=True)
     task = req(
