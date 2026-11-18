@@ -54,14 +54,25 @@ def adb(*args: str) -> None:
     subprocess.run(["adb", "-s", SERIAL, *args], check=False, capture_output=True)
 
 
-A11Y = (
-    "ai.mobilerun.selfhosted/ai.mobilerun.selfhosted.MobilerunAccessibilityService"
-)
+A11Y = "ai.mobilerun.selfhosted/ai.mobilerun.selfhosted.MobilerunAccessibilityService"
 
 
 def ensure_a11y_bound() -> None:
-    """Force a clean accessibility bind (settings-put alone can stick in Binding)."""
+    """Ensure accessibility is enabled without tearing down a live WS session.
+
+    Only force a full off/on cycle when dumpsys shows the service is not Bound
+    (stuck Binding). A blunt toggle kills the app process and drops prod WS.
+    """
     adb("shell", "dumpsys", "deviceidle", "whitelist", "+ai.mobilerun.selfhosted")
+    dump = subprocess.run(
+        ["adb", "-s", SERIAL, "shell", "dumpsys", "accessibility"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    bound = "Bound services:{Service[" in dump and "Mobilerun" in dump
+    if bound:
+        return
     adb("shell", "am", "force-stop", "com.android.settings")
     adb("shell", "settings", "put", "secure", "enabled_accessibility_services", "")
     adb("shell", "settings", "put", "secure", "accessibility_enabled", "0")
@@ -76,7 +87,7 @@ def ensure_a11y_bound() -> None:
         "-n",
         "ai.mobilerun.selfhosted/.MainActivity",
     )
-    time.sleep(2)
+    time.sleep(3)
 
 
 def seed_contact() -> None:
