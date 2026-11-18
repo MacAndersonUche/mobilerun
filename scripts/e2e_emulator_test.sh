@@ -132,7 +132,10 @@ route = None
 latency = None
 device_id = None
 connected = False
-for _ in range(30):
+allowed = ("lan", "discovered", "wifi", "cloud")
+# HTTP claim can register a device_id before the WS is live — do NOT break
+# early on bare device_id while route is still "pending"/disconnected.
+for _ in range(45):
     try:
         req = urllib.request.Request(host + "/api/devices")
         if token:
@@ -146,16 +149,16 @@ for _ in range(30):
             route = d.get("route") or d.get("connection_type")
             latency = d.get("latency_ms")
             connected = bool(d.get("connected") or d.get("online") or d.get("status") == "online")
-            if connected or device_id:
+            route_ok = str(route or "").lower() in allowed
+            if device_id and connected and route_ok:
                 break
     except Exception as e:
         open(os.path.join(artifacts, "devices_err.txt"), "a").write(str(e) + "\n")
     time.sleep(1)
 print("device_id", device_id, "route", route, "latency_ms", latency, "connected", connected)
 assert device_id, "short-code pair did not register a device"
-# Soft assert: if device registered, route should be lan/discovered/wifi/cloud (not requiring USB)
-if route:
-    assert str(route).lower() in ("lan", "discovered", "wifi", "cloud"), route
+assert connected, f"device registered but WS not connected (route={route})"
+assert str(route).lower() in allowed, route
 open(os.path.join(artifacts, "connection_route.txt"), "w").write(f"{route}\n{latency}\n{device_id}\n")
 open(os.path.join(artifacts, "paired_device_id.txt"), "w").write(str(device_id))
 PY
