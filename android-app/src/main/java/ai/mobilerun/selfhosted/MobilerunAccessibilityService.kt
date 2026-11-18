@@ -43,9 +43,10 @@ class MobilerunAccessibilityService : AccessibilityService() {
         private const val MAX_DEPTH = 10
         private const val MAX_TREE_CHARS = 12_000
         // Soft budget for the main-looper walk itself (partial tree > empty)
-        private const val SOFT_DEADLINE_MS = 1_200L
+        // Target p95 < 1.5s wall including gzip/scheduling
+        private const val SOFT_DEADLINE_MS = 1_100L
         // Caller await: soft walk + main-looper scheduling + gzip slack
-        private const val HARD_AWAIT_MS = 1_800L
+        private const val HARD_AWAIT_MS = 1_450L
         // Serve unchanged content from cache aggressively
         private const val CACHE_TTL_MS = 4_000L
         // Keep a slightly older non-empty dump to avoid feeding empty trees after drops

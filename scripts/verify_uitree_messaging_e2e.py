@@ -106,7 +106,7 @@ def ensure_a11y_bound() -> None:
 
 
 def seed_contact() -> None:
-    """Best-effort seed a Messages-friendly contact on the emulator."""
+    """Best-effort seed a Messages-friendly contact + open SMS compose."""
     ensure_a11y_bound()
     adb(
         "shell",
@@ -147,6 +147,20 @@ def seed_contact() -> None:
         "--bind",
         "data2:i:2",
     )
+    # Pre-open SMS compose so the agent does not depend on contact search alone
+    adb(
+        "shell",
+        "am",
+        "start",
+        "-a",
+        "android.intent.action.SENDTO",
+        "-d",
+        "sms:5550100",
+        "--es",
+        "sms_body",
+        "hello",
+    )
+    time.sleep(1.5)
     adb("shell", "input", "keyevent", "KEYCODE_HOME")
 
 
@@ -173,10 +187,12 @@ def main() -> int:
     ]
     instr = os.environ.get(
         "E2E_INSTRUCTION",
-        "Open Messages. Search for contact MacAITest or number 5550100, open that "
-        "chat (or start a new conversation), type hello from macai uitree recovery "
-        "test into the compose field, send it, and confirm the message appears in "
-        "the thread. Keep taking UI steps until send is confirmed.",
+        "Open Messages. Tap Start chat / New conversation / Compose if shown. "
+        "Enter recipient 5550100 or MacAITest, open the thread, type "
+        "'hello from macai uitree recovery test' in the message box, tap Send, "
+        "and confirm the sent text is visible in the conversation. Prefer typing "
+        "the phone number directly if search shows no contacts. Keep taking UI "
+        "steps until send is confirmed.",
     )
     print("START", instr, flush=True)
     task = req(

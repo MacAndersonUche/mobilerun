@@ -1335,15 +1335,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "empty tree",
                     "no contacts",
                     "no further actions",
+                    "no ui elements",
+                    "not found in the ui",
                     "accessibility",
+                    "same screen/tree hash",
+                    "no ui progress",
                 )
             ):
                 empty_n = int(state.get("empty_tree_streak") or 0) + 1
                 state["empty_tree_streak"] = empty_n
+                state["no_progress_streak"] = 0
+                state["last_tree_fp"] = None
                 state["last_action"] = f"retry_empty: {reason}"
+                history.append(
+                    f"hint: prior fail was transient ({reason[:80]}) — "
+                    "try Start chat / type 5550100 / compose / Send"
+                )
+                state["history"] = history[-40:]
                 job["state"] = state
                 job["result"] = f"Retrying after empty-tree fail ({empty_n})"
-                if empty_n < 6:
+                if empty_n < 8:
                     return job
             state["steps"] = step + 1
             state["last_progress_at"] = int(time.time())
