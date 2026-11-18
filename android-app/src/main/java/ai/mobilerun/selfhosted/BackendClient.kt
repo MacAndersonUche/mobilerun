@@ -1034,6 +1034,8 @@ class BackendClient(private val context: Context) {
                     "get_ui_tree",
                     "screenshot",
                     "dismiss_anr",
+                    "dismiss_dialogs",
+                    "rebind_a11y",
                 )
                 if (needsA11y && a11yService == null) {
                     throw Exception("Accessibility service not connected")
@@ -1106,11 +1108,23 @@ class BackendClient(private val context: Context) {
                             ),
                         )
                     }
-                    "dismiss_anr" -> {
-                        val dismissed = a11yService?.dismissSystemAnrIfPresent() == true
+                    "dismiss_anr", "dismiss_dialogs" -> {
+                        val dismissed = a11yService?.dismissBlockingDialogs(
+                            anrOnly = command == "dismiss_anr",
+                        ) == true
                         mapOf(
                             "ok" to true,
                             "dismissed" to dismissed,
+                            "timing" to mapOf(
+                                "ack_ms" to (SystemClock.elapsedRealtime() - t0),
+                            ),
+                        )
+                    }
+                    "rebind_a11y" -> {
+                        val ok = PermissionStatus.tryRecoverAccessibilityBinding(context)
+                        mapOf(
+                            "ok" to ok,
+                            "bound" to PermissionStatus.isAccessibilityBound(),
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),

@@ -1506,10 +1506,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             state["last_action"] = "device_offline_wait"
             job["state"] = state
             job["result"] = f"Waiting for device reconnect ({offline_n})"
-            if offline_n >= 8:
-                job["status"] = "failed"
-                job["error"] = "Device offline — no live WebSocket"
-                job["completed_at"] = now
+            # Keep recovering — only hard-fail after many reconnect attempts
+            if offline_n >= 20:
+                try:
+                    from recovery import should_hard_fail
+                except ImportError:
+                    from backend.recovery import should_hard_fail  # type: ignore
+
+                state.setdefault("recovery_tried", [])
+                if "reconnect_wait" not in state["recovery_tried"]:
+                    state["recovery_tried"].append("reconnect_wait")
+                if should_hard_fail(state) or offline_n >= 30:
+                    job["status"] = "failed"
+                    job["error"] = "Device offline — no live WebSocket after recovery"
+                    job["completed_at"] = now
+            else:
+                job["next_run_at"] = int(time.time()) + 2
+                try:
+                    _kick_self(job.get("job_id"))
+                except Exception:
+                    pass
             return job
         state["offline_streak"] = 0
     # LLM keys are only required when deterministic fast-paths cannot plan.
@@ -1578,77 +1594,234 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 ui_tree = tree_info["tree"]
             except Exception as anr_err:
                 logger.warning("dismiss_anr failed: %s", anr_err)
-        # Never feed an empty tree to the planner — retry / wait / vision instead
+        # Empty / blocked trees → multi-strategy recovery (never fail on first miss)
+        try:
+            from recovery import (
+                recovery_action,
+                should_hard_fail,
+                tree_looks_blocked,
+            )
+        except ImportError:
+            from backend.recovery import (  # type: ignore
+                recovery_action,
+                should_hard_fail,
+                tree_looks_blocked,
+            )
+
         if tree_info.get("empty"):
             empty_n = int(state.get("empty_tree_streak") or 0) + 1
             state["empty_tree_streak"] = empty_n
             job["state"] = state
-            job["result"] = f"Retrying empty UI tree ({empty_n})"
-            if empty_n < 5:
-                # Leave job running; next tick re-syncs after reconnect / a11y bind
+            job["result"] = f"Recovering empty UI tree ({empty_n})"
+            if empty_n <= 2:
+                # Best-effort a11y rebind + brief wait — stay running
+                try:
+                    call_device(
+                        device_id,
+                        "rebind_a11y",
+                        {},
+                        timeout_s=8,
+                        wait_reconnect_s=8,
+                    )
+                except Exception as rebind_err:
+                    logger.warning("rebind_a11y: %s", rebind_err)
+                job["next_run_at"] = int(time.time())
+                _kick_self(job.get("job_id"))
                 return job
-            # Last resort: vision screenshot so we do not invent taps on nothing
-        else:
-            state["empty_tree_streak"] = 0
-
-        image_b64 = None
-        # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
-        try:
-            from dm_heuristics import tree_is_sparse
-        except ImportError:
-            from backend.dm_heuristics import tree_is_sparse  # type: ignore
-
-        sparse_tree = tree_info.get("empty") or tree_is_sparse(
-            ui_tree, tree_info.get("nodes")
-        )
-        try:
-            if sparse_tree:
-                image_b64 = _fetch_screenshot_b64(device_id)
-        except Exception as shot_err:
-            logger.warning("screenshot skipped: %s", shot_err)
-            image_b64 = None
-        use_vision = bool(image_b64) and sparse_tree
-        if use_vision:
-            state["vision_fallback"] = True
-            state["tree_sparse"] = True
-            logger.info(
-                "vision fallback job=%s nodes=%s empty=%s",
-                job.get("job_id"),
-                tree_info.get("nodes"),
-                tree_info.get("empty"),
-            )
-
-        np_streak = int(state.get("no_progress_streak") or 0)
-        try:
-            action = plan_next_action(
+            # Rotate distinct recoveries instead of hard-failing
+            action = recovery_action(
+                state,
                 instruction,
                 ui_tree,
-                history,
-                image_b64=image_b64 if use_vision else None,
-                no_progress_streak=np_streak,
-                last_tap_key=state.get("last_tap_key"),
-                package=str(tree_info.get("package") or ""),
+                str(tree_info.get("package") or ""),
+                prefer=["dismiss_dialogs", "redump_tree", "vision", "reconnect_wait"],
             )
-        except RuntimeError as plan_err:
-            # Surface missing-LLM only after heuristics could not plan
-            if (
-                not _llm_keys_present()
-                and LLM_UNAVAILABLE_LABEL.lower() in str(plan_err).lower()
-            ):
-                job["status"] = "failed"
-                job["error"] = (
-                    f"{LLM_UNAVAILABLE_LABEL} — No LLM API key configured "
-                    "on the AWS backend (and no deterministic fast-path matched)"
-                )
-                state["last_action"] = "no_llm_key"
-                state["planner"] = None
-                job["state"] = state
+            if action.get("action") == "_reconnect_wait":
+                if should_hard_fail(state):
+                    job["status"] = "failed"
+                    job["error"] = "Empty UI tree after recovery strategies"
+                    job["completed_at"] = int(time.time())
+                    _attach_failure_artifacts(
+                        job, device_id, ui_tree, call_device=call_device
+                    )
+                    return job
+                job["result"] = "Waiting for a11y/WS reconnect (recovery)"
+                job["next_run_at"] = int(time.time()) + 2
+                _kick_self(job.get("job_id"))
                 return job
-            raise
-        kind = str(action.get("action") or "").lower()
-        reason = str(action.get("reason") or "")
-        planner = action.get("planner") or "llm"
-        llm_provider = action.get("llm_provider")
+            # Fall through to execute recovery action below
+            kind = str(action.get("action") or "").lower()
+            reason = str(action.get("reason") or "")
+            planner = action.get("planner") or "recovery"
+            llm_provider = None
+            image_b64 = None
+            use_vision = False
+            if action.get("_force_vision"):
+                try:
+                    image_b64 = _fetch_screenshot_b64(device_id)
+                    use_vision = bool(image_b64)
+                except Exception:
+                    use_vision = False
+            if kind == "_vision_retry":
+                # Re-plan with vision if possible; else dismiss/tap fallback
+                if use_vision:
+                    try:
+                        action = plan_next_action(
+                            instruction,
+                            ui_tree,
+                            history,
+                            image_b64=image_b64,
+                            no_progress_streak=int(
+                                state.get("no_progress_streak") or 0
+                            ),
+                            last_tap_key=state.get("last_tap_key"),
+                            package=str(tree_info.get("package") or ""),
+                        )
+                        kind = str(action.get("action") or "").lower()
+                        reason = str(action.get("reason") or "")
+                        planner = action.get("planner") or "llm"
+                        llm_provider = action.get("llm_provider")
+                    except Exception:
+                        action = {
+                            "action": "tap",
+                            "x": 540,
+                            "y": 1395,
+                            "reason": "Vision unavailable — tap Wait/Allow",
+                            "planner": "recovery:vision",
+                        }
+                        kind = "tap"
+                        reason = action["reason"]
+                        planner = "recovery:vision"
+                else:
+                    action = {
+                        "action": "tap",
+                        "x": 540,
+                        "y": 1395,
+                        "reason": "No screenshot — tap Wait/Allow",
+                        "planner": "recovery:vision",
+                    }
+                    kind = "tap"
+                    reason = action["reason"]
+                    planner = "recovery:vision"
+            # Skip normal planning — jump to action execution via flag
+            _skip_plan = True
+        else:
+            state["empty_tree_streak"] = 0
+            _skip_plan = False
+
+        # Auto-dismiss permission / ANR style blockers even on non-empty trees
+        if (not _skip_plan) and tree_looks_blocked(ui_tree):
+            try:
+                call_device(
+                    device_id,
+                    "dismiss_dialogs",
+                    {},
+                    timeout_s=8,
+                    wait_reconnect_s=8,
+                )
+            except Exception:
+                try:
+                    call_device(
+                        device_id,
+                        "dismiss_anr",
+                        {},
+                        timeout_s=6,
+                        wait_reconnect_s=6,
+                    )
+                except Exception as e:
+                    logger.warning("dismiss_dialogs failed: %s", e)
+            tree_info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+            ui_tree = tree_info["tree"]
+
+        image_b64 = locals().get("image_b64")
+        use_vision = bool(locals().get("use_vision"))
+        if not _skip_plan:
+            image_b64 = None
+            # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
+            try:
+                from dm_heuristics import tree_is_sparse
+            except ImportError:
+                from backend.dm_heuristics import tree_is_sparse  # type: ignore
+
+            sparse_tree = tree_info.get("empty") or tree_is_sparse(
+                ui_tree, tree_info.get("nodes")
+            )
+            force_vision = bool(state.get("force_vision_once"))
+            if force_vision:
+                state["force_vision_once"] = False
+            try:
+                if (
+                    sparse_tree
+                    or force_vision
+                    or int(state.get("no_progress_streak") or 0) >= 2
+                ):
+                    image_b64 = _fetch_screenshot_b64(device_id)
+            except Exception as shot_err:
+                logger.warning("screenshot skipped: %s", shot_err)
+                image_b64 = None
+            use_vision = bool(image_b64) and (
+                sparse_tree
+                or force_vision
+                or int(state.get("no_progress_streak") or 0) >= 2
+            )
+            if use_vision:
+                state["vision_fallback"] = True
+                state["tree_sparse"] = bool(sparse_tree)
+                logger.info(
+                    "vision fallback job=%s nodes=%s empty=%s",
+                    job.get("job_id"),
+                    tree_info.get("nodes"),
+                    tree_info.get("empty"),
+                )
+
+            np_streak = int(state.get("no_progress_streak") or 0)
+            try:
+                action = plan_next_action(
+                    instruction,
+                    ui_tree,
+                    history,
+                    image_b64=image_b64 if use_vision else None,
+                    no_progress_streak=np_streak,
+                    last_tap_key=state.get("last_tap_key"),
+                    package=str(tree_info.get("package") or ""),
+                )
+            except RuntimeError as plan_err:
+                # Recover instead of failing when possible
+                if should_hard_fail(state) and not _llm_keys_present():
+                    job["status"] = "failed"
+                    job["error"] = (
+                        f"{LLM_UNAVAILABLE_LABEL} — No LLM API key configured "
+                        "on the AWS backend (and recovery strategies exhausted)"
+                    )
+                    state["last_action"] = "no_llm_key"
+                    state["planner"] = None
+                    job["state"] = state
+                    return job
+                action = recovery_action(
+                    state,
+                    instruction,
+                    ui_tree,
+                    str(tree_info.get("package") or ""),
+                    prefer=["vision", "home_then_open", "alt_path", "back"],
+                )
+                if action.get("action") in ("_vision_retry", "_reconnect_wait"):
+                    state["force_vision_once"] = True
+                    job["state"] = state
+                    job["result"] = str(action.get("reason") or "recovery")
+                    job["next_run_at"] = int(time.time())
+                    _kick_self(job.get("job_id"))
+                    return job
+                logger.warning("planner failed → recovery: %s", plan_err)
+            kind = str(action.get("action") or "").lower()
+            reason = str(action.get("reason") or "")
+            planner = action.get("planner") or "llm"
+            llm_provider = action.get("llm_provider")
+        else:
+            # action/kind/reason/planner already set by empty-tree recovery
+            llm_provider = locals().get("llm_provider")
+            planner = locals().get("planner") or "recovery"
+            reason = locals().get("reason") or ""
+            kind = locals().get("kind") or str(action.get("action") or "").lower()
         # goal_visible is a safety rail after LLM steps — keep prior provider
         if planner == "goal_visible":
             llm_provider = llm_provider or state.get("llm_provider")
@@ -1897,7 +2070,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["planner_fail_retry_streak"] = fail_n
                 state["no_progress_streak"] = 0
                 state["last_tree_fp"] = None
-                if fail_n < 12:
+                try:
+                    from recovery import should_hard_fail as _shf
+                except ImportError:
+                    from backend.recovery import should_hard_fail as _shf  # type: ignore
+
+                if fail_n < 16 and not _shf(state):
                     # Rotate recovery actions so we actually move the UI forward.
                     # If we left Messages (SystemUI/launcher), open_app first;
                     # then focus compose, type marker, tap Send. Never Back.

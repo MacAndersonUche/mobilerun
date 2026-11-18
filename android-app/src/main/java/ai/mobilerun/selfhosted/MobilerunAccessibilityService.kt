@@ -242,18 +242,16 @@ class MobilerunAccessibilityService : AccessibilityService() {
      * Detect System UI ANR / "isn't responding" dialogs and tap Wait or Close app.
      * Returns true if a dialog action was dispatched.
      */
-    fun dismissSystemAnrIfPresent(): Boolean {
+    fun dismissSystemAnrIfPresent(): Boolean = dismissBlockingDialogs(anrOnly = true)
+
+    /**
+     * Auto-dismiss ANRs and common permission / runtime popups so tasks recover
+     * instead of stalling ("Allow", "While using the app", "OK", …).
+     */
+    fun dismissBlockingDialogs(anrOnly: Boolean = false): Boolean {
         val root = rootInActiveWindow ?: return false
         try {
-            // Cheap package gate — full text walk only for System UI dialogs
             val pkg = root.packageName?.toString().orEmpty()
-            if (pkg.isNotEmpty() &&
-                "systemui" !in pkg &&
-                "android" != pkg &&
-                !pkg.startsWith("com.android.systemui")
-            ) {
-                return false
-            }
             val blob = StringBuilder()
             collectTextSample(root, blob, 0, AtomicInteger(0))
             val low = blob.toString().lowercase()
@@ -261,18 +259,41 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 "isnt responding" in low ||
                 "not responding" in low ||
                 ("close app" in low && "wait" in low)
-            if (!isAnr) return false
-            // Prefer "Wait" to keep the session alive; fall back to Close app
-            val wait = findNodeByText(root, listOf("Wait", "wait"))
-            if (wait != null) {
-                val tapped = wait.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                Log.i(TAG, "ANR dialog: tapped Wait ok=$tapped")
-                return tapped
+            if (isAnr) {
+                val wait = findNodeByText(root, listOf("Wait", "wait"))
+                if (wait != null) {
+                    val tapped = wait.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Log.i(TAG, "ANR dialog: tapped Wait ok=$tapped")
+                    return tapped
+                }
+                val close = findNodeByText(root, listOf("Close app", "Close App", "close app"))
+                if (close != null) {
+                    val tapped = close.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Log.i(TAG, "ANR dialog: tapped Close app ok=$tapped")
+                    return tapped
+                }
             }
-            val close = findNodeByText(root, listOf("Close app", "Close App", "close app"))
-            if (close != null) {
-                val tapped = close.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                Log.i(TAG, "ANR dialog: tapped Close app ok=$tapped")
+            if (anrOnly) return false
+            // Permission / consent popups — prefer the least-restrictive positive action
+            val positives = listOf(
+                "While using the app",
+                "Only this time",
+                "Allow all the time",
+                "Allow",
+                "ALLOW",
+                "OK",
+                "Okay",
+                "Got it",
+                "Continue",
+                "Accept",
+                "I agree",
+                "Agree",
+            )
+            val node = findNodeByText(root, positives)
+            if (node != null) {
+                val label = node.text?.toString() ?: node.contentDescription?.toString()
+                val tapped = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                Log.i(TAG, "popup dismiss: tapped '$label' ok=$tapped pkg=$pkg")
                 return tapped
             }
             return false
