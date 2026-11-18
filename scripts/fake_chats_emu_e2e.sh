@@ -88,16 +88,51 @@ print("mobilerun://pair?" + urlencode({
 }))
 PY
 )
-adb shell "am start -a android.intent.action.VIEW -d '$PAIR_URL'" || true
-sleep 8
-
-DEVICE_ID=$(TOKEN="$TOKEN" HOST="$HOST_BACKEND" python3 - <<'PY'
+# Pairing can race right after install — retry deep-link + kick ConnectionService.
+DEVICE_ID=""
+adb shell am start -n ai.mobilerun.selfhosted/.MainActivity || true
+sleep 2
+for attempt in 1 2 3; do
+  echo "Pair attempt $attempt"
+  adb shell "am start -a android.intent.action.VIEW -d '$PAIR_URL'" || true
+  adb shell am startservice -n ai.mobilerun.selfhosted/.ConnectionService \
+    -a ai.mobilerun.selfhosted.CONN_START || true
+  sleep 6
+  ONLINE=$(TOKEN="$TOKEN" HOST="$HOST_BACKEND" python3 - <<'PY'
+import json, os, urllib.request
+host=os.environ["HOST"]; token=os.environ["TOKEN"]
+forbid="android_46101066"
+req=urllib.request.Request(host+"/api/devices", headers={"Authorization":f"Bearer {token}"})
+try:
+    devices=json.load(urllib.request.urlopen(req, timeout=10))
+except Exception:
+    devices=[]
+for d in devices or []:
+    did=str(d.get("device_id") or "")
+    if did.startswith(forbid):
+        raise SystemExit("refusing Mac real phone in fake-chats bench")
+    if d.get("connected") or d.get("online"):
+        print(did); raise SystemExit
+print("")
+PY
+  )
+  if [[ -n "$ONLINE" ]]; then
+    DEVICE_ID="$ONLINE"
+    break
+  fi
+done
+if [[ -z "${DEVICE_ID:-}" ]]; then
+  # Final longer poll
+  DEVICE_ID=$(TOKEN="$TOKEN" HOST="$HOST_BACKEND" python3 - <<'PY'
 import json, os, time, urllib.request
 host=os.environ["HOST"]; token=os.environ["TOKEN"]
 forbid="android_46101066"
-for _ in range(45):
+for _ in range(60):
     req=urllib.request.Request(host+"/api/devices", headers={"Authorization":f"Bearer {token}"})
-    devices=json.load(urllib.request.urlopen(req))
+    try:
+        devices=json.load(urllib.request.urlopen(req, timeout=10))
+    except Exception:
+        devices=[]
     for d in devices or []:
         did=str(d.get("device_id") or "")
         if did.startswith(forbid):
@@ -107,7 +142,8 @@ for _ in range(45):
     time.sleep(1)
 raise SystemExit("emulator did not come online")
 PY
-)
+  )
+fi
 echo "DEVICE_ID=$DEVICE_ID" | tee -a "$ARTIFACTS_DIR/apk_paths.txt"
 export DEVICE_ID
 
