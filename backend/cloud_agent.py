@@ -52,12 +52,24 @@ TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "900")
 # Fail only when no step progress for this long (still progressing → keep going
 # until TASK_TIMEOUT_S).
 TASK_IDLE_TIMEOUT_S = int(os.environ.get("AGENT_IDLE_TIMEOUT_S") or "240")
-# Max identical swipe summaries before hard-fail
-MAX_SWIPE_LOOPS = 2
+# Launcher-only swipe loops: require this many unchanged swipes on a launcher package
+MAX_LAUNCHER_SWIPE_LOOPS = 3
+# Legacy alias (tests) — in-app swipes must NOT trip this; use launcher guard instead
+MAX_SWIPE_LOOPS = MAX_LAUNCHER_SWIPE_LOOPS
 # Same tree fingerprint after an action → no-progress streak before forcing strategy
 MAX_NO_PROGRESS = 2
 # Same tap coords with unchanged tree → force strategy change
 MAX_SAME_TAP = 2
+# Known launcher package fragments (Samsung One UI, Pixel, AOSP, OEM)
+_LAUNCHER_PKG_MARKERS = (
+    "launcher",
+    "com.sec.android.app.launcher",
+    "com.google.android.apps.nexuslauncher",
+    "com.android.launcher3",
+    "com.miui.home",
+    "com.huawei.android.launcher",
+    "com.oppo.launcher",
+)
 
 # Shown in Tasks/Chat UI when Gemini/OpenAI cannot plan.
 LLM_UNAVAILABLE_LABEL = "LLM unavailable: quota"
@@ -444,27 +456,29 @@ def _goal_satisfied_from_tree(
         if "message sent" in tl or "delivered" in tl:
             return "Message appears sent"
         # E2E marker phrase — treat as sent when it appears outside a focused edit
-        marker = "hello from macai uitree recovery test"
-        if marker in tl:
-            # Compact tree marks editables with e="1" / e=1; bubbles are plain text
-            in_edit = bool(
-                re.search(
-                    r'e="?1"?[^>]{0,120}' + re.escape(marker),
-                    tl,
+        markers = ["hello from macai uitree recovery test"]
+        wa = _parse_whatsapp_instruction(instruction)
+        if wa and wa.get("message"):
+            markers.append(wa["message"].lower())
+        for marker in markers:
+            if marker and marker in tl:
+                # Compact tree marks editables with e="1" / e=1; bubbles are plain text
+                in_edit = bool(
+                    re.search(
+                        r'e="?1"?[^>]{0,120}' + re.escape(marker),
+                        tl,
+                    )
+                ) or bool(
+                    re.search(
+                        re.escape(marker) + r'[^>]{0,80}e="?1"?',
+                        tl,
+                    )
                 )
-            ) or bool(
-                re.search(
-                    re.escape(marker) + r'[^>]{0,80}e="?1"?',
-                    tl,
-                )
-            )
-            if not in_edit:
-                return (
-                    "Sent message visible in conversation: "
-                    "'hello from macai uitree recovery test'"
-                )
-            # Draft still in the box — not done yet
-        if "sms" in tl and "5550100" in tl and "now" in tl and marker.split()[0] in tl:
+                if not in_edit:
+                    return f"Sent message visible in conversation: '{marker}'"
+                # Draft still in the box — not done yet
+        marker0 = markers[0]
+        if "sms" in tl and "5550100" in tl and "now" in tl and marker0.split()[0] in tl:
             return "SMS thread shows recent outbound message"
     _ = package  # reserved for package-gated goals
     return None
@@ -510,6 +524,11 @@ def plan_next_action(
     msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
     if msg_heur:
         return msg_heur
+
+    # WhatsApp: open → Search → type contact → tap result → compose → type → Send
+    wa_heur = _heuristic_whatsapp_send(instruction, ui_tree, history, package)
+    if wa_heur:
+        return wa_heur
 
     open_target = _trivial_open_app_target(instruction)
     hist_blob = " ".join(history).lower()
@@ -615,20 +634,384 @@ def plan_next_action(
 
 
 def _tree_node_center(tree: str, *needles: str) -> Optional[tuple]:
-    """Return (x, y) center of first node whose text/desc contains any needle."""
+    """Return (x, y) center of first node whose text/desc/hint contains any needle.
+
+    Supports classic a11y dumps (text=/content-desc=/bounds=) and compact APK
+    dumps (t=/d=/h=/xy=/b=).
+    """
     low = (tree or "").lower()
     for needle in needles:
-        n = needle.lower()
-        # bounds before or after the matching attribute
+        n = (needle or "").lower().strip()
+        if not n:
+            continue
+        # Compact: attribute order varies — match label then xy, or xy then label
         for pat in (
+            rf'<(?:n|node)\b[^>]*(?:t|d|h|text|content-desc|contentDescription)="[^"]*{re.escape(n)}[^"]*"[^>]*\bxy="(\d+),(\d+)"',
+            rf'<(?:n|node)\b[^>]*\bxy="(\d+),(\d+)"[^>]*(?:t|d|h|text|content-desc|contentDescription)="[^"]*{re.escape(n)}[^"]*"',
+            rf'<(?:n|node)\b[^>]*(?:t|d|h|text|content-desc)="[^"]*{re.escape(n)}[^"]*"[^>]*\bb="(\d+),(\d+),(\d+),(\d+)"',
+            rf'<(?:n|node)\b[^>]*\bb="(\d+),(\d+),(\d+),(\d+)"[^>]*(?:t|d|h|text|content-desc)="[^"]*{re.escape(n)}[^"]*"',
             rf'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*(?:text|content-desc)="[^"]*{re.escape(n)}[^"]*"',
             rf'(?:text|content-desc)="[^"]*{re.escape(n)}[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-            # compact tree: often t="..." b="x1,y1,x2,y2" or similar — skip if absent
         ):
             m = re.search(pat, low, re.I)
-            if m:
-                x1, y1, x2, y2 = map(int, m.groups()[:4])
+            if not m:
+                continue
+            groups = [int(g) for g in m.groups() if g is not None]
+            if len(groups) == 2:
+                return (groups[0], groups[1])
+            if len(groups) >= 4:
+                x1, y1, x2, y2 = groups[:4]
                 return ((x1 + x2) // 2, (y1 + y2) // 2)
+    return None
+
+
+def _tree_editable_center(tree: str) -> Optional[tuple]:
+    """Center of first editable/EditText-like node (e=1 or class EditText)."""
+    low = (tree or "").lower()
+    for pat in (
+        r'<(?:n|node)\b[^>]*\be="?1"?[^>]*\bxy="(\d+),(\d+)"',
+        r'<(?:n|node)\b[^>]*\bxy="(\d+),(\d+)"[^>]*\be="?1"?',
+        r'<(?:n|node)\b[^>]*edittext[^>]*\bxy="(\d+),(\d+)"',
+        r'<(?:n|node)\b[^>]*\bb="(\d+),(\d+),(\d+),(\d+)"[^>]*\be="?1"?',
+        r'<(?:n|node)\b[^>]*\be="?1"?[^>]*\bb="(\d+),(\d+),(\d+),(\d+)"',
+    ):
+        m = re.search(pat, low, re.I)
+        if not m:
+            continue
+        groups = [int(g) for g in m.groups() if g is not None]
+        if len(groups) == 2:
+            return (groups[0], groups[1])
+        if len(groups) >= 4:
+            x1, y1, x2, y2 = groups[:4]
+            return ((x1 + x2) // 2, (y1 + y2) // 2)
+    return None
+
+
+def _is_launcher_package(package: str) -> bool:
+    pkg = (package or "").lower()
+    if not pkg:
+        return False
+    return any(m in pkg for m in _LAUNCHER_PKG_MARKERS)
+
+
+def _parse_whatsapp_instruction(instruction: str) -> Optional[Dict[str, str]]:
+    """Extract {contact, message} from WhatsApp send goals.
+
+    Examples:
+      go on whatsapp message precious achalugo and say hi baby
+      open whatsapp, message Jane Doe and say hello
+      whatsapp text bob say hey
+    """
+    text = (instruction or "").strip()
+    if not text:
+        return None
+    low = text.lower()
+    if "whatsapp" not in low and not re.search(r"\bwa\b", low):
+        return None
+    if not any(k in low for k in ("message", "msg", "text", "chat", "say", "send")):
+        return None
+    patterns = (
+        r"(?:go\s+on\s+|open\s+|launch\s+)?whatsapp\s+"
+        r"(?:message|msg|text|chat(?:\s+with)?)\s+(.+?)\s+"
+        r"(?:and\s+)?(?:say|send|tell)\s+(.+)$",
+        r"whatsapp[,:]?\s+(?:message|msg|text)\s+(.+?)\s+"
+        r"(?:and\s+)?(?:say|send)\s+(.+)$",
+        r"(?:message|msg|text)\s+(.+?)\s+on\s+whatsapp\s+"
+        r"(?:and\s+)?(?:say|send)\s+(.+)$",
+        r"whatsapp\s+(.+?)\s+(?:and\s+)?(?:say|send)\s+(.+)$",
+    )
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if not m:
+            continue
+        contact = re.sub(r"\s+", " ", m.group(1)).strip(" .,\"'")
+        message = re.sub(r"\s+", " ", m.group(2)).strip(" .,\"'")
+        # Strip leading verbs left on contact
+        contact = re.sub(
+            r"^(?:message|msg|text|chat(?:\s+with)?)\s+",
+            "",
+            contact,
+            flags=re.I,
+        ).strip()
+        if contact and message and len(contact) <= 80 and len(message) <= 500:
+            return {"contact": contact, "message": message}
+    return None
+
+
+def _heuristic_whatsapp_send(
+    instruction: str,
+    ui_tree: str,
+    history: List[str],
+    package: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Deterministic WhatsApp path: Search → contact → compose → Send → verify.
+
+    open WhatsApp → tap Search (content-desc) → type contact → tap result →
+    tap Message/compose EditText → type body → tap Send → done when bubble shows.
+    """
+    parsed = _parse_whatsapp_instruction(instruction)
+    if not parsed:
+        return None
+    contact = parsed["contact"]
+    message = parsed["message"]
+    hist = " ".join(history[-16:]).lower()
+    pkg = (package or "").lower()
+    tl = (ui_tree or "").lower()
+    # Prefer reported package — tree XML can mention com.whatsapp even when
+    # the launcher is still foreground (stale dump / packages= attr).
+    wa_fg = "whatsapp" in pkg
+    if not wa_fg and pkg and not _is_launcher_package(pkg):
+        wa_fg = 'p="com.whatsapp"' in tl or "packages=\"com.whatsapp\"" in tl
+
+    # Already sent — bubble visible outside edit
+    sat = _goal_satisfied_from_tree(instruction, ui_tree, package)
+    if sat and message.lower() in (ui_tree or "").lower():
+        return {
+            "action": "done",
+            "reason": sat,
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # ANR
+    if "isn't responding" in tl or "not responding" in tl:
+        return {
+            "action": "tap",
+            "x": 540,
+            "y": 1395,
+            "reason": "Dismiss ANR Wait (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    opened = (
+        "opened whatsapp" in hist
+        or "open_app(whatsapp)" in hist
+        or ("open_ok" in hist and "whatsapp" in hist)
+        or wa_fg
+    )
+
+    if not opened:
+        return {
+            "action": "open_app",
+            "app": "WhatsApp",
+            "reason": "Open WhatsApp (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    typed_contact = (
+        contact.lower() in hist
+        and ("type contact" in hist or f'type("{contact.lower()}")' in hist
+             or f"typed {contact.lower()}" in hist or "type(" in hist)
+    )
+    # Broader: any type of the contact string
+    if not typed_contact:
+        typed_contact = any(
+            contact.lower() in str(h).lower()
+            and ("type" in str(h).lower() or "typed" in str(h).lower())
+            for h in history[-16:]
+        )
+    tapped_contact = any(
+        contact.lower() in str(h).lower()
+        and ("tap contact" in str(h).lower() or "select contact" in str(h).lower()
+             or "matching" in str(h).lower())
+        for h in history[-16:]
+    )
+    # Contact row tap may just be tap(x,y) — after typing, next tap on contact name counts
+    if typed_contact and not tapped_contact:
+        # If compose field already visible, treat contact as selected
+        if _tree_editable_center(ui_tree) and (
+            "type a message" in tl or "message" in tl or 'e="1"' in tl or "e=1" in tl
+        ):
+            # Heuristic: after typing contact, if we see compose hints we may be in chat
+            pass
+
+    tapped_search = "tap search" in hist or (
+        "search" in hist and "tap(" in hist and "whatsapp" in hist
+    )
+    typed_message = any(
+        message.lower() in str(h).lower()
+        and ("type" in str(h).lower() or "typed" in str(h).lower())
+        for h in history[-16:]
+    )
+    tapped_send = any(
+        "tap send" in str(h).lower() or "send (whatsapp" in str(h).lower()
+        for h in history[-16:]
+    )
+    focused_compose = any(
+        "compose" in str(h).lower() or "message field" in str(h).lower()
+        for h in history[-16:]
+    )
+
+    # 1) Tap Search icon (content-desc Search)
+    if not typed_contact and not tapped_search:
+        c = _tree_node_center(ui_tree, "Search", "search")
+        if c:
+            return {
+                "action": "tap",
+                "x": c[0],
+                "y": c[1],
+                "reason": "Tap Search (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+        # Fallback: top-right Search on S21+ (~1080x)
+        return {
+            "action": "tap",
+            "x": 980,
+            "y": 160,
+            "reason": "Tap Search coords fallback (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # 2) Type contact name (into search EditText — already focused after Search)
+    if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
+        return {
+            "action": "type",
+            "text": contact,
+            "reason": f"Type contact '{contact}' (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # 3) Tap matching contact result
+    if typed_contact and not tapped_contact and not typed_message:
+        # Prefer full name, then first token
+        tokens = [contact] + ([contact.split()[0]] if " " in contact else [])
+        c = _tree_node_center(ui_tree, *tokens)
+        if c:
+            return {
+                "action": "tap",
+                "x": c[0],
+                "y": c[1],
+                "reason": f"Tap matching contact '{contact}' (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+        # Scroll/search list a bit if no match yet
+        if hist.count("swipe") < 2:
+            return {
+                "action": "swipe",
+                "x1": 540,
+                "y1": 1600,
+                "x2": 540,
+                "y2": 800,
+                "reason": "Scroll contact results (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+        return {
+            "action": "tap",
+            "x": 540,
+            "y": 420,
+            "reason": f"Tap first search result for '{contact}' (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # 4) Focus compose EditText
+    if (tapped_contact or typed_contact) and not typed_message and not focused_compose:
+        ec = _tree_editable_center(ui_tree)
+        c = _tree_node_center(
+            ui_tree, "Type a message", "Message", "Write a message", "type a message"
+        )
+        if ec or c:
+            x, y = ec or c
+            return {
+                "action": "tap",
+                "x": x,
+                "y": y,
+                "reason": "Focus compose Message field (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+        return {
+            "action": "tap",
+            "x": 540,
+            "y": 2250,
+            "reason": "Focus compose coords fallback (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # 5) Type message body
+    if focused_compose and not typed_message:
+        return {
+            "action": "type",
+            "text": message,
+            "reason": f"Type message '{message}' (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+    # If we somehow typed contact+selected but skipped focus flag, still type
+    if typed_contact and (tapped_contact or focused_compose) and not typed_message:
+        return {
+            "action": "type",
+            "text": message,
+            "reason": f"Type message '{message}' (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # 6) Tap Send (content-desc Send)
+    if typed_message and not tapped_send:
+        c = _tree_node_center(ui_tree, "Send", "send")
+        x, y = c if c else (1000, 2280)
+        return {
+            "action": "tap",
+            "x": x,
+            "y": y,
+            "reason": "Tap Send (whatsapp heuristic)",
+            "planner": "whatsapp_heuristic",
+            "llm_provider": None,
+        }
+
+    # 7) Re-tap Send / verify
+    if tapped_send:
+        sat2 = _goal_satisfied_from_tree(instruction, ui_tree, package)
+        if sat2:
+            return {
+                "action": "done",
+                "reason": sat2,
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+        if hist.count("tap send") + hist.count("re-tap send") < 3:
+            c = _tree_node_center(ui_tree, "Send", "send")
+            x, y = c if c else (1000, 2280)
+            return {
+                "action": "tap",
+                "x": x,
+                "y": y,
+                "reason": "Re-tap Send (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+
+    # Keep driving inside WhatsApp — never swipe the launcher
+    if wa_fg:
+        ec = _tree_editable_center(ui_tree)
+        if ec and not typed_message:
+            return {
+                "action": "tap",
+                "x": ec[0],
+                "y": ec[1],
+                "reason": "Continue compose (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
+        c = _tree_node_center(ui_tree, "Search", "search")
+        if c and not typed_contact:
+            return {
+                "action": "tap",
+                "x": c[0],
+                "y": c[1],
+                "reason": "Retry Search (whatsapp heuristic)",
+                "planner": "whatsapp_heuristic",
+                "llm_provider": None,
+            }
     return None
 
 
@@ -1150,6 +1533,7 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
 
 
 def _count_recent_swipes(history: List[str]) -> int:
+    """Count trailing swipe actions (any package). Used for soft hints only."""
     n = 0
     for h in reversed(history):
         hs = str(h)
@@ -1158,6 +1542,72 @@ def _count_recent_swipes(history: List[str]) -> int:
         else:
             break
     return n
+
+
+def _launcher_swipe_abort(
+    state: Dict[str, Any], package: str, tree_changed: bool, kind: str
+) -> bool:
+    """True only for launcher package + ≥3 unchanged swipes (in-app swipes OK)."""
+    if kind != "swipe":
+        # Non-swipe actions clear the launcher streak
+        if not _is_launcher_package(package):
+            state["launcher_swipe_unchanged"] = 0
+        return False
+    if not _is_launcher_package(package):
+        state["launcher_swipe_unchanged"] = 0
+        return False
+    if tree_changed:
+        state["launcher_swipe_unchanged"] = 1
+        return False
+    n = int(state.get("launcher_swipe_unchanged") or 0) + 1
+    state["launcher_swipe_unchanged"] = n
+    return n >= MAX_LAUNCHER_SWIPE_LOOPS
+
+
+def _attach_failure_artifacts(
+    job: Dict[str, Any],
+    device_id: str,
+    ui_tree: Optional[str] = None,
+    *,
+    call_device=None,
+) -> None:
+    """Persist last full UI tree + screenshot on the job row for debugging."""
+    try:
+        tree = ui_tree
+        if (not tree) and device_id:
+            try:
+                if call_device is None:
+                    try:
+                        from device_rpc import call_device as _cd
+                    except ImportError:
+                        from backend.device_rpc import call_device as _cd  # type: ignore
+
+                    call_device = _cd
+                info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                tree = info.get("tree") or ""
+                job.setdefault("state", {})["failure_package"] = info.get("package")
+            except Exception as e:
+                logger.warning("failure tree fetch failed: %s", e)
+                tree = tree or ""
+        if tree:
+            # Dynamo item limit ~400KB — keep a generous but bounded dump
+            job["failure_ui_tree"] = tree[:120_000]
+            job.setdefault("state", {})["failure_tree_chars"] = len(tree)
+            job.setdefault("state", {})["failure_tree_nodes"] = tree.lower().count(
+                "<n "
+            ) + tree.lower().count("<node ")
+        shot = _fetch_screenshot_b64(device_id) if device_id else None
+        if shot:
+            key = _store_step_screenshot(
+                str(job.get("job_id") or "unknown"), "failure", shot
+            )
+            if key:
+                job["failure_screenshot_key"] = key
+            else:
+                # Local/dev fallback — short prefix only
+                job["failure_screenshot_b64_prefix"] = shot[:2000]
+    except Exception as e:
+        logger.warning("attach failure artifacts failed: %s", e)
 
 
 def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -1250,15 +1700,21 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["result"] = state.get("last_action") or f"Reached max_steps={max_steps}"
         job["completed_at"] = now
         return job
-    if _count_recent_swipes(history) >= MAX_SWIPE_LOOPS:
+    # Swipe-loop abort is evaluated after actions (launcher + unchanged only).
+    # Never abort here on a single in-app swipe.
+    if int(state.get("launcher_swipe_unchanged") or 0) >= MAX_LAUNCHER_SWIPE_LOOPS:
         job["status"] = "failed"
         job["error"] = (
-            "Stopped swipe loop — use open_app for launching apps "
+            "Stopped launcher swipe loop — use open_app for launching apps "
             "(PackageManager), not launcher swipes"
         )
         state["last_action"] = "swipe_loop"
         job["state"] = state
         job["completed_at"] = now
+        try:
+            _attach_failure_artifacts(job, device_id)
+        except Exception:
+            pass
         return job
     if _count_recent_open_apps(history) >= 2:
         # Planner kept re-opening; force it to continue with UI actions
@@ -1640,6 +2096,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     job["status"] = "failed"
                     job["error"] = reason or "Agent could not complete the goal"
                     job["completed_at"] = int(time.time())
+                    _attach_failure_artifacts(
+                        job, device_id, ui_tree, call_device=call_device
+                    )
                     return job
             else:
                 state["steps"] = step + 1
@@ -1652,31 +2111,38 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["status"] = "failed"
                 job["error"] = reason or "Agent could not complete the goal"
                 job["completed_at"] = int(time.time())
+                _attach_failure_artifacts(
+                    job, device_id, ui_tree, call_device=call_device
+                )
                 return job
 
-        # Identical swipe detection before executing
-        pending_summary_prefix = "swipe(" if kind == "swipe" else ""
-        if (
-            pending_summary_prefix
-            and _count_recent_swipes(history) >= MAX_SWIPE_LOOPS - 1
+        # In-app swipes are fine. Only soft-redirect messaging E2E away from
+        # launcher hunting; hard abort is deferred to post-action launcher guard.
+        if kind == "swipe" and _is_launcher_package(
+            str(tree_info.get("package") or "")
         ):
             instr_l = str(job.get("instruction") or instruction or "").lower()
             if "macai" in instr_l or "5550100" in instr_l:
-                # Messaging E2E: convert swipe loops into Start-chat recovery
                 action = {
                     "action": "tap",
                     "x": 845,
                     "y": 2200,
-                    "reason": "swipe-loop → Start chat FAB (messaging)",
+                    "reason": "launcher-swipe → Start chat FAB (messaging)",
                 }
                 kind = "tap"
                 reason = action["reason"]
-                history.append("hint: swipe-loop → messaging Start chat")
+                history.append("hint: launcher-swipe → messaging Start chat")
                 state["history"] = history[-40:]
-            else:
-                raise RuntimeError(
-                    "Swipe loop detected — aborting. Use open_app instead of launcher swipes."
-                )
+            elif _parse_whatsapp_instruction(instruction):
+                action = {
+                    "action": "open_app",
+                    "app": "WhatsApp",
+                    "reason": "launcher-swipe → open WhatsApp (whatsapp heuristic)",
+                }
+                kind = "open_app"
+                reason = action["reason"]
+                history.append("hint: launcher-swipe → open WhatsApp")
+                state["history"] = history[-40:]
 
         summary = execute_action(device_id, action)
 
@@ -1739,7 +2205,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             after_pkg = str(after.get("package") or "")
             fp = _tree_fingerprint(after_tree, after_pkg)
             prev_fp = state.get("last_tree_fp")
-            if prev_fp and prev_fp == fp:
+            tree_changed = not (prev_fp and prev_fp == fp)
+            if not tree_changed:
                 state["no_progress_streak"] = (
                     int(state.get("no_progress_streak") or 0) + 1
                 )
@@ -1747,6 +2214,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 state["no_progress_streak"] = 0
             state["last_tree_fp"] = fp
+            # Launcher swipe loop: only abort after ≥3 unchanged launcher swipes
+            if _launcher_swipe_abort(state, after_pkg or str(tree_info.get("package") or ""), tree_changed, kind):
+                state["last_action"] = "swipe_loop"
+                history.append("swipe_loop: launcher unchanged ×3")
+                state["history"] = history[-40:]
+                _record_step("swipe_loop", ok=False, screenshot_key=shot_key)
+                job["state"] = state
+                job["status"] = "failed"
+                job["error"] = (
+                    "Stopped launcher swipe loop — use open_app instead of "
+                    "launcher swipes"
+                )
+                job["completed_at"] = int(time.time())
+                _attach_failure_artifacts(
+                    job, device_id, after_tree or ui_tree, call_device=call_device
+                )
+                return job
             tap_key = _same_tap_key(action)
             if tap_key:
                 if tap_key == state.get("last_tap_key") and state.get(
@@ -1924,6 +2408,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     job["error"] = msg
             else:
                 job["error"] = msg
+            try:
+                _attach_failure_artifacts(job, device_id, call_device=call_device)
+            except Exception:
+                pass
         else:
             if rate_limited:
                 job["next_run_at"] = int(time.time()) + 20

@@ -280,12 +280,12 @@ export class MobilerunStack extends cdk.Stack {
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
 
-    // Step worker — one dating/agent step per invocation (no 15-min long loop)
+    // Step worker — dating/agent steps (chains a few agent ticks per invoke)
     const stepFn = new lambda.Function(this, 'StepWorkerFunction', {
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'backend.step_worker.handler',
       code,
-      timeout: cdk.Duration.minutes(2),
+      timeout: cdk.Duration.minutes(5),
       memorySize: 512,
       environment: envVars,
       logRetention: logs.RetentionDays.ONE_WEEK,
@@ -300,9 +300,13 @@ export class MobilerunStack extends cdk.Stack {
       screenshotBucket.grantReadWrite(fn);
     }
 
-    // Allow HTTP Lambda to invoke step worker / manage WS connections later
+    // Allow HTTP Lambda + step worker itself to invoke step worker for
+    // back-to-back agent ticks (avoid waiting on the 1-minute EventBridge rule).
     stepFn.grantInvoke(httpFn);
+    stepFn.grantInvoke(stepFn);
     httpFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
+    stepFn.addEnvironment('STEP_WORKER_ARN', stepFn.functionArn);
+    stepFn.addEnvironment('AGENT_STEP_CHAIN', '4');
 
     // === HTTP API (cheaper than REST API Gateway) ===
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {

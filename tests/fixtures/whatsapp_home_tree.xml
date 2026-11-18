@@ -1,0 +1,15 @@
+<hierarchy windows="2" nodes="28" partial="false" empty="false" mode="compact" packages="com.whatsapp">
+<w id="active" t="active" p="com.whatsapp" f="1">
+ <n t="WhatsApp" d="WhatsApp" xy="120,90" b="0,40,400,160"/>
+ <n d="Search" c="1" xy="980,150" b="900,80,1060,220"/>
+ <n d="More options" c="1" xy="1040,150" b="1000,80,1080,220"/>
+ <n t="Chats" c="1" xy="180,280" b="40,240,320,320"/>
+ <n t="Updates" c="1" xy="540,280" b="360,240,720,320"/>
+ <n t="Calls" c="1" xy="900,280" b="740,240,1060,320"/>
+ <n s="1" xy="540,1200" b="0,360,1080,2100"/>
+ <n t="Precious Achalugo · Hi there" c="1" xy="540,480" b="0,400,1080,560"/>
+ <n t="Mom" c="1" xy="540,640" b="0,560,1080,720"/>
+ <n t="Work Group" c="1" xy="540,800" b="0,720,1080,880"/>
+ <n d="New chat" c="1" xy="960,2100" b="880,2020,1040,2180"/>
+</w>
+</hierarchy>

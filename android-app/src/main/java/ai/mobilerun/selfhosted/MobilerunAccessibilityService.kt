@@ -38,17 +38,19 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "MobilerunA11y"
-        // Compact dumps — target ≪ 20KB; p95 tree build < 1.5s
-        private const val MAX_NODES = 90
-        private const val MAX_DEPTH = 10
-        private const val MAX_TREE_CHARS = 12_000
-        // Soft budget for the main-looper walk itself (partial tree > empty)
-        // Soft walk budget once main looper actually starts the dump.
+        // Compact dumps — rich enough for WhatsApp lists (content-desc / clickable
+        // parents) while staying under WS payload limits.
+        private const val MAX_NODES = 220
+        private const val MAX_DEPTH = 18
+        private const val MAX_TREE_CHARS = 28_000
+        // Soft budget for the main-looper walk itself (partial tree > empty).
         // Hard await must absorb main-thread scheduling delay on slow/ANR-busy
-        // emulators (accel-off) so we never return before a late non-empty walk.
-        private const val SOFT_DEADLINE_MS = 1_600L
+        // devices so we never return before a late non-empty walk.
+        private const val SOFT_DEADLINE_MS = 2_400L
         // Caller await: main scheduling + soft walk + gzip. Keep > soft+1s.
-        private const val HARD_AWAIT_MS = 4_000L
+        private const val HARD_AWAIT_MS = 5_500L
+        // If compact dump is too thin for the FG app, re-walk without filters.
+        private const val MIN_USEFUL_NODES = 15
         // Serve unchanged content from cache aggressively
         private const val CACHE_TTL_MS = 4_000L
         // Keep a slightly older non-empty dump to avoid feeding empty trees after drops
@@ -95,10 +97,12 @@ class MobilerunAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         serviceInfo = serviceInfo?.apply {
-            // Skip INCLUDE_NOT_IMPORTANT_VIEWS — halves walk cost on Messages/OEM UIs
+            // INCLUDE_NOT_IMPORTANT_VIEWS is required for WhatsApp / Compose UIs —
+            // without it RecyclerView rows and ImageButton Send often vanish.
             flags = flags or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
             // Content changes only — not TYPES_ALL_MASK (cheaper event delivery)
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
@@ -502,7 +506,24 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     private fun dumpUITreeCompact(deadlineMs: Long): TreeResult {
-        val sb = StringBuilder(4096)
+        // First pass: compact (interactive / text / desc). If too thin for the
+        // foreground app, immediately re-walk in full mode (no interesting filter).
+        val compact = dumpUITreeWalk(deadlineMs, fullMode = false)
+        if (compact.nodes >= MIN_USEFUL_NODES || compact.empty) {
+            return compact
+        }
+        val remaining = deadlineMs - SystemClock.elapsedRealtime()
+        if (remaining < 400) {
+            Log.w(TAG, "thin tree nodes=${compact.nodes}; no budget left for full re-dump")
+            return compact.copy(partial = true)
+        }
+        Log.i(TAG, "thin tree nodes=${compact.nodes}; re-dumping uncompacted")
+        val full = dumpUITreeWalk(deadlineMs, fullMode = true)
+        return if (full.nodes >= compact.nodes) full.copy(partial = true) else compact.copy(partial = true)
+    }
+
+    private fun dumpUITreeWalk(deadlineMs: Long, fullMode: Boolean): TreeResult {
+        val sb = StringBuilder(8192)
         val counter = intArrayOf(0)
         val pkgs = linkedSetOf<String>()
         var windowCount = 0
@@ -516,7 +537,19 @@ class MobilerunAccessibilityService : AccessibilityService() {
             return false
         }
 
-        // Prefer active root first — cheapest reliable source; windows() can be slow
+        fun emitWindow(id: String, type: String, focused: Int, root: AccessibilityNodeInfo) {
+            windowCount++
+            val pkg = root.packageName?.toString().orEmpty()
+            if (pkg.isNotEmpty()) pkgs.add(pkg)
+            sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\">\n")
+            buildCompactNodes(
+                root, " ", sb, counter, 0, deadlineMs, fullMode,
+            ) { partial = true }
+            sb.append("</w>\n")
+        }
+
+        // Prefer active root first
+        var activeEmitted = false
         val active = try {
             rootInActiveWindow
         } catch (e: Exception) {
@@ -524,22 +557,17 @@ class MobilerunAccessibilityService : AccessibilityService() {
             null
         }
         if (active != null && !pastDeadline()) {
-            windowCount = 1
-            val pkg = active.packageName?.toString().orEmpty()
-            if (pkg.isNotEmpty()) pkgs.add(pkg)
-            sb.append("<w id=\"active\" t=\"active\" p=\"${xmlEsc(pkg)}\">\n")
-            buildCompactNodes(active, " ", sb, counter, 0, deadlineMs) { partial = true }
-            sb.append("</w>\n")
+            emitWindow("active", "active", 1, active)
+            activeEmitted = true
             try {
                 active.recycle()
             } catch (_: Exception) {
             }
         }
 
-        // Skip windows() enrichment by default — active root is enough for
-        // messaging flows and windows() binder cost dominates p95 on OEM/emu.
-        // Only scan other windows when the active dump was empty and budget remains.
-        if (counter[0] == 0 && !pastDeadline()) {
+        // Always walk interactive windows — WhatsApp often parks the list /
+        // compose field in a non-active application window on One UI / S21+.
+        if (!pastDeadline()) {
             val winList = try {
                 windows?.toList()
             } catch (e: Exception) {
@@ -549,33 +577,41 @@ class MobilerunAccessibilityService : AccessibilityService() {
             if (!winList.isNullOrEmpty()) {
                 val ordered = winList.sortedByDescending { w ->
                     when (w.type) {
-                        AccessibilityWindowInfo.TYPE_APPLICATION -> 3
+                        AccessibilityWindowInfo.TYPE_APPLICATION -> 4
+                        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> 3
                         AccessibilityWindowInfo.TYPE_SYSTEM -> 2
                         else -> 1
-                    }
+                    } + (if (w.isFocused) 1 else 0) + (if (w.isActive) 1 else 0)
                 }
                 for (window in ordered) {
                     if (pastDeadline() || counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
-                    if (window.isActive && windowCount > 0) continue
+                    // Skip the active window we already emitted as "active"
+                    if (window.isActive && activeEmitted) continue
+                    // Prefer application + IME; skip pure wallpaper/split décor
+                    if (
+                        window.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
+                        window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
+                        window.type != AccessibilityWindowInfo.TYPE_SYSTEM
+                    ) {
+                        continue
+                    }
                     val root = try {
                         window.root
                     } catch (_: Exception) {
                         null
                     } ?: continue
-                    windowCount++
-                    val pkg = root.packageName?.toString().orEmpty()
-                    if (pkg.isNotEmpty()) pkgs.add(pkg)
                     val title = try {
                         window.title?.toString().orEmpty()
                     } catch (_: Exception) {
                         ""
                     }
-                    sb.append("<w id=\"${window.id}\" t=\"${window.type}\" ")
-                    sb.append("p=\"${xmlEsc(pkg)}\" ")
-                    if (title.isNotEmpty()) sb.append("title=\"${xmlEsc(title)}\" ")
-                    sb.append("f=\"${if (window.isFocused) 1 else 0}\">\n")
-                    buildCompactNodes(root, " ", sb, counter, 0, deadlineMs) { partial = true }
-                    sb.append("</w>\n")
+                    val typeLabel = "${window.type}" + if (title.isNotEmpty()) ":${title.take(24)}" else ""
+                    emitWindow(
+                        id = "${window.id}",
+                        type = typeLabel,
+                        focused = if (window.isFocused) 1 else 0,
+                        root = root,
+                    )
                     try {
                         root.recycle()
                     } catch (_: Exception) {
@@ -608,12 +644,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
         val primaryPkg = pkgs.firstOrNull().orEmpty()
         val nodeCount = counter[0]
-        // Soft-deadline can leave a window shell with zero nodes — treat as empty
-        // so callers retry / serve stale instead of planning on a hollow tree.
         val isEmpty = nodeCount == 0
+        val mode = if (fullMode) "full" else "compact"
         val tree = buildString {
             append("<hierarchy windows=\"$windowCount\" nodes=\"$nodeCount\" ")
-            append("partial=\"$truncated\" empty=\"$isEmpty\" ")
+            append("partial=\"$truncated\" empty=\"$isEmpty\" mode=\"$mode\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
             append("</hierarchy>")
@@ -634,8 +669,48 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Emit only visible interactive / text-bearing nodes with short keys:
-     * t=text, d=desc, i=id, c=clickable, e=editable, xy=center, b=bounds
+     * Collect shallow descendant text/desc so clickable parents (WhatsApp row
+     * containers) carry the label even when the TextView is a child.
+     */
+    private fun mergeChildLabels(node: AccessibilityNodeInfo, maxDepth: Int = 2): Pair<String, String> {
+        val texts = linkedSetOf<String>()
+        val descs = linkedSetOf<String>()
+        fun walk(n: AccessibilityNodeInfo?, depth: Int) {
+            if (n == null || depth > maxDepth) return
+            n.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { texts.add(it.take(60)) }
+            n.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                descs.add(it.take(60))
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                try {
+                    n.hintText?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                        texts.add(it.take(60))
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            if (depth == maxDepth) return
+            for (i in 0 until n.childCount.coerceAtMost(12)) {
+                val child = try {
+                    n.getChild(i)
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                walk(child, depth + 1)
+                try {
+                    child.recycle()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        walk(node, 0)
+        return texts.joinToString(" · ").take(120) to descs.joinToString(" · ").take(80)
+    }
+
+    /**
+     * Emit interactive / text-bearing nodes with short keys:
+     * t=text, d=desc, h=hint, i=id, c=clickable, e=editable, s=scrollable,
+     * xy=center, b=bounds. Never drop EditText or clickable=true.
      */
     private fun buildCompactNodes(
         node: AccessibilityNodeInfo?,
@@ -644,6 +719,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         counter: IntArray,
         depth: Int,
         deadlineMs: Long,
+        fullMode: Boolean,
         markPartial: () -> Unit,
     ) {
         if (node == null || counter[0] >= MAX_NODES || depth > MAX_DEPTH) return
@@ -653,10 +729,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
             return
         }
 
-        val text = node.text?.toString().orEmpty().take(80)
-        val contentDesc = node.contentDescription?.toString().orEmpty().take(60)
+        var text = node.text?.toString().orEmpty().take(80)
+        var contentDesc = node.contentDescription?.toString().orEmpty().take(60)
+        val hint = if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                node.hintText?.toString().orEmpty().take(60)
+            } catch (_: Exception) {
+                ""
+            }
+        } else {
+            ""
+        }
         val viewId = node.viewIdResourceName.orEmpty().let { id ->
-            // short id: last segment only
             if (id.contains('/')) id.substringAfterLast('/') else id.takeLast(40)
         }
         val visible = try {
@@ -664,12 +748,14 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             true
         }
-        // Invisible subtrees are skipped entirely — biggest win for p95
-        if (!visible) return
+        // Keep clickable/editable even if isVisibleToUser is flaky on OEM skins
+        val mustKeep = node.isClickable || node.isEditable || node.isCheckable ||
+            node.isLongClickable
+        if (!visible && !mustKeep) return
 
-        val interesting = node.isClickable || node.isEditable || node.isCheckable ||
-            node.isLongClickable || node.isScrollable ||
-            text.isNotEmpty() || contentDesc.isNotEmpty()
+        val interactive = mustKeep || node.isScrollable
+        val hasLabel = text.isNotEmpty() || contentDesc.isNotEmpty() || hint.isNotEmpty()
+        val interesting = interactive || hasLabel || fullMode
 
         // Skip inert wrappers; still recurse into visible children
         if (!interesting) {
@@ -685,13 +771,22 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 } catch (_: Exception) {
                     null
                 }
-                buildCompactNodes(child, indent, sb, counter, depth + 1, deadlineMs, markPartial)
+                buildCompactNodes(
+                    child, indent, sb, counter, depth + 1, deadlineMs, fullMode, markPartial,
+                )
                 try {
                     child?.recycle()
                 } catch (_: Exception) {
                 }
             }
             return
+        }
+
+        // Merge child labels into clickable/editable parents (WhatsApp rows)
+        if (interactive && text.isEmpty() && contentDesc.isEmpty()) {
+            val merged = mergeChildLabels(node)
+            if (text.isEmpty()) text = merged.first
+            if (contentDesc.isEmpty()) contentDesc = merged.second
         }
 
         counter[0]++
@@ -703,6 +798,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         sb.append(indent).append("<n")
         if (text.isNotEmpty()) sb.append(" t=\"${xmlEsc(text)}\"")
         if (contentDesc.isNotEmpty()) sb.append(" d=\"${xmlEsc(contentDesc)}\"")
+        if (hint.isNotEmpty()) sb.append(" h=\"${xmlEsc(hint)}\"")
         if (viewId.isNotEmpty()) sb.append(" i=\"${xmlEsc(viewId)}\"")
         if (node.isClickable) sb.append(" c=\"1\"")
         if (node.isEditable) sb.append(" e=\"1\"")
@@ -725,7 +821,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
             } catch (_: Exception) {
                 null
             }
-            buildCompactNodes(child, indent, sb, counter, depth + 1, deadlineMs, markPartial)
+            buildCompactNodes(
+                child, indent, sb, counter, depth + 1, deadlineMs, fullMode, markPartial,
+            )
             try {
                 child?.recycle()
             } catch (_: Exception) {

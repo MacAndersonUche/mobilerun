@@ -363,6 +363,17 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         from backend.cloud_agent import run_one_agent_step  # type: ignore
 
     updated = run_one_agent_step(job)
+    # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
+    # 1-minute ticks (target <5s/step when the device/LLM cooperate).
+    chain_budget = int(os.environ.get("AGENT_STEP_CHAIN") or "4")
+    for _ in range(max(0, chain_budget - 1)):
+        if updated.get("status") != "running":
+            break
+        nra = int(updated.get("next_run_at") or 0)
+        # Respect intentional backoff (rate-limit / offline waits)
+        if nra > int(time.time()) + 3:
+            break
+        updated = run_one_agent_step(updated)
     if updated.get("status") in ("completed", "failed", "stopped"):
         updated["completed_at"] = int(time.time())
     updated["updated_at"] = int(time.time())

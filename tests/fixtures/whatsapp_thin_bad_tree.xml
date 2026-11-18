@@ -1,0 +1,7 @@
+<!-- Simulates the S21+ failure mode: nearly empty compact dump -->
+<hierarchy windows="1" nodes="3" partial="true" empty="false" mode="compact" packages="com.whatsapp">
+<w id="active" t="active" p="com.whatsapp" f="1">
+ <n xy="540,1200" b="0,0,1080,2400"/>
+ <n s="1" xy="540,1200" b="0,200,1080,2200"/>
+</w>
+</hierarchy>
