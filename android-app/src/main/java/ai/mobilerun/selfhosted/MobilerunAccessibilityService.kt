@@ -38,15 +38,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "MobilerunA11y"
-        // Compact dumps — target ≪ 20KB so API Gateway WS stays healthy
-        private const val MAX_NODES = 140
-        private const val MAX_DEPTH = 16
-        private const val MAX_TREE_CHARS = 18_000
+        // Compact dumps — target ≪ 20KB; p95 tree build < 1.5s
+        private const val MAX_NODES = 90
+        private const val MAX_DEPTH = 10
+        private const val MAX_TREE_CHARS = 12_000
         // Soft budget for the main-looper walk itself (partial tree > empty)
-        private const val SOFT_DEADLINE_MS = 3_500L
+        private const val SOFT_DEADLINE_MS = 1_200L
         // Caller await: soft walk + main-looper scheduling + gzip slack
-        private const val HARD_AWAIT_MS = 5_000L
-        private const val CACHE_TTL_MS = 2_500L
+        private const val HARD_AWAIT_MS = 1_800L
+        // Serve unchanged content from cache aggressively
+        private const val CACHE_TTL_MS = 4_000L
+        // Keep a slightly older non-empty dump to avoid feeding empty trees after drops
+        private const val STALE_NONEMPTY_TTL_MS = 12_000L
 
         @Volatile
         var instance: MobilerunAccessibilityService? = null
@@ -82,18 +85,25 @@ class MobilerunAccessibilityService : AccessibilityService() {
     @Volatile private var cachedGeneration: Long = -1
     @Volatile private var cachedAtMs: Long = 0
     @Volatile private var cachedResult: TreeResult? = null
+    @Volatile private var lastNonEmptyResult: TreeResult? = null
+    @Volatile private var lastNonEmptyAtMs: Long = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         serviceInfo = serviceInfo?.apply {
+            // Skip INCLUDE_NOT_IMPORTANT_VIEWS — halves walk cost on Messages/OEM UIs
             flags = flags or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            // Content changes only — not TYPES_ALL_MASK (cheaper event delivery)
+            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_FOCUSED or
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 50
+            notificationTimeout = 100
         } ?: serviceInfo
         Log.d(TAG, "Accessibility service connected flags=${serviceInfo?.flags}")
     }
@@ -355,9 +365,32 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     return late.copy(cached = true, partial = true, buildMs = HARD_AWAIT_MS)
                 }
             }
-            return emptyTreeResult(reason = "dump_timeout", buildMs = HARD_AWAIT_MS)
+            return preferStaleNonEmpty(
+                emptyTreeResult(reason = "dump_timeout", buildMs = HARD_AWAIT_MS),
+            )
         }
-        return result.get() ?: emptyTreeResult(reason = "dump_null", buildMs = 0)
+        val got = result.get() ?: emptyTreeResult(reason = "dump_null", buildMs = 0)
+        return if (got.empty) preferStaleNonEmpty(got) else got
+    }
+
+    /** Never hand the cloud an empty tree when a recent non-empty dump exists. */
+    private fun preferStaleNonEmpty(fallback: TreeResult): TreeResult {
+        synchronized(cacheLock) {
+            val stale = lastNonEmptyResult
+            if (
+                stale != null &&
+                !stale.empty &&
+                SystemClock.elapsedRealtime() - lastNonEmptyAtMs < STALE_NONEMPTY_TTL_MS
+            ) {
+                Log.i(TAG, "serving stale non-empty tree chars=${stale.chars}")
+                return stale.copy(
+                    cached = true,
+                    partial = true,
+                    buildMs = fallback.buildMs,
+                )
+            }
+        }
+        return fallback
     }
 
     private fun emptyTreeResult(reason: String, buildMs: Long): TreeResult =
@@ -415,9 +448,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
             // Wait for the main walk; soft deadline lives inside dumpUITreeCompact.
             // Poll briefly after the first wait so a late non-empty result is not dropped.
-            if (!latch.await(SOFT_DEADLINE_MS + 900, TimeUnit.MILLISECONDS)) {
+            if (!latch.await(SOFT_DEADLINE_MS + 400, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "main dump still running after soft+slack; polling for late result")
-                val hardDeadline = t0 + HARD_AWAIT_MS - 200
+                val hardDeadline = t0 + HARD_AWAIT_MS - 100
                 while (walkRef.get() == null && SystemClock.elapsedRealtime() < hardDeadline) {
                     try {
                         Thread.sleep(40)
@@ -451,6 +484,10 @@ class MobilerunAccessibilityService : AccessibilityService() {
             cachedResult = result
             cachedGeneration = gen
             cachedAtMs = SystemClock.elapsedRealtime()
+            if (!result.empty && result.nodes > 0) {
+                lastNonEmptyResult = result
+                lastNonEmptyAtMs = SystemClock.elapsedRealtime()
+            }
         }
         Log.i(
             TAG,
@@ -458,7 +495,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 "bytes=${result.bytes} partial=${result.partial} gz=${gz?.length ?: 0} " +
                 "anr=${result.anrDismissed} empty=${result.empty}",
         )
-        return result
+        return if (result.empty) preferStaleNonEmpty(result) else result
     }
 
     private fun dumpUITreeCompact(deadlineMs: Long): TreeResult {
@@ -496,8 +533,10 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Enrich with other interactive windows when budget remains
-        if (!pastDeadline() && counter[0] < MAX_NODES) {
+        // Skip windows() enrichment by default — active root is enough for
+        // messaging flows and windows() binder cost dominates p95 on OEM/emu.
+        // Only scan other windows when the active dump was empty and budget remains.
+        if (counter[0] == 0 && !pastDeadline()) {
             val winList = try {
                 windows?.toList()
             } catch (e: Exception) {
@@ -514,7 +553,6 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 }
                 for (window in ordered) {
                     if (pastDeadline() || counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
-                    // Skip the active window we already dumped
                     if (window.isActive && windowCount > 0) continue
                     val root = try {
                         window.root
@@ -619,13 +657,15 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             true
         }
+        // Invisible subtrees are skipped entirely — biggest win for p95
+        if (!visible) return
+
         val interesting = node.isClickable || node.isEditable || node.isCheckable ||
             node.isLongClickable || node.isScrollable ||
             text.isNotEmpty() || contentDesc.isNotEmpty()
 
-        // Skip invisible / inert wrappers; still recurse into children
-        val emit = visible && interesting
-        if (!emit) {
+        // Skip inert wrappers; still recurse into visible children
+        if (!interesting) {
             val childCount = node.childCount
             for (i in 0 until childCount) {
                 if (counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break

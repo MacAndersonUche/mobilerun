@@ -24,6 +24,8 @@ import androidx.core.content.ContextCompat
 object PermissionStatus {
     data class Snapshot(
         val accessibility: Boolean,
+        val accessibilityBound: Boolean,
+        val accessibilityStuckBinding: Boolean,
         val notifications: Boolean,
         val mediaProjection: Boolean,
         val batteryOptimization: Boolean,
@@ -33,6 +35,8 @@ object PermissionStatus {
     ) {
         fun toMap(mediaGranted: Boolean = mediaProjection): Map<String, Any?> = mapOf(
             "accessibility" to accessibility,
+            "accessibility_bound" to accessibilityBound,
+            "accessibility_stuck_binding" to accessibilityStuckBinding,
             "notifications" to notifications,
             "media_projection" to mediaGranted,
             "battery_optimization" to batteryOptimization,
@@ -45,15 +49,19 @@ object PermissionStatus {
 
         /** Ready for automation tasks (live view is optional). */
         val readyForAgent: Boolean
-            get() = accessibility
+            get() = accessibility && accessibilityBound && !accessibilityStuckBinding
 
         val needsAutoGrant: Boolean
             get() = !notifications || !batteryOptimization
     }
 
     fun snapshot(context: Context, mediaProjectionGranted: Boolean = false): Snapshot {
+        val enabledInSettings = isAccessibilityEnabledInSettings(context)
+        val bound = isAccessibilityBound()
         return Snapshot(
-            accessibility = isAccessibilityEnabled(context),
+            accessibility = enabledInSettings || bound,
+            accessibilityBound = bound,
+            accessibilityStuckBinding = enabledInSettings && !bound,
             notifications = hasNotifications(context),
             mediaProjection = mediaProjectionGranted ||
                 context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
@@ -65,12 +73,43 @@ object PermissionStatus {
         )
     }
 
-    fun isAccessibilityEnabled(context: Context): Boolean {
+    fun isAccessibilityBound(): Boolean = MobilerunAccessibilityService.instance != null
+
+    fun isAccessibilityEnabledInSettings(context: Context): Boolean {
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
         val enabled = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         val pkg = context.packageName
         return enabled.any { it.resolveInfo?.serviceInfo?.packageName == pkg }
-            || MobilerunAccessibilityService.instance != null
+    }
+
+    fun isAccessibilityEnabled(context: Context): Boolean {
+        return isAccessibilityEnabledInSettings(context) || isAccessibilityBound()
+    }
+
+    /**
+     * Best-effort recover when Settings shows the service Enabled but it is stuck
+     * in Binding (instance == null). Requires WRITE_SECURE_SETTINGS (adb grant /
+     * device-owner). Falls back to opening Accessibility settings.
+     */
+    fun tryRecoverAccessibilityBinding(context: Context): Boolean {
+        if (isAccessibilityBound()) return true
+        val cn = ComponentName(context, MobilerunAccessibilityService::class.java)
+            .flattenToString()
+        return try {
+            val cr = context.contentResolver
+            // Toggle off then on to force a fresh bind
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "")
+            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+            Thread.sleep(250)
+            Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, cn)
+            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+            Thread.sleep(400)
+            isAccessibilityBound()
+        } catch (_: SecurityException) {
+            false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun hasNotifications(context: Context): Boolean {
