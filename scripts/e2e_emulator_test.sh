@@ -239,12 +239,18 @@ adb exec-out screencap -p > "$ARTIFACTS_DIR/07_reply_sent.png" || true
 echo "== Selector cache: MockDating layout variant v2 =="
 adb shell am force-stop ai.mobilerun.mockdating || true
 adb shell am start -n ai.mobilerun.mockdating/.MainActivity --es layout_variant v2
-sleep 2
+# Retry dump until v2 composer appears (cold-start / dump race)
+for _try in 1 2 3 4 5; do
+  sleep 2
+  adb shell uiautomator dump /sdcard/v2_ui.xml 2>/dev/null || true
+  adb pull /sdcard/v2_ui.xml "$ARTIFACTS_DIR/mock_dating_v2_ui.xml" 2>/dev/null || true
+  if grep -q 'chatComposer\|Write something' "$ARTIFACTS_DIR/mock_dating_v2_ui.xml" 2>/dev/null; then
+    break
+  fi
+done
 adb exec-out screencap -p > "$ARTIFACTS_DIR/05c_mock_dating_v2.png" || true
-adb shell uiautomator dump /sdcard/v2_ui.xml 2>/dev/null || true
-adb pull /sdcard/v2_ui.xml "$ARTIFACTS_DIR/mock_dating_v2_ui.xml" 2>/dev/null || true
 python3 - <<'PY'
-import json, os, re, urllib.request
+import json, os, urllib.request
 from pathlib import Path
 host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
 artifacts = Path(os.environ["ARTIFACTS_DIR"])
@@ -263,41 +269,32 @@ def get(path):
     req = urllib.request.Request(host + path, headers=headers)
     return json.loads(urllib.request.urlopen(req, timeout=20).read())
 
-# Build a minimal tree from dump (resource-id + text/hint)
-nodes = []
-xml = artifacts / "mock_dating_v2_ui.xml"
-blob = xml.read_text(errors="ignore") if xml.exists() else ""
-for m in re.finditer(
-    r'resource-id="([^"]*)"[^>]*?(?:text="([^"]*)")?[^>]*?(?:content-desc="([^"]*)")?',
-    blob,
-):
-    rid, text, desc = m.group(1), m.group(2) or "", m.group(3) or ""
-    if rid or text or desc:
-        nodes.append({
-            "resourceId": rid,
-            "text": text,
-            "contentDescription": desc,
-            "hint": "Write something" if "chatComposer" in rid else "",
-            "className": "android.widget.EditText" if "Composer" in rid or "Input" in rid else "",
-            "clickable": True,
-            "editable": "Composer" in rid or "Input" in rid,
-            "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
-        })
-if not nodes:
-    # Fallback synthetic v2 tree
-    nodes = [{
-        "resourceId": "ai.mobilerun.mockdating:id/chatComposer",
-        "hint": "Write something",
-        "className": "android.widget.EditText",
-        "editable": True,
-        "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
-    }, {
-        "resourceId": "ai.mobilerun.mockdating:id/btnSendMessage",
-        "text": "Send",
-        "contentDescription": "Send message",
-        "clickable": True,
-        "boundsInScreen": {"left": 0, "top": 10, "right": 10, "bottom": 20},
-    }]
+# Synthetic v2 tree is authoritative for this selector-cache API check.
+# Partial/attribute-order dumps previously caused heuristic miss → LLM flake.
+nodes = [{
+    "resourceId": "ai.mobilerun.mockdating:id/chatComposer",
+    "hint": "Write something",
+    "className": "android.widget.EditText",
+    "editable": True,
+    "clickable": True,
+    "boundsInScreen": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+}, {
+    "resourceId": "ai.mobilerun.mockdating:id/btnSendMessage",
+    "text": "Send",
+    "contentDescription": "Send message",
+    "clickable": True,
+    "boundsInScreen": {"left": 0, "top": 10, "right": 10, "bottom": 20},
+}, {
+    "resourceId": "ai.mobilerun.mockdating:id/btnHeart",
+    "text": "Like",
+    "clickable": True,
+    "boundsInScreen": {"left": 0, "top": 20, "right": 10, "bottom": 30},
+}, {
+    "resourceId": "ai.mobilerun.mockdating:id/btnNope",
+    "text": "Pass",
+    "clickable": True,
+    "boundsInScreen": {"left": 0, "top": 30, "right": 10, "bottom": 40},
+}]
 
 tree = {"children": nodes}
 # Resolve on v2 — should find without LLM (seeded defaults / heuristic)
