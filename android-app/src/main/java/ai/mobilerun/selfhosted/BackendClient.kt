@@ -1775,14 +1775,15 @@ class BackendClient(private val context: Context) {
             null,
             null,
             "secure_folder",
-            "Opened Secure Folder — confirm fingerprint if prompted",
+            "Opened Secure Folder — waiting for fingerprint unlock",
         )
         val a11y = MobilerunAccessibilityService.instance
         val t0 = SystemClock.elapsedRealtime()
         var needsFp = false
-        // Cap well under open_app RPC timeout (45s) so we still ACK
-        val deadline = t0 + 28_000L
+        // Wait long enough for Mac to place a finger; cloud open_app timeout is 90s.
+        val deadline = t0 + 75_000L
         var unlocked = false
+        var lastFpNudgeMs = 0L
         while (SystemClock.elapsedRealtime() < deadline) {
             Thread.sleep(900)
             val tree = try {
@@ -1797,9 +1798,20 @@ class BackendClient(private val context: Context) {
                 low.contains("confirm pattern") ||
                 low.contains("confirm pin") ||
                 low.contains("use biometrics") ||
-                low.contains("authenticate")
+                low.contains("authenticate") ||
+                low.contains("unlock") && low.contains("secure")
             ) {
                 needsFp = true
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastFpNudgeMs > 5_000L) {
+                    lastFpNudgeMs = now
+                    sendAgentEvent(
+                        null,
+                        null,
+                        "secure_folder_unlock",
+                        "Fingerprint prompt — unlock Secure Folder to continue ($app)",
+                    )
+                }
                 continue
             }
             // Folder home / app grid likely unlocked

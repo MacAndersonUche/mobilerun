@@ -1445,9 +1445,9 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             device_id,
             "open_app",
             {"app": app, "package": action.get("package")},
-            # Secure Folder / Samsung cold-start can exceed 20s
-            timeout_s=45,
-            wait_reconnect_s=60,
+            # Secure Folder fingerprint wait can take ~75s on device
+            timeout_s=90,
+            wait_reconnect_s=90,
         )
         pkg = ""
         if isinstance(raw, dict):
