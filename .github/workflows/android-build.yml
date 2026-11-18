@@ -147,9 +147,10 @@ jobs:
           retention-days: 90
 
   # Prerelease APK + QR for feature branches (after green build) — does not touch main/latest
+  # FROZEN on apk-preview-381 for Mac install — re-enable the `if` when unfrozen.
   publish-apk-prerelease:
     needs: android-build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/cursor/')
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: write

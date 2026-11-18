@@ -1423,10 +1423,19 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             action["_via"] = raw.get("via")
         return f"IME action {action_name}"
     if kind in ("ensure_ime", "switch_ime"):
-        raw = call_device(device_id, "ensure_ime", {}, timeout_s=15)
-        if isinstance(raw, dict):
-            action["_ime"] = raw
-        return "Ensured Mobilerun Keyboard"
+        try:
+            raw = call_device(device_id, "ensure_ime", {}, timeout_s=5)
+            if isinstance(raw, dict):
+                action["_ime"] = raw
+            selected = bool(isinstance(raw, dict) and raw.get("selected"))
+            return (
+                "Ensured Mobilerun Keyboard"
+                if selected
+                else "IME not selected — will use a11y SET_TEXT"
+            )
+        except Exception as e:
+            action["_ime"] = {"ok": False, "error": str(e), "fallback": "a11y"}
+            return f"IME ensure skipped ({e}) — a11y SET_TEXT fallback"
     if kind == "restore_ime":
         raw = call_device(device_id, "restore_ime", {}, timeout_s=15)
         if isinstance(raw, dict):
@@ -1592,33 +1601,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     except ImportError:
         from backend.dm_heuristics import detect_dm_app  # type: ignore
     if detect_dm_app(instruction) and not state.get("ime_ensured"):
+        # Do not hard-require ensure_ime. Old APKs ignore the command (timeout);
+        # phones without Mobilerun Keyboard selected still type via a11y SET_TEXT.
+        # Ultra-short probe only — never burn reconnect/idle on a missing IME.
         try:
-            # Short timeout: old APKs ignore ensure_ime and would burn the
-            # reconnect/idle budget if we wait longer.
-            ime_res = call_device(device_id, "ensure_ime", {}, timeout_s=8)
-            state["ime_ensured"] = True
+            ime_res = call_device(device_id, "ensure_ime", {}, timeout_s=3)
             state["ime_status"] = (
                 ime_res if isinstance(ime_res, dict) else {"raw": ime_res}
             )
-            history.append(
-                "ensure_ime "
-                + str(
-                    (ime_res or {}).get("selected")
-                    if isinstance(ime_res, dict)
-                    else ime_res
-                )
-            )
+            selected = bool(isinstance(ime_res, dict) and ime_res.get("selected"))
+            history.append(f"ensure_ime selected={selected}")
             state["history"] = history[-40:]
             state["last_progress_at"] = now
         except Exception as e:
-            logger.warning("ensure_ime failed (will use a11y SET_TEXT): %s", e)
-            state["ime_ensured"] = True  # don't retry every step
-            history.append(f"ensure_ime failed: {e}")
+            logger.warning("ensure_ime skipped (a11y SET_TEXT fallback): %s", e)
+            history.append(f"ensure_ime skipped: {e}")
             state["history"] = history[-40:]
-            # Soft-fail must count as progress so a missing IME on an old
-            # build does not trip the 240s idle watchdog before get_ui_tree.
             state["last_progress_at"] = now
             state["offline_streak"] = 0
+        state["ime_ensured"] = True  # never retry — typing falls back itself
     # Absolute wall-clock cap
     if now - created > TASK_TIMEOUT_S:
         job["status"] = "failed"

@@ -1291,9 +1291,13 @@ class BackendClient(private val context: Context) {
                         val text = params?.get("text") as? String ?: ""
                         val clear = params?.get("clear") as? Boolean ?: false
                         val humanize = params?.get("humanize") as? Boolean ?: true
-                        // Portal order: Mobilerun Keyboard IME first, then a11y SET_TEXT.
-                        // Prefer our own keyboard; fall back to a11y SET_TEXT.
-                        ai.mobilerun.selfhosted.input.ImeSessionController.ensureSelected(context)
+                        // Best-effort IME select (never blocks on picker). Prefer our
+                        // keyboard when already enabled; otherwise a11y SET_TEXT.
+                        try {
+                            ai.mobilerun.selfhosted.input.ImeSessionController.ensureSelected(context)
+                        } catch (e: Exception) {
+                            Log.w(tag, "ensureSelected before type: ${e.message}")
+                        }
                         val focus = ai.mobilerun.selfhosted.input.MobilerunKeyboardIME
                             .getInstance()?.focusedFieldInfo()
                             ?: a11yService?.focusedEditableMeta().orEmpty()
@@ -1306,13 +1310,13 @@ class BackendClient(private val context: Context) {
                             )
                         ) {
                             ai.mobilerun.selfhosted.input.AutomationInput.DONE -> "ime"
-                            ai.mobilerun.selfhosted.input.AutomationInput.STUCK ->
-                                throw Exception(
-                                    "input_text via IME accepted but unverified — " +
-                                        "enable Mobilerun Keyboard or focus the field",
-                                )
+                            ai.mobilerun.selfhosted.input.AutomationInput.STUCK,
                             ai.mobilerun.selfhosted.input.AutomationInput.FALLBACK -> {
-                                val ok = a11yService!!.inputText(text, clear, humanize)
+                                val svc = a11yService
+                                    ?: throw Exception(
+                                        "input_text needs accessibility when IME unavailable",
+                                    )
+                                val ok = svc.inputText(text, clear, humanize)
                                 if (!ok) {
                                     throw Exception("input_text failed — focus a text field")
                                 }
@@ -1333,13 +1337,23 @@ class BackendClient(private val context: Context) {
                         )
                     }
                     "ensure_ime", "switch_ime" -> {
-                        val r = ai.mobilerun.selfhosted.input.ImeSessionController
-                            .ensureSelected(context)
-                        if (r["needs_user"] == true) {
-                            PermissionStatus.openInputMethodSettings(context)
+                        // Always reply quickly — never open settings from the RPC
+                        // path (that waits on a human and looks like a command timeout).
+                        val r = try {
+                            ai.mobilerun.selfhosted.input.ImeSessionController
+                                .ensureSelected(context)
+                        } catch (e: Exception) {
+                            Log.w(tag, "ensure_ime: ${e.message}")
+                            mapOf(
+                                "ok" to false,
+                                "selected" to false,
+                                "needs_user" to true,
+                                "error" to (e.message ?: "ensure_ime failed"),
+                            )
                         }
                         sendAgentEvent(null, null, "ime", "ensure_ime selected=${r["selected"]}")
                         r + mapOf(
+                            "fallback" to "a11y_set_text",
                             "timing" to mapOf(
                                 "ack_ms" to (SystemClock.elapsedRealtime() - t0),
                             ),

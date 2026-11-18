@@ -69,8 +69,9 @@ class MobilerunKeyboardIME : InputMethodService() {
         }
 
         /**
-         * Portal order: try IME when selected+available, else FALLBACK to a11y.
-         * AcceptedUnverified / session-changed → STUCK (no a11y double-input).
+         * Portal order: try IME when selected+available, else FALLBACK to a11y SET_TEXT.
+         * Session-changed / unknown commit → FALLBACK (never leave the agent stuck
+         * waiting on a half-bound keyboard when a11y can still type).
          */
         fun tryAutomationInput(
             context: android.content.Context,
@@ -89,9 +90,9 @@ class MobilerunKeyboardIME : InputMethodService() {
             return when (result) {
                 TextInputResult.Verified,
                 TextInputResult.AcceptedUnverified -> AutomationInput.DONE
-                TextInputResult.Rejected -> AutomationInput.FALLBACK
+                TextInputResult.Rejected,
                 TextInputResult.CommitOutcomeUnknown,
-                TextInputResult.InputSessionChanged -> AutomationInput.STUCK
+                TextInputResult.InputSessionChanged -> AutomationInput.FALLBACK
             }
         }
     }

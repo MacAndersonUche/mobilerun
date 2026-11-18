@@ -4,7 +4,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
 import android.util.Log
-import android.view.inputmethod.InputMethodManager
 
 /**
  * Switch to Mobilerun Keyboard for a task, then restore the user's IME.
@@ -120,12 +119,8 @@ object ImeSessionController {
                 Settings.Secure.DEFAULT_INPUT_METHOD,
                 imeId,
             )
-            // Nudge IMM so the new IME binds sooner
-            try {
-                val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                imm?.showInputMethodPicker()
-            } catch (_: Exception) {
-            }
+            // Do NOT showInputMethodPicker() here — that blocks automation waiting
+            // for a human tap and can make ensure_ime / type look hung.
             true
         } catch (e: SecurityException) {
             Log.w(TAG, "set default IME needs WRITE_SECURE_SETTINGS: ${e.message}")

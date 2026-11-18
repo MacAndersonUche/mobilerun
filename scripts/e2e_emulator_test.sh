@@ -1111,13 +1111,31 @@ PROD_API="${PROD_API_URL:-https://68tgk4z5n6.execute-api.eu-west-2.amazonaws.com
 adb shell pm clear ai.mobilerun.selfhosted || true
 adb shell settings put secure enabled_accessibility_services "$A11Y" || true
 adb shell settings put secure accessibility_enabled 1 || true
-PROD_TOKEN=$(curl -sfS -X POST "$PROD_API/api/auth/login" \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-PROD_PAIR=$(curl -sfS -X POST "$PROD_API/api/auth/pair/create" \
-  -H "Authorization: Bearer ${PROD_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d '{"device_name":"emu-cloud-only","platform":"android"}')
+# Concurrent deploys can 503 for a while after /health — retry login + pair.
+PROD_TOKEN=""
+for i in $(seq 1 15); do
+  if PROD_TOKEN=$(curl -sfS --max-time 25 -X POST "$PROD_API/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"ci-e2e","password":"admin"}' \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])"); then
+    break
+  fi
+  echo "prod login attempt $i failed; sleeping..."
+  sleep $(( i < 5 ? 5 : 12 ))
+done
+test -n "$PROD_TOKEN"
+PROD_PAIR=""
+for i in $(seq 1 12); do
+  if PROD_PAIR=$(curl -sfS --max-time 25 -X POST "$PROD_API/api/auth/pair/create" \
+    -H "Authorization: Bearer ${PROD_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    -d '{"device_name":"emu-cloud-only","platform":"android"}'); then
+    break
+  fi
+  echo "prod pair create attempt $i failed; sleeping..."
+  sleep $(( i < 4 ? 5 : 10 ))
+done
+test -n "$PROD_PAIR"
 echo "$PROD_PAIR" | tee "$ARTIFACTS_DIR/prod_cloud_pair.json"
 PROD_CODE=$(echo "$PROD_PAIR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code') or d['token'])")
 # Code alone — same as typing in-app; baked DEFAULT_CLOUD_HTTP, zero LAN params
