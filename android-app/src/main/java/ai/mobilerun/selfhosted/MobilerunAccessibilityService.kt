@@ -42,9 +42,10 @@ class MobilerunAccessibilityService : AccessibilityService() {
         private const val MAX_NODES = 140
         private const val MAX_DEPTH = 16
         private const val MAX_TREE_CHARS = 18_000
-        private const val SOFT_DEADLINE_MS = 3_000L
-        // Must exceed soft deadline + main-looper scheduling slack in dumpAndCache
-        private const val HARD_AWAIT_MS = 4_200L
+        // Soft budget for the main-looper walk itself (partial tree > empty)
+        private const val SOFT_DEADLINE_MS = 3_500L
+        // Caller await: soft walk + main-looper scheduling + gzip slack
+        private const val HARD_AWAIT_MS = 5_000L
         private const val CACHE_TTL_MS = 2_500L
 
         @Volatile
@@ -412,11 +413,19 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     latch.countDown()
                 }
             }
-            // Soft walk + main-looper scheduling slack
-            if (!latch.await(SOFT_DEADLINE_MS + 800, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "main dump soft deadline exceeded (${SOFT_DEADLINE_MS}ms)")
-                val late = walkRef.get()
-                if (late == null) {
+            // Wait for the main walk; soft deadline lives inside dumpUITreeCompact.
+            // Poll briefly after the first wait so a late non-empty result is not dropped.
+            if (!latch.await(SOFT_DEADLINE_MS + 900, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "main dump still running after soft+slack; polling for late result")
+                val hardDeadline = t0 + HARD_AWAIT_MS - 200
+                while (walkRef.get() == null && SystemClock.elapsedRealtime() < hardDeadline) {
+                    try {
+                        Thread.sleep(40)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                }
+                if (walkRef.get() == null) {
                     return emptyTreeResult(
                         reason = "soft_deadline",
                         buildMs = SystemClock.elapsedRealtime() - t0,
