@@ -206,6 +206,15 @@ class MobilerunAccessibilityService : AccessibilityService() {
     fun dismissSystemAnrIfPresent(): Boolean {
         val root = rootInActiveWindow ?: return false
         try {
+            // Cheap package gate — full text walk only for System UI dialogs
+            val pkg = root.packageName?.toString().orEmpty()
+            if (pkg.isNotEmpty() &&
+                "systemui" !in pkg &&
+                "android" != pkg &&
+                !pkg.startsWith("com.android.systemui")
+            ) {
+                return false
+            }
             val blob = StringBuilder()
             collectTextSample(root, blob, 0, AtomicInteger(0))
             val low = blob.toString().lowercase()
