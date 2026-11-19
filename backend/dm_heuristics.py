@@ -260,14 +260,23 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "people_tab_xy": (540, 2197),  # People [432..648]
         "new_chat_labels": ("Chats", "Connections"),
         "search_labels": ("Search", "Search…"),
-        "search_ids": (),
-        "search_fallback": None,  # never coordinate-guess search
-        # Connections list
+        # Fake-chats emu ids; real Bumble Connections has no search field
+        "search_ids": (
+            "id/connections_search",
+            "id/connections_search_input",
+        ),
+        "search_fallback": None,  # never coordinate-guess search on real device
+        # Fake-chats Like/Pass buttons (real deck is swipe-only)
+        "like_ids": ("id/encounter_like", "id/gamepad_like"),
+        "pass_ids": ("id/encounter_pass", "id/gamepad_pass"),
+        # Connections list (real SM-G996B + fake-chats emu)
         "result_ids": (
             "com.bumble.app:id/connectionItem",
             "id/connectionItem",
             "com.bumble.app:id/connectionsItem_personName",
             "id/connectionsItem_personName",
+            "id/connection_row",
+            "id/connection_name",
         ),
         "result_exclude_ids": (
             "com.bumble.app:id/connections_stickyPromoContainer",
@@ -278,11 +287,14 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "header_ids": (
             "com.bumble.app:id/chatToolbar_title",
             "id/chatToolbar_title",
+            "id/chat_title",  # fake-chats
         ),
         "compose_labels": ("Aa", "Message", "Type a message", "Say something"),
         "compose_ids": (
             "com.bumble.app:id/chatInput_text",
             "id/chatInput_text",
+            "id/message_box",
+            ":id/message_box",
         ),
         "send_labels": ("Send",),
         # Send appears only after typing — match id containing "send"
@@ -291,8 +303,9 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "com.bumble.app:id/chatInput_send",
             "id/chatInput_send",
             "id/send_cta",
+            ":id/send_cta",
         ),
-        "send_fallback": None,  # never coordinate-guess Send
+        "send_fallback": None,  # never coordinate-guess Send on real device
         "compose_fallback": None,
         "prefer_tap_send": True,
         # NEVER tap these (undo / paid / AV)
