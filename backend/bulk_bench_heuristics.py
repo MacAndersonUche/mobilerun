@@ -23,9 +23,19 @@ try:
         _parse_compact_nodes,
         _tree_id_center,
         _tree_node_center,
+        badoo_like_action,
+        badoo_on_encounters,
+        badoo_pass_action,
+        bumble_like_swipe,
+        bumble_on_people_deck,
+        bumble_pass_swipe,
         detect_dm_app,
+        find_send_center_safe,
         focused_is_compose_not_search,
-        find_send_center,
+        yubo_deck_card_name,
+        yubo_like_swipe,
+        yubo_on_deck,
+        yubo_pass_swipe,
     )
 except ImportError:
     from backend.dm_heuristics import (  # type: ignore
@@ -34,10 +44,23 @@ except ImportError:
         _parse_compact_nodes,
         _tree_id_center,
         _tree_node_center,
+        badoo_like_action,
+        badoo_on_encounters,
+        badoo_pass_action,
+        bumble_like_swipe,
+        bumble_on_people_deck,
+        bumble_pass_swipe,
         detect_dm_app,
+        find_send_center_safe,
         focused_is_compose_not_search,
-        find_send_center,
+        yubo_deck_card_name,
+        yubo_like_swipe,
+        yubo_on_deck,
+        yubo_pass_swipe,
     )
+
+# Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
+_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo"})
 
 
 def _delay_band() -> tuple[float, float]:
@@ -52,10 +75,57 @@ def sample_human_delay(rng: random.Random) -> float:
     return rng.uniform(lo, hi)
 
 
+def _is_mixed_bulk_instruction(low: str) -> bool:
+    """True when swipe/bulk is mixed with chat/reply — leave to DM heuristics."""
+    has_swipe = (
+        bool(re.search(r"(?:auto[- ]?)?swipe|\bswipe\s+\d+|auto-swipe", low))
+        or "swipe 50" in low
+    )
+    has_bulk_msg = (
+        bool(
+            re.search(r"(?:auto[- ]?)?message\s+\d+\s+(?:matches|contacts|people)", low)
+        )
+        or "message 50" in low
+        or "auto-message" in low
+    )
+    chatish = any(
+        tok in low
+        for tok in (
+            "open chat",
+            "go to chat",
+            "open chats",
+            "then reply",
+            "and reply",
+            "reply to",
+            "then message",
+            "and message",
+            "send a message to",
+            "message to ",
+            "then send",
+            "open conversation",
+        )
+    )
+    if has_swipe and chatish:
+        return True
+    if has_swipe and has_bulk_msg:
+        return True
+    if has_bulk_msg and chatish and "matches" not in low and "contacts" not in low:
+        # e.g. "message 50 then open chat and reply" still mixed
+        if "then open" in low or "then reply" in low:
+            return True
+    return False
+
+
 def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
-    """Return {kind: swipe|message, count: int, message: str|None, app: str|None}."""
+    """Return {kind: swipe|message, count: int, message: str|None, app: str|None}.
+
+    Returns None for mixed goals (swipe + open chat/reply) so the single-DM
+    path can handle them instead of swallowing the whole instruction.
+    """
     text = (instruction or "").strip()
     low = text.lower()
+    if _is_mixed_bulk_instruction(low):
+        return None
     counts = bulk_counts()
     app = None
     try:
@@ -102,6 +172,126 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
             msg = "hi baby"
         return {"kind": "message", "count": n, "message": msg, "app": app}
     return None
+
+
+def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
+    """Top-card display name for swipe verification (real maps + fake-chats)."""
+    app = (app or "").lower()
+    if app == "yubo":
+        return yubo_deck_card_name(tree)
+    if app == "bumble":
+        for n in _parse_compact_nodes(tree):
+            text = (n.get("text") or "").strip()
+            if not text:
+                continue
+            # "Name, Age" near bottom of card
+            if re.search(r",\s*\d{2}\s*$", text) and int(n.get("y") or 0) > 1500:
+                return text.split(",")[0].strip()
+        for n in _parse_compact_nodes(tree):
+            desc = (n.get("desc") or "").strip()
+            m = re.match(r"(.+?)['\u2019]s main photo", desc, re.I)
+            if m:
+                return m.group(1).strip()
+        return None
+    if app == "badoo":
+        for n in _parse_compact_nodes(tree):
+            nid = str(n.get("id") or "").lower()
+            if "profileinfo_name" in nid:
+                text = (n.get("text") or n.get("label") or "").strip()
+                if text:
+                    return text.split(",")[0].strip()
+                desc = (n.get("desc") or "").strip()
+                m = re.match(r"(.+?),\s*\d+", desc)
+                if m:
+                    return m.group(1).strip()
+        return None
+    # Fake-chats / generic: ProfileNN or first mid-card title
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or n.get("desc") or "").strip()
+        if re.match(r"Profile\d+", text, re.I):
+            return text
+        if re.match(r"Match\d+", text, re.I) and int(n.get("y") or 0) < 1200:
+            return text
+    return None
+
+
+def _deck_visible(app: Optional[str], tree: str) -> bool:
+    if _exact_label_center(tree, "Like") or _exact_label_center(tree, "Pass"):
+        return True
+    if _tree_id_center(
+        tree, "id/gamepad_like", "gamepad_like", "id/btn_like", "encounter_like"
+    ):
+        return True
+    app = (app or "").lower()
+    if app == "bumble" and bumble_on_people_deck(tree):
+        return True
+    if app == "yubo" and yubo_on_deck(tree):
+        return True
+    if app == "badoo" and badoo_on_encounters(tree):
+        return True
+    if app and app in DM_APP_PROFILES:
+        ids = tuple(DM_APP_PROFILES[app].get("deck_ids") or ())
+        if ids and _tree_id_center(tree, *ids):
+            return True
+        like_ids = tuple(DM_APP_PROFILES[app].get("like_ids") or ())
+        if like_ids and _tree_id_center(tree, *like_ids):
+            return True
+    return False
+
+
+def _real_like_action(
+    app: str, planner: str = "bulk_swipe_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Per-app like from the S21 map — swipe or VoteYes; never nav-tab coords."""
+    if app == "bumble":
+        act = bumble_like_swipe(planner=planner)
+        act["reason"] = f"Bumble like swipe ({planner})"
+        return act
+    if app == "yubo":
+        act = yubo_like_swipe(planner=planner)
+        act["reason"] = f"Yubo like swipe ({planner})"
+        return act
+    if app == "badoo":
+        # Prefer VoteYes id when present; helper uses verified map xy
+        act = badoo_like_action(planner=planner)
+        act["reason"] = f"Badoo Like VoteYes ({planner})"
+        return act
+    return None
+
+
+def _real_pass_action(
+    app: str, planner: str = "bulk_swipe_heuristic"
+) -> Optional[Dict[str, Any]]:
+    if app == "bumble":
+        return bumble_pass_swipe(planner=planner)
+    if app == "yubo":
+        return yubo_pass_swipe(planner=planner)
+    if app == "badoo":
+        return badoo_pass_action(planner=planner)
+    return None
+
+
+def _fake_like_center(app: Optional[str], tree: str) -> Optional[tuple[int, int]]:
+    """Locate Like for fake-chats / button decks. No coordinate guess."""
+    like_ids: tuple = ()
+    if app and app in DM_APP_PROFILES:
+        like_ids = tuple(DM_APP_PROFILES[app].get("like_ids") or ())
+    located = _tree_id_center(tree, *like_ids) if like_ids else None
+    if located:
+        return located
+    # Also try common emu ids without the broken y>=2000 filter (Badoo Like
+    # sits at y=1982 on real devices; emu Like can be slightly above 2000).
+    located = _tree_id_center(
+        tree,
+        "id/gamepad_like",
+        "gamepad_like",
+        "id/btn_like",
+        "encounter_like",
+        "encounters_profile_voting_buttonVoteYes",
+    )
+    if located:
+        return located
+    return _exact_label_center(tree, "Like")
 
 
 def _dialog_center(tree: str, labels: Sequence[str]) -> Optional[tuple[int, int]]:
@@ -194,24 +384,30 @@ def plan_bulk_swipe(
     *,
     state: Optional[Dict[str, Any]] = None,
     package: str = "",
+    dry_run: bool = False,
 ) -> Optional[Dict[str, Any]]:
     goal = parse_bulk_goal(instruction)
     if not goal or goal["kind"] != "swipe":
         return None
     st = state if isinstance(state, dict) else {}
-    bulk = st.setdefault("bulk_swipe", {"done": 0, "target": goal["count"]})
+    bulk = st.setdefault(
+        "bulk_swipe",
+        {
+            "done": 0,
+            "target": goal["count"],
+            "last_name": None,
+            "awaiting_verify": False,
+        },
+    )
     target = int(bulk.get("target") or goal["count"])
     done = int(bulk.get("done") or 0)
     planner = "bulk_swipe_heuristic"
     hist = " | ".join(history[-12:]).lower()
+    app = (goal.get("app") or "") or ""
 
     # If deck controls are already on-screen, do not open_app (relaunches reset
     # cold start races and used to rewind the deck cursor).
-    deck_visible = bool(
-        _exact_label_center(ui_tree, "Like")
-        or _exact_label_center(ui_tree, "Pass")
-        or _tree_id_center(ui_tree, "id/gamepad_like", "gamepad_like", "id/btn_like")
-    )
+    deck_visible = _deck_visible(app, ui_tree)
     if not deck_visible:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
@@ -228,6 +424,9 @@ def plan_bulk_swipe(
             "out of likes",
             "get more likes",
             "see plans",
+            "unlock infinity",
+            "buy credits",
+            "enjoying bumble",
         )
     ):
         if "out of likes" in tl:
@@ -246,7 +445,14 @@ def plan_bulk_swipe(
                 },
                 "bulk_out_of_likes",
             )
-        for lab in ("Keep swiping", "Maybe later", "OK"):
+        for lab in (
+            "Keep swiping",
+            "Maybe later",
+            "OK",
+            "Close",
+            "YES",
+            "NOT INTERESTED",
+        ):
             c = _exact_label_center(ui_tree, lab) or _dialog_center(ui_tree, (lab,))
             if c:
                 return _fp(
@@ -261,18 +467,40 @@ def plan_bulk_swipe(
                     },
                     "bulk_dismiss_dialog",
                 )
-        # Dialog text visible but button coords missing — tap lower-center CTA
+        # Known upsell/paywall copy → BACK (never tap Buy / paid CTAs)
         return _fp(
             {
-                "action": "tap",
-                "x": 540,
-                "y": 1500,
-                "reason": f"Dismiss dialog fallback ({planner})",
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss interrupt sheet ({planner})",
                 "planner": planner,
                 "llm_provider": None,
             },
-            "bulk_dismiss_fallback",
+            "bulk_dismiss_back",
         )
+
+    # Verify previous like: only count when top-card name changed
+    if bulk.get("awaiting_verify"):
+        name_now = deck_card_name(app, ui_tree)
+        last = bulk.get("last_name")
+        if name_now and last and name_now != last:
+            bulk["done"] = done + 1
+            done = int(bulk["done"])
+            bulk["last_name"] = name_now
+            bulk["awaiting_verify"] = False
+            st["bulk_swipe"] = bulk
+        elif name_now and not last:
+            bulk["last_name"] = name_now
+            bulk["awaiting_verify"] = False
+            st["bulk_swipe"] = bulk
+        elif name_now and last and name_now == last:
+            # Same card still showing — do not increment; allow retry
+            bulk["awaiting_verify"] = False
+            st["bulk_swipe"] = bulk
+        else:
+            # Name unreadable — do not increment
+            bulk["awaiting_verify"] = False
+            st["bulk_swipe"] = bulk
 
     if done >= target:
         return _fp(
@@ -287,7 +515,7 @@ def plan_bulk_swipe(
             "bulk_swipe_done",
         )
 
-    # Do not count likes while FG is wrong / tree empty
+    # Do not act while FG is wrong
     want = ""
     if goal.get("app") and goal["app"] in DM_APP_PROFILES:
         want = str(DM_APP_PROFILES[goal["app"]].get("package") or "").lower()
@@ -296,21 +524,10 @@ def plan_bulk_swipe(
         if opened:
             return opened
 
-    # Fake-chats Like is the right gamepad control. On 1080x2400 emulators the
-    # row sits near y=2200 (above the 63px nav bar) — y=2100 misses entirely.
-    like = (950, 2200)
-    like_ids = ()
-    if goal.get("app") and goal["app"] in DM_APP_PROFILES:
-        like_ids = tuple(DM_APP_PROFILES[goal["app"]].get("like_ids") or ())
-    located = _tree_id_center(ui_tree, *like_ids) if like_ids else None
-    if located and located[0] >= 780 and located[1] >= 2000:
-        like = located
-    else:
-        exact = _exact_label_center(ui_tree, "Like")
-        if exact and exact[0] >= 780 and exact[1] >= 2000:
-            like = exact
-    if not deck_visible and not _exact_label_center(ui_tree, "Like"):
-        disc = _tree_node_center(ui_tree, "Discover", "Open Discover")
+    if not deck_visible:
+        disc = _tree_node_center(
+            ui_tree, "Discover", "Open Discover", "People", "Encounters"
+        )
         if disc and "open swipe deck" not in hist:
             return _fp(
                 {
@@ -324,13 +541,71 @@ def plan_bulk_swipe(
                 "bulk_open_deck",
             )
 
-    # Only advance the counter when we are actually on the target package
-    if not want or want in (package or "").lower():
-        bulk["done"] = done + 1
+    # dry_run: never like — stop before action (do not mutate the deck)
+    if dry_run:
+        return _fp(
+            {
+                "action": "done",
+                "reason": (
+                    f"dry_run — bulk like skipped at {done}/{target} "
+                    f"(no like/swipe) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": True,
+                "bulk_swipe_done": done,
+                "bulk_swipe_target": target,
+                "screenshot": True,
+            },
+            "bulk_dry_run_skip_like",
+        )
+
+    card_name = deck_card_name(app, ui_tree)
+    next_n = done + 1
+
+    # Real Bumble/Yubo/Badoo: mapped gestures / VoteYes — never (950,2200)
+    if app in _REAL_GESTURE_APPS:
+        act = _real_like_action(app, planner=planner)
+        if not act:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": f"No real-app like gesture for {app} ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_like_missing",
+            )
+        bulk["last_name"] = card_name
+        bulk["awaiting_verify"] = True
+        bulk["_bulk_swipe_inc"] = False  # only after name change
         st["bulk_swipe"] = bulk
-        next_n = done + 1
-    else:
-        next_n = done
+        act = dict(act)
+        act["reason"] = f"Like profile {next_n}/{target}: {act.get('reason')}"
+        act["delay_s"] = sample_human_delay(random.Random(f"like:{done}"))
+        act["_bulk_swipe_inc"] = False
+        step = "bulk_like_swipe" if act.get("action") == "swipe" else "bulk_like"
+        return _fp(act, step)
+
+    # Fake-chats / button decks: Like by id or exact label — never guessed coords
+    like = _fake_like_center(app, ui_tree)
+    if not like:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Like control not found in a11y tree — "
+                    f"refusing coord guess ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_like_not_found",
+        )
+
+    bulk["last_name"] = card_name
+    bulk["awaiting_verify"] = True
+    st["bulk_swipe"] = bulk
     return _fp(
         {
             "action": "tap",
@@ -340,7 +615,7 @@ def plan_bulk_swipe(
             "planner": planner,
             "llm_provider": None,
             "delay_s": sample_human_delay(random.Random(f"like:{done}")),
-            "_bulk_swipe_inc": bool(not want or want in (package or "").lower()),
+            "_bulk_swipe_inc": False,
         },
         "bulk_like",
     )
@@ -353,6 +628,7 @@ def plan_bulk_message(
     *,
     state: Optional[Dict[str, Any]] = None,
     package: str = "",
+    dry_run: bool = False,
 ) -> Optional[Dict[str, Any]]:
     goal = parse_bulk_goal(instruction)
     if not goal or goal["kind"] != "message":
@@ -427,8 +703,24 @@ def plan_bulk_message(
 
         # Type / send
         if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
-            # Focus compose — never search
-            c = _tree_node_center(ui_tree, *compose_labels) or (540, 2050)
+            # Focus compose — never search; never guessed coords
+            c = _tree_node_center(ui_tree, *compose_labels)
+            compose_ids = tuple(profile.get("compose_ids") or ())
+            if c is None and compose_ids:
+                c = _tree_id_center(ui_tree, *compose_ids)
+            if c is None:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Compose not found for {next_name} — "
+                            f"refusing coord guess ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_compose_not_found",
+                )
             return _fp(
                 {
                     "action": "tap",
@@ -455,11 +747,43 @@ def plan_bulk_message(
                 },
                 "bulk_type",
             )
-        send = find_send_center(
+        # dry_run: stop before send
+        if dry_run:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"dry_run — compose filled with '{message}' for "
+                        f"{next_name}; send skipped ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "screenshot": True,
+                    "bulk_message_done": done,
+                    "bulk_message_target": target,
+                },
+                "bulk_dry_run_skip_send",
+            )
+        send = find_send_center_safe(
             ui_tree,
             tuple(profile.get("send_labels") or ("Send",)),
             send_ids=tuple(profile.get("send_ids") or ()),
-        ) or (1000, 2050)
+            profile=profile,
+        )
+        if send is None:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Send control not found for {next_name} — "
+                        f"refusing coord guess ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_send_not_found",
+            )
         return _fp(
             {
                 "action": "tap",
@@ -592,6 +916,7 @@ def plan_bulk_bench(
     *,
     state: Optional[Dict[str, Any]] = None,
     package: str = "",
+    dry_run: bool = False,
 ) -> Optional[Dict[str, Any]]:
     sf = plan_secure_folder(instruction, ui_tree, history)
     if sf:
@@ -602,7 +927,11 @@ def plan_bulk_bench(
     if goal["kind"] == "swipe":
         # Only for swipe-capable apps when detected
         app = goal.get("app")
-        if app and app not in swipe_keys() and app not in ("facebook",):
+        if (
+            app
+            and app not in swipe_keys()
+            and app not in ("facebook", "bumble", "yubo", "badoo")
+        ):
             # messaging apps: no-op skip with done reason
             return _fp(
                 {
@@ -615,8 +944,18 @@ def plan_bulk_bench(
                 "bulk_swipe_skip",
             )
         return plan_bulk_swipe(
-            instruction, ui_tree, history, state=state, package=package
+            instruction,
+            ui_tree,
+            history,
+            state=state,
+            package=package,
+            dry_run=dry_run,
         )
     return plan_bulk_message(
-        instruction, ui_tree, history, state=state, package=package
+        instruction,
+        ui_tree,
+        history,
+        state=state,
+        package=package,
+        dry_run=dry_run,
     )
