@@ -1,4 +1,4 @@
-"""Load test-apps/fake-chats/catalog.json for matrix + heuristics.
+"""Load test-apps/fake-chats/catalog.json for matrix + heuristics (catalog soft-fail).
 
 On Lambda the catalog file is not packaged — return safe empty defaults so
 normal (non-bench) agent jobs never crash on import/plan.
@@ -73,3 +73,4 @@ def bulk_counts() -> Dict[str, int]:
         "swipe": int(b.get("swipe_count") or 50),
         "message": int(b.get("message_count") or 50),
     }
+
