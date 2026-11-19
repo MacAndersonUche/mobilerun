@@ -377,6 +377,90 @@ def _trivial_open_app_target(instruction: str) -> Optional[str]:
     return app
 
 
+_DRY_RUN_SEND_STEPS = frozenset(
+    {
+        "tap_send",
+        "bulk_send",
+        "ime_send",
+        "re_tap_send",
+        "retry_send",
+    }
+)
+
+
+def _action_looks_like_send(action: Dict[str, Any], kind: str = "") -> bool:
+    """True when the planned action would send a message.
+
+    Covers heuristic fastpaths (bulk_send / tap_send) and AI/vision taps that
+    only name a Send control via id/desc/label (no fastpath_step).
+    """
+    kind_l = (kind or str((action or {}).get("action") or "")).lower()
+    if kind_l in ("ime_send",):
+        return True
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    if fp in _DRY_RUN_SEND_STEPS or fp.endswith("_send") or fp == "send":
+        return True
+    # AI / unlabeled: element identity carries "send"
+    blobs: List[str] = []
+    for k in (
+        "label",
+        "text",
+        "element",
+        "target",
+        "desc",
+        "content_desc",
+        "contentDescription",
+        "resource_id",
+        "resourceId",
+        "id",
+        "view_id",
+        "viewId",
+    ):
+        v = (action or {}).get(k)
+        if v:
+            blobs.append(str(v).lower())
+    blob = " ".join(blobs)
+    if "send" in blob:
+        return True
+    # Reason semantics (AI often says "Tap Send" / "Send to …")
+    reason = str((action or {}).get("reason") or "").lower()
+    if re.search(r"\btap\s+send\b", reason):
+        return True
+    if reason.startswith("send ") or "send to " in reason or "send message" in reason:
+        return True
+    return False
+
+
+def apply_dry_run_send_guard(
+    *,
+    dry_run: bool,
+    action: Dict[str, Any],
+    kind: str,
+    reason: str,
+) -> tuple:
+    """If dry_run and action is a send, convert to done. Never mutates step counters.
+
+    Returns (kind, reason, action).
+    """
+    if not dry_run:
+        return kind, reason, action
+    if not _action_looks_like_send(action, kind):
+        return kind, reason, action
+    new_reason = f"dry_run — compose filled; send skipped ({reason})"
+    new_action = {
+        **action,
+        "action": "done",
+        "reason": new_reason,
+        "screenshot": True,
+        "dry_run": True,
+    }
+    return "done", new_reason, new_action
+
+
 def _history_shows_app_opened(hist_blob: str, app: str) -> bool:
     """True if prior steps already launched ``app`` successfully."""
     if not hist_blob:
@@ -2356,35 +2440,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 str(job.get("job_id") or ""), step + 1, image_b64
             )
 
-        # dry_run: never send — block by step type (not reason text).
-        # Bulk uses reason "Send to {name}" / fastpath bulk_send; DM uses tap_send.
-        if bool(job.get("dry_run") or state.get("dry_run")):
-            step = str(
-                action.get("fastpath_step") or action.get("_fastpath_step") or ""
-            ).lower()
-            send_steps = {
-                "tap_send",
-                "bulk_send",
-                "ime_send",
-                "re_tap_send",
-                "retry_send",
-            }
-            is_send = (
-                kind in ("ime_send",)
-                or step in send_steps
-                or step.endswith("_send")
-                or "send" == step
-            )
-            if is_send:
-                kind = "done"
-                reason = f"dry_run — compose filled; send skipped ({reason})"
-                action = {
-                    **action,
-                    "action": "done",
-                    "reason": reason,
-                    "screenshot": True,
-                    "dry_run": True,
-                }
+        # dry_run: never send. Use fp_step / element heuristics — NEVER reassign
+        # the int `step` counter (PR #54 regression: step+1 TypeError).
+        kind, reason, action = apply_dry_run_send_guard(
+            dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+            action=action if isinstance(action, dict) else {},
+            kind=kind,
+            reason=reason,
+        )
 
         if kind == "done":
             # Always capture a final screenshot for dry-run compose verification
