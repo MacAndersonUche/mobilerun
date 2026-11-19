@@ -301,14 +301,15 @@ jobs:
           echo "Login (ci-e2e) + device-code + QR pair create + APK download QR..."
           # Dedicated CI user so smoke devices never land on Mac/admin
           TOKEN=""
-          for i in $(seq 1 12); do
+          # Alias flips after CDK often 503 for 1–3 min — retry generously.
+          for i in $(seq 1 24); do
             if TOKEN=$(curl -sfS --max-time 25 -X POST "$API_URL/api/auth/login" \
               -H 'Content-Type: application/json' \
               -d '{"username":"ci-e2e","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])"); then
               break
             fi
             echo "login attempt $i failed; sleeping..."
-            sleep $(( i < 5 ? 5 : 12 ))
+            sleep $(( i < 8 ? 5 : 15 ))
           done
           test -n "$TOKEN"
           me_ok=0
