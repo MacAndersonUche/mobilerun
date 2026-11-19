@@ -1641,14 +1641,20 @@ class BackendClient(private val context: Context) {
                                 context,
                                 ai.mobilerun.selfhosted.input.MobilerunKeyboardIME::class.java,
                             ).flattenToShortString()
-                        val enabledMethods =
-                            android.provider.Settings.Secure.getString(
-                                context.contentResolver,
-                                android.provider.Settings.Secure.ENABLED_INPUT_METHODS,
-                            ).orEmpty()
+                        // targetSdk 34+ cannot read ENABLED_INPUT_METHODS — use IMM list
                         val imeEnabled =
-                            enabledMethods.split(':').any {
-                                it.equals(imeComponent, ignoreCase = true)
+                            try {
+                                val imm =
+                                    context.getSystemService(
+                                        android.content.Context.INPUT_METHOD_SERVICE,
+                                    ) as android.view.inputmethod.InputMethodManager
+                                imm.enabledInputMethodList.any {
+                                    it.id.equals(imeComponent, ignoreCase = true) ||
+                                        it.packageName == context.packageName
+                                }
+                            } catch (e: Exception) {
+                                Log.w(tag, "ime_enabled probe: ${e.message}")
+                                false
                             }
                         val imeSelected =
                             ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(context)
