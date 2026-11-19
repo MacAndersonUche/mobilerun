@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="10" partial="false" empty="false" mode="compact" packages="com.takimi.android">
+<w id="active" t="active" p="com.takimi.android" f="1">
+ <n t="Taimi" xy="540,400" b="200,360,880,440"/>
+ <n t="GOLD" xy="540,600" b="300,560,780,640"/>
+ <n t="Recurring billing. Cancel anytime." xy="540,900" b="80,860,1000,940"/>
+ <n t="£19.99 / week" xy="540,1100" b="200,1060,880,1140"/>
+ <n t="Continue" c="1" xy="540,1600" b="200,1540,880,1660"/>
+</w>
+</hierarchy>

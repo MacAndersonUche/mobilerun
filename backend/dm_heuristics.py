@@ -585,6 +585,59 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         ),
         "never_tap_ids": (),
     },
+    "taimi": {
+        # Real-device map: Mac SM-G996B 1080x2400. Package is takimi (not taimi).
+        # FLAG_SECURE → screenshots black; uiautomator dumps only (no vision).
+        "aliases": ("taimi",),
+        "package": "com.takimi.android",
+        "pkg_markers": ("takimi",),
+        "open_label": "Taimi",
+        "launch_activity": "com.takimi.android/.MainActivityDefault",
+        "open_settle_s": 5.0,
+        "family": "swipe",
+        "flag_secure": True,
+        # React Native: almost no ids — text/content-desc + bounds
+        "like_ids": (),
+        "pass_ids": (),
+        "inbox_labels": ("Chats", "Matches", "Messages"),
+        "inbox_tab_labels": ("Chats",),
+        "inbox_tab_xy": (972, 2200),  # Chats nav
+        "deck_tab_xy": (540, 2200),  # People
+        "likes_tab_xy": (756, 2200),
+        "new_chat_labels": ("Chats", "Matches", "Start chat"),
+        "search_labels": ("Search", "Search…"),
+        "search_ids": (),
+        "search_fallback": None,
+        "result_ids": (),
+        "header_ids": (),
+        "compose_labels": (
+            "Say something...",
+            "Say something…",
+            "Say something",
+            "Add an intro (optional)",
+            "Message",
+        ),
+        "compose_ids": (),
+        "send_labels": ("Send",),
+        "send_ids": (),
+        "send_fallback": None,
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        "prefer_clear_before_type": True,
+        "never_tap_labels": (
+            "Continue",  # GOLD paywall CTA
+            "Notify me",
+            "Never miss a message",
+            "Is your daily pick",
+            "Recurring billing",
+            "GOLD",
+        ),
+        "never_tap_ids": (),
+        # Verified action-row map centres (fallback when siblings not parsed)
+        "pass_xy": (320, 1948),
+        "instant_chat_xy": (541, 1948),  # PAID on Mac's account
+        "like_xy": (761, 1948),
+    },
     "hinge": {
         "aliases": ("hinge",),
         "package": "co.hinge.app",
@@ -2182,6 +2235,409 @@ def blk_outgoing_verified(tree: str, message: str) -> bool:
     return saw_msg and saw_sent
 
 
+# --- Taimi (com.takimi.android) SM-G996B — RN, FLAG_SECURE, no vision ---
+
+
+def taimi_is_paywall(tree: str) -> bool:
+    """GOLD / billing sheet — never Continue."""
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "recurring billing" in blob:
+        return True
+    if "gold" in blob and (
+        "continue" in blob or "cancel anytime" in blob or "£" in blob or "$" in blob
+    ):
+        return True
+    if "continue" in blob and ("gold" in blob or "£" in blob or "billing" in blob):
+        return True
+    return False
+
+
+def taimi_dismiss_paywall(
+    tree: str, planner: str = "taimi_heuristic"
+) -> Optional[Dict[str, Any]]:
+    if not taimi_is_paywall(tree):
+        return None
+    return _fp(
+        {
+            "action": "press_button",
+            "button": "back",
+            "reason": f"Dismiss Taimi GOLD paywall → BACK ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "taimi_paywall_back",
+    )
+
+
+def taimi_swipes_left(tree: str) -> Optional[int]:
+    """Parse '<N> left' daily swipe counter near top (~y124)."""
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or n.get("label") or "").strip()
+        m = re.search(r"^(\d+)\s+left$", text, re.I)
+        if not m:
+            continue
+        y = int(n.get("y") or 0)
+        if y > 400:
+            continue
+        return int(m.group(1))
+    return None
+
+
+def taimi_on_people_deck(tree: str) -> bool:
+    if taimi_is_paywall(tree):
+        return False
+    if taimi_swipes_left(tree) is not None:
+        return True
+    # Action row band + name band without Chats header
+    blob = " ".join(
+        (n.get("text") or n.get("desc") or "") for n in _parse_compact_nodes(tree)
+    ).lower()
+    if blob.startswith("chats") or "\nchats" in blob or re.search(r"\bchats\b", blob):
+        # May still be deck if People selected — require action row
+        pass
+    row = taimi_action_row_centers(tree)
+    if row and row.get("like"):
+        return True
+    return False
+
+
+def taimi_on_chats_list(tree: str) -> bool:
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join((n.get("text") or n.get("desc") or "") for n in nodes).lower()
+    has_header = any(
+        (n.get("text") or "").strip().lower() == "chats" and int(n.get("y") or 0) < 300
+        for n in nodes
+    )
+    has_matches_chip = any(
+        (n.get("text") or n.get("desc") or "").strip().lower() == "matches"
+        for n in nodes
+    )
+    has_tile = any(
+        "start chat" in (n.get("desc") or "").lower()
+        or "daily pick" in (n.get("desc") or "").lower()
+        for n in nodes
+    )
+    return bool(
+        has_header or (has_matches_chip and has_tile) or ("chats" in blob and has_tile)
+    )
+
+
+def taimi_on_thread(tree: str) -> bool:
+    has_edit = any(n.get("editable") for n in _parse_compact_nodes(tree))
+    if not has_edit:
+        return False
+    if taimi_is_paywall(tree):
+        return False
+    # Instant Chat sheet also has EditText — detect by title
+    blob = " ".join((n.get("text") or "") for n in _parse_compact_nodes(tree)).lower()
+    if "send instant chat" in blob:
+        return False
+    # Thread: Say something… composer, or Delivered history
+    return (
+        "say something" in blob
+        or "delivered" in blob
+        or bool(find_compose_center(tree, ("Say something...", "Say something"), ()))
+    )
+
+
+def taimi_is_curated_card(tree: str) -> bool:
+    blob = " ".join(
+        (n.get("text") or n.get("label") or "") for n in _parse_compact_nodes(tree)
+    ).lower()
+    return "curated for you" in blob
+
+
+def taimi_deck_card_name(tree: str) -> Optional[str]:
+    """Name = large text roughly y 1507–1665 (not labels / icebreakers)."""
+    skip = {
+        "curated for you",
+        "active today",
+        "people",
+        "likes",
+        "chats",
+        "profile",
+        "trending",
+        "left",
+    }
+    best: Optional[Tuple[int, str]] = None
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if not text or len(text) > 40:
+            continue
+        low = text.lower()
+        if low in skip or "left" in low:
+            continue
+        if low.startswith(",") or ", ," in low:
+            continue  # icebreaker chip
+        y = int(n.get("y") or 0)
+        y1 = int(n.get("y1") if n.get("y1") is not None else y)
+        if not (1450 <= y <= 1750 or 1450 <= y1 <= 1750):
+            continue
+        # Prefer shorter name-like tokens
+        if best is None or abs(y - 1580) < abs(best[0] - 1580):
+            best = (y, text.split(",")[0].strip())
+    return best[1] if best else None
+
+
+def taimi_action_row_centers(
+    tree: str,
+) -> Dict[str, Optional[Tuple[int, int]]]:
+    """Locate Skip / Instant Chat / Like as three equal-width siblings ~y1875–2022.
+
+    LEFT = Skip, CENTRE = Instant Chat (paid), RIGHT = Like.
+    """
+    candidates: List[Dict[str, Any]] = []
+    for n in _parse_compact_nodes(tree):
+        if not n.get("clickable"):
+            continue
+        y1 = n.get("y1")
+        y2 = n.get("y2")
+        x1 = n.get("x1")
+        x2 = n.get("x2")
+        if y1 is None or y2 is None or x1 is None or x2 is None:
+            y = int(n.get("y") or 0)
+            if not (1850 <= y <= 2050):
+                continue
+            # No bounds — use center xy only
+            candidates.append(n)
+            continue
+        if int(y2) < 1850 or int(y1) > 2050:
+            continue
+        # Skip tiny / full-width / top chrome
+        w = int(x2) - int(x1)
+        h = int(y2) - int(y1)
+        if w < 80 or w > 400 or h < 60 or h > 250:
+            continue
+        # Skip labeled nav / paid CTAs
+        lab = f"{n.get('text') or ''} {n.get('desc') or ''}".strip().lower()
+        if lab in ("people", "chats", "likes", "profile", "trending", "continue"):
+            continue
+        if int(y1) < 1800:
+            continue
+        candidates.append(n)
+    # Prefer three siblings with similar width/height
+    if len(candidates) >= 3:
+        candidates.sort(key=lambda n: int(n.get("x") or 0))
+        # Pick the tightest cluster of 3 by y proximity to 1948
+        scored: List[Tuple[float, List[Dict[str, Any]]]] = []
+        for i in range(len(candidates) - 2):
+            trio = candidates[i : i + 3]
+            ys = [int(t.get("y") or 0) for t in trio]
+            if max(ys) - min(ys) > 80:
+                continue
+            xs = [int(t.get("x") or 0) for t in trio]
+            if xs[0] >= xs[1] or xs[1] >= xs[2]:
+                continue
+            # Roughly equal spacing
+            d1, d2 = xs[1] - xs[0], xs[2] - xs[1]
+            if abs(d1 - d2) > 120:
+                continue
+            score = abs(sum(ys) / 3 - 1948) + abs(d1 - d2)
+            scored.append((score, trio))
+        if scored:
+            scored.sort(key=lambda x: x[0])
+            trio = scored[0][1]
+            return {
+                "skip": (int(trio[0]["x"]), int(trio[0]["y"])),
+                "instant_chat": (int(trio[1]["x"]), int(trio[1]["y"])),
+                "like": (int(trio[2]["x"]), int(trio[2]["y"])),
+            }
+    # Fallback: verified map centres when on deck
+    if taimi_swipes_left(tree) is not None or taimi_deck_card_name(tree):
+        p = DM_APP_PROFILES["taimi"]
+        return {
+            "skip": tuple(p["pass_xy"]),  # type: ignore[return-value]
+            "instant_chat": tuple(p["instant_chat_xy"]),  # type: ignore[return-value]
+            "like": tuple(p["like_xy"]),  # type: ignore[return-value]
+        }
+    return {"skip": None, "instant_chat": None, "like": None}
+
+
+def taimi_like_action(
+    tree: str, planner: str = "taimi_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Like = RIGHT action-row button. Curated cards → pass instead (GOLD)."""
+    if taimi_is_curated_card(tree):
+        return taimi_pass_action(tree, planner=planner)
+    row = taimi_action_row_centers(tree)
+    like = row.get("like")
+    if not like:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(like[0]),
+            "y": int(like[1]),
+            "reason": f"Taimi Like (right action) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "taimi_like",
+    )
+
+
+def taimi_pass_action(
+    tree: str, planner: str = "taimi_heuristic"
+) -> Optional[Dict[str, Any]]:
+    row = taimi_action_row_centers(tree)
+    skip = row.get("skip")
+    if not skip:
+        return None
+    reason = "Taimi Skip (left action)"
+    if taimi_is_curated_card(tree):
+        reason = "Taimi Skip curated card (Like → GOLD)"
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(skip[0]),
+            "y": int(skip[1]),
+            "reason": f"{reason} ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "taimi_pass",
+    )
+
+
+def taimi_find_chat_tile(tree: str, contact: str) -> Optional[Tuple[int, int]]:
+    """Chats grid: prefer '<Name>, , Start chat'; skip daily pick / locked."""
+    best: Optional[Tuple[float, int, int]] = None
+    for n in _parse_compact_nodes(tree):
+        desc = (n.get("desc") or "").strip()
+        text = (n.get("text") or "").strip()
+        blob = desc or text
+        if not blob:
+            continue
+        low = blob.lower()
+        if "daily pick" in low:
+            continue
+        if "notify me" in low or "never miss" in low:
+            continue
+        # Icebreaker / canned chips
+        if low.startswith("say ") or "say '" in low or 'say "' in low:
+            continue
+        score = _fuzzy_score(contact, blob.split(",")[0].strip())
+        if score < 0.55:
+            # Exact desc == name
+            if blob.strip().lower() != contact.lower():
+                continue
+            score = 0.9
+        bonus = 0.25 if "start chat" in low else 0.0
+        ranked = score + bonus
+        if best is None or ranked > best[0]:
+            best = (ranked, int(n["x"]), int(n["y"]))
+    if best is None:
+        return None
+    return (best[1], best[2])
+
+
+def taimi_send_relative_to_edittext(tree: str) -> Optional[Tuple[int, int]]:
+    """Send = clickable ViewGroup immediately right of the EditText composer."""
+    edit: Optional[Dict[str, Any]] = None
+    for n in _parse_compact_nodes(tree):
+        if not n.get("editable"):
+            continue
+        if edit is None or int(n.get("y") or 0) > int(edit.get("y") or 0):
+            edit = n
+    if not edit:
+        # Also try hint "Say something" / "Add an intro"
+        for n in _parse_compact_nodes(tree):
+            hint = f"{n.get('hint') or ''} {n.get('text') or ''}".lower()
+            if "say something" in hint or "add an intro" in hint:
+                edit = n
+                break
+    if not edit:
+        return None
+    # Labeled Send button (Instant Chat sheet)
+    send_btn = _tree_node_center(tree, "Send")
+    if send_btn and int(send_btn[1]) >= int(edit.get("y") or 0) - 80:
+        return send_btn
+    ex2 = edit.get("x2")
+    ey1 = edit.get("y1")
+    ey2 = edit.get("y2")
+    if ex2 is None or ey1 is None or ey2 is None:
+        # Approximate: right of edit center
+        return (min(1040, int(edit["x"]) + 400), int(edit["y"]))
+    best: Optional[Tuple[int, int, int]] = None
+    for n in _parse_compact_nodes(tree):
+        if n is edit or n.get("editable"):
+            continue
+        if not n.get("clickable"):
+            continue
+        t = str(n.get("text") or "").strip().lower()
+        d = str(n.get("desc") or "").strip().lower()
+        if any(
+            bad in f"{t} {d}"
+            for bad in ("continue", "gold", "notify", "boost", "premium")
+        ):
+            continue
+        x1 = n.get("x1")
+        y1 = n.get("y1")
+        x2 = n.get("x2")
+        y2 = n.get("y2")
+        if x1 is None or y1 is None or x2 is None or y2 is None:
+            # Fall back to center near edit
+            if (
+                int(n.get("x") or 0) > int(edit.get("x") or 0) + 100
+                and abs(int(n.get("y") or 0) - int(edit.get("y") or 0)) < 80
+            ):
+                dx = int(n["x"]) - int(edit["x"])
+                if best is None or dx < best[0]:
+                    best = (dx, int(n["x"]), int(n["y"]))
+            continue
+        if int(x1) < int(ex2) - 30:
+            continue
+        if int(y2) < int(ey1) - 50 or int(y1) > int(ey2) + 50:
+            continue
+        w, h = int(x2) - int(x1), int(y2) - int(y1)
+        if w > 220 or h > 220 or w < 24 or h < 24:
+            continue
+        dx = int(x1) - int(ex2)
+        if dx < 0:
+            continue
+        if best is None or dx < best[0]:
+            best = (dx, int(n["x"]), int(n["y"]))
+    if best is None:
+        return None
+    return (best[1], best[2])
+
+
+def taimi_outgoing_verified(tree: str, message: str) -> bool:
+    """Last bubble text == message followed by 'Delivered'."""
+    needle = (message or "").strip().lower()
+    if len(needle) < 2:
+        return False
+    nodes = [
+        n
+        for n in _parse_compact_nodes(tree)
+        if not n.get("editable") and (n.get("text") or "").strip()
+    ]
+    nodes.sort(key=lambda n: int(n.get("y") or 0))
+    for i, n in enumerate(nodes):
+        text = (n.get("text") or "").strip().lower()
+        if text != needle:
+            continue
+        if int(n.get("y") or 0) < 280:
+            continue
+        # Look ahead for Delivered within next few nodes / nearby y
+        for m in nodes[i + 1 : i + 6]:
+            mt = (m.get("text") or "").strip().lower()
+            if mt == "delivered":
+                return True
+            if abs(int(m.get("y") or 0) - int(n.get("y") or 0)) > 200:
+                break
+    # Also accept Delivered anywhere if exact message bubble present
+    saw_msg = any(
+        (n.get("text") or "").strip().lower() == needle and int(n.get("y") or 0) > 280
+        for n in nodes
+    )
+    saw_del = any((n.get("text") or "").strip().lower() == "delivered" for n in nodes)
+    return saw_msg and saw_del
+
+
 def _label_matches_compose(blob: str, compose_labels: Sequence[str]) -> bool:
     """Match compose hints without treating nav 'Messages' as a compose box."""
     b = (blob or "").strip().lower()
@@ -2830,6 +3286,62 @@ def heuristic_dm_send(
                     "blk_tap_match",
                 )
 
+    # --- Taimi real-device path (com.takimi.android; FLAG_SECURE; never GOLD) ---
+    if app_key == "taimi" and pkg_ok:
+        pay = taimi_dismiss_paywall(ui_tree, planner=planner)
+        if pay:
+            return pay
+        left = taimi_swipes_left(ui_tree)
+        if left == 0 and not chat_ok and not typed_message:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": f"Taimi daily swipes exhausted (0 left) ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "taimi_swipes_exhausted",
+            )
+        if (
+            not chat_ok
+            and not typed_message
+            and taimi_on_people_deck(ui_tree)
+            and not taimi_on_chats_list(ui_tree)
+            and not taimi_on_thread(ui_tree)
+        ):
+            tab = profile.get("inbox_tab_xy") or (972, 2200)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(tab[0]),
+                    "y": int(tab[1]),
+                    "reason": f"Open Chats from Taimi People ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "taimi_open_chats_tab",
+            )
+        if (
+            not chat_ok
+            and not typed_message
+            and not tapped_contact
+            and taimi_on_chats_list(ui_tree)
+        ):
+            # Prefer free Start chat tiles; skip daily pick
+            tile = taimi_find_chat_tile(ui_tree, contact)
+            if tile:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": tile[0],
+                        "y": tile[1],
+                        "reason": f"Tap Taimi chat/Start chat '{contact}' ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "taimi_tap_chat",
+                )
+
     # 0a) If the contact row is already on-screen (inbox / matches list), tap it
     # before any search field — dating decks often expose a Search affordance
     # that would otherwise steal the flow.
@@ -2876,6 +3388,7 @@ def heuristic_dm_send(
         and not (app_key == "badoo" and badoo_on_connections(ui_tree))
         and not (app_key == "hily" and hily_on_chats_list(ui_tree))
         and not (app_key == "blk" and blk_on_matches(ui_tree))
+        and not (app_key == "taimi" and taimi_on_chats_list(ui_tree))
     ):
         # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
         on_deck = (
@@ -2887,6 +3400,7 @@ def heuristic_dm_send(
             or (app_key == "badoo" and badoo_on_encounters(ui_tree))
             or (app_key == "hily" and hily_on_finder(ui_tree))
             or (app_key == "blk" and blk_on_deck(ui_tree))
+            or (app_key == "taimi" and taimi_on_people_deck(ui_tree))
         )
         if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
@@ -2903,7 +3417,7 @@ def heuristic_dm_send(
                     "open_inbox",
                 )
             # Dating apps with verified nav tab xy — never a random toolbar guess
-            if app_key in ("bumble", "yubo", "badoo", "hily", "blk"):
+            if app_key in ("bumble", "yubo", "badoo", "hily", "blk", "taimi"):
                 tab = profile.get("inbox_tab_xy")
                 if isinstance(tab, (tuple, list)) and len(tab) >= 2:
                     return _fp(
@@ -2945,6 +3459,7 @@ def heuristic_dm_send(
         and not (app_key == "badoo" and badoo_on_connections(ui_tree))
         and not (app_key == "hily" and hily_on_chats_list(ui_tree))
         and not (app_key == "blk" and blk_on_matches(ui_tree))
+        and not (app_key == "taimi" and taimi_on_chats_list(ui_tree))
     ):
         tab = _tree_node_center(
             ui_tree, "Chats", "Chat", "Matches", "Messages", "Inbox", "Connections"
@@ -3009,6 +3524,10 @@ def heuristic_dm_send(
             and (hily_on_chats_list(ui_tree) or hily_on_thread(ui_tree))
         )
         or (app_key == "blk" and (blk_on_matches(ui_tree) or blk_on_thread(ui_tree)))
+        or (
+            app_key == "taimi"
+            and (taimi_on_chats_list(ui_tree) or taimi_on_thread(ui_tree))
+        )
     )
     if not chat_ok and not typed_contact and not tapped_search and not skip_search:
         search_ids = tuple(profile.get("search_ids") or ())
@@ -3320,7 +3839,7 @@ def heuristic_dm_send(
 
     # 5) Type message — ONLY if chat verified AND target is compose (not search)
     if chat_ok and not typed_message:
-        # Hily: app once backgrounded — require FG package before typing
+        # Hily / Taimi: require FG package (takimi) before typing
         if app_key == "hily" and want_pkg and want_pkg not in pkg and not fg:
             return _fp(
                 {
@@ -3334,6 +3853,24 @@ def heuristic_dm_send(
                 },
                 "hily_refocus_before_type",
             )
+        if app_key == "taimi":
+            markers = tuple(profile.get("pkg_markers") or ("takimi",))
+            if not any(m and m.lower() in pkg for m in markers) and not fg:
+                return _fp(
+                    {
+                        "action": "open_app",
+                        "app": open_label,
+                        "reason": (
+                            f"Re-focus Taimi (takimi) before typing; "
+                            f"FG={package or '?'} ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "taimi_refocus_before_type",
+                )
+            if taimi_is_paywall(ui_tree):
+                return taimi_dismiss_paywall(ui_tree, planner=planner)
         # Locked composer → skip (never paid unlock)
         if app_key == "hily":
             for n in _parse_compact_nodes(ui_tree):
@@ -3432,6 +3969,8 @@ def heuristic_dm_send(
             c = hily_find_send_center(ui_tree)
         if c is None and app_key == "blk":
             c = blk_send_relative_to_edittext(ui_tree)
+        if c is None and app_key == "taimi":
+            c = taimi_send_relative_to_edittext(ui_tree)
         prefer_tap = bool(profile.get("prefer_tap_send"))
         if c:
             return _fp(
@@ -3501,6 +4040,8 @@ def heuristic_dm_send(
             outgoing_ok = hily_outgoing_verified(ui_tree, message)
         elif app_key == "blk":
             outgoing_ok = blk_outgoing_verified(ui_tree, message)
+        elif app_key == "taimi":
+            outgoing_ok = taimi_outgoing_verified(ui_tree, message)
         if pkg_ok and outgoing_ok:
             return _fp(
                 {
@@ -3557,6 +4098,8 @@ def heuristic_dm_send(
                 c = hily_find_send_center(ui_tree)
             if c is None and app_key == "blk":
                 c = blk_send_relative_to_edittext(ui_tree)
+            if c is None and app_key == "taimi":
+                c = taimi_send_relative_to_edittext(ui_tree)
             fb = profile.get("send_fallback")
             if c:
                 x, y = c
