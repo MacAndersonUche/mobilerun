@@ -46,7 +46,9 @@ permissions:
 
 concurrency:
   group: mobilerun-aws-deploy
-  cancel-in-progress: false
+  # Allow the newest main/branch deploy to preempt stale queued deploys
+  # (matrix jobs were starving the shared runner pool + this queue).
+  cancel-in-progress: true
 
 jobs:
   deploy:
