@@ -1,32 +1,9 @@
 name: Fake Chats Emulator Matrix
 
 on:
+  # Manual only until prod deploy queue is clear — auto PR/push matrix
+  # was saturating runners ahead of AWS deploy (idle-0 fix).
   workflow_dispatch:
-  push:
-    branches: [cursor/**]
-    paths:
-      - 'test-apps/fake-chats/**'
-      - 'scripts/fake_chats_emu_*.py'
-      - 'scripts/fake_chats_emu_e2e.sh'
-      - 'backend/dm_heuristics.py'
-      - 'backend/cloud_agent.py'
-      - 'backend/device_push.py'
-      - 'backend/device_rpc.py'
-      - 'backend/main.py'
-      - 'android-app/**'
-      - '.github/workflows/fake-chats-emu-matrix.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'test-apps/fake-chats/**'
-      - 'scripts/fake_chats_emu_*.py'
-      - 'scripts/fake_chats_emu_e2e.sh'
-      - 'backend/dm_heuristics.py'
-      - 'backend/device_push.py'
-      - 'backend/device_rpc.py'
-      - 'backend/main.py'
-      - 'android-app/**'
-      - '.github/workflows/fake-chats-emu-matrix.yml'
 
 jobs:
   fake-chats-matrix:
