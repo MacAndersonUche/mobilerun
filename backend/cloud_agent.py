@@ -672,6 +672,7 @@ def plan_next_action(
             history,
             state=agent_state if isinstance(agent_state, dict) else {},
             package=package,
+            dry_run=dry_run,
         )
         if bulk_act:
             return _guard(bulk_act)
@@ -2355,10 +2356,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 str(job.get("job_id") or ""), step + 1, image_b64
             )
 
-        # dry_run: never tap Send — stop once compose is filled
-        if bool(job.get("dry_run") or state.get("dry_run")) and kind == "tap":
-            low_r = (reason or "").lower()
-            if "tap send" in low_r or low_r.startswith("tap send"):
+        # dry_run: never send — block by step type (not reason text).
+        # Bulk uses reason "Send to {name}" / fastpath bulk_send; DM uses tap_send.
+        if bool(job.get("dry_run") or state.get("dry_run")):
+            step = str(
+                action.get("fastpath_step") or action.get("_fastpath_step") or ""
+            ).lower()
+            send_steps = {
+                "tap_send",
+                "bulk_send",
+                "ime_send",
+                "re_tap_send",
+                "retry_send",
+            }
+            is_send = (
+                kind in ("ime_send",)
+                or step in send_steps
+                or step.endswith("_send")
+                or "send" == step
+            )
+            if is_send:
                 kind = "done"
                 reason = f"dry_run — compose filled; send skipped ({reason})"
                 action = {
