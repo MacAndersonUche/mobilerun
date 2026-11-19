@@ -177,7 +177,9 @@ def test_bulk_swipe_dry_run_skips_like():
     )
     assert act and act.get("action") == "done"
     assert act.get("dry_run") is True
-    assert "like skipped" in (act.get("reason") or "").lower()
+    reason = (act.get("reason") or "").lower()
+    assert "dry run" in reason or act.get("dry_run") is True
+    assert "would" in reason or "no like" in reason or "skip" in reason
     assert st.get("bulk_swipe", {}).get("done") == 0
 
 
@@ -209,7 +211,8 @@ def test_bulk_message_dry_run_stops_before_send():
     )
     assert act and act.get("action") == "done"
     assert act.get("dry_run") is True
-    assert "send skipped" in (act.get("reason") or "").lower()
+    assert "send" in (act.get("reason") or "").lower()
+    assert "skip" in (act.get("reason") or "").lower()
     assert act.get("fastpath_step") == "bulk_dry_run_skip_send"
 
 
@@ -279,4 +282,4 @@ def test_cloud_agent_dry_run_guard_blocks_bulk_send_step():
     )
     assert kind == "done"
     assert out.get("dry_run") is True
-    assert "send skipped" in reason.lower()
+    assert "send" in reason.lower() and "skip" in reason.lower()

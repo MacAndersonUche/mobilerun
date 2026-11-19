@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional  # List used by update_job_fields sets
 
 USE_AWS = os.environ.get("USE_AWS_STORAGE", "false").lower() == "true"
 
@@ -152,6 +152,7 @@ def get_device_connections(device_id: str) -> List[Dict[str, Any]]:
 
 
 def put_job(job: Dict[str, Any]) -> None:
+    """Full replace — prefer update_job_fields / acquire_job_lease for workers."""
     table = _table("JOBS_TABLE")
     if table is None:
         # Local / unit-test fallback: keep an in-process map so tick/activity work
@@ -170,6 +171,205 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     resp = table.get_item(Key={"job_id": job_id}, ConsistentRead=True)
     item = resp.get("Item")
     return _from_dynamo(item) if item else None
+
+
+DEFAULT_JOB_LEASE_S = 45
+
+
+def acquire_job_lease(
+    job_id: str,
+    owner: str,
+    *,
+    ttl_s: int = DEFAULT_JOB_LEASE_S,
+    now: Optional[int] = None,
+) -> bool:
+    """Conditional lease: only one worker owns a running job.
+
+    Succeeds when status=='running' and (no lease, expired lease, or same owner).
+    Returns False if another live owner holds the lease or status is not running.
+    """
+    if not job_id or not owner:
+        return False
+    now = int(now if now is not None else time.time())
+    expiry = now + max(5, int(ttl_s))
+    table = _table("JOBS_TABLE")
+    if table is None:
+        store = globals().setdefault("_LOCAL_JOBS", {})
+        item = store.get(job_id)
+        if not item:
+            return False
+        if str(item.get("status") or "") != "running":
+            return False
+        cur_owner = str(item.get("lease_owner") or "")
+        cur_exp = int(item.get("lease_expires_at") or 0)
+        if cur_owner and cur_owner != owner and cur_exp > now:
+            return False
+        item = dict(item)
+        item["lease_owner"] = owner
+        item["lease_expires_at"] = expiry
+        item["updated_at"] = now
+        store[job_id] = item
+        return True
+    # DynamoDB conditional update
+    try:
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression=(
+                "SET lease_owner = :owner, lease_expires_at = :exp, updated_at = :now"
+            ),
+            ConditionExpression=(
+                "#s = :running AND ("
+                "attribute_not_exists(lease_owner) OR lease_owner = :owner "
+                "OR lease_expires_at <= :now OR attribute_not_exists(lease_expires_at)"
+                ")"
+            ),
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":owner": owner,
+                ":exp": expiry,
+                ":now": now,
+                ":running": "running",
+            },
+        )
+        return True
+    except Exception as e:
+        # ConditionalCheckFailedException → skip; other errors log + skip
+        name = type(e).__name__
+        if (
+            "ConditionalCheckFailed" not in name
+            and "ConditionalCheckFailed" not in str(e)
+        ):
+            import logging
+
+            logging.getLogger("mobilerun.storage").warning(
+                "acquire_job_lease failed job=%s: %s", job_id, e
+            )
+        return False
+
+
+def update_job_fields(
+    job_id: str,
+    fields: Dict[str, Any],
+    *,
+    owner: Optional[str] = None,
+    require_running: bool = True,
+    allow_terminal_status: bool = True,
+) -> bool:
+    """Targeted UpdateExpression — never full put_item.
+
+    When require_running=True, refuses to write if status is no longer 'running'
+    (so a cancel/stop cannot be overwritten by a stale worker). Terminal status
+    transitions (completed/failed/stopped) are allowed when allow_terminal_status
+    and the current status is still running.
+    """
+    if not job_id or not fields:
+        return False
+    now = int(time.time())
+    payload = {k: v for k, v in fields.items() if k != "job_id"}
+    payload["updated_at"] = now
+    new_status = payload.get("status")
+
+    table = _table("JOBS_TABLE")
+    if table is None:
+        store = globals().setdefault("_LOCAL_JOBS", {})
+        item = store.get(job_id)
+        if not item:
+            return False
+        cur_status = str(item.get("status") or "")
+        if require_running and cur_status != "running":
+            return False
+        if owner:
+            cur_owner = str(item.get("lease_owner") or "")
+            cur_exp = int(item.get("lease_expires_at") or 0)
+            if cur_owner and cur_owner != owner and cur_exp > now:
+                return False
+        if new_status and new_status != "running" and not allow_terminal_status:
+            payload = {k: v for k, v in payload.items() if k != "status"}
+        merged = dict(item)
+        for k, v in payload.items():
+            if k == "status" and cur_status != "running" and v == "running":
+                continue  # never revive a cancelled job
+            merged[k] = v
+        store[job_id] = merged
+        return True
+
+    # Build UpdateExpression
+    names: Dict[str, str] = {}
+    values: Dict[str, Any] = {":now": now}
+    sets: List[str] = ["updated_at = :now"]
+    for i, (k, v) in enumerate(payload.items()):
+        if k == "updated_at":
+            continue
+        nk = f"#k{i}"
+        vk = f":v{i}"
+        names[nk] = k
+        values[vk] = _dynamo_safe(v)
+        sets.append(f"{nk} = {vk}")
+    names["#s"] = "status"
+    values[":running"] = "running"
+    cond = "#s = :running"
+    if owner:
+        values[":owner"] = owner
+        cond += (
+            " AND (attribute_not_exists(lease_owner) OR lease_owner = :owner "
+            "OR lease_expires_at <= :now OR attribute_not_exists(lease_expires_at))"
+        )
+    try:
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression="SET " + ", ".join(sets),
+            ConditionExpression=cond,
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except Exception as e:
+        name = type(e).__name__
+        if (
+            "ConditionalCheckFailed" not in name
+            and "ConditionalCheckFailed" not in str(e)
+        ):
+            import logging
+
+            logging.getLogger("mobilerun.storage").warning(
+                "update_job_fields failed job=%s: %s", job_id, e
+            )
+        return False
+
+
+def save_job_progress(job: Dict[str, Any], owner: Optional[str] = None) -> bool:
+    """Persist worker progress without clobbering a cancelled/stopped status."""
+    job_id = str(job.get("job_id") or "")
+    if not job_id:
+        return False
+    # Only write mutable progress fields — never force status back to running
+    fields: Dict[str, Any] = {}
+    for k in (
+        "state",
+        "result",
+        "error",
+        "next_run_at",
+        "completed_at",
+        "lease_owner",
+        "lease_expires_at",
+        "dry_run",
+        "kind",
+        "device_id",
+        "instruction",
+        "max_steps",
+    ):
+        if k in job:
+            fields[k] = job[k]
+    status = job.get("status")
+    if status and status != "running":
+        fields["status"] = status
+    return update_job_fields(
+        job_id,
+        fields,
+        owner=owner,
+        require_running=True,
+        allow_terminal_status=True,
+    )
 
 
 def list_due_jobs(

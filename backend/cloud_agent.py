@@ -435,6 +435,87 @@ def _action_looks_like_send(action: Dict[str, Any], kind: str = "") -> bool:
     return False
 
 
+def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
+    """True for swipe gestures and like/pass/vote taps (dating deck mutations)."""
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k == "swipe":
+        return True
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    if any(
+        tok in fp
+        for tok in (
+            "like",
+            "pass",
+            "skip",
+            "swipe",
+            "vote",
+            "bulk_like",
+            "bulk_pass",
+        )
+    ):
+        return True
+    reason = str((action or {}).get("reason") or "").lower()
+    if any(
+        tok in reason
+        for tok in (
+            " like ",
+            "like (",
+            "like profile",
+            "pass (",
+            " skip ",
+            "swipe",
+            "vote yes",
+            "vote no",
+            "actionbutton_like",
+            "actionbutton_skip",
+        )
+    ):
+        return True
+    if reason.startswith("like ") or reason.startswith("pass "):
+        return True
+    return False
+
+
+def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
+    """True for paid / premium CTAs that must never fire in dry_run (or ever unpaid)."""
+    blobs: List[str] = []
+    for k in (
+        "label",
+        "text",
+        "desc",
+        "content_desc",
+        "reason",
+        "fastpath_step",
+        "_fastpath_step",
+    ):
+        v = (action or {}).get(k)
+        if v:
+            blobs.append(str(v).lower())
+    blob = " ".join(blobs)
+    paid_toks = (
+        "continue",  # GOLD Continue
+        "gold",
+        "premium",
+        "boost",
+        "super like",
+        "crush",
+        "spotlight",
+        "buy credits",
+        "subscribe",
+        "unlock infinity",
+        "blast",
+        "yubucks",
+        "instant chat",
+        "major crush",
+        "send a super like",
+    )
+    return any(t in blob for t in paid_toks)
+
+
 def apply_dry_run_send_guard(
     *,
     dry_run: bool,
@@ -442,15 +523,47 @@ def apply_dry_run_send_guard(
     kind: str,
     reason: str,
 ) -> tuple:
-    """If dry_run and action is a send, convert to done. Never mutates step counters.
+    """If dry_run, block send / swipe / like-pass / paid taps. Never mutates step counters.
+
+    Allowed to execute: open_app / launch and read-only waits. Everything else that
+    would mutate the dating deck or send a message becomes done with
+    ``[DRY RUN] would …`` logging.
 
     Returns (kind, reason, action).
     """
     if not dry_run:
         return kind, reason, action
-    if not _action_looks_like_send(action, kind):
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    # Always allow launch / open / wait / fail / done through
+    if k in ("open_app", "launch", "wait", "fail", "done", "press_button"):
+        # press_button back is OK for dismissing sheets; block Home spam? allow
+        if k == "press_button" and str((action or {}).get("button") or "").lower() in (
+            "home",
+            "recent",
+        ):
+            pass  # still allow for recovery
+        elif k != "press_button":
+            return kind, reason, action
+        else:
+            return kind, reason, action
+
+    blocked = False
+    would = ""
+    if _action_looks_like_send(action, kind) or k == "ime_send":
+        blocked = True
+        would = "send"
+    elif _action_looks_like_paid(action, kind):
+        blocked = True
+        would = "paid tap"
+    elif k == "swipe" or _action_looks_like_swipe_or_like(action, kind):
+        blocked = True
+        would = "swipe" if k == "swipe" else "like/pass tap"
+
+    if not blocked:
         return kind, reason, action
-    new_reason = f"dry_run — compose filled; send skipped ({reason})"
+
+    new_reason = f"[DRY RUN] would {would} — skipped ({reason})"
+    logger.info("%s", new_reason)
     new_action = {
         **action,
         "action": "done",
@@ -1911,7 +2024,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 job["next_run_at"] = int(time.time()) + 2
                 try:
-                    _kick_self(job.get("job_id"))
+                    _kick_self(job.get("job_id"), job=job)
                 except Exception:
                     pass
             return job
@@ -2016,7 +2129,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception as rebind_err:
                     logger.warning("rebind_a11y: %s", rebind_err)
                 job["next_run_at"] = int(time.time())
-                _kick_self(job.get("job_id"))
+                _kick_self(job.get("job_id"), job=job)
                 return job
             # Rotate distinct recoveries instead of hard-failing
             action = recovery_action(
@@ -2037,7 +2150,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     return job
                 job["result"] = "Waiting for a11y/WS reconnect (recovery)"
                 job["next_run_at"] = int(time.time()) + 2
-                _kick_self(job.get("job_id"))
+                _kick_self(job.get("job_id"), job=job)
                 return job
             # Fall through to execute recovery action below
             kind = str(action.get("action") or "").lower()
@@ -2200,7 +2313,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     job["state"] = state
                     job["result"] = str(action.get("reason") or "recovery")
                     job["next_run_at"] = int(time.time())
-                    _kick_self(job.get("job_id"))
+                    _kick_self(job.get("job_id"), job=job)
                     return job
                 logger.warning("planner failed → recovery: %s", plan_err)
             kind = str(action.get("action") or "").lower()
@@ -3015,7 +3128,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Due immediately — step worker self-kick / chain handles pacing
         job["next_run_at"] = int(time.time())
         job["updated_at"] = int(time.time())
-        _kick_self(job.get("job_id"))
+        _kick_self(job.get("job_id"), job=job)
         logger.info(
             "agent step done job=%s planner=%s wall_ms=%.0f delay_s=%.2f p50=%.0f p95=%.0f",
             job.get("job_id"),
@@ -3105,7 +3218,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["next_run_at"] = int(time.time()) + 5
                 job["error"] = msg
             job["updated_at"] = int(time.time())
-            _kick_self(job.get("job_id"))
+            _kick_self(job.get("job_id"), job=job)
         return job
 
 
@@ -3118,8 +3231,14 @@ def _step_worker_target() -> Optional[str]:
     )
 
 
-def _kick_self(job_id: Optional[str]) -> None:
+def _kick_self(job_id: Optional[str], job: Optional[Dict[str, Any]] = None) -> None:
+    """Async re-invoke step worker. Skipped while in-process chain suppresses kicks."""
     if not job_id:
+        return
+    # Prefer explicit job flag; fall back to thread-local via env for safety
+    if job is not None and job.get("_suppress_kick"):
+        return
+    if os.environ.get("MOBILERUN_SUPPRESS_KICK", "").lower() in ("1", "true", "yes"):
         return
     arn = _step_worker_target()
     if not arn or os.environ.get("USE_AWS_STORAGE", "").lower() != "true":

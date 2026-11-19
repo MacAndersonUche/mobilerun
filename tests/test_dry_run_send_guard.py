@@ -20,7 +20,7 @@ def test_bulk_send_step_blocked():
     )
     assert kind == "done"
     assert out.get("dry_run") is True
-    assert "send skipped" in reason.lower()
+    assert "send" in reason.lower() and "skip" in reason.lower()
 
 
 def test_ai_fallback_send_by_resource_id_blocked():
