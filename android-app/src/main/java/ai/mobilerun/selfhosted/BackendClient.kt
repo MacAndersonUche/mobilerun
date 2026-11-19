@@ -1636,6 +1636,22 @@ class BackendClient(private val context: Context) {
                         }
                     }
                     "get_device_info" -> {
+                        val imeComponent =
+                            android.content.ComponentName(
+                                context,
+                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME::class.java,
+                            ).flattenToShortString()
+                        val enabledMethods =
+                            android.provider.Settings.Secure.getString(
+                                context.contentResolver,
+                                android.provider.Settings.Secure.ENABLED_INPUT_METHODS,
+                            ).orEmpty()
+                        val imeEnabled =
+                            enabledMethods.split(':').any {
+                                it.equals(imeComponent, ignoreCase = true)
+                            }
+                        val imeSelected =
+                            ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(context)
                         mapOf(
                             "device_id" to deviceId,
                             "platform" to "android",
@@ -1644,15 +1660,16 @@ class BackendClient(private val context: Context) {
                             "latency_ms" to lastLatencyMs,
                             "active_package" to a11yService?.activePackageName(),
                             "a11y" to (a11yService != null),
+                            // Prefer snake_case; keep camelCase aliases for older probes
                             "version_code" to BuildConfig.VERSION_CODE,
                             "version_name" to BuildConfig.VERSION_NAME,
-                            "ime_component" to
-                                android.content.ComponentName(
-                                    context,
-                                    ai.mobilerun.selfhosted.input.MobilerunKeyboardIME::class.java,
-                                ).flattenToShortString(),
-                            "ime_selected" to
-                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(context),
+                            "versionCode" to BuildConfig.VERSION_CODE,
+                            "versionName" to BuildConfig.VERSION_NAME,
+                            "ime_component" to imeComponent,
+                            "ime_enabled" to imeEnabled,
+                            "ime_selected" to imeSelected,
+                            "imeEnabled" to imeEnabled,
+                            "imeSelected" to imeSelected,
                         )
                     }
                     else -> throw Exception("Unknown command: $command")
