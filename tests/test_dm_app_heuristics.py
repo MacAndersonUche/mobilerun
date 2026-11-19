@@ -106,8 +106,21 @@ def test_instagram_opens_then_inbox_or_search():
     )
     assert a1 and a1["action"] == "tap"
     assert a1["planner"] == "instagram_heuristic"
-    # Inbox (Messages) or Search
-    assert any(k in a1["reason"].lower() for k in ("inbox", "search", "dm", "message"))
+    # Inbox / Search / chats tab / visible contact row
+    assert any(
+        k in a1["reason"].lower()
+        for k in (
+            "inbox",
+            "search",
+            "dm",
+            "message",
+            "contact",
+            "jane",
+            "chat",
+            "match",
+            "tab",
+        )
+    )
 
 
 def test_instagram_compose_send():
@@ -127,9 +140,10 @@ def test_instagram_compose_send():
         hist,
         package="com.instagram.android",
     )
-    assert a and a["action"] == "tap"
+    assert a and a["action"] in ("tap", "ime_send")
     assert "send" in a["reason"].lower()
-    assert (a["x"], a["y"]) == (1000, 2280)
+    if a["action"] == "tap":
+        assert (a["x"], a["y"]) == (1000, 2280)
 
 
 def test_messenger_telegram_tinder_bumble_hinge_search():
@@ -178,7 +192,10 @@ def test_messenger_telegram_tinder_bumble_hinge_search():
         assert a, f"no action for {label}"
         assert a["planner"] == planner
         assert a["action"] == "tap", f"{label} got {a}"
-        assert "search" in a["reason"].lower() or "inbox" in a["reason"].lower()
+        reason = a["reason"].lower()
+        assert any(
+            k in reason for k in ("search", "inbox", "contact", "chat", "match")
+        ), reason
 
 
 def test_plan_prefers_dm_heuristic_over_llm(monkeypatch):

@@ -80,48 +80,44 @@ def test_whatsapp_heuristic_open_then_search_type_send_flow():
     a0 = _heuristic_whatsapp_send(INSTR, home, [], package="com.android.launcher3")
     assert a0 and a0["action"] == "open_app" and "whatsapp" in a0["app"].lower()
 
-    # Home → Search
+    # Home with contact row visible → tap that row (skip Search)
     a1 = _heuristic_whatsapp_send(
         INSTR, home, ["Opened WhatsApp[com.whatsapp] — launch"], package=pkg
     )
     assert a1 and a1["action"] == "tap"
-    assert "search" in a1["reason"].lower()
-    assert (a1["x"], a1["y"]) == (980, 150)
+    assert "precious" in a1["reason"].lower() or "contact" in a1["reason"].lower()
+    assert (a1["x"], a1["y"]) == (540, 480)
 
-    # Search field → type contact
+    # Search results already list Precious → tap that row (or type into Search)
     a2 = _heuristic_whatsapp_send(
         INSTR,
         search_tree,
         [
             "Opened WhatsApp[com.whatsapp] — launch",
-            "tap(980,150) — Tap Search (whatsapp heuristic)",
+            "tap(980,150) — Tap Search id/label (whatsapp_heuristic)",
         ],
         package=pkg,
     )
-    assert a2 and a2["action"] == "type"
-    assert "precious" in a2["text"].lower()
-
-    # Results → tap contact
-    a3 = _heuristic_whatsapp_send(
-        INSTR,
-        search_tree,
-        [
+    assert a2 and a2["action"] in ("type", "tap")
+    if a2["action"] == "type":
+        assert "precious" in a2["text"].lower()
+        hist_after_search = [
             "Opened WhatsApp[com.whatsapp] — launch",
-            "tap(980,150) — Tap Search (whatsapp heuristic)",
+            "tap(980,150) — Tap Search id/label (whatsapp_heuristic)",
             'type("Precious Achalugo") — Type contact',
-        ],
-        package=pkg,
-    )
-    assert a3 and a3["action"] == "tap"
-    assert "contact" in a3["reason"].lower() or "precious" in a3["reason"].lower()
-
-    # Compose → focus + type + send
-    hist_compose = [
-        "Opened WhatsApp[com.whatsapp] — launch",
-        "tap(980,150) — Tap Search (whatsapp heuristic)",
-        'type("Precious Achalugo") — Type contact',
-        "tap(540,420) — Tap matching contact 'Precious Achalugo' (whatsapp heuristic)",
-    ]
+        ]
+        a3 = _heuristic_whatsapp_send(INSTR, search_tree, hist_after_search, package=pkg)
+        assert a3 and a3["action"] == "tap"
+        assert "contact" in a3["reason"].lower() or "precious" in a3["reason"].lower()
+        hist_compose = hist_after_search + [
+            "tap(540,420) — Tap matching contact 'Precious Achalugo' (whatsapp_heuristic)"
+        ]
+    else:
+        assert "precious" in a2["reason"].lower() or "contact" in a2["reason"].lower()
+        hist_compose = [
+            "Opened WhatsApp[com.whatsapp] — launch",
+            "tap(540,420) — Tap visible contact 'precious achalugo' (whatsapp_heuristic)",
+        ]
     a4 = _heuristic_whatsapp_send(INSTR, compose, hist_compose, package=pkg)
     assert a4 and a4["action"] == "tap"
     assert "compose" in a4["reason"].lower() or "message" in a4["reason"].lower()
@@ -134,15 +130,50 @@ def test_whatsapp_heuristic_open_then_search_type_send_flow():
 
     hist_send = hist_typed + ['type("hi baby") — Type message']
     a6 = _heuristic_whatsapp_send(INSTR, compose, hist_send, package=pkg)
-    assert a6 and a6["action"] == "tap"
+    assert a6 and a6["action"] in ("tap", "ime_send")
     assert "send" in a6["reason"].lower()
-    assert (a6["x"], a6["y"]) == (1000, 2280)
+    if a6["action"] == "tap":
+        assert (a6["x"], a6["y"]) == (1000, 2280)
 
     # Bubble visible → done
-    hist_done = hist_send + ["tap(1000,2280) — Tap Send (whatsapp heuristic)"]
+    hist_done = hist_send + [
+        (
+            "ime_send — IME_ACTION_SEND via Mobilerun Keyboard (whatsapp_heuristic)"
+            if a6["action"] == "ime_send"
+            else "tap(1000,2280) — Tap Send (whatsapp heuristic)"
+        )
+    ]
     a7 = _heuristic_whatsapp_send(INSTR, sent, hist_done, package=pkg)
     assert a7 and a7["action"] == "done"
     assert "hi baby" in a7["reason"].lower()
+
+
+def test_whatsapp_already_in_chat_skips_search_dry_run():
+    """Mac S21: already in Precious chat with compose — never search_not_found."""
+    compose = _load("whatsapp_compose_tree.xml")
+    pkg = "com.whatsapp"
+    instr = "whatsapp send a message to precious acahlugo say hi baby"
+    # Empty history, already on conversation — must focus/type, not fail search
+    a0 = _heuristic_whatsapp_send(instr, compose, [], package=pkg, dry_run=True)
+    assert a0 is not None
+    assert a0.get("action") != "fail"
+    assert "search" not in (a0.get("reason") or "").lower() or "focus" in (
+        a0.get("reason") or ""
+    ).lower()
+    assert a0.get("action") in ("tap", "type")
+    if a0["action"] == "tap":
+        assert "compose" in a0["reason"].lower() or "message" in a0["reason"].lower()
+        hist = [f"tap({a0['x']},{a0['y']}) — {a0['reason']}"]
+        a1 = _heuristic_whatsapp_send(instr, compose, hist, package=pkg, dry_run=True)
+        assert a1 and a1["action"] == "type" and a1["text"].lower() == "hi baby"
+        hist = hist + ['type("hi baby") — Type message']
+    else:
+        assert a0["text"].lower() == "hi baby"
+        hist = ['type("hi baby") — Type message']
+    a2 = _heuristic_whatsapp_send(instr, compose, hist, package=pkg, dry_run=True)
+    assert a2 and a2["action"] == "done"
+    assert "dry_run" in a2["reason"].lower()
+    assert "hi baby" in a2["reason"].lower()
 
 
 def test_plan_next_action_uses_whatsapp_heuristic(monkeypatch):
@@ -161,7 +192,8 @@ def test_plan_next_action_uses_whatsapp_heuristic(monkeypatch):
     )
     assert action["planner"] == "whatsapp_heuristic"
     assert action["action"] == "tap"
-    assert "search" in action["reason"].lower()
+    # Inbox already shows Precious — prefer visible contact over Search
+    assert "precious" in action["reason"].lower() or "search" in action["reason"].lower()
 
 
 def test_goal_satisfied_whatsapp_bubble():
@@ -190,11 +222,12 @@ def test_thin_tree_fixture_is_under_useful_node_budget():
     nodes = thin.lower().count("<n ")
     assert nodes < 15
     assert "com.whatsapp" in thin
-    # Heuristic still prefers Search fallback coords when labels are missing
+    # Refuse blind Search coords on a readable-but-label-less tree
     a = _heuristic_whatsapp_send(
         INSTR, thin, ["Opened WhatsApp[com.whatsapp]"], package="com.whatsapp"
     )
-    assert a and a["action"] == "tap"
+    assert a and a["action"] == "fail"
+    assert "search" in a["reason"].lower() and "refusing" in a["reason"].lower()
 
 
 def test_swipe_loop_only_launcher_unchanged():

@@ -1079,7 +1079,8 @@ def heuristic_dm_send(
         tapped_search = False  # force Search re-locate below
 
     # 1) Search — prefer resource-id / label (deterministic). No blind coords.
-    if not typed_contact and not tapped_search:
+    # Skip entirely when already in the target chat (header + compose verified).
+    if not chat_ok and not typed_contact and not tapped_search:
         search_ids = tuple(profile.get("search_ids") or ())
         c = _tree_id_center(ui_tree, *search_ids) if search_ids else None
         if c is None:
@@ -1128,7 +1129,12 @@ def heuristic_dm_send(
 
     # 2) Type contact into search — never into the message compose box
     # Require an editable on screen (or a verified Search tap), not a failed fallback.
-    if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
+    # Skip when already in chat — compose EditText must not receive the contact name.
+    if (
+        not chat_ok
+        and (tapped_search or _tree_editable_center(ui_tree))
+        and not typed_contact
+    ):
         if focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
             # Compose has focus (leftover conversation) — leave chat, re-open search
             return _fp(
