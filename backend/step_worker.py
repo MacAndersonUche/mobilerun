@@ -46,8 +46,8 @@ def _to_plain(obj: Any) -> Any:
 
 
 def _dynamo_safe(obj: Any) -> Any:
-    """Convert floats to Decimal for DynamoDB."""
-    return json.loads(json.dumps(obj), parse_float=Decimal)
+    """Convert floats to Decimal for DynamoDB (plain first — obj may already have Decimals)."""
+    return json.loads(json.dumps(_to_plain(obj)), parse_float=Decimal)
 
 
 def _send_to_device(device_id: str, payload: Dict[str, Any]) -> bool:
@@ -68,7 +68,8 @@ def _send_to_device(device_id: str, payload: Dict[str, Any]) -> bool:
         cid = c["connection_id"]
         try:
             client.post_to_connection(
-                ConnectionId=cid, Data=json.dumps(payload).encode("utf-8")
+                ConnectionId=cid,
+                Data=json.dumps(_to_plain(payload)).encode("utf-8"),
             )
             ok = True
         except Exception as e:
