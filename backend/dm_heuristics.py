@@ -2865,16 +2865,66 @@ def detect_dm_app(instruction: str) -> Optional[str]:
     return ranked[0][1]
 
 
+def parse_existing_chats_instruction(instruction: str) -> Optional[Dict[str, Any]]:
+    """Parse 'message/reply \"body\" to N existing chat(s) on <app>'.
+
+    Returns {app, message, count} for the deterministic first-N chats path
+    (never invents a contact name for the AI planner).
+    """
+    text = (instruction or "").strip()
+    if not text:
+        return None
+    m = re.search(
+        r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
+        r"to\s+(\d+)\s+(?:existing\s+)?chats?\s*(?:on\s+(\w+))?",
+        text,
+        re.I,
+    )
+    if not m:
+        m = re.search(
+            r"(?:reply|message)\s+[\"']([^\"']+)[\"']\s+"
+            r"to\s+(\d+)\s+existing\s+chats?",
+            text,
+            re.I,
+        )
+    if not m:
+        return None
+    app_key = detect_dm_app(text)
+    if not app_key and m.lastindex and m.lastindex >= 3 and m.group(3):
+        token = m.group(3).strip().lower()
+        if token in DM_APP_PROFILES:
+            app_key = token
+    if not app_key:
+        return None
+    return {
+        "app": app_key,
+        "message": m.group(1).strip(),
+        "count": int(m.group(2)),
+        "existing_chats": True,
+    }
+
+
 def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
     """Extract {app, contact, message} from a DM send goal.
 
     Supports phrasings like:
       whatsapp find and message Precious Achalugo tell her hi baby
       go on whatsapp message X and say Y
+
+    Existing-chats bulk goals (\"message 'hi' to 1 existing chat on WhatsApp\")
+    return a structured first-N marker — never a fake contact name.
     """
     text = (instruction or "").strip()
     if not text:
         return None
+    existing = parse_existing_chats_instruction(text)
+    if existing:
+        return {
+            "app": str(existing["app"]),
+            "contact": f"__existing_{existing['count']}__",
+            "message": str(existing["message"]),
+            "existing_count": existing["count"],  # type: ignore[dict-item]
+        }
     app_key = detect_dm_app(text)
     if not app_key:
         return None
@@ -2964,11 +3014,30 @@ def heuristic_dm_send(
     *,
     goal_satisfied=None,
     dry_run: bool = False,
+    agent_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Generic DM fast-path. Returns an action dict or None."""
     parsed = parse_dm_instruction(instruction)
     if not parsed:
         return None
+    # First-N existing chats (WhatsApp / dating): deterministic bulk path —
+    # never hand a synthetic contact to the AI planner.
+    if parsed.get("existing_count") or str(parsed.get("contact") or "").startswith(
+        "__existing_"
+    ):
+        try:
+            from bulk_bench_heuristics import plan_bulk_message
+        except ImportError:
+            from backend.bulk_bench_heuristics import plan_bulk_message  # type: ignore
+
+        return plan_bulk_message(
+            instruction,
+            ui_tree,
+            history,
+            state=agent_state if isinstance(agent_state, dict) else {},
+            package=package,
+            dry_run=dry_run,
+        )
     app_key = parsed["app"]
     profile = DM_APP_PROFILES[app_key]
     contact = parsed["contact"]

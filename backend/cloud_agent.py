@@ -436,7 +436,12 @@ def _action_looks_like_send(action: Dict[str, Any], kind: str = "") -> bool:
 
 
 def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
-    """True for swipe gestures and like/pass/vote taps (dating deck mutations)."""
+    """True for swipe gestures and like/pass/vote taps (dating deck mutations).
+
+    Decide from action type / fastpath / target node only — NEVER from planner
+    reason text (every bulk step ends with ``(bulk_swipe_heuristic)``, which
+    previously false-blocked harmless nav taps like ``bulk_open_deck``).
+    """
     k = (kind or str((action or {}).get("action") or "")).lower()
     if k == "swipe":
         return True
@@ -445,37 +450,70 @@ def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
         or (action or {}).get("_fastpath_step")
         or ""
     ).lower()
+    # Nav / list opens are never deck mutations
     if any(
         tok in fp
         for tok in (
-            "like",
-            "pass",
-            "skip",
-            "swipe",
-            "vote",
+            "bulk_open_deck",
+            "bulk_open_matches",
+            "bulk_open_chats",
+            "open_chats",
+            "open_matches",
+            "open_inbox",
+            "hily_open_chats",
+            "blk_open_matches",
+            "taimi_open_chats",
+            "bulk_scroll",
+            "bulk_focus",
+            "bulk_type",
+            "bulk_open_match",
+        )
+    ):
+        return False
+    # Explicit mutation fastpaths (substring-safe: require like/pass tokens,
+    # never bare "swipe" which would hit planner names).
+    if any(
+        tok in fp
+        for tok in (
             "bulk_like",
             "bulk_pass",
+            "bulk_like_swipe",
+            "like_swipe",
+            "pass_swipe",
+            "bumble_like",
+            "bumble_pass",
+            "yubo_like",
+            "yubo_pass",
+            "hily_like",
+            "hily_pass",
+            "blk_like",
+            "taimi_like",
+            "taimi_pass",
+            "badoo_like",
+            "badoo_pass",
         )
     ):
         return True
-    reason = str((action or {}).get("reason") or "").lower()
+    # Target node label / text / content-desc only
+    blob = " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in ("label", "text", "desc", "content_desc", "contentDescription")
+    )
+    if not blob.strip():
+        return False
     if any(
-        tok in reason
+        tok in blob
         for tok in (
-            " like ",
-            "like (",
-            "like profile",
-            "pass (",
-            " skip ",
-            "swipe",
-            "vote yes",
-            "vote no",
             "actionbutton_like",
             "actionbutton_skip",
+            "vote yes",
+            "vote no",
+            " super like",
         )
     ):
         return True
-    if reason.startswith("like ") or reason.startswith("pass "):
+    # Exact-ish control labels (avoid matching "likely" etc.)
+    if re.search(r"\b(like|pass|skip)\b", blob):
         return True
     return False
 
@@ -515,37 +553,30 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
 
 
 def _is_chat_list_scroll_swipe(action: Dict[str, Any], kind: str) -> bool:
-    """True for non-mutating vertical scrolls in chat/match lists (allowed in dry_run)."""
+    """True for non-mutating vertical scrolls in a *verified* chat/match list.
+
+    Dry-run may execute these only after the chat list screen was proven
+    (``chat_list_verified`` on the action). Unverified scrolls stay blocked.
+    """
     k = (kind or str((action or {}).get("action") or "")).lower()
     if k != "swipe":
+        return False
+    if not (action.get("chat_list_verified") or action.get("_chat_list_verified")):
         return False
     fp = str(
         (action or {}).get("fastpath_step")
         or (action or {}).get("_fastpath_step")
         or ""
     ).lower()
-    reason = str((action or {}).get("reason") or "").lower()
     if any(t in fp for t in ("bulk_scroll", "scroll_list", "chat_list_scroll")):
-        return True
-    if any(
-        t in reason
-        for t in ("deck", "like", "pass", "vote", "swipe right", "swipe left")
-    ):
-        return False
-    if "scroll" in reason and any(
-        t in reason for t in ("list", "match", "chat", "inbox", "connection", "people")
-    ):
         return True
     try:
         x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
         x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
     except (TypeError, ValueError):
         return False
-    # Vertical list fling (large dy, small dx) with list-ish reason
-    if abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 200:
-        if any(t in reason for t in ("list", "match", "chat", "inbox", "more")):
-            return True
-    return False
+    # Vertical list fling (large dy, small dx)
+    return abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 200
 
 
 def apply_dry_run_send_guard(
@@ -928,13 +959,19 @@ def _goal_satisfied_from_tree(
 
 
 def _same_tap_key(action: Dict[str, Any]) -> Optional[str]:
+    """Stable key for repeated tap/swipe/scroll detection (no screen change → fail)."""
     kind = str(action.get("action") or "").lower()
-    if kind != "tap":
-        return None
     try:
-        return f"tap:{int(action['x'])},{int(action['y'])}"
+        if kind == "tap":
+            return f"tap:{int(action['x'])},{int(action['y'])}"
+        if kind == "swipe":
+            return (
+                f"swipe:{int(action.get('x1') or 0)},{int(action.get('y1') or 0)}"
+                f"->{int(action.get('x2') or 0)},{int(action.get('y2') or 0)}"
+            )
     except (KeyError, TypeError, ValueError):
         return None
+    return None
 
 
 def plan_next_action(
@@ -974,10 +1011,12 @@ def plan_next_action(
             "auto message",
             "existing chats",
             "existing matches",
+            "existing chat",
         )
     ) or bool(
         re.search(
-            r"(?:message|reply to)\s+\d+\s+(?:existing\s+)?(?:matches?|people|contacts?|chats?)",
+            r"(?:message|reply(?:\s+to)?)\s+(?:\d+|[\"'][^\"']+[\"'])\s+"
+            r"(?:to\s+\d+\s+)?(?:existing\s+)?(?:matches?|people|contacts?|chats?)",
             instr_l,
         )
     )
@@ -1048,7 +1087,12 @@ def plan_next_action(
 
     # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, Tinder, …)
     dm_heur = _heuristic_dm_send(
-        instruction, ui_tree, history, package, dry_run=dry_run
+        instruction,
+        ui_tree,
+        history,
+        package,
+        dry_run=dry_run,
+        agent_state=agent_state if isinstance(agent_state, dict) else None,
     )
     if dm_heur:
         return _guard(dm_heur)
@@ -1259,6 +1303,7 @@ def _heuristic_dm_send(
     package: str = "",
     *,
     dry_run: bool = False,
+    agent_state: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """DM fast-path for WhatsApp / Instagram / Messenger / Telegram / dating apps."""
     try:
@@ -1278,6 +1323,7 @@ def _heuristic_dm_send(
         package,
         goal_satisfied=_sat,
         dry_run=dry_run,
+        agent_state=agent_state,
     )
 
 
@@ -2593,10 +2639,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = f"App already open ({fg0 or trivial_target})"
                 action = {"action": "done", "reason": reason}
 
-        # Same tap + unchanged UI → refuse to re-tap; done/back instead
+        # Same tap/swipe/scroll + unchanged UI → fail after 2 identical actions
         pending_tap = _same_tap_key(action)
         if (
-            kind == "tap"
+            kind in ("tap", "swipe")
             and pending_tap
             and pending_tap == state.get("last_tap_key")
             and np_streak >= 1
@@ -2618,12 +2664,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
                 kind = "fail"
                 reason = (
-                    "same tap repeated with no screen change — aborting "
+                    "same action repeated with no screen change — aborting "
                     "(heuristic loop guard)"
                 )
                 action = {"action": "fail", "reason": reason}
                 logger.info(
-                    "no-progress: failing after repeated tap job=%s",
+                    "no-progress: failing after repeated %s job=%s",
+                    kind,
                     job.get("job_id"),
                 )
 
