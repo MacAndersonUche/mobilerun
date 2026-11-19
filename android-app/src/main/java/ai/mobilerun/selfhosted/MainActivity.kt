@@ -463,26 +463,32 @@ fun MainScreen(
                     val keyboardSelected = remember(snap) {
                         ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(activity)
                     }
-                    if (!keyboardSelected) {
-                        Text(
+                    // Always offer Enable keyboard — Samsung may hide us until
+                    // subtypes are present and the user toggles the IME on.
+                    Text(
+                        if (keyboardSelected) {
+                            "Mobilerun Keyboard is selected."
+                        } else {
                             "Required for reliable typing: enable Mobilerun Keyboard " +
-                                "(our controlled IME — search vs compose is then deterministic).",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Button(
-                            onClick = {
-                                val r = ai.mobilerun.selfhosted.input.ImeSessionController
-                                    .ensureSelected(activity)
-                                if (r["needs_user"] == true || r["selected"] != true) {
-                                    PermissionStatus.openInputMethodSettings(activity)
-                                }
-                                refreshPerms()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Enable Mobilerun Keyboard")
-                        }
+                                "in system settings, then pick it. Agents still fall " +
+                                "back to accessibility SET_TEXT if the IME is off."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = {
+                            // Best-effort silent enable (needs WRITE_SECURE_SETTINGS)
+                            ai.mobilerun.selfhosted.input.ImeSessionController
+                                .ensureSelected(activity)
+                            // Always open system IME settings, then show picker
+                            ai.mobilerun.selfhosted.input.ImeSettingsActivity
+                                .openSettingsThenPicker(activity)
+                            refreshPerms()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Enable keyboard")
                     }
                 }
 

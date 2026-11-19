@@ -1578,6 +1578,15 @@ class BackendClient(private val context: Context) {
                             "latency_ms" to lastLatencyMs,
                             "active_package" to a11yService?.activePackageName(),
                             "a11y" to (a11yService != null),
+                            "version_code" to BuildConfig.VERSION_CODE,
+                            "version_name" to BuildConfig.VERSION_NAME,
+                            "ime_component" to
+                                android.content.ComponentName(
+                                    context,
+                                    ai.mobilerun.selfhosted.input.MobilerunKeyboardIME::class.java,
+                                ).flattenToShortString(),
+                            "ime_selected" to
+                                ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(context),
                         )
                     }
                     else -> throw Exception("Unknown command: $command")

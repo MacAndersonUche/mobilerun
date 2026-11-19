@@ -6,4 +6,11 @@
     <string name="switch_keyboard">Switch</string>
     <string name="keyboard_switch_settings_help">Enable another keyboard, then switch to it.</string>
     <string name="keyboard_switch_unavailable">Could not open keyboard switching options.</string>
+    <string name="ime_subtype_en_gb">English (UK)</string>
+    <string name="ime_subtype_en_us">English (US)</string>
+    <string name="ime_settings_title">Mobilerun Keyboard</string>
+    <string name="ime_settings_body">Turn on Mobilerun Keyboard in system settings, then select it as the current keyboard. Agents still type via accessibility if the IME is off.</string>
+    <string name="ime_settings_open">Open keyboard settings</string>
+    <string name="ime_settings_picker">Show keyboard picker</string>
+    <string name="ime_enable_help">1) Enable “Mobilerun Keyboard”\n2) Return here and tap Show keyboard picker\n3) Choose Mobilerun Keyboard</string>
 </resources>

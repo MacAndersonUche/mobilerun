@@ -103,12 +103,15 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Portal-compatible keyboard IME (preferred text path when selected) -->
+        <!-- Portal-compatible keyboard IME (preferred text path when selected).
+             Must stay exported + BIND_INPUT_METHOD; empty method.xml without
+             <subtype> is hidden by Samsung One UI keyboard lists. -->
         <service
             android:name=".input.MobilerunKeyboardIME"
             android:label="@string/keyboard_name"
             android:permission="android.permission.BIND_INPUT_METHOD"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="false">
             <intent-filter>
                 <action android:name="android.view.InputMethod" />
             </intent-filter>
@@ -116,6 +119,13 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+
+        <!-- IME settingsActivity — required for Keyboard list visibility on Samsung -->
+        <activity
+            android:name=".input.ImeSettingsActivity"
+            android:exported="true"
+            android:label="@string/ime_settings_title"
+            android:theme="@style/Theme.MobilerunSelfHosted" />
 
         <!-- Keep WebSocket alive in background -->
         <service

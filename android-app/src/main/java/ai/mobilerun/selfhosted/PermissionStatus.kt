@@ -134,24 +134,14 @@ object PermissionStatus {
         }
     }
 
-    /** Deep-link to this app's AccessibilityService details when possible. */
+    /** Open system keyboard list (Settings.ACTION_INPUT_METHOD_SETTINGS). */
     fun openInputMethodSettings(context: Context) {
-        try {
-            context.startActivity(
-                Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
-        } catch (_: Exception) {
-            try {
-                context.startActivity(
-                    Intent(Settings.ACTION_SETTINGS).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    },
-                )
-            } catch (_: Exception) {
-            }
-        }
+        ai.mobilerun.selfhosted.input.ImeSettingsActivity.openInputMethodSettings(context)
+    }
+
+    /** Settings → then IME picker (for the in-app Enable keyboard button). */
+    fun openInputMethodSettingsThenPicker(context: Context) {
+        ai.mobilerun.selfhosted.input.ImeSettingsActivity.openSettingsThenPicker(context)
     }
 
     fun openAccessibilitySettings(context: Context) {
