@@ -215,7 +215,13 @@ def device_is_reachable(device_id: str) -> bool:
     except Exception:
         pass
 
-    # Local FastAPI (emulator e2e / self-hosted) keeps sockets in-process
+    # Local FastAPI (emulator e2e / self-hosted) keeps sockets in-process.
+    # Never import backend.main from the step-worker Lambda — that pulls the
+    # whole HTTP app into the worker and can crash agent ticks.
+    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME") and not os.environ.get(
+        "ALLOW_LOCAL_WS_FALLBACK"
+    ):
+        return False
     for mod_name in ("main", "backend.main"):
         try:
             import importlib

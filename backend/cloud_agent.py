@@ -1934,7 +1934,6 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     {},
                     timeout_s=8,
                     wait_reconnect_s=8,
-                    agent_state=state,
                 )
             except Exception:
                 try:
