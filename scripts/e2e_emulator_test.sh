@@ -135,7 +135,8 @@ connected = False
 allowed = ("lan", "discovered", "wifi", "cloud")
 # HTTP claim can register a device_id before the WS is live — do NOT break
 # early on bare device_id while route is still "pending"/disconnected.
-for _ in range(45):
+# CI flakes often need >45s for the emulator WS to flip off "pending".
+for _ in range(90):
     try:
         req = urllib.request.Request(host + "/api/devices")
         if token:
