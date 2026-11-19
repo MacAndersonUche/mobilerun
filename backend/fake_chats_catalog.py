@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
-logger = logging.getLogger("mobilerun.fake_chats_catalog")
+logger = logging.getLogger("mobilerun.fake_chats_catalog")  # deploy-queue-unstick
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CATALOG_PATH = _ROOT / "test-apps" / "fake-chats" / "catalog.json"
