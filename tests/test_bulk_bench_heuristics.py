@@ -261,7 +261,8 @@ def test_out_of_likes_stops():
 
 def test_cloud_agent_dry_run_guard_blocks_bulk_send_step():
     """Step-type guard must catch bulk_send even when reason is 'Send to …'."""
-    # Simulate the guard logic used in cloud_agent.run_agent_step
+    from backend.cloud_agent import apply_dry_run_send_guard
+
     action = {
         "action": "tap",
         "x": 1000,
@@ -270,20 +271,12 @@ def test_cloud_agent_dry_run_guard_blocks_bulk_send_step():
         "fastpath_step": "bulk_send",
         "_fastpath_step": "bulk_send",
     }
-    kind = action["action"]
-    reason = action["reason"]
-    dry_run = True
-    step = str(
-        action.get("fastpath_step") or action.get("_fastpath_step") or ""
-    ).lower()
-    send_steps = {"tap_send", "bulk_send", "ime_send", "re_tap_send", "retry_send"}
-    is_send = (
-        kind in ("ime_send",)
-        or step in send_steps
-        or step.endswith("_send")
-        or "send" == step
-    )
-    assert is_send
     # Old reason-only guard would miss this:
-    low_r = reason.lower()
+    low_r = action["reason"].lower()
     assert not ("tap send" in low_r or low_r.startswith("tap send"))
+    kind, reason, out = apply_dry_run_send_guard(
+        dry_run=True, action=action, kind="tap", reason=action["reason"]
+    )
+    assert kind == "done"
+    assert out.get("dry_run") is True
+    assert "send skipped" in reason.lower()
