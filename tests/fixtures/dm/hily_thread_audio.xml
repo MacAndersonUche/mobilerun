@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Evie" i="threadToolBarName" xy="400,148" b="200,100,700,196"/>
+ <n e="1" f="1" t="" h="Aa" i="threadInputFieldText" c="1" xy="480,2200" b="80,2140,880,2260"/>
+ <n i="threadSend" d="Audio message" c="1" xy="980,2200" b="920,2140,1040,2260"/>
+</w>
+</hierarchy>

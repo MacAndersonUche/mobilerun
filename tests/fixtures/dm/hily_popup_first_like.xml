@@ -1,0 +1,6 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="You gave your first like!" xy="540,900" b="100,800,980,1000"/>
+ <n t="Got it" c="1" xy="540,1600" b="300,1540,780,1660"/>
+</w>
+</hierarchy>

@@ -1,0 +1,13 @@
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="Your turn (2)" xy="300,300" b="80,260,520,340"/>
+ <n t="Maya" xy="300,450" b="180,410,480,490"/>
+ <n t="hey" xy="300,500" b="180,470,420,530"/>
+ <n t="Their turn (1)" xy="300,700" b="80,660,520,740"/>
+ <n t="Jordan" xy="300,850" b="180,810,480,890"/>
+ <n t="Hidden (1)" xy="300,1100" b="80,1060,520,1140"/>
+ <n t="HiddenPerson" xy="300,1250" b="180,1210,520,1290"/>
+ <n i="nav_swipe" d="Discover" c="1" xy="135,2170" b="50,2120,220,2220"/>
+ <n i="nav_connections" d="Matches" c="1" xy="675,2170" b="590,2120,760,2220"/>
+</w>
+</hierarchy>

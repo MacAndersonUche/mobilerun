@@ -26,12 +26,22 @@ try:
         badoo_like_action,
         badoo_on_encounters,
         badoo_pass_action,
+        blk_dismiss_popup,
+        blk_end_of_deck,
+        blk_like_action,
+        blk_on_deck,
+        blk_deck_card_name,
         bumble_like_swipe,
         bumble_on_people_deck,
         bumble_pass_swipe,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
+        hily_deck_card_name,
+        hily_dismiss_popup,
+        hily_like_action,
+        hily_on_finder,
+        hily_pass_action,
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_deck,
@@ -47,12 +57,22 @@ except ImportError:
         badoo_like_action,
         badoo_on_encounters,
         badoo_pass_action,
+        blk_dismiss_popup,
+        blk_end_of_deck,
+        blk_like_action,
+        blk_on_deck,
+        blk_deck_card_name,
         bumble_like_swipe,
         bumble_on_people_deck,
         bumble_pass_swipe,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
+        hily_deck_card_name,
+        hily_dismiss_popup,
+        hily_like_action,
+        hily_on_finder,
+        hily_pass_action,
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_deck,
@@ -60,7 +80,7 @@ except ImportError:
     )
 
 # Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
-_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo"})
+_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk"})
 
 
 def _delay_band() -> tuple[float, float]:
@@ -205,6 +225,10 @@ def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
                 if m:
                     return m.group(1).strip()
         return None
+    if app == "hily":
+        return hily_deck_card_name(tree)
+    if app == "blk":
+        return blk_deck_card_name(tree)
     # Fake-chats / generic: ProfileNN or first mid-card title
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or n.get("desc") or "").strip()
@@ -229,6 +253,10 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
         return True
     if app == "badoo" and badoo_on_encounters(tree):
         return True
+    if app == "hily" and hily_on_finder(tree):
+        return True
+    if app == "blk" and (blk_on_deck(tree) or blk_end_of_deck(tree)):
+        return True
     if app and app in DM_APP_PROFILES:
         ids = tuple(DM_APP_PROFILES[app].get("deck_ids") or ())
         if ids and _tree_id_center(tree, *ids):
@@ -240,9 +268,11 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
 
 
 def _real_like_action(
-    app: str, planner: str = "bulk_swipe_heuristic"
+    app: str,
+    tree: str = "",
+    planner: str = "bulk_swipe_heuristic",
 ) -> Optional[Dict[str, Any]]:
-    """Per-app like from the S21 map — swipe or VoteYes; never nav-tab coords."""
+    """Per-app like from the S21 map — swipe / button; never nav-tab coords."""
     if app == "bumble":
         act = bumble_like_swipe(planner=planner)
         act["reason"] = f"Bumble like swipe ({planner})"
@@ -256,11 +286,23 @@ def _real_like_action(
         act = badoo_like_action(planner=planner)
         act["reason"] = f"Badoo Like VoteYes ({planner})"
         return act
+    if app == "hily":
+        act = hily_like_action(tree, planner=planner)
+        if act:
+            act["reason"] = f"Hily Like button ({planner})"
+        return act
+    if app == "blk":
+        act = blk_like_action(tree, planner=planner)
+        if act:
+            act["reason"] = f"BLK Like Icon right/cyan ({planner})"
+        return act
     return None
 
 
 def _real_pass_action(
-    app: str, planner: str = "bulk_swipe_heuristic"
+    app: str,
+    tree: str = "",
+    planner: str = "bulk_swipe_heuristic",
 ) -> Optional[Dict[str, Any]]:
     if app == "bumble":
         return bumble_pass_swipe(planner=planner)
@@ -268,6 +310,8 @@ def _real_pass_action(
         return yubo_pass_swipe(planner=planner)
     if app == "badoo":
         return badoo_pass_action(planner=planner)
+    if app == "hily":
+        return hily_pass_action(tree, planner=planner)
     return None
 
 
@@ -413,6 +457,32 @@ def plan_bulk_swipe(
         if opened:
             return opened
 
+    # App-specific popups (Hily Got it / Maybe later; BLK Send Like anyway)
+    if app == "hily":
+        popup = hily_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+    if app == "blk":
+        if blk_end_of_deck(ui_tree):
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"BLK end of deck after {done}/{target} likes "
+                        f"— stop gracefully ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "bulk_swipe_done": done,
+                    "bulk_swipe_target": target,
+                    "stopped_reason": "end_of_deck",
+                },
+                "bulk_blk_deck_end",
+            )
+        popup = blk_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+
     # Interruptions first (match / upsell / out-of-likes)
     tl = (ui_tree or "").lower()
     if any(
@@ -427,6 +497,8 @@ def plan_bulk_swipe(
             "unlock infinity",
             "buy credits",
             "enjoying bumble",
+            "you gave your first like",
+            "send a super like",
         )
     ):
         if "out of likes" in tl:
@@ -448,6 +520,8 @@ def plan_bulk_swipe(
         for lab in (
             "Keep swiping",
             "Maybe later",
+            "Got it",
+            "Send Like anyway",
             "OK",
             "Close",
             "YES",
@@ -563,9 +637,9 @@ def plan_bulk_swipe(
     card_name = deck_card_name(app, ui_tree)
     next_n = done + 1
 
-    # Real Bumble/Yubo/Badoo: mapped gestures / VoteYes — never (950,2200)
+    # Real Bumble/Yubo/Badoo/Hily/BLK: mapped gestures / buttons — never (950,2200)
     if app in _REAL_GESTURE_APPS:
-        act = _real_like_action(app, planner=planner)
+        act = _real_like_action(app, tree=ui_tree, planner=planner)
         if not act:
             return _fp(
                 {
@@ -930,7 +1004,7 @@ def plan_bulk_bench(
         if (
             app
             and app not in swipe_keys()
-            and app not in ("facebook", "bumble", "yubo", "badoo")
+            and app not in ("facebook", "bumble", "yubo", "badoo", "hily", "blk")
         ):
             # messaging apps: no-op skip with done reason
             return _fp(

@@ -1,0 +1,11 @@
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n i="dialogsSearchButton" d="Search" c="1" xy="980,160" b="920,100,1040,220"/>
+ <n i="dialogMessageItem" c="1" xy="540,700" b="40,620,1040,780"/>
+ <n t="Evie" i="userNameField" xy="300,680" b="180,640,480,720"/>
+ <n t="hey there" i="messageField" xy="300,740" b="180,710,500,770"/>
+ <n t="They liked you!" i="dialogTag_liked" c="1" xy="800,680" b="700,640,980,720"/>
+ <n i="bottomNavTab_1" d="Finder" c="1" xy="142,2190" b="60,2140,220,2240"/>
+ <n i="bottomNavTab_2" d="Chats" c="1" xy="341,2190" b="260,2140,420,2240"/>
+</w>
+</hierarchy>

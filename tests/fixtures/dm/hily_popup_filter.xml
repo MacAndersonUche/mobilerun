@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Filter your chats" xy="540,400" b="100,360,980,440"/>
+ <n t="Got it" c="1" xy="900,400" b="820,360,980,440"/>
+ <n i="dialogsSearchButton" d="Search" c="1" xy="980,160" b="920,100,1040,220"/>
+</w>
+</hierarchy>

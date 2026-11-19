@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Message Before Match" i="userInfoBlockTitle" xy="540,400" b="100,360,980,440"/>
+ <n t="Say hi to Evie before you match" i="userInfoBlockDescription" xy="540,500" b="100,460,980,540"/>
+ <n d="button  0" i="allowanceCounter" xy="900,200" b="840,160,960,240"/>
+ <n e="1" f="1" t="" h="Aa" i="textInput" c="1" xy="480,2100" b="80,2040,880,2160"/>
+ <n i="sendMessageButton" d="Send" c="1" xy="980,2100" b="920,2040,1040,2160"/>
+</w>
+</hierarchy>

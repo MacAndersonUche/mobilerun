@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="Send a Super Like instead?" xy="540,900" b="100,820,980,980"/>
+ <n t="Send a Super Like" c="1" xy="540,1400" b="200,1340,880,1460"/>
+ <n t="Send Like anyway" c="1" xy="540,1550" b="200,1490,880,1610"/>
+</w>
+</hierarchy>
