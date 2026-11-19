@@ -22,15 +22,30 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "open_label": "WhatsApp",
         "inbox_labels": ("Chats", "New chat"),
         "new_chat_labels": ("New chat", "New Chat"),
-        "search_labels": ("Search", "search", "Search…", "Search..."),
+        "search_labels": (
+            "Search",
+            "search",
+            "Search…",
+            "Search...",
+            "Ask Meta AI or Search",
+            "Ask Meta AI or search",
+            "Ask Meta AI",
+            "Meta AI or Search",
+        ),
         "search_ids": (
             "com.whatsapp:id/menuitem_search",
             "com.whatsapp:id/search_src_text",
             "com.whatsapp:id/search_input",
+            "com.whatsapp:id/search_bar",
+            "com.whatsapp:id/home_search",
+            "com.whatsapp:id/search",
             "id/menuitem_search",
             "id/search_src_text",
+            "id/search_input",
+            "id/search_bar",
         ),
-        "search_fallback": (980, 160),
+        # Never use blind coords when the tree is readable — prefer fail/replan.
+        "search_fallback": None,
         "result_ids": (
             "com.whatsapp:id/contact_row_container",
             "com.whatsapp:id/conversations_row_contact_name",
@@ -451,8 +466,27 @@ def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _token_near(a: str, b: str) -> bool:
+    """True when tokens match or are a 1-edit typo (acahlugo≈achalugo)."""
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    if abs(len(a) - len(b)) > 2:
+        return False
+    # cheap Levenshtein early-exit for short name tokens
+    if len(a) < 4 or len(b) < 4:
+        return False
+    try:
+        from difflib import SequenceMatcher
+
+        return SequenceMatcher(None, a, b).ratio() >= 0.82
+    except Exception:
+        return False
+
+
 def _fuzzy_score(needle: str, hay: str) -> float:
-    """Simple token-overlap fuzzy score in [0, 1]."""
+    """Token-overlap fuzzy score in [0, 1] with 1-edit typo tolerance."""
     n = re.sub(r"\s+", " ", (needle or "").strip().lower())
     h = re.sub(r"\s+", " ", (hay or "").strip().lower())
     if not n or not h:
@@ -462,10 +496,13 @@ def _fuzzy_score(needle: str, hay: str) -> float:
     if n in h or h in n:
         return 0.92
     nt = [t for t in re.split(r"[^\w]+", n) if t]
-    ht = set(t for t in re.split(r"[^\w]+", h) if t)
+    ht = [t for t in re.split(r"[^\w]+", h) if t]
     if not nt:
         return 0.0
-    hit = sum(1 for t in nt if t in ht)
+    hit = 0
+    for t in nt:
+        if any(_token_near(t, u) for u in ht):
+            hit += 1
     return hit / len(nt)
 
 
@@ -708,6 +745,10 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
     say = r"(?:say|send|tell(?:\s+(?:her|him|them))?)"
     patterns = (
+        # whatsapp send a message to X say Y  /  whatsapp message to X say Y
+        rf"(?:go\s+on\s+|open\s+|launch\s+)?(?:{alias_alt})\s+"
+        rf"(?:send\s+a\s+)?(?:message|msg|text|dm)\s+(?:to\s+)?(.+?)\s+"
+        rf"(?:and\s+)?{say}\s+(.+)$",
         # find and message X tell her Y
         rf"(?:go\s+on\s+|open\s+|launch\s+)?(?:{alias_alt})\s+"
         rf"(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+(.+?)\s+"
@@ -725,11 +766,12 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
         contact = re.sub(r"\s+", " ", m.group(1)).strip(" .,\"'")
         message = re.sub(r"\s+", " ", m.group(2)).strip(" .,\"'")
         contact = re.sub(
-            r"^(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+",
+            r"^(?:find\s+(?:and\s+)?)?(?:send\s+a\s+)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+(?:to\s+)?",
             "",
             contact,
             flags=re.I,
         ).strip()
+        contact = re.sub(r"^(?:to\s+)", "", contact, flags=re.I).strip()
         # Strip instruction leftovers from message body
         message = re.sub(r"^(?:her|him|them)\s+", "", message, flags=re.I).strip(
             " .,\"'"
@@ -870,8 +912,24 @@ def heuristic_dm_send(
         or "open dms" in hist
         or "open inbox" in hist
     )
-    tapped_search = "tap search" in hist or (
-        "search" in hist and "tap(" in hist and (open_l in hist or app_key in hist)
+    # Only credit a real Search tap — never "coords fallback" (wrong xy).
+    tapped_search = any(
+        (
+            "tap search id/label" in str(h).lower()
+            or "tap search (" in str(h).lower()
+            or (
+                "tap search" in str(h).lower()
+                and "fallback" not in str(h).lower()
+                and "coords" not in str(h).lower()
+            )
+        )
+        for h in history[-16:]
+    )
+    type_focus_fails = sum(
+        1
+        for h in history[-16:]
+        if "input_text failed" in str(h).lower()
+        or "focus a text field" in str(h).lower()
     )
     typed_message = _hist_has_type(history, message)
     tapped_send = any(
@@ -986,12 +1044,49 @@ def heuristic_dm_send(
                 "open_inbox_tab",
             )
 
-    # 1) Search — prefer resource-id (deterministic), never vision
+    # After input_text focus failures: re-find Search / editable from fresh tree
+    # (never keep typing blind into an unfocused screen).
+    if type_focus_fails and not typed_contact:
+        if type_focus_fails >= 2:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"input_text failed {type_focus_fails}× without a focused "
+                        f"EditText — Search not focused; abort ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "type_focus_fail",
+            )
+        # Prefer visible editable (search field), else re-tap Search from tree
+        ec = _tree_editable_center(ui_tree)
+        if ec:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": ec[0],
+                    "y": ec[1],
+                    "reason": (
+                        f"Re-focus editable after input_text failure ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "refocus_editable",
+            )
+        tapped_search = False  # force Search re-locate below
+
+    # 1) Search — prefer resource-id / label (deterministic). No blind coords.
     if not typed_contact and not tapped_search:
         search_ids = tuple(profile.get("search_ids") or ())
         c = _tree_id_center(ui_tree, *search_ids) if search_ids else None
         if c is None:
             c = _tree_node_center(ui_tree, *search_labels)
+        # Also match content-desc / text containing "search" on ImageButton/toolbar
+        if c is None:
+            c = _tree_node_center(ui_tree, "Search", "search")
         if c:
             return _fp(
                 {
@@ -1004,20 +1099,35 @@ def heuristic_dm_send(
                 },
                 "tap_search",
             )
-        fx, fy = profile["search_fallback"]
+        fb = profile.get("search_fallback")
+        if isinstance(fb, (tuple, list)) and len(fb) >= 2 and tree_is_sparse(ui_tree):
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(fb[0]),
+                    "y": int(fb[1]),
+                    "reason": f"Tap Search coords fallback sparse tree ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_search_fallback",
+            )
         return _fp(
             {
-                "action": "tap",
-                "x": fx,
-                "y": fy,
-                "reason": f"Tap Search coords fallback ({planner})",
+                "action": "fail",
+                "reason": (
+                    f"Search control not found in a11y tree "
+                    f"(ids={list(search_ids)[:3]} labels={list(search_labels)[:3]}) "
+                    f"— refusing coord guess ({planner})"
+                ),
                 "planner": planner,
                 "llm_provider": None,
             },
-            "tap_search_fallback",
+            "search_not_found",
         )
 
     # 2) Type contact into search — never into the message compose box
+    # Require an editable on screen (or a verified Search tap), not a failed fallback.
     if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
         if focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
             # Compose has focus (leftover conversation) — leave chat, re-open search
