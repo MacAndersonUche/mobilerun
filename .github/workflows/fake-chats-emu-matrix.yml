@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 180
     strategy:
       fail-fast: false
+      # Keep concurrency low so matrix cannot starve AWS deploy again
+      max-parallel: 1
       matrix:
         # 3 consecutive green runs required by the bench contract
         attempt: [1, 2, 3]
