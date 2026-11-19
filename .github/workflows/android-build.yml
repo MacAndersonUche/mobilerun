@@ -28,10 +28,19 @@ jobs:
         run: |
           cd android-app
           chmod +x gradlew || true
+          # IME Samsung fix branch publishes as fixed apk-386 (not run_number)
+          if [ "${{ github.ref }}" = "refs/heads/cursor/ime-samsung-subtype-df3e" ]; then
+            VC=386
+            VN=1.0.386
+          else
+            VC="${{ github.run_number }}"
+            VN="1.0.${{ github.run_number }}"
+          fi
+          echo "Building VERSION_CODE=$VC VERSION_NAME=$VN"
           ./gradlew assembleRelease \
             --no-daemon \
-            -PVERSION_CODE=${{ github.run_number }} \
-            -PVERSION_NAME=1.0.${{ github.run_number }}
+            -PVERSION_CODE="$VC" \
+            -PVERSION_NAME="$VN"
       
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -39,6 +48,106 @@ jobs:
           name: mobilerun-apk
           path: android-app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+  # Fixed tag apk-386 for Mobilerun Keyboard Samsung subtype fix (this branch only)
+  publish-apk-386:
+    needs: android-build
+    if: github.ref == 'refs/heads/cursor/ime-samsung-subtype-df3e' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mobilerun-apk
+          path: ./apk
+
+      - name: Rename APK
+        run: mv apk/*.apk apk/mobilerun.apk
+
+      - name: Verify APK version is 386
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq aapt >/dev/null
+          aapt dump badging apk/mobilerun.apk | tee /tmp/badging.txt
+          grep -E "versionCode='386'" /tmp/badging.txt
+          grep -E "versionName='1.0.386'" /tmp/badging.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install qrcode package
+        run: npm install qrcode
+
+      - name: Generate QR code
+        run: |
+          export APK_RELEASE_TAG=apk-386
+          node scripts/generate-apk-qr.mjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_NUMBER: '386'
+          APK_RELEASE_TAG: apk-386
+
+      - name: Create / update apk-386 release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=apk-386
+          REPO="${{ github.repository }}"
+          NOTES="**Mobilerun Android App — apk-386 (IME Samsung fix)**
+
+          Fixes Mobilerun Keyboard missing from Samsung One UI keyboard list:
+          - \`method.xml\` subtypes (en_GB / en_US), settingsActivity, isDefault,
+            supportsSwitchingToNextInputMethod
+          - In-app **Enable keyboard** → ACTION_INPUT_METHOD_SETTINGS + IME picker
+          - Agents still fall back to a11y SET_TEXT if IME is off
+
+          ![Download QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)
+
+          **Links:**
+          - [Commit ${{ github.sha }}](https://github.com/$REPO/commit/${{ github.sha }})
+          - [Workflow run](https://github.com/$REPO/actions/runs/${{ github.run_id }})"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" apk/mobilerun.apk apk-download-qr.png --clobber
+            gh release edit "$TAG" --title "Android Build 386 (IME Samsung fix)" --notes "$NOTES" --latest
+          else
+            gh release create "$TAG" \
+              --title "Android Build 386 (IME Samsung fix)" \
+              --notes "$NOTES" \
+              --latest \
+              apk/mobilerun.apk \
+              apk-download-qr.png
+          fi
+
+      - name: Update README with latest APK
+        run: node scripts/update-readme-apk.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_NUMBER: '386'
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+
+      - name: Commit updated README
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "docs: update latest APK links [skip ci]"
+            git push
+          fi
+
+      - name: Summary
+        run: |
+          echo "## apk-386 published" >> $GITHUB_STEP_SUMMARY
+          echo "- [mobilerun.apk](https://github.com/${{ github.repository }}/releases/download/apk-386/mobilerun.apk)" >> $GITHUB_STEP_SUMMARY
 
   publish-apk:
     needs: android-build

@@ -73,4 +73,3 @@ def bulk_counts() -> Dict[str, int]:
         "swipe": int(b.get("swipe_count") or 50),
         "message": int(b.get("message_count") or 50),
     }
-

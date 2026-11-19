@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 /**
  * Pairing + minimal setup.
@@ -216,10 +217,45 @@ fun MainScreen(
     var snap by remember {
         mutableStateOf(PermissionStatus.snapshot(activity, mediaProjectionGranted))
     }
+    var updateStatus by remember { mutableStateOf<String?>(null) }
+    var updateBusy by remember { mutableStateOf(false) }
+    var pendingUpdate by remember { mutableStateOf<AppUpdater.ReleaseInfo?>(null) }
+    val scope = rememberCoroutineScope()
 
     fun refreshPerms() {
         snap = PermissionStatus.snapshot(activity, mediaProjectionGranted)
         onPermissionsChanged()
+    }
+
+    suspend fun runUpdateCheck(promptInstall: Boolean) {
+        updateBusy = true
+        updateStatus = "Checking for updates…"
+        when (
+            val result =
+                AppUpdater.checkLatest(activity, backendClient.defaultBackendHttp())
+        ) {
+            is AppUpdater.CheckResult.UpToDate -> {
+                pendingUpdate = null
+                backendClient.clearUpdateAvailable()
+                updateStatus = "Up to date (v${BuildConfig.VERSION_NAME} / ${result.current})"
+            }
+            is AppUpdater.CheckResult.Available -> {
+                pendingUpdate = result.release
+                backendClient.offerUpdate(result.release)
+                updateStatus =
+                    "Update ${result.release.tag} available (v${result.release.versionName})"
+                if (promptInstall) {
+                    updateStatus =
+                        AppUpdater.downloadAndPromptInstall(activity, result.release) {
+                            updateStatus = it
+                        }
+                }
+            }
+            is AppUpdater.CheckResult.Error -> {
+                updateStatus = "Update check failed: ${result.message}"
+            }
+        }
+        updateBusy = false
     }
 
     LaunchedEffect(Unit) {
@@ -239,6 +275,14 @@ fun MainScreen(
             paired = it
             if (it) onEnsureAutoGrants()
         }
+    }
+    LaunchedEffect(Unit) {
+        backendClient.updateAvailableFlow.collect { pendingUpdate = it }
+    }
+    // Deferred silent check — wait for cold-start/WS to settle; never auto-install
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(4_000)
+        runUpdateCheck(promptInstall = false)
     }
     LaunchedEffect(mediaProjectionGranted) { refreshPerms() }
     LaunchedEffect(paired) {
@@ -463,26 +507,32 @@ fun MainScreen(
                     val keyboardSelected = remember(snap) {
                         ai.mobilerun.selfhosted.input.MobilerunKeyboardIME.isSelected(activity)
                     }
-                    if (!keyboardSelected) {
-                        Text(
-                            "Required for reliable typing: enable Mobilerun Keyboard " +
-                                "(our controlled IME — search vs compose is then deterministic).",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Button(
-                            onClick = {
-                                val r = ai.mobilerun.selfhosted.input.ImeSessionController
-                                    .ensureSelected(activity)
-                                if (r["needs_user"] == true || r["selected"] != true) {
-                                    PermissionStatus.openInputMethodSettings(activity)
-                                }
-                                refreshPerms()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Enable Mobilerun Keyboard")
-                        }
+                    // Always offer Enable keyboard — Samsung may hide us until
+                    // subtypes are present and the user toggles the IME on.
+                    Text(
+                        if (keyboardSelected) {
+                            "MacAuto Keyboard is selected."
+                        } else {
+                            "Required for reliable typing: enable MacAuto Keyboard " +
+                                "in system settings, then pick it. Agents still fall " +
+                                "back to accessibility SET_TEXT if the IME is off."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(
+                        onClick = {
+                            // Best-effort silent enable (needs WRITE_SECURE_SETTINGS)
+                            ai.mobilerun.selfhosted.input.ImeSessionController
+                                .ensureSelected(activity)
+                            // Always open system IME settings, then show picker
+                            ai.mobilerun.selfhosted.input.ImeSettingsActivity
+                                .openSettingsThenPicker(activity)
+                            refreshPerms()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Enable keyboard")
                     }
                 }
 
@@ -499,6 +549,61 @@ fun MainScreen(
                                 "Enable live view capture (optional)"
                             },
                         )
+                    }
+                }
+            }
+
+            // Self-update (same applicationId + signing key → in-place over previous build)
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "App updates",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "Installed v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    updateStatus?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                runUpdateCheck(promptInstall = pendingUpdate == null)
+                            }
+                        },
+                        enabled = !updateBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (updateBusy) "Working…" else "Check for update")
+                    }
+                    val offer = pendingUpdate
+                    if (offer != null && offer.versionCode > BuildConfig.VERSION_CODE) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    updateBusy = true
+                                    updateStatus =
+                                        AppUpdater.downloadAndPromptInstall(activity, offer) {
+                                            updateStatus = it
+                                        }
+                                    updateBusy = false
+                                }
+                            },
+                            enabled = !updateBusy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Download & install ${offer.tag}")
+                        }
                     }
                 }
             }
