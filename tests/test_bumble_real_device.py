@@ -40,7 +40,10 @@ def test_bumble_deck_detection_and_open_chats():
     assert bumble_on_people_deck(deck)
     assert not bumble_on_connections(deck)
     a = _heuristic_dm_send(
-        INSTR, deck, ["Opened Bumble[com.bumble.app] — launch"], package="com.bumble.app"
+        INSTR,
+        deck,
+        ["Opened Bumble[com.bumble.app] — launch"],
+        package="com.bumble.app",
     )
     assert a and a["action"] == "tap"
     assert "chats" in a["reason"].lower()
@@ -114,9 +117,7 @@ def test_bumble_dry_run_stops_before_send():
         "tap — Focus compose",
         'type("hi") — Type message',
     ]
-    a = _heuristic_dm_send(
-        INSTR, chat, hist, package="com.bumble.app", dry_run=True
-    )
+    a = _heuristic_dm_send(INSTR, chat, hist, package="com.bumble.app", dry_run=True)
     assert a and a["action"] == "done"
     assert "dry_run" in a["reason"].lower()
     assert "hi" in a["reason"].lower()

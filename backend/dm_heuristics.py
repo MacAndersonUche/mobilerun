@@ -650,9 +650,7 @@ def _chats_section_y(nodes: Sequence[Dict[str, Any]]) -> Optional[int]:
     for n in nodes:
         label = (n.get("label") or "").strip().lower()
         nid = str(n.get("id") or "").lower()
-        if label == "chats" or (
-            "title" in nid and label == "chats"
-        ):
+        if label == "chats" or ("title" in nid and label == "chats"):
             return int(n.get("y") or 0)
     return None
 
@@ -751,7 +749,9 @@ def _strip_zwsp(text: str) -> str:
     return (text or "").replace("\u200b", "").strip()
 
 
-def find_search_clear_center(tree: str, profile: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+def find_search_clear_center(
+    tree: str, profile: Dict[str, Any]
+) -> Optional[Tuple[int, int]]:
     ids = tuple(profile.get("search_clear_ids") or ())
     labels = tuple(profile.get("search_clear_labels") or ("Clear",))
     c = _tree_id_center(tree, *ids) if ids else None
@@ -760,9 +760,7 @@ def find_search_clear_center(tree: str, profile: Dict[str, Any]) -> Optional[Tup
     return _tree_node_center(tree, *labels)
 
 
-def _is_forbidden_tap_target(
-    node: Dict[str, Any], profile: Dict[str, Any]
-) -> bool:
+def _is_forbidden_tap_target(node: Dict[str, Any], profile: Dict[str, Any]) -> bool:
     """True when a node must never be tapped (undo / paid / AV)."""
     ids = tuple(profile.get("never_tap_ids") or ())
     labels = tuple(profile.get("never_tap_labels") or ())
@@ -820,7 +818,7 @@ def bumble_on_people_deck(tree: str) -> bool:
         return True
     # Name TextView "Name, Age" near bottom of card + main photo desc
     for n in _parse_compact_nodes(tree):
-        lab = (n.get("label") or "")
+        lab = n.get("label") or ""
         low = lab.lower()
         if "main photo" in low and ("'s" in low or "\u2019s" in lab):
             return True
@@ -960,7 +958,10 @@ def bumble_dismiss_popup(
         if msg_cta:
             # Avoid "Send a compliment"
             for n in nodes:
-                if int(n.get("x") or -1) == msg_cta[0] and int(n.get("y") or -1) == msg_cta[1]:
+                if (
+                    int(n.get("x") or -1) == msg_cta[0]
+                    and int(n.get("y") or -1) == msg_cta[1]
+                ):
                     if "compliment" in (n.get("label") or "").lower():
                         msg_cta = None
                     break
