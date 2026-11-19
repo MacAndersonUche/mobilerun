@@ -745,6 +745,10 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
     alias_alt = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
     say = r"(?:say|send|tell(?:\s+(?:her|him|them))?)"
     patterns = (
+        # whatsapp send a message to X say Y  /  whatsapp message to X say Y
+        rf"(?:go\s+on\s+|open\s+|launch\s+)?(?:{alias_alt})\s+"
+        rf"(?:send\s+a\s+)?(?:message|msg|text|dm)\s+(?:to\s+)?(.+?)\s+"
+        rf"(?:and\s+)?{say}\s+(.+)$",
         # find and message X tell her Y
         rf"(?:go\s+on\s+|open\s+|launch\s+)?(?:{alias_alt})\s+"
         rf"(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+(.+?)\s+"
@@ -762,11 +766,12 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
         contact = re.sub(r"\s+", " ", m.group(1)).strip(" .,\"'")
         message = re.sub(r"\s+", " ", m.group(2)).strip(" .,\"'")
         contact = re.sub(
-            r"^(?:find\s+(?:and\s+)?)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+",
+            r"^(?:find\s+(?:and\s+)?)?(?:send\s+a\s+)?(?:message|msg|text|dm|chat(?:\s+with)?)\s+(?:to\s+)?",
             "",
             contact,
             flags=re.I,
         ).strip()
+        contact = re.sub(r"^(?:to\s+)", "", contact, flags=re.I).strip()
         # Strip instruction leftovers from message body
         message = re.sub(r"^(?:her|him|them)\s+", "", message, flags=re.I).strip(
             " .,\"'"
