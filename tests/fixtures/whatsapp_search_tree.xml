@@ -1,9 +1,15 @@
-<hierarchy windows="2" nodes="18" partial="false" empty="false" mode="compact" packages="com.whatsapp">
+<hierarchy windows="2" nodes="22" partial="false" empty="false" mode="compact" packages="com.whatsapp">
 <w id="active" t="active" p="com.whatsapp" f="1">
  <n d="Back" c="1" xy="80,150" b="20,90,140,210"/>
- <n e="1" h="Search…" xy="540,150" b="160,90,980,210"/>
- <n t="Precious Achalugo" c="1" xy="540,420" b="0,340,1080,500"/>
- <n t="Precious" c="1" xy="540,560" b="0,500,1080,620"/>
- <n t="Messages" xy="200,720" b="40,680,400,760"/>
+ <n e="1" f="1" t="​" h="Search…" i="com.whatsapp:id/search_input" xy="540,150" b="160,90,900,210"/>
+ <n d="Clear" i="com.whatsapp:id/search_clear_btn" c="1" xy="960,150" b="920,110,1000,190"/>
+ <n d="Ask" i="com.whatsapp:id/search_meta_ai_input_send_button" c="1" xy="1040,150" b="1000,110,1080,190"/>
+ <n t="Chats" i="com.whatsapp:id/title" xy="120,320" b="40,280,240,360"/>
+ <n i="com.whatsapp:id/contact_row_container" cls="RelativeLayout" c="1" xy="540,420" b="0,360,1080,500"/>
+ <n t="Precious Achalugo" i="com.whatsapp:id/conversations_row_contact_name" c="1" xy="540,420" b="160,380,900,460"/>
+ <n t="Messages" xy="120,560" b="40,520,280,600"/>
+ <n i="com.whatsapp:id/search_message_container_0" c="1" xy="540,640" b="0,600,1080,720"/>
+ <n t="Precious Achalugo: old chat snippet" xy="540,640" b="160,620,900,700"/>
+ <n t="From Precious Achalugo" i="com.whatsapp:id/search_contact_token" c="1" xy="300,780" b="40,740,560,820"/>
 </w>
 </hierarchy>

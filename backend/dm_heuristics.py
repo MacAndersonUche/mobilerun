@@ -22,47 +22,84 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "open_label": "WhatsApp",
         "inbox_labels": ("Chats", "New chat"),
         "new_chat_labels": ("New chat", "New Chat"),
+        # SM-G996B HomeActivity: search is a bar, NOT menuitem_search.
+        # Toolbar only has camera + overflow — old (983,158) hit those.
         "search_labels": (
-            "Search",
-            "search",
-            "Search…",
-            "Search...",
             "Ask Meta AI or Search",
             "Ask Meta AI or search",
-            "Ask Meta AI",
+            "Ask Meta AI or Search",
             "Meta AI or Search",
+            "Search…",
+            "Search...",
+            "Search",
+            "search",
         ),
         "search_ids": (
-            "com.whatsapp:id/menuitem_search",
-            "com.whatsapp:id/search_src_text",
-            "com.whatsapp:id/search_input",
+            # Home bar (current WA)
+            "com.whatsapp:id/search_bar_inner_layout",
+            "id/search_bar_inner_layout",
             "com.whatsapp:id/search_bar",
+            "id/search_bar",
+            # After bar tap — focused EditText (text may have U+200B prefix)
+            "com.whatsapp:id/search_input",
+            "id/search_input",
+            "com.whatsapp:id/search_src_text",
+            "id/search_src_text",
+            # Legacy icon (older WA builds only)
+            "com.whatsapp:id/menuitem_search",
+            "id/menuitem_search",
             "com.whatsapp:id/home_search",
             "com.whatsapp:id/search",
-            "id/menuitem_search",
-            "id/search_src_text",
-            "id/search_input",
-            "id/search_bar",
         ),
-        # Never use blind coords when the tree is readable — prefer fail/replan.
+        # Never guess toolbar coords (camera/overflow live there).
         "search_fallback": None,
         "result_ids": (
             "com.whatsapp:id/contact_row_container",
             "com.whatsapp:id/conversations_row_contact_name",
-            "com.whatsapp:id/resultlist",
             "id/contact_row_container",
+            "id/conversations_row_contact_name",
+        ),
+        # Prefer Chats-section rows; never message hits / "From X" chips.
+        "result_exclude_ids": (
+            "com.whatsapp:id/search_message_container",
+            "com.whatsapp:id/search_contact_token",
+            "id/search_message_container",
+            "id/search_contact_token",
+            "search_media_filter",
+            "type_token",
         ),
         "header_ids": (
             "com.whatsapp:id/conversation_contact_name",
+            "com.whatsapp:id/conversation_contact",
             "com.whatsapp:id/toolbar",
             "id/conversation_contact_name",
         ),
-        "compose_labels": ("Type a message", "Message", "Write a message"),
+        "compose_labels": ("Message", "Type a message", "Write a message"),
         "compose_ids": ("com.whatsapp:id/entry", "id/entry", ":id/entry"),
         "send_labels": ("Send",),
-        "send_ids": ("com.whatsapp:id/send", "id/send", ":id/send"),
-        "send_fallback": (1000, 2280),
-        "compose_fallback": (540, 2250),
+        "send_ids": (
+            "com.whatsapp:id/send",
+            "id/send",
+            ":id/send",
+            "com.whatsapp:id/send_container",
+        ),
+        # Prefer visible Send ImageButton; no blind coords.
+        "send_fallback": None,
+        "compose_fallback": None,
+        # Clear filter chips before typing a contact name.
+        "search_clear_ids": (
+            "com.whatsapp:id/search_clear_btn",
+            "id/search_clear_btn",
+        ),
+        "search_clear_labels": ("Clear",),
+        # NEVER tap — would ask Meta AI instead of searching contacts.
+        "meta_ai_ask_ids": (
+            "com.whatsapp:id/search_meta_ai_input_send_button",
+            "id/search_meta_ai_input_send_button",
+        ),
+        "meta_ai_ask_labels": ("Ask",),
+        # Prefer tap Send over IME Enter (Enter in search = Meta AI).
+        "prefer_tap_send": True,
     },
     "instagram": {
         "aliases": ("instagram", "ig"),
@@ -520,41 +557,132 @@ def _is_searchish_node(node: Dict[str, Any], search_labels: Sequence[str]) -> bo
     return False
 
 
+def _node_id_matches(node: Dict[str, Any], needles: Sequence[str]) -> bool:
+    nid = str(node.get("id") or "").lower()
+    if not nid:
+        return False
+    for n in needles:
+        nl = (n or "").lower().strip()
+        if not nl:
+            continue
+        if nl in nid or nid.endswith(nl.lstrip(":")):
+            return True
+    return False
+
+
+def _chats_section_y(nodes: Sequence[Dict[str, Any]]) -> Optional[int]:
+    """Y of the 'Chats' section header in WA search results (prefer rows below)."""
+    for n in nodes:
+        label = (n.get("label") or "").strip().lower()
+        nid = str(n.get("id") or "").lower()
+        if label == "chats" or (
+            "title" in nid and label == "chats"
+        ):
+            return int(n.get("y") or 0)
+    return None
+
+
 def find_contact_result_center(
     tree: str,
     contact: str,
     *,
     search_labels: Sequence[str] = (),
+    result_ids: Sequence[str] = (),
+    exclude_ids: Sequence[str] = (),
 ) -> Optional[Tuple[int, int]]:
-    """Best fuzzy match for a contact *result row* — never the search EditText."""
+    """Best fuzzy match for a contact *result row* — never the search EditText.
+
+    WhatsApp SM-G996B: prefer contact_row_container / conversations_row_contact_name
+    under the 'Chats' header — never message hits or 'From X' chips.
+    """
     nodes = _parse_compact_nodes(tree)
     if not nodes:
-        # Fallback: old center search but only if we can exclude editables later
         return None
+    chats_y = _chats_section_y(nodes)
     candidates: List[Tuple[float, int, Dict[str, Any]]] = []
     for node in nodes:
         if _is_searchish_node(node, search_labels):
             continue
-        score = _fuzzy_score(contact, node.get("label") or "")
+        if exclude_ids and _node_id_matches(node, exclude_ids):
+            continue
+        label = node.get("label") or ""
+        low = label.lower()
+        # "From Precious Achalugo" chip / message snippet rows
+        if low.startswith("from "):
+            continue
+        if "search_message" in str(node.get("id") or "").lower():
+            continue
+        score = _fuzzy_score(contact, label)
         if score < 0.5:
-            # Also try first token (first name)
             first = (contact.split() or [""])[0]
             if first and len(first) >= 3:
-                score = max(score, _fuzzy_score(first, node.get("label") or "") * 0.85)
+                score = max(score, _fuzzy_score(first, label) * 0.85)
+        # Photo content-desc: "<Name> picture" — usable but prefer name/row
+        if score < 0.5 and "picture" in low:
+            score = max(
+                score,
+                _fuzzy_score(contact, re.sub(r"\s+picture\s*$", "", low, flags=re.I))
+                * 0.9,
+            )
         if score < 0.5:
             continue
-        # Prefer clickable list rows below the search bar
         y = int(node.get("y") or 0)
         if y < 260:
             score *= 0.4
         if node.get("clickable"):
             score += 0.05
+        if result_ids and _node_id_matches(node, result_ids):
+            score += 0.25
+        if "picture" in low and "contact_photo" in str(node.get("id") or "").lower():
+            score *= 0.7
+        # Prefer rows under the Chats section header
+        if chats_y is not None and y > chats_y:
+            score += 0.15
+        elif chats_y is not None and y < chats_y:
+            score *= 0.5
         candidates.append((score, y, node))
     if not candidates:
         return None
     candidates.sort(key=lambda t: (-t[0], t[1]))
     best = candidates[0][2]
     return (int(best["x"]), int(best["y"]))
+
+
+def _search_filter_chip_active(tree: str) -> bool:
+    """True when WA search has a media/type chip (Photos, Stickers, type_token)."""
+    for node in _parse_compact_nodes(tree):
+        nid = str(node.get("id") or "").lower()
+        label = (node.get("label") or "").lower()
+        if "type_token" in nid or "search_media_filter" in nid:
+            return True
+        if nid.endswith("type_token") or "media_filter" in nid:
+            return True
+        # Selected chip often exposes filter names near the search field
+        if int(node.get("y") or 0) < 400 and label in (
+            "photos",
+            "stickers",
+            "videos",
+            "gifs",
+            "links",
+            "audio",
+            "documents",
+        ):
+            return True
+    return False
+
+
+def _strip_zwsp(text: str) -> str:
+    """WhatsApp search_input often prefixes a zero-width space (U+200B)."""
+    return (text or "").replace("\u200b", "").strip()
+
+
+def find_search_clear_center(tree: str, profile: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    ids = tuple(profile.get("search_clear_ids") or ())
+    labels = tuple(profile.get("search_clear_labels") or ("Clear",))
+    c = _tree_id_center(tree, *ids) if ids else None
+    if c:
+        return c
+    return _tree_node_center(tree, *labels)
 
 
 def _label_matches_compose(blob: str, compose_labels: Sequence[str]) -> bool:
@@ -961,7 +1089,11 @@ def heuristic_dm_send(
     # that would otherwise steal the flow.
     if not chat_ok and not typed_message and not tapped_contact:
         visible = find_contact_result_center(
-            ui_tree, contact, search_labels=search_labels
+            ui_tree,
+            contact,
+            search_labels=search_labels,
+            result_ids=tuple(profile.get("result_ids") or ()),
+            exclude_ids=tuple(profile.get("result_exclude_ids") or ()),
         )
         if visible is None:
             # Fake-chats rows use "Chat with X" / "Match X" content-desc
@@ -1082,12 +1214,19 @@ def heuristic_dm_send(
     # Skip entirely when already in the target chat (header + compose verified).
     if not chat_ok and not typed_contact and not tapped_search:
         search_ids = tuple(profile.get("search_ids") or ())
+        # Never treat Meta AI "Ask" send as Search (id-only — "Ask" is a
+        # substring of "Ask Meta AI or Search" on the home bar).
+        meta_ids = tuple(profile.get("meta_ai_ask_ids") or ())
         c = _tree_id_center(ui_tree, *search_ids) if search_ids else None
         if c is None:
             c = _tree_node_center(ui_tree, *search_labels)
-        # Also match content-desc / text containing "search" on ImageButton/toolbar
+        # Bare "Search" desc — but not camera/overflow toolbar icons
         if c is None:
-            c = _tree_node_center(ui_tree, "Search", "search")
+            c = _tree_node_center(ui_tree, "Ask Meta AI or Search", "Search")
+        if c and meta_ids:
+            ask = _tree_id_center(ui_tree, *meta_ids)
+            if ask and ask == c:
+                c = None
         if c:
             return _fp(
                 {
@@ -1148,6 +1287,24 @@ def heuristic_dm_send(
                 },
                 "back_before_type_contact",
             )
+        # WA: clear Photos/Stickers/type_token chips or search returns "No results"
+        if app_key == "whatsapp" and _search_filter_chip_active(ui_tree):
+            clear_c = find_search_clear_center(ui_tree, profile)
+            if clear_c:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": clear_c[0],
+                        "y": clear_c[1],
+                        "reason": (
+                            f"Clear search filter chip before typing contact ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "clear_search_filter",
+                )
+        # Prefer focused search_input; never IME Enter / Meta AI Ask after type.
         return _fp(
             {
                 "action": "type",
@@ -1156,6 +1313,9 @@ def heuristic_dm_send(
                 "planner": planner,
                 "llm_provider": None,
                 "clear": True,
+                # Strip ZWSP when callers verify entry text
+                "strip_zwsp": True,
+                "no_ime_enter": True,
             },
             "type_contact",
         )
@@ -1167,7 +1327,13 @@ def heuristic_dm_send(
             # one tick with a no-op that forces re-dump — use tiny wait via back? No.
             # Prefer first-result fallback lower on screen after a short scroll.
             pass
-        c = find_contact_result_center(ui_tree, contact, search_labels=search_labels)
+        c = find_contact_result_center(
+            ui_tree,
+            contact,
+            search_labels=search_labels,
+            result_ids=tuple(profile.get("result_ids") or ()),
+            exclude_ids=tuple(profile.get("result_exclude_ids") or ()),
+        )
         if c:
             return _fp(
                 {
@@ -1243,7 +1409,11 @@ def heuristic_dm_send(
     if typed_contact and tapped_contact and not chat_ok and not typed_message:
         if contact_tap_attempts < 4:
             c = find_contact_result_center(
-                ui_tree, contact, search_labels=search_labels
+                ui_tree,
+                contact,
+                search_labels=search_labels,
+                result_ids=tuple(profile.get("result_ids") or ()),
+                exclude_ids=tuple(profile.get("result_exclude_ids") or ()),
             )
             if c:
                 return _fp(
@@ -1302,41 +1472,66 @@ def heuristic_dm_send(
                 },
                 "focus_compose",
             )
-        # No entry/Message in tree (common on Secure Folder / sparse dumps) —
-        # defer to vision rather than blind coords that miss the box.
-        if tree_is_sparse(ui_tree) or not compose_field_present(
-            ui_tree, compose_labels
+        # No entry/Message in tree — defer to vision; never blind-tap toolbar.
+        fb = profile.get("compose_fallback")
+        if (
+            isinstance(fb, (tuple, list))
+            and len(fb) >= 2
+            and not tree_is_sparse(ui_tree)
+            and compose_field_present(ui_tree, compose_labels)
         ):
-            return None
-        cx, cy = profile["compose_fallback"]
-        return _fp(
-            {
-                "action": "tap",
-                "x": cx,
-                "y": cy,
-                "reason": f"Focus compose coords fallback ({planner})",
-                "planner": planner,
-                "llm_provider": None,
-            },
-            "focus_compose_fallback",
-        )
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(fb[0]),
+                    "y": int(fb[1]),
+                    "reason": f"Focus compose coords fallback ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "focus_compose_fallback",
+            )
+        return None
 
     # 5) Type message — ONLY if chat verified AND target is compose (not search)
     if chat_ok and not typed_message:
         if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": profile["compose_fallback"][0],
-                    "y": profile["compose_fallback"][1],
-                    "reason": (
-                        f"Refuse type — focus looks like search; retarget compose ({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "refuse_type_search",
+            compose_ids = tuple(profile.get("compose_ids") or ())
+            c = find_compose_center(
+                ui_tree, compose_labels, compose_ids, search_labels=search_labels
             )
+            if c:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": c[0],
+                        "y": c[1],
+                        "reason": (
+                            f"Refuse type — focus looks like search; "
+                            f"retarget compose ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "refuse_type_search",
+                )
+            fb = profile.get("compose_fallback")
+            if isinstance(fb, (tuple, list)) and len(fb) >= 2:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(fb[0]),
+                        "y": int(fb[1]),
+                        "reason": (
+                            f"Refuse type — focus looks like search; "
+                            f"retarget compose ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "refuse_type_search",
+                )
+            return None
         return _fp(
             {
                 "action": "type",
@@ -1344,11 +1539,13 @@ def heuristic_dm_send(
                 "reason": f"Type message '{message}' ({planner})",
                 "planner": planner,
                 "llm_provider": None,
+                "clear": True,
             },
             "type_message",
         )
 
-    # 6) Send — IME_ACTION_SEND first; else tap send id. Dry-run stops here.
+    # 6) Send — prefer visible Send ImageButton (appears after text). Dry-run stops.
+    # WA: never IME Enter in search (Meta AI); prefer tap Send in chat too.
     if typed_message and not tapped_send:
         if dry_run:
             return _fp(
@@ -1365,8 +1562,22 @@ def heuristic_dm_send(
                 },
                 "dry_run_stop",
             )
-        # Prefer our keyboard's performEditorAction(SEND)
-        if "ime_send" not in hist and "ime_action" not in hist:
+        send_ids = tuple(profile.get("send_ids") or ())
+        c = find_send_center(ui_tree, tuple(profile["send_labels"]), send_ids=send_ids)
+        prefer_tap = bool(profile.get("prefer_tap_send"))
+        if c:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": c[0],
+                    "y": c[1],
+                    "reason": f"Tap Send id/send ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_send",
+            )
+        if not prefer_tap and "ime_send" not in hist and "ime_action" not in hist:
             return _fp(
                 {
                     "action": "ime_send",
@@ -1376,20 +1587,41 @@ def heuristic_dm_send(
                 },
                 "ime_send",
             )
-        send_ids = tuple(profile.get("send_ids") or ())
-        c = find_send_center(ui_tree, tuple(profile["send_labels"]), send_ids=send_ids)
-        sx, sy = profile["send_fallback"]
-        x, y = c if c else (sx, sy)
+        fb = profile.get("send_fallback")
+        if isinstance(fb, (tuple, list)) and len(fb) >= 2:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(fb[0]),
+                    "y": int(fb[1]),
+                    "reason": f"Tap Send coords fallback ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_send",
+            )
+        if prefer_tap and "ime_send" not in hist and "ime_action" not in hist:
+            return _fp(
+                {
+                    "action": "ime_send",
+                    "reason": (
+                        f"Send button not in tree — IME_ACTION_SEND ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "ime_send",
+            )
         return _fp(
             {
-                "action": "tap",
-                "x": x,
-                "y": y,
-                "reason": f"Tap Send id/send ({planner})",
+                "action": "fail",
+                "reason": (
+                    f"Send control not found after typing '{message}' ({planner})"
+                ),
                 "planner": planner,
                 "llm_provider": None,
             },
-            "tap_send",
+            "send_not_found",
         )
 
     # 7) Verify outgoing bubble / re-send
@@ -1441,20 +1673,29 @@ def heuristic_dm_send(
             hist.count("tap send") + hist.count("re-tap send") + hist.count("ime_send")
             < 3
         ):
-            c = _tree_node_center(ui_tree, *tuple(profile["send_labels"]))
-            sx, sy = profile["send_fallback"]
-            x, y = c if c else (sx, sy)
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": x,
-                    "y": y,
-                    "reason": f"Re-tap Send ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "retap_send",
+            send_ids = tuple(profile.get("send_ids") or ())
+            c = find_send_center(
+                ui_tree, tuple(profile["send_labels"]), send_ids=send_ids
             )
+            fb = profile.get("send_fallback")
+            if c:
+                x, y = c
+            elif isinstance(fb, (tuple, list)) and len(fb) >= 2:
+                x, y = int(fb[0]), int(fb[1])
+            else:
+                x = y = None
+            if x is not None:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": x,
+                        "y": y,
+                        "reason": f"Re-tap Send ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "retap_send",
+                )
 
     if fg:
         if chat_ok and not typed_message:

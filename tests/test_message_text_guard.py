@@ -16,6 +16,13 @@ def test_extract_user_message_from_task():
         extract_user_message_text('instagram message jane and say "hello there"')
         == "hello there"
     )
+    # Must NOT capture "a message to …" from "send a message to X say Y"
+    assert (
+        extract_user_message_text(
+            "whatsapp send a message to precious acahlugo say hi baby"
+        )
+        == "hi baby"
+    )
     assert extract_user_message_text("open settings") is None
 
 

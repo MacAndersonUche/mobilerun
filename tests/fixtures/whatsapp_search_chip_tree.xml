@@ -1,0 +1,8 @@
+<hierarchy windows="2" nodes="14" partial="false" empty="false" mode="compact" packages="com.whatsapp">
+<w id="active" t="active" p="com.whatsapp" f="1">
+ <n e="1" f="1" t="​" h="Search…" i="com.whatsapp:id/search_input" xy="540,150" b="160,90,900,210"/>
+ <n d="Clear" i="com.whatsapp:id/search_clear_btn" c="1" xy="960,150" b="920,110,1000,190"/>
+ <n t="Photos" i="com.whatsapp:id/type_token" c="1" xy="200,280" b="40,240,360,320"/>
+ <n t="No results found" xy="540,800" b="200,760,880,840"/>
+</w>
+</hierarchy>

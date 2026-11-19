@@ -1513,15 +1513,19 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                         _tree_editable_center(tree)
                         or _tree_id_center(
                             tree,
-                            "com.whatsapp:id/search_src_text",
                             "com.whatsapp:id/search_input",
-                            "id/search_src_text",
+                            "com.whatsapp:id/search_bar_inner_layout",
+                            "com.whatsapp:id/entry",
+                            "com.whatsapp:id/search_src_text",
+                            "id/search_input",
+                            "id/search_bar_inner_layout",
                             "id/entry",
+                            "id/search_src_text",
                         )
                         or _tree_node_center(
                             tree,
-                            "Search",
                             "Ask Meta AI or Search",
+                            "Search",
                             "Type a message",
                             "Message",
                         )
