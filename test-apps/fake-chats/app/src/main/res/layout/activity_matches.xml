@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@id/root_matches"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="8dp">
+    <TextView
+        android:id="@id/matches_title"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:gravity="center_vertical"
+        android:text="Matches"
+        android:textSize="22sp"
+        android:textStyle="bold" />
+    <EditText
+        android:id="@+id/matches_search_input"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="Search matches"
+        android:inputType="text"
+        android:imeOptions="actionSearch" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+        <LinearLayout
+            android:id="@id/matches_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+</LinearLayout>

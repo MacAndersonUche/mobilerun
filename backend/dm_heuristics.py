@@ -159,19 +159,20 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Chat", "Chats", "Messages", "Matches", "Inbox"),
         "new_chat_labels": ("Matches", "Chat"),
         "search_labels": ("Search", "Search matches", "Search…"),
-        "search_ids": (),
+        # Fake-chats emulator bench ids (+ label fallbacks for real Tinder)
+        "search_ids": ("id/matches_search", "id/matches_search_input"),
         "search_fallback": (540, 200),
-        "result_ids": (),
-        "header_ids": (),
+        "result_ids": ("id/match_row", "id/match_name"),
+        "header_ids": ("id/chat_header_name",),
         "compose_labels": (
             "Type a message",
             "Message",
             "Send a message",
             "Say something",
         ),
-        "compose_ids": (),
+        "compose_ids": ("id/message_input", ":id/message_input"),
         "send_labels": ("Send",),
-        "send_ids": (),
+        "send_ids": ("id/send_button", ":id/send_button"),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -183,14 +184,14 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Messages", "Connections", "Chats", "Inbox"),
         "new_chat_labels": ("Messages", "Connections"),
         "search_labels": ("Search", "Search…"),
-        "search_ids": (),
+        "search_ids": ("id/connections_search", "id/connections_search_input"),
         "search_fallback": (980, 160),
-        "result_ids": (),
-        "header_ids": (),
+        "result_ids": ("id/connection_row", "id/connection_name"),
+        "header_ids": ("id/chat_title",),
         "compose_labels": ("Type a message", "Message", "Say something"),
-        "compose_ids": (),
+        "compose_ids": ("id/message_box", ":id/message_box"),
         "send_labels": ("Send",),
-        "send_ids": (),
+        "send_ids": ("id/send_cta", ":id/send_cta"),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
@@ -202,23 +203,80 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "inbox_labels": ("Matches", "Messages", "Chats", "Liked You", "Inbox"),
         "new_chat_labels": ("Matches", "Liked You"),
         "search_labels": ("Search", "Search…"),
-        "search_ids": (),
+        "search_ids": ("id/likes_search", "id/likes_search_input"),
         "search_fallback": (980, 160),
-        "result_ids": (),
-        "header_ids": (),
+        "result_ids": ("id/like_row", "id/like_name"),
+        "header_ids": ("id/conversation_title",),
         "compose_labels": (
             "Type a message",
             "Message",
             "Your message",
             "Say something",
         ),
-        "compose_ids": (),
+        "compose_ids": ("id/your_message", ":id/your_message"),
         "send_labels": ("Send",),
-        "send_ids": (),
+        "send_ids": ("id/send_message", ":id/send_message"),
         "send_fallback": (1000, 2280),
         "compose_fallback": (540, 2250),
     },
 }
+
+
+def _register_catalog_profiles() -> None:
+    """Add fake-chats catalog apps not already in DM_APP_PROFILES."""
+    try:
+        from fake_chats_catalog import apps as catalog_apps
+    except ImportError:
+        try:
+            from backend.fake_chats_catalog import apps as catalog_apps  # type: ignore
+        except ImportError:
+            return
+    swipe_template = DM_APP_PROFILES["tinder"]
+    for app in catalog_apps():
+        key = app["key"]
+        if key in DM_APP_PROFILES or key == "securefolder":
+            continue
+        family = app.get("family") or "swipe"
+        if family == "messaging":
+            continue
+        if family == "facebook_dating":
+            DM_APP_PROFILES[key] = {
+                **swipe_template,
+                "aliases": ("facebook dating", "facebook", "fb dating"),
+                "package": app["package"],
+                "pkg_markers": ("facebook", "katana", "dating"),
+                "open_label": app["label"],
+                "like_ids": ("id/dating_like",),
+                "pass_ids": ("id/dating_pass",),
+                "compose_ids": ("id/dating_composer",),
+                "send_ids": ("id/dating_send",),
+                "search_ids": ("id/dating_search", "id/dating_search_edit"),
+                "result_ids": ("id/dating_match_row", "id/dating_inbox_row"),
+                "header_ids": ("id/dating_thread_title",),
+            }
+            continue
+        # Generic swipe dating clones
+        DM_APP_PROFILES[key] = {
+            **swipe_template,
+            "aliases": (key, app["label"].lower()),
+            "package": app["package"],
+            "pkg_markers": (key,),
+            "open_label": app["label"],
+            "like_ids": (f"id/{key}_like", "id/gamepad_like"),
+            "pass_ids": (f"id/{key}_pass", "id/gamepad_pass"),
+            "search_ids": (
+                f"id/{key}_matches_tab",
+                "id/matches_search",
+                "id/matches_search_input",
+            ),
+            "result_ids": (f"id/{key}_match_row", "id/match_row"),
+            "header_ids": ("id/chat_header_name",),
+            "compose_ids": ("id/message_input",),
+            "send_ids": ("id/send_button",),
+        }
+
+
+_register_catalog_profiles()
 
 
 def tree_node_count(tree: str) -> int:
@@ -539,25 +597,48 @@ def chat_screen_verified(
 
 
 def outgoing_bubble_present(tree: str, message: str) -> bool:
-    """True when the typed message appears as an outgoing bubble in the tree.
+    """True when the typed message appears as a NEW outgoing bubble in the tree.
 
-    Heuristic: message text is visible on a non-editable node in the lower
-    half of the screen (chat transcript), not only in the compose EditText.
+    Heuristic: message text is visible on a non-editable node in the chat
+    transcript, not only in the compose EditText. Fake-chats (and similar
+    fixtures) seed an "Old outgoing message: …" bubble with the same text —
+    those must NOT count as success.
     """
     needle = (message or "").strip()
     if len(needle) < 2:
         return False
     low_needle = needle.lower()
+    saw_new_marker = False
+    saw_unmarked = False
     for n in _parse_compact_nodes(tree):
         if n.get("editable"):
             continue
-        blob = f"{n.get('label') or ''} {n.get('hint') or ''}".lower()
-        if low_needle not in blob and low_needle[:12] not in blob:
+        text = str(n.get("text") or "").strip()
+        desc = str(n.get("desc") or "").strip()
+        hint = str(n.get("hint") or "").strip()
+        blob = f"{text} {desc} {hint}".lower()
+        # Explicit seed marker from fake-chats ConversationActivity
+        if "old outgoing" in blob:
             continue
+        text_low = text.lower()
+        # Exact text match on the bubble (reject "Precious Achalugohi baby")
+        if text_low != low_needle and f": {low_needle}" not in blob:
+            if low_needle not in blob and low_needle[:12] not in blob:
+                continue
+            if text_low and low_needle in text_low and text_low != low_needle:
+                continue
         y = int(n.get("y") or 0)
-        if y > 700:  # below header / search
-            return True
-    return False
+        # Header / status band is roughly y < 280 on phones; chat bubbles sit
+        # just below. Explicit "new outgoing" markers always count.
+        if "new outgoing" in blob:
+            saw_new_marker = True
+            continue
+        if y < 280:
+            continue
+        saw_unmarked = True
+    # Prefer explicit new markers when the tree uses them; otherwise unmarked
+    # bubbles (real WhatsApp) still count.
+    return saw_new_marker or saw_unmarked
 
 
 def focused_is_compose_not_search(
@@ -741,19 +822,25 @@ def heuristic_dm_send(
             "dismiss_anr",
         )
 
-    opened = (
-        f"opened {open_l}" in hist
-        or f"open_app({open_l})" in hist
-        or f"open_app({app_key})" in hist
-        or (f"open_ok" in hist and (open_l in hist or app_key in hist))
-        or fg
+    # Require real FG match. open_ok in history can race while SystemUI/launcher
+    # still owns the tree — keep reopening until package markers match.
+    want_pkg = str(profile.get("package") or "").lower()
+    pkg_ok = bool(fg) or (bool(want_pkg) and want_pkg in pkg)
+    open_attempts = sum(
+        1
+        for h in history[-16:]
+        if "open_app(" in str(h).lower() or "opened " in str(h).lower()
     )
-    if not opened:
+    if not pkg_ok and open_attempts < 8:
         return _fp(
             {
                 "action": "open_app",
                 "app": open_label,
-                "reason": f"Open {open_label} ({planner})",
+                "reason": (
+                    f"Open {open_label} ({planner})"
+                    if open_attempts == 0
+                    else f"Re-open {open_label}; FG={package or '?'} ({planner})"
+                ),
                 "planner": planner,
                 "llm_provider": None,
             },
@@ -809,11 +896,43 @@ def heuristic_dm_send(
     # Sparse tree after search → ask planner/vision (signal via None + caller)
     # We still return wait-style re-eval by swiping minimally or no-op wait tap.
     sparse_after_search = typed_contact and tree_is_sparse(ui_tree)
+    needs_inbox = bool(profile.get("inbox_labels")) and app_key != "whatsapp"
+
+    # 0a) If the contact row is already on-screen (inbox / matches list), tap it
+    # before any search field — dating decks often expose a Search affordance
+    # that would otherwise steal the flow.
+    if not chat_ok and not typed_message and not tapped_contact:
+        visible = find_contact_result_center(
+            ui_tree, contact, search_labels=search_labels
+        )
+        if visible is None:
+            # Fake-chats rows use "Chat with X" / "Match X" content-desc
+            visible = _tree_node_center(
+                ui_tree,
+                f"Chat with {contact}",
+                f"Match {contact}",
+                contact,
+            )
+        if visible:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": visible[0],
+                    "y": visible[1],
+                    "reason": f"Tap visible contact '{contact}' ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "tap_visible_contact",
+            )
 
     # 0) Enter DMs / inbox when still on feed/home (Instagram / dating)
-    needs_inbox = bool(profile.get("inbox_labels")) and app_key != "whatsapp"
     if needs_inbox and not tapped_inbox and not typed_contact and not tapped_search:
-        if not _tree_node_center(ui_tree, *search_labels):
+        # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
+        on_deck = bool(
+            _tree_node_center(ui_tree, "Like") or _tree_node_center(ui_tree, "Pass")
+        )
+        if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
             if c:
                 return _fp(
@@ -827,7 +946,9 @@ def heuristic_dm_send(
                     },
                     "open_inbox",
                 )
-            if app_key in ("tinder", "bumble", "hinge", "instagram"):
+            if app_key in ("tinder", "bumble", "hinge", "instagram") or (
+                profile.get("package") or ""
+            ).startswith(("com.tinder", "com.bumble", "co.hinge")):
                 return _fp(
                     {
                         "action": "tap",
@@ -839,6 +960,31 @@ def heuristic_dm_send(
                     },
                     "open_inbox_fallback",
                 )
+
+    # 0b) Dating decks: open Chats/Matches tab before Search (Search sits on
+    # every screen and otherwise short-circuits the contact list).
+    if (
+        needs_inbox
+        and not tapped_inbox
+        and not typed_contact
+        and not chat_ok
+        and not typed_message
+    ):
+        tab = _tree_node_center(
+            ui_tree, "Chats", "Matches", "Messages", "Inbox", "Connections"
+        )
+        if tab:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": tab[0],
+                    "y": tab[1],
+                    "reason": f"Open chats/matches tab ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "open_inbox_tab",
+            )
 
     # 1) Search — prefer resource-id (deterministic), never vision
     if not typed_contact and not tapped_search:
@@ -871,8 +1017,21 @@ def heuristic_dm_send(
             "tap_search_fallback",
         )
 
-    # 2) Type contact into search
+    # 2) Type contact into search — never into the message compose box
     if (tapped_search or _tree_editable_center(ui_tree)) and not typed_contact:
+        if focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
+            # Compose has focus (leftover conversation) — leave chat, re-open search
+            return _fp(
+                {
+                    "action": "back",
+                    "reason": (
+                        f"Compose focused before contact typed — back then search ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "back_before_type_contact",
+            )
         return _fp(
             {
                 "action": "type",
@@ -1119,7 +1278,9 @@ def heuristic_dm_send(
 
     # 7) Verify outgoing bubble / re-send
     if tapped_send:
-        if outgoing_bubble_present(ui_tree, message):
+        want_pkg = str(profile.get("package") or "").lower()
+        pkg_ok = (not want_pkg) or (want_pkg in pkg) or fg
+        if pkg_ok and outgoing_bubble_present(ui_tree, message):
             return _fp(
                 {
                     "action": "done",
@@ -1132,6 +1293,21 @@ def heuristic_dm_send(
                     "outgoing_confirmed": True,
                 },
                 "done_outgoing_bubble",
+            )
+        if not pkg_ok and outgoing_bubble_present(ui_tree, message):
+            # Bubble on wrong package — re-open target app
+            return _fp(
+                {
+                    "action": "open_app",
+                    "app": open_label,
+                    "reason": (
+                        f"Wrong FG package {package or '?'} — reopen "
+                        f"{open_label} ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "reopen_wrong_pkg",
             )
         if goal_satisfied:
             sat2 = goal_satisfied(instruction, ui_tree, package)

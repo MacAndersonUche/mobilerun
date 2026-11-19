@@ -1,0 +1,233 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "ai.mobilerun.fakechats"
+    compileSdk = 34
+
+    defaultConfig {
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+        // Debuggable so adb run-as can read sent_messages.jsonl in CI
+        // (flavors inherit; buildTypes.debug sets debuggable).
+    }
+
+    flavorDimensions += "chatapp"
+    productFlavors {
+        create("whatsapp") {
+            dimension = "chatapp"
+            applicationId = "com.whatsapp"
+            resValue("string", "app_label", "WhatsApp")
+            buildConfigField("String", "FLAVOR_KEY", "\"whatsapp\"")
+            buildConfigField("String", "FAMILY", "\"messaging\"")
+        }
+        create("instagram") {
+            dimension = "chatapp"
+            applicationId = "com.instagram.android"
+            resValue("string", "app_label", "Instagram")
+            buildConfigField("String", "FLAVOR_KEY", "\"instagram\"")
+            buildConfigField("String", "FAMILY", "\"messaging\"")
+        }
+        create("messenger") {
+            dimension = "chatapp"
+            applicationId = "com.facebook.orca"
+            resValue("string", "app_label", "Messenger")
+            buildConfigField("String", "FLAVOR_KEY", "\"messenger\"")
+            buildConfigField("String", "FAMILY", "\"messaging\"")
+        }
+        create("telegram") {
+            dimension = "chatapp"
+            applicationId = "org.telegram.messenger"
+            resValue("string", "app_label", "Telegram")
+            buildConfigField("String", "FLAVOR_KEY", "\"telegram\"")
+            buildConfigField("String", "FAMILY", "\"messaging\"")
+        }
+        create("facebook") {
+            dimension = "chatapp"
+            applicationId = "com.facebook.katana"
+            resValue("string", "app_label", "Facebook Dating")
+            buildConfigField("String", "FLAVOR_KEY", "\"facebook\"")
+            buildConfigField("String", "FAMILY", "\"facebook_dating\"")
+        }
+        create("tinder") {
+            dimension = "chatapp"
+            applicationId = "com.tinder"
+            resValue("string", "app_label", "Tinder")
+            buildConfigField("String", "FLAVOR_KEY", "\"tinder\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("bumble") {
+            dimension = "chatapp"
+            applicationId = "com.bumble.app"
+            resValue("string", "app_label", "Bumble")
+            buildConfigField("String", "FLAVOR_KEY", "\"bumble\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("hinge") {
+            dimension = "chatapp"
+            applicationId = "co.hinge.app"
+            resValue("string", "app_label", "Hinge")
+            buildConfigField("String", "FLAVOR_KEY", "\"hinge\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("hily") {
+            dimension = "chatapp"
+            applicationId = "com.hily.app"
+            resValue("string", "app_label", "Hily")
+            buildConfigField("String", "FLAVOR_KEY", "\"hily\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("breeze") {
+            dimension = "chatapp"
+            applicationId = "co.okcupid.breeze"
+            resValue("string", "app_label", "Breeze")
+            buildConfigField("String", "FLAVOR_KEY", "\"breeze\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("taimi") {
+            dimension = "chatapp"
+            applicationId = "com.takimi.android"
+            resValue("string", "app_label", "Taimi")
+            buildConfigField("String", "FLAVOR_KEY", "\"taimi\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("tagged") {
+            dimension = "chatapp"
+            applicationId = "com.taggedapp"
+            resValue("string", "app_label", "Tagged")
+            buildConfigField("String", "FLAVOR_KEY", "\"tagged\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("blk") {
+            dimension = "chatapp"
+            applicationId = "com.affinityapps.blk"
+            resValue("string", "app_label", "BLK")
+            buildConfigField("String", "FLAVOR_KEY", "\"blk\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("yubo") {
+            dimension = "chatapp"
+            applicationId = "co.yellw.yellowapp"
+            resValue("string", "app_label", "Yubo")
+            buildConfigField("String", "FLAVOR_KEY", "\"yubo\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("pure") {
+            dimension = "chatapp"
+            applicationId = "com.pure.android"
+            resValue("string", "app_label", "Pure")
+            buildConfigField("String", "FLAVOR_KEY", "\"pure\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("boo") {
+            dimension = "chatapp"
+            applicationId = "enterprises.dating.boo"
+            resValue("string", "app_label", "Boo")
+            buildConfigField("String", "FLAVOR_KEY", "\"boo\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("jaumo") {
+            dimension = "chatapp"
+            applicationId = "com.jaumo"
+            resValue("string", "app_label", "Jaumo")
+            buildConfigField("String", "FLAVOR_KEY", "\"jaumo\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("happn") {
+            dimension = "chatapp"
+            applicationId = "com.ftw_and_co.happn"
+            resValue("string", "app_label", "happn")
+            buildConfigField("String", "FLAVOR_KEY", "\"happn\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("wild") {
+            dimension = "chatapp"
+            applicationId = "com.wild.date"
+            resValue("string", "app_label", "Wild")
+            buildConfigField("String", "FLAVOR_KEY", "\"wild\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("threef") {
+            dimension = "chatapp"
+            applicationId = "com.threefun.app"
+            resValue("string", "app_label", "3F")
+            buildConfigField("String", "FLAVOR_KEY", "\"threef\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("meetme") {
+            dimension = "chatapp"
+            applicationId = "com.myyearbook.m"
+            resValue("string", "app_label", "MeetMe")
+            buildConfigField("String", "FLAVOR_KEY", "\"meetme\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("okcupid") {
+            dimension = "chatapp"
+            applicationId = "com.okcupid.okcupid"
+            resValue("string", "app_label", "OkCupid")
+            buildConfigField("String", "FLAVOR_KEY", "\"okcupid\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("badoo") {
+            dimension = "chatapp"
+            applicationId = "com.badoo.mobile"
+            resValue("string", "app_label", "Badoo")
+            buildConfigField("String", "FLAVOR_KEY", "\"badoo\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("feeld") {
+            dimension = "chatapp"
+            applicationId = "co.feeld"
+            resValue("string", "app_label", "Feeld")
+            buildConfigField("String", "FLAVOR_KEY", "\"feeld\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("pof") {
+            dimension = "chatapp"
+            applicationId = "com.pof.android"
+            resValue("string", "app_label", "POF")
+            buildConfigField("String", "FLAVOR_KEY", "\"pof\"")
+            buildConfigField("String", "FAMILY", "\"swipe\"")
+        }
+        create("securefolder") {
+            dimension = "chatapp"
+            applicationId = "com.samsung.knox.securefolder"
+            resValue("string", "app_label", "Secure Folder")
+            buildConfigField("String", "FLAVOR_KEY", "\"securefolder\"")
+            buildConfigField("String", "FAMILY", "\"secure_folder\"")
+        }
+    }
+    buildTypes {
+        debug {
+            isDebuggable = true
+        }
+        release {
+            isMinifyEnabled = false
+            isDebuggable = true // keep run-as for CI asserts even on "release" flavor builds
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+        viewBinding = false
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+}

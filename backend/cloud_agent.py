@@ -538,6 +538,18 @@ def _goal_satisfied_from_tree(
             )
             if not marker_in_label:
                 continue
+            # Fake-chats (and fixtures) seed an "Old outgoing message: …" bubble
+            # with the same text — that must not satisfy the send goal.
+            if re.search(
+                rf"old outgoing message:\s*{re.escape(marker)}",
+                tl,
+                re.I,
+            ) and not re.search(
+                rf'new outgoing message[^"]*{re.escape(marker)}',
+                tl,
+                re.I,
+            ):
+                continue
             in_edit = bool(
                 re.search(
                     r'e="?1"?[^>]{0,120}'
@@ -580,6 +592,7 @@ def plan_next_action(
     last_tap_key: Optional[str] = None,
     package: str = "",
     dry_run: bool = False,
+    agent_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Plan one action. Multi-step goals require a real LLM (Gemini or OpenAI).
 
@@ -587,21 +600,54 @@ def plan_next_action(
     and is always labelled LLM unavailable: quota. It must never complete
     multi-step verification tasks.
     """
-    # Deterministic short-circuit: goal already visible → done (avoids tap loops)
-    satisfied = _goal_satisfied_from_tree(
-        instruction,
-        ui_tree,
-        package,
-        history=history,
-        dry_run=dry_run,
+    # Bulk swipe / bulk message bench goals skip the single-DM "goal visible"
+    # short-circuit (seed bubbles / match lists would false-complete).
+    # Lazy: only parse bulk when the instruction looks like a bench goal so
+    # prod Lambda (no catalog.json) never pays the import cost on normal DMs.
+    instr_l = (instruction or "").lower()
+    maybe_bulk = any(
+        tok in instr_l
+        for tok in (
+            "swipe ",
+            "auto-swipe",
+            "bulk ",
+            "50 profiles",
+            "message 50",
+            "fake-chats",
+            "fake chats",
+        )
     )
-    if satisfied:
-        return {
-            "action": "done",
-            "reason": satisfied,
-            "planner": "goal_visible",
-            "llm_provider": None,
-        }
+    bulk_goal = None
+    if maybe_bulk:
+        try:
+            from bulk_bench_heuristics import parse_bulk_goal as _parse_bulk
+        except ImportError:
+            from backend.bulk_bench_heuristics import (  # type: ignore
+                parse_bulk_goal as _parse_bulk,
+            )
+        try:
+            bulk_goal = _parse_bulk(instruction)
+        except Exception as e:
+            logger.warning("parse_bulk_goal skipped: %s", e)
+            bulk_goal = None
+    secure_folder_goal = "secure folder" in instr_l
+
+    # Deterministic short-circuit: goal already visible → done (avoids tap loops)
+    if not bulk_goal and not secure_folder_goal:
+        satisfied = _goal_satisfied_from_tree(
+            instruction,
+            ui_tree,
+            package,
+            history=history,
+            dry_run=dry_run,
+        )
+        if satisfied:
+            return {
+                "action": "done",
+                "reason": satisfied,
+                "planner": "goal_visible",
+                "llm_provider": None,
+            }
 
     try:
         from message_text_guard import enforce_message_text as _enforce_msg
@@ -612,6 +658,23 @@ def plan_next_action(
 
     def _guard(action: Dict[str, Any]) -> Dict[str, Any]:
         return _enforce_msg(action, instruction, history=history)
+
+    # Fake-chats bulk bench + Secure Folder path — before single-DM path
+    if bulk_goal or secure_folder_goal:
+        try:
+            from bulk_bench_heuristics import plan_bulk_bench
+        except ImportError:
+            from backend.bulk_bench_heuristics import plan_bulk_bench  # type: ignore
+
+        bulk_act = plan_bulk_bench(
+            instruction,
+            ui_tree,
+            history,
+            state=agent_state if isinstance(agent_state, dict) else {},
+            package=package,
+        )
+        if bulk_act:
+            return _guard(bulk_act)
 
     # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
     msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
@@ -1330,13 +1393,30 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                     b_tuple = (parts[0], parts[1], parts[2], parts[3])
             except ValueError:
                 b_tuple = None
-        jx, jy = jitter_tap(ox, oy, bounds=b_tuple)
+        # Fake-chats bench: keep taps exact so Like ≠ Super Like under jitter.
+        bench_exact = os.environ.get("FAKE_CHATS_FAST", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ) or bool(
+            action.get("_bulk_swipe_inc")
+            or action.get("fastpath_step")
+            in (
+                "bulk_like",
+                "bulk_dismiss_dialog",
+                "bulk_dismiss_fallback",
+            )
+        )
+        if bench_exact:
+            jx, jy = ox, oy
+        else:
+            jx, jy = jitter_tap(ox, oy, bounds=b_tuple)
         action["_tap_raw"] = (ox, oy)
         action["_tap_jitter"] = (jx, jy)
         raw = call_device(
             device_id,
             "tap",
-            {"x": jx, "y": jy, "humanize": True},
+            {"x": jx, "y": jy, "humanize": not bench_exact},
             timeout_s=20,
         )
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
@@ -1832,6 +1912,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             last_tap_key=state.get("last_tap_key"),
                             package=str(tree_info.get("package") or ""),
                             dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+                            agent_state=state,
                         )
                         kind = str(action.get("action") or "").lower()
                         reason = str(action.get("reason") or "")
@@ -1938,6 +2019,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     last_tap_key=state.get("last_tap_key"),
                     package=str(tree_info.get("package") or ""),
                     dry_run=job_dry_run,
+                    agent_state=state,
                 )
             except RuntimeError as plan_err:
                 # Recover instead of failing when possible
@@ -2046,7 +2128,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or ("chrome" in app_l and "chrome" in fg)
                 or ("message" in app_l and "messaging" in fg)
             )
-            if fg_matches or _history_shows_app_opened(hist_blob, app_name):
+            # History alone is not enough: open_ok can race while SystemUI /
+            # launcher / MobileRun still owns the foreground. Only skip when FG
+            # actually matches the target app.
+            history_opened = _history_shows_app_opened(hist_blob, app_name)
+            if fg_matches:
                 logger.info(
                     "skipping repeat open_app(%s) — already open (fg=%s)",
                     app_name,
@@ -2071,6 +2157,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         last_tap_key=state.get("last_tap_key"),
                         dry_run=bool(job.get("dry_run") or state.get("dry_run")),
                         package=str(tree_info.get("package") or ""),
+                        agent_state=state,
                     )
                     kind = str(action.get("action") or "").lower()
                     reason = str(action.get("reason") or reason)
@@ -2107,6 +2194,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             )
                             action = {"action": "fail", "reason": reason}
                             kind = "fail"
+            elif history_opened and not fg_matches:
+                # Allow the open_app action to execute again — prior open_ok
+                # did not land the target package in the foreground.
+                logger.info(
+                    "re-issuing open_app(%s) — history open_ok but fg=%s",
+                    app_name,
+                    fg or "?",
+                )
 
         # Hard-stop after too many no-progress steps (same tree forever)
         if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
@@ -2275,47 +2370,91 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     from backend.recovery import should_hard_fail as _shf  # type: ignore
 
                 if fail_n < 16 and not _shf(state):
-                    # Rotate recovery actions so we actually move the UI forward.
-                    # If we left Messages (SystemUI/launcher), open_app first;
-                    # then focus compose, type marker, tap Send. Never Back.
-                    pkg_l = str(tree_info.get("package") or "").lower()
-                    off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
-                    # ANR dialog "Wait" button (accel-off emu); then reopen Messages.
-                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
-                    recoveries = (
-                        (
-                            anr_wait,
-                            {"action": "open_app", "app": "messages"},
-                            {"action": "tap", "x": 845, "y": 2200},  # Start chat FAB
-                            {"action": "tap", "x": 540, "y": 400},  # contact/search
-                            {
-                                "action": "type",
-                                "text": "5550100",
-                            },
-                            {"action": "tap", "x": 540, "y": 450},
-                            {
-                                "action": "type",
-                                "text": "hello from macai uitree recovery test",
-                            },
-                            {"action": "tap", "x": 1000, "y": 2280},  # Send
-                            {"action": "open_app", "app": "messages"},
-                        )
-                        if off_messages
-                        else (
-                            {"action": "tap", "x": 1000, "y": 2280},  # Send first
-                            {"action": "tap", "x": 845, "y": 2200},  # Start chat / Send
-                            {"action": "tap", "x": 540, "y": 2250},  # message field
-                            {
-                                "action": "type",
-                                "text": "hello from macai uitree recovery test",
-                            },
-                            {"action": "tap", "x": 1000, "y": 2280},  # send again
-                            anr_wait,
-                            {"action": "open_app", "app": "messages"},
-                            {"action": "tap", "x": 540, "y": 2100},
+                    instr_l = (instruction or "").lower()
+                    sms_goal = any(
+                        k in instr_l
+                        for k in (
+                            "messages",
+                            "sms",
+                            "5550100",
+                            "macai",
+                            "text message",
                         )
                     )
-                    action = recoveries[(fail_n - 1) % len(recoveries)]
+                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
+                    if sms_goal:
+                        # Rotate recovery actions so we actually move the UI forward.
+                        # If we left Messages (SystemUI/launcher), open_app first;
+                        # then focus compose, type marker, tap Send. Never Back.
+                        pkg_l = str(tree_info.get("package") or "").lower()
+                        off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
+                        recoveries = (
+                            (
+                                anr_wait,
+                                {"action": "open_app", "app": "messages"},
+                                {"action": "tap", "x": 845, "y": 2200},
+                                {"action": "tap", "x": 540, "y": 400},
+                                {"action": "type", "text": "5550100"},
+                                {"action": "tap", "x": 540, "y": 450},
+                                {
+                                    "action": "type",
+                                    "text": "hello from macai uitree recovery test",
+                                },
+                                {"action": "tap", "x": 1000, "y": 2280},
+                                {"action": "open_app", "app": "messages"},
+                            )
+                            if off_messages
+                            else (
+                                {"action": "tap", "x": 1000, "y": 2280},
+                                {"action": "tap", "x": 845, "y": 2200},
+                                {"action": "tap", "x": 540, "y": 2250},
+                                {
+                                    "action": "type",
+                                    "text": "hello from macai uitree recovery test",
+                                },
+                                {"action": "tap", "x": 1000, "y": 2280},
+                                anr_wait,
+                                {"action": "open_app", "app": "messages"},
+                                {"action": "tap", "x": 540, "y": 2100},
+                            )
+                        )
+                        action = recoveries[(fail_n - 1) % len(recoveries)]
+                    else:
+                        # Dating / fake-chats / generic: dismiss ANR, back, re-open
+                        # the instruction's app — never hijack into SMS Messages.
+                        dm_app = None
+                        open_label = None
+                        try:
+                            from dm_heuristics import (
+                                DM_APP_PROFILES as _DAP,
+                                detect_dm_app as _dda,
+                            )
+                        except ImportError:
+                            from backend.dm_heuristics import (  # type: ignore
+                                DM_APP_PROFILES as _DAP,
+                                detect_dm_app as _dda,
+                            )
+                        try:
+                            dm_app = _dda(instruction)
+                        except Exception:
+                            dm_app = None
+                        if dm_app:
+                            open_label = str(
+                                (_DAP.get(dm_app) or {}).get("open_label") or dm_app
+                            )
+                        reopen = (
+                            {"action": "open_app", "app": open_label}
+                            if open_label
+                            else anr_wait
+                        )
+                        recoveries = (
+                            anr_wait,
+                            {"action": "back"},
+                            reopen,
+                            {"action": "tap", "x": 950, "y": 2200},
+                            {"action": "tap", "x": 540, "y": 1500},
+                        )
+                        action = recoveries[(fail_n - 1) % len(recoveries)]
                     kind = str(action.get("action") or "").lower()
                     history.append(
                         f"hint: planner fail ({reason[:60]}) → recovery {kind} "
@@ -2707,9 +2846,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         stats = update_step_timing_stats(state, wall_ms)
         delay_s = 0.0
         planner_l = str(planner or "").lower()
-        # Deterministic fast-paths already skip LLM — only short human gap
+        # Prefer planner-provided pacing (bulk bench); else short human gap
         if kind not in ("done", "fail"):
-            delay_s = sleep_inter_step(seed=f"{job.get('job_id')}:{step}:{kind}")
+            if action.get("delay_s") is not None:
+                delay_s = float(action.get("delay_s") or 0.0)
+                if delay_s > 0:
+                    time.sleep(delay_s)
+            else:
+                delay_s = sleep_inter_step(seed=f"{job.get('job_id')}:{step}:{kind}")
         state["last_human_delay_s"] = round(delay_s, 3)
         state["last_step_wall_ms"] = round(wall_ms, 1)
         job["state"] = state

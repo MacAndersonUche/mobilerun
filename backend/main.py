@@ -75,8 +75,16 @@ pairing_tokens: Dict[str, Dict[str, Any]] = {}
 # Long-lived device sessions for reconnect without USB / without re-scan
 device_sessions: Dict[str, Dict[str, Any]] = {}  # session_token -> meta
 device_websockets: Dict[str, WebSocket] = {}
+# Uvicorn event loop — used by device_push local in-memory bridge
+_app_loop: Optional[asyncio.AbstractEventLoop] = None
 # Device-code OAuth style linking (APK shows code → approve on web)
 device_link_codes: Dict[str, Dict[str, Any]] = {}  # user_code -> meta
+
+
+@app.on_event("startup")
+async def _capture_app_loop() -> None:
+    global _app_loop
+    _app_loop = asyncio.get_running_loop()
 
 
 def _owner_key(auth: Optional[dict]) -> Optional[str]:
@@ -840,6 +848,121 @@ async def revoke_device(
     return {"ok": True, "device_id": device_id, "revoked": True}
 
 
+@app.get("/api/devices/{device_id}/agent_debug")
+async def device_agent_debug(
+    device_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Reachability + live WS connection rows (diagnose idle-0 / tick failures)."""
+    try:
+        from storage import device_is_ws_connected, get_device_connections
+    except ImportError:
+        from backend.storage import (  # type: ignore
+            device_is_ws_connected,
+            get_device_connections,
+        )
+    try:
+        from device_push import device_is_reachable
+    except ImportError:
+        from backend.device_push import device_is_reachable  # type: ignore
+
+    conns = []
+    try:
+        raw = get_device_connections(device_id) or []
+        now = int(time.time())
+        for c in raw:
+            ca = int(c.get("connected_at") or 0)
+            conns.append(
+                {
+                    "connection_id": str(c.get("connection_id") or "")[:12] + "…",
+                    "role": c.get("role"),
+                    "authed": bool(c.get("authed")),
+                    "platform": c.get("platform"),
+                    "age_s": (now - ca) if ca else None,
+                    "last_type": c.get("last_type"),
+                    "owner": (c.get("owner") or "")[:32],
+                }
+            )
+    except Exception as e:
+        conns = [{"error": str(e)}]
+    return {
+        "device_id": device_id,
+        "reachable": bool(device_is_reachable(device_id)),
+        "ws_connected": bool(device_is_ws_connected(device_id)),
+        "connections": conns,
+        "in_memory_ws": device_id in device_websockets,
+        "step_worker_arn_set": bool(os.environ.get("STEP_WORKER_ARN")),
+        "use_aws_storage": os.environ.get("USE_AWS_STORAGE"),
+    }
+
+
+class DeviceRpcBody(BaseModel):
+    command: str
+    params: Optional[Dict[str, Any]] = None
+    timeout_s: float = 20.0
+
+
+@app.post("/api/devices/{device_id}/rpc")
+async def device_rpc_http(
+    device_id: str,
+    body: DeviceRpcBody,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """One-shot phone RPC (get_device_info / ensure_ime / get_ui_tree) via WS.
+
+    Used to confirm APK build + IME without waiting on the full agent loop.
+    """
+    if auth is None and os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() != "true":
+        raise HTTPException(status_code=401, detail="Sign in required")
+    cmd = (body.command or "").strip()
+    # Allowlist — never expose arbitrary shell/file commands here
+    allowed = {
+        "get_device_info",
+        "ensure_ime",
+        "restore_ime",
+        "get_ui_tree",
+        "screenshot",
+        "ping",
+        "get_foreground_app",
+        "dismiss_dialogs",
+    }
+    if cmd not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"command not allowed; choose from {sorted(allowed)}",
+        )
+
+    try:
+        from device_rpc import call_device
+    except ImportError:
+        from backend.device_rpc import call_device  # type: ignore
+
+    t0 = time.time()
+    try:
+        result = await asyncio.to_thread(
+            call_device,
+            device_id,
+            cmd,
+            body.params or {},
+            float(body.timeout_s or 20.0),
+            wait_reconnect_s=min(30.0, float(body.timeout_s or 20.0)),
+        )
+        return {
+            "ok": True,
+            "device_id": device_id,
+            "command": cmd,
+            "result": result,
+            "elapsed_s": round(time.time() - t0, 3),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "device_id": device_id,
+            "command": cmd,
+            "error": str(e),
+            "elapsed_s": round(time.time() - t0, 3),
+        }
+
+
 @app.websocket("/api/devices/connect")
 async def device_websocket(websocket: WebSocket):
     """
@@ -1012,6 +1135,11 @@ async def device_websocket(websocket: WebSocket):
             )
 
         device_websockets[device_id] = websocket
+        global _app_loop
+        try:
+            _app_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
 
         await websocket.send_json(
             {
@@ -1366,36 +1494,12 @@ async def submit_task(
             task["status"] = "running"
             task["result"] = "Cloud agent started (step worker)"
         elif os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() == "true":
-            # Local/dev: run one step inline so CI/emulator can progress without EventBridge
-            try:
-                from cloud_agent import run_one_agent_step
-            except ImportError:
-                from backend.cloud_agent import run_one_agent_step  # type: ignore
-            try:
-                from storage import get_job, put_job
-            except ImportError:
-                from backend.storage import get_job, put_job  # type: ignore
-
-            job = get_job(task_id) or {
-                "job_id": task_id,
-                "kind": "agent",
-                "status": "running",
-                "device_id": request.device_id,
-                "instruction": request.instruction,
-                "max_steps": request.max_steps or 15,
-                "state": {"steps": 0, "history": []},
-            }
-            # Run up to a few steps inline for local backends
-            for _ in range(min(8, int(request.max_steps or 15))):
-                if job.get("status") != "running":
-                    break
-                job = run_one_agent_step(job)
-                put_job(job)
+            # Local/dev: queue the job; /api/jobs/{id}/tick advances steps off the
+            # event loop (asyncio.to_thread) so in-memory WS RPC can complete.
+            # Do NOT run steps inline here — that deadlocks get_ui_tree.
             kicked = True
-            task["status"] = job.get("status") or "running"
-            task["result"] = job.get("result")
-            task["error"] = job.get("error")
-            task["current_step"] = int((job.get("state") or {}).get("steps") or 0)
+            task["status"] = "running"
+            task["result"] = "Queued for local tick loop"
     except Exception as e:
         logger.error("Failed to kick cloud agent: %s", e)
         task["status"] = "failed"
@@ -3494,6 +3598,8 @@ async def get_dating_activity(auth: Optional[dict] = Depends(optional_verify_tok
 @app.post("/api/jobs/{job_id}/tick")
 async def tick_job(job_id: str, auth: Optional[dict] = Depends(optional_verify_token)):
     """Advance one dating/social/agent step (used by live-activity E2E + dry-run)."""
+    import traceback as _tb
+
     try:
         from storage import get_job, put_job
     except ImportError:
@@ -3503,7 +3609,10 @@ async def tick_job(job_id: str, auth: Optional[dict] = Depends(optional_verify_t
     except ImportError:
         from backend.step_worker import process_job  # type: ignore
 
-    job = get_job(job_id)
+    try:
+        job = get_job(job_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"get_job failed: {e}") from e
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     if str(job.get("status") or "") not in ("running", "paused"):
@@ -3511,14 +3620,39 @@ async def tick_job(job_id: str, auth: Optional[dict] = Depends(optional_verify_t
     # Force due now
     job["next_run_at"] = int(time.time()) - 1
     job["status"] = "running"
-    put_job(job)
-    process_job(job)
+    try:
+        put_job(job)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"put_job failed: {e}") from e
+    # Off-loop so device WS can deliver RPC replies during the step
+    try:
+        await asyncio.to_thread(process_job, job)
+    except Exception as e:
+        # Surface the real crash (previously a bare 500) so we can diagnose
+        # prod step-worker failures without CloudWatch.
+        updated = get_job(job_id) or job
+        return {
+            "status": updated.get("status") or "failed",
+            "job_id": job_id,
+            "error": f"process_job: {e}",
+            "traceback": _tb.format_exc()[-4000:],
+            "job_error": updated.get("error"),
+            "result": updated.get("result"),
+            "steps": int((updated.get("state") or {}).get("steps") or 0),
+        }
     updated = get_job(job_id) or job
     kind = str(updated.get("kind") or "agent")
+    try:
+        activity = _activity_for_mode(kind, job_id)
+    except Exception as e:
+        activity = {"error": f"activity failed: {e}"}
     return {
         "status": updated.get("status"),
         "job_id": job_id,
-        "activity": _activity_for_mode(kind, job_id),
+        "activity": activity,
+        "error": updated.get("error"),
+        "result": updated.get("result"),
+        "steps": int((updated.get("state") or {}).get("steps") or 0),
     }
 
 

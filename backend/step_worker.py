@@ -46,8 +46,8 @@ def _to_plain(obj: Any) -> Any:
 
 
 def _dynamo_safe(obj: Any) -> Any:
-    """Convert floats to Decimal for DynamoDB."""
-    return json.loads(json.dumps(obj), parse_float=Decimal)
+    """Convert floats to Decimal for DynamoDB (plain first — obj may already have Decimals)."""
+    return json.loads(json.dumps(_to_plain(obj)), parse_float=Decimal)
 
 
 def _send_to_device(device_id: str, payload: Dict[str, Any]) -> bool:
@@ -68,7 +68,8 @@ def _send_to_device(device_id: str, payload: Dict[str, Any]) -> bool:
         cid = c["connection_id"]
         try:
             client.post_to_connection(
-                ConnectionId=cid, Data=json.dumps(payload).encode("utf-8")
+                ConnectionId=cid,
+                Data=json.dumps(_to_plain(payload)).encode("utf-8"),
             )
             ok = True
         except Exception as e:
@@ -537,13 +538,34 @@ def process_job(job: Dict[str, Any]) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
         return
-    if kind == "dating":
-        updated = run_dating_step(job)
-    elif kind == "social":
-        updated = run_social_step(job)
-    else:
-        updated = run_agent_step(job)
-    put_job(_dynamo_safe(updated))
+    try:
+        if kind == "dating":
+            updated = run_dating_step(job)
+        elif kind == "social":
+            updated = run_social_step(job)
+        else:
+            updated = run_agent_step(job)
+        put_job(_dynamo_safe(updated))
+    except Exception as e:
+        # Persist the crash so Tasks/tick show a real error instead of idle-0.
+        logger.exception("process_job crash job=%s: %s", job.get("job_id"), e)
+        try:
+            state = job.setdefault("state", {})
+            if isinstance(state, dict):
+                state["last_action"] = f"process_job_crash: {e}"
+                job["state"] = state
+            job["status"] = "failed"
+            job["error"] = f"step_worker crash: {e}"
+            job["completed_at"] = int(time.time())
+            job["updated_at"] = int(time.time())
+            put_job(_dynamo_safe(job))
+        except Exception as persist_err:
+            logger.exception(
+                "failed to persist process_job crash for %s: %s",
+                job.get("job_id"),
+                persist_err,
+            )
+        raise
 
 
 def handler(event: Dict[str, Any], context: Any):
@@ -551,16 +573,25 @@ def handler(event: Dict[str, Any], context: Any):
     if event.get("job_id"):
         job = get_job(event["job_id"])
         if job:
-            process_job(job)
+            try:
+                process_job(job)
+            except Exception as e:
+                return {
+                    "processed": 0,
+                    "job_id": event["job_id"],
+                    "error": str(e),
+                }
             return {"processed": 1, "job_id": event["job_id"]}
         return {"processed": 0, "error": "job not found"}
 
     due = list_due_jobs(limit=10)
     processed = 0
+    errors = 0
     for job in due:
         try:
             process_job(job)
             processed += 1
         except Exception as e:
+            errors += 1
             logger.exception("job failed: %s", e)
-    return {"processed": processed, "due": len(due)}
+    return {"processed": processed, "due": len(due), "errors": errors}

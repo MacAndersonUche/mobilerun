@@ -287,7 +287,9 @@ def _dynamo_safe(obj: Any) -> Any:
             return [_drop_none(v) for v in o if v is not None]
         return o
 
-    cleaned = _drop_none(obj)
+    # Plain first: Dynamo round-trips already contain Decimal, and json.dumps
+    # cannot serialize Decimal without a default.
+    cleaned = _drop_none(_from_dynamo(obj))
     return json.loads(json.dumps(cleaned), parse_float=Decimal)
 
 

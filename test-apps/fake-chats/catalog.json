@@ -1,0 +1,31 @@
+{
+  "apps": [
+    {"key": "whatsapp", "label": "WhatsApp", "package": "com.whatsapp", "family": "messaging", "secure_folder": true},
+    {"key": "instagram", "label": "Instagram", "package": "com.instagram.android", "family": "messaging", "secure_folder": true},
+    {"key": "messenger", "label": "Messenger", "package": "com.facebook.orca", "family": "messaging", "secure_folder": true},
+    {"key": "telegram", "label": "Telegram", "package": "org.telegram.messenger", "family": "messaging", "secure_folder": true},
+    {"key": "facebook", "label": "Facebook Dating", "package": "com.facebook.katana", "family": "facebook_dating", "secure_folder": true},
+    {"key": "tinder", "label": "Tinder", "package": "com.tinder", "family": "swipe", "secure_folder": true},
+    {"key": "bumble", "label": "Bumble", "package": "com.bumble.app", "family": "swipe", "secure_folder": true},
+    {"key": "hinge", "label": "Hinge", "package": "co.hinge.app", "family": "swipe", "secure_folder": true},
+    {"key": "hily", "label": "Hily", "package": "com.hily.app", "family": "swipe", "secure_folder": true},
+    {"key": "breeze", "label": "Breeze", "package": "co.okcupid.breeze", "family": "swipe", "secure_folder": true},
+    {"key": "taimi", "label": "Taimi", "package": "com.takimi.android", "family": "swipe", "secure_folder": true},
+    {"key": "tagged", "label": "Tagged", "package": "com.taggedapp", "family": "swipe", "secure_folder": true},
+    {"key": "blk", "label": "BLK", "package": "com.affinityapps.blk", "family": "swipe", "secure_folder": true},
+    {"key": "yubo", "label": "Yubo", "package": "co.yellw.yellowapp", "family": "swipe", "secure_folder": true},
+    {"key": "pure", "label": "Pure", "package": "com.pure.android", "family": "swipe", "secure_folder": true},
+    {"key": "boo", "label": "Boo", "package": "enterprises.dating.boo", "family": "swipe", "secure_folder": true},
+    {"key": "jaumo", "label": "Jaumo", "package": "com.jaumo", "family": "swipe", "secure_folder": true},
+    {"key": "happn", "label": "happn", "package": "com.ftw_and_co.happn", "family": "swipe", "secure_folder": true},
+    {"key": "wild", "label": "Wild", "package": "com.wild.date", "family": "swipe", "secure_folder": true},
+    {"key": "threef", "label": "3F", "package": "com.threefun.app", "family": "swipe", "secure_folder": true},
+    {"key": "meetme", "label": "MeetMe", "package": "com.myyearbook.m", "family": "swipe", "secure_folder": true},
+    {"key": "okcupid", "label": "OkCupid", "package": "com.okcupid.okcupid", "family": "swipe", "secure_folder": true},
+    {"key": "badoo", "label": "Badoo", "package": "com.badoo.mobile", "family": "swipe", "secure_folder": true},
+    {"key": "feeld", "label": "Feeld", "package": "co.feeld", "family": "swipe", "secure_folder": true},
+    {"key": "pof", "label": "POF", "package": "com.pof.android", "family": "swipe", "secure_folder": true},
+    {"key": "securefolder", "label": "Secure Folder", "package": "com.samsung.knox.securefolder", "family": "secure_folder", "secure_folder": false}
+  ],
+  "bulk": {"swipe_count": 50, "message_count": 50, "profile_pool": 60, "match_pool": 50}
+}
