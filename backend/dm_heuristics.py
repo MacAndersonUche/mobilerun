@@ -322,6 +322,163 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "SuperSwipe",
         ),
     },
+    "yubo": {
+        # Real-device map: Mac SM-G996B 1080x2400 (19 Nov). Compose UI — few ids.
+        "aliases": ("yubo",),
+        "package": "co.yellw.yellowapp",
+        "pkg_markers": ("yellw", "yellowapp", "yubo"),
+        "open_label": "Yubo",
+        "launch_activity": "co.yellw.yellowapp/.main.MainActivity",
+        "open_settle_s": 8.0,
+        "family": "swipe",
+        "like_swipe": (250, 1000, 1050, 1050, 300),
+        "pass_swipe": (850, 1000, 30, 1050, 300),
+        # Bottom nav y≈2180 (centers)
+        "nav_y": 2180,
+        "deck_tab_xy": (140, 2180),
+        "inbox_tab_xy": (343, 2180),  # Chat
+        "likes_tab_xy": (540, 2180),
+        "friends_tab_xy": (750, 2180),
+        "more_tab_xy": (940, 2180),
+        "inbox_labels": ("Chat", "Chats", "Conversations", "Messages"),
+        "inbox_tab_labels": ("Chat",),
+        "new_chat_labels": ("Chat", "Conversations"),
+        "search_labels": ("Search", "Search…"),
+        "search_ids": (
+            "id/matches_search",
+            "id/matches_search_input",
+        ),  # fake-chats
+        "search_fallback": None,
+        "like_ids": ("id/yubo_like", "id/gamepad_like"),
+        "pass_ids": ("id/yubo_pass", "id/gamepad_pass"),
+        "result_ids": ("id/match_row", "id/match_name"),
+        "header_ids": ("id/chat_header_name",),
+        "compose_labels": ("Aa", "Message", "Type a message", "Hey"),
+        "compose_ids": ("id/message_input", ":id/message_input"),
+        # Keyboard-open send arrow (mic becomes send when text present)
+        "send_labels": ("Send",),
+        "send_ids": ("id/send_button", ":id/send_button", "send"),
+        "send_xy_keyboard": (1008, 1336),
+        "direct_send_xy": (985, 1336),
+        "send_fallback": None,
+        "compose_fallback": None,  # prefer Aa / editable; keyboard moves field
+        "prefer_tap_send": True,
+        "prefer_clear_before_type": True,
+        "outgoing_min_x": 666,  # right-aligned bubbles
+        # Paid / dangerous — never tap
+        "never_tap_xy": ((840, 158),),  # Yubucks pill ~[812,138][869,179]
+        "never_tap_labels": (
+            "Yubucks",
+            "Blast",
+            "HyperSurge",
+            "Launch a HyperSurge",
+            "Unlock Infinity Pack",
+            "Infinity Pack",
+            "rocket",
+            "Rewind",
+        ),
+        "never_tap_ids": (),
+        "direct_tile_xy": (855, 656),
+        "send_message_cta_xy": (260, 2000),
+    },
+    "badoo": {
+        # Real-device map: Mac SM-G996B 1080x2400 (19 Nov). Full resource-ids.
+        "aliases": ("badoo",),
+        "package": "com.badoo.mobile",
+        "pkg_markers": ("badoo",),
+        "open_label": "Badoo",
+        "launch_activity": "com.badoo.mobile/.android.BadooActivity",
+        "open_settle_s": 8.0,
+        "family": "swipe",
+        "deck_ids": (
+            "com.badoo.mobile:id/encounters_stackView",
+            "id/encounters_stackView",
+        ),
+        "like_ids": (
+            "com.badoo.mobile:id/encounters_profile_voting_buttonVoteYes",
+            "id/encounters_profile_voting_buttonVoteYes",
+            "id/badoo_like",
+        ),
+        "pass_ids": (
+            "com.badoo.mobile:id/encounters_profile_voting_buttonVoteNo",
+            "id/encounters_profile_voting_buttonVoteNo",
+            "id/badoo_pass",
+        ),
+        "like_xy": (855, 1982),
+        "pass_xy": (225, 1982),
+        "like_swipe": (250, 1100, 1050, 1150, 300),
+        "pass_swipe": (850, 1100, 30, 1150, 300),
+        "inbox_labels": ("Chats", "Connections", "Messages", "Inbox"),
+        "inbox_ids": (
+            "com.badoo.mobile:id/connections_root",
+            "id/connections_root",
+        ),
+        "inbox_tab_labels": ("Chats", "Connections"),
+        "inbox_tab_xy": (756, 2210),  # nav_bar_button_connections
+        "encounters_tab_xy": (324, 2210),
+        "new_chat_labels": ("Chats", "Connections"),
+        "search_labels": ("Search", "Search…"),
+        "search_ids": ("id/matches_search", "id/matches_search_input"),
+        "search_fallback": None,
+        "result_ids": (
+            "com.badoo.mobile:id/connection_container",
+            "id/connection_container",
+            "com.badoo.mobile:id/profileInfo_name",
+            "id/profileInfo_name",
+            "id/match_row",
+            "id/match_name",
+        ),
+        "result_exclude_ids": (
+            "com.badoo.mobile:id/connectionItem_favoriteContainer",
+            "id/connectionItem_favoriteContainer",
+            "match_bar_container",
+        ),
+        "connections_list_id": "com.badoo.mobile:id/connection_list_component",
+        "header_ids": (
+            "com.badoo.mobile:id/chatToolbar_title",
+            "id/chatToolbar_title",
+            "id/chat_header_name",
+        ),
+        "compose_labels": (
+            "Type a message...",
+            "Type a message",
+            "Message",
+            "Aa",
+        ),
+        "compose_ids": (
+            "com.badoo.mobile:id/chatInput_text",
+            "id/chatInput_text",
+            "id/message_input",
+        ),
+        "send_labels": ("Send message", "Send"),
+        "send_ids": (
+            "com.badoo.mobile:id/chatInput_button_send",
+            "id/chatInput_button_send",
+            "id/send_button",
+            "send",
+        ),
+        "send_fallback": None,
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        "prefer_clear_before_type": True,
+        "never_tap_ids": (
+            "encounters_profile_voting_buttonChat",
+            "buttonChat",
+            "encounters_profile_voting_buttonCrush",
+            "buttonCrush",
+            "encountersCards_undo",
+            "chatToolbar_videoChatButton",
+            "status_add_spp_explanation_text",
+            "connectionItem_favoriteContainer",
+        ),
+        "never_tap_labels": (
+            "Buy Credits",
+            "Crush",
+            "Likes",  # match strip paid tile
+            "Rewind",
+            "Undo",
+        ),
+    },
     "hinge": {
         "aliases": ("hinge",),
         "package": "co.hinge.app",
@@ -544,16 +701,18 @@ def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
         editable = _attr(attrs, "e") in ("1", "true", "True")
         clickable = _attr(attrs, "c") in ("1", "true", "True")
         cx = cy = None
+        x1 = y1 = x2 = y2 = None
+        if b:
+            nums = re.findall(r"\d+", b)
+            if len(nums) >= 4:
+                x1, y1, x2, y2 = (int(n) for n in nums[:4])
         if xy and "," in xy:
             try:
                 cx, cy = [int(p) for p in xy.split(",")[:2]]
             except ValueError:
                 cx = cy = None
-        if (cx is None or cy is None) and b:
-            nums = re.findall(r"\d+", b)
-            if len(nums) >= 4:
-                x1, y1, x2, y2 = (int(n) for n in nums[:4])
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        if (cx is None or cy is None) and x1 is not None and y1 is not None:
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
         if cx is None or cy is None:
             continue
         label = " ".join(p for p in (text, desc, hint) if p).strip()
@@ -570,6 +729,10 @@ def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
                 "cls": cls,
                 "x": cx,
                 "y": cy,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
                 "editable": editable,
                 "clickable": clickable,
                 "focused": focused,
@@ -1029,6 +1192,345 @@ def bumble_pass_swipe(planner: str = "bumble_heuristic") -> Dict[str, Any]:
     )
 
 
+# --- Yubo (co.yellw.yellowapp) SM-G996B ---
+
+
+def yubo_deck_card_name(tree: str) -> Optional[str]:
+    """First text node with left x≈42 is the deck card name."""
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if not text or len(text) > 40:
+            continue
+        x1 = n.get("x1")
+        if x1 is None:
+            continue
+        if abs(int(x1) - 42) > 2:
+            continue
+        y = int(n.get("y") or 0)
+        if y < 200 or y > 2100:
+            continue
+        low = text.lower()
+        if low in ("chat", "likes", "friends", "more", "aa", "direct", "blast"):
+            continue
+        return text
+    return None
+
+
+def yubo_on_deck(tree: str) -> bool:
+    if yubo_deck_card_name(tree):
+        return True
+    blob = (tree or "").lower()
+    return "send a message" in blob and "conversations" not in blob
+
+
+def yubo_on_chat_list(tree: str) -> bool:
+    blob = (tree or "").lower()
+    return "conversations" in blob or ("new friends" in blob and "aa" not in blob)
+
+
+def yubo_on_chat(tree: str) -> bool:
+    return bool(
+        _tree_node_center(tree, "Aa")
+        or find_compose_center(tree, ("Aa", "Message"), ())
+    ) and bool(_tree_node_center(tree, "Back"))
+
+
+def yubo_dismiss_popup(
+    tree: str, planner: str = "yubo_heuristic"
+) -> Optional[Dict[str, Any]]:
+    blob = " ".join(
+        f"{n.get('id')} {n.get('label')}" for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "unlock infinity pack" in blob or "infinity pack" in blob:
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss Infinity Pack upsell ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "yubo_popup_infinity",
+        )
+    return None
+
+
+def yubo_direct_sheet_action(
+    tree: str, planner: str = "yubo_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Handle 'Send a message' sheet: never send while Blast (paid) is selected."""
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join((n.get("label") or "") for n in nodes).lower()
+    if "direct" not in blob and "blast" not in blob:
+        return None
+    # Find Direct / Blast tiles
+    direct_n = None
+    blast_n = None
+    for n in nodes:
+        lab = (n.get("label") or "").strip().lower()
+        if lab == "direct":
+            direct_n = n
+        elif lab == "blast":
+            blast_n = n
+    if direct_n is None and blast_n is None:
+        return None
+    # Selected Direct has bounds ≈[729,515][875,572]; unselected ≈[754,525][871,570]
+    direct_selected = False
+    if direct_n is not None and direct_n.get("x1") is not None:
+        w = int(direct_n["x2"]) - int(direct_n["x1"])
+        h = int(direct_n["y2"]) - int(direct_n["y1"])
+        # Selected tile is slightly larger
+        if w >= 140 or h >= 50 or int(direct_n["x1"]) <= 735:
+            direct_selected = True
+    if not direct_selected:
+        xy = DM_APP_PROFILES["yubo"].get("direct_tile_xy") or (855, 656)
+        if direct_n is not None:
+            xy = (int(direct_n["x"]), int(direct_n["y"]))
+        return _fp(
+            {
+                "action": "tap",
+                "x": int(xy[0]),
+                "y": int(xy[1]),
+                "reason": f"Select Direct (never Blast/Yubucks) ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "yubo_select_direct",
+        )
+    return None
+
+
+def yubo_find_conversation_tap(tree: str, contact: str) -> Optional[Tuple[int, int]]:
+    """Conversations row: name text near x=242 → tap (540, name_y+27)."""
+    best: Optional[Tuple[float, int, int]] = None
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if not text:
+            continue
+        score = _fuzzy_score(contact, text)
+        if score < 0.6:
+            continue
+        cx = int(n.get("x") or 0)
+        x1 = n.get("x1")
+        # Name column ≈ x=242; skip New friends carousel (y 264–760) when possible
+        y = int(n.get("y") or 0)
+        if y < 200:
+            continue
+        col_ok = abs(cx - 242) <= 50 or (x1 is not None and abs(int(x1) - 242) <= 40)
+        if not col_ok and not (180 <= cx <= 320):
+            continue
+        # Prefer rows below Conversations header (~1072)
+        bonus = 0.2 if y >= 1000 else 0.0
+        if 264 <= y <= 760:
+            bonus -= 0.3  # New friends / Reactions carousel
+        ranked = score + bonus
+        if best is None or ranked > best[0]:
+            best = (ranked, 540, y + 27)
+    if best is None:
+        return None
+    return (best[1], best[2])
+
+
+def yubo_like_swipe(planner: str = "yubo_heuristic") -> Dict[str, Any]:
+    x1, y1, x2, y2, dur = DM_APP_PROFILES["yubo"]["like_swipe"]
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "duration_ms": dur,
+            "reason": f"Yubo like swipe ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "yubo_like_swipe",
+    )
+
+
+def yubo_pass_swipe(planner: str = "yubo_heuristic") -> Dict[str, Any]:
+    x1, y1, x2, y2, dur = DM_APP_PROFILES["yubo"]["pass_swipe"]
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "duration_ms": dur,
+            "reason": f"Yubo pass swipe ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "yubo_pass_swipe",
+    )
+
+
+def yubo_find_send_center(tree: str) -> Optional[Tuple[int, int]]:
+    """Send arrow with keyboard open — prefer node near known xy / Send label."""
+    c = find_send_center_safe(
+        tree,
+        ("Send",),
+        send_ids=("send", "id/send_button"),
+        profile=DM_APP_PROFILES["yubo"],
+    )
+    if c:
+        return c
+    # Mic becomes send arrow near (1008,1336) when text present
+    for n in _parse_compact_nodes(tree):
+        if _is_forbidden_tap_target(n, DM_APP_PROFILES["yubo"]):
+            continue
+        x, y = int(n["x"]), int(n["y"])
+        if abs(x - 1008) <= 40 and abs(y - 1336) <= 60 and n.get("clickable"):
+            return (x, y)
+        if abs(x - 985) <= 40 and abs(y - 1336) <= 60 and n.get("clickable"):
+            return (x, y)
+    return None
+
+
+def yubo_outgoing_verified(tree: str, message: str) -> bool:
+    """Right-aligned (x>=666) bubble with exact text."""
+    needle = (message or "").strip().lower()
+    if len(needle) < 2:
+        return False
+    min_x = int(DM_APP_PROFILES["yubo"].get("outgoing_min_x") or 666)
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable"):
+            continue
+        text = (n.get("text") or "").strip()
+        if text.lower() != needle:
+            continue
+        if int(n.get("x") or 0) >= min_x or (
+            n.get("x1") is not None and int(n["x1"]) >= min_x - 40
+        ):
+            return True
+    return False
+
+
+# --- Badoo (com.badoo.mobile) SM-G996B ---
+
+
+def badoo_on_encounters(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "encounters_stackView",
+            "encounters_profile_voting_buttonVoteYes",
+            "encounters_profile_voting_buttonVoteNo",
+            "com.badoo.mobile:id/encounters_stackView",
+        )
+    )
+
+
+def badoo_on_connections(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "connections_root",
+            "connection_list_component",
+            "com.badoo.mobile:id/connections_root",
+        )
+    )
+
+
+def badoo_dismiss_popup(
+    tree: str, planner: str = "badoo_heuristic"
+) -> Optional[Dict[str, Any]]:
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join(f"{n.get('id')} {n.get('label')}" for n in nodes).lower()
+    if "buy credits" in blob:
+        close = _tree_node_center(tree, "Close")
+        if close:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": close[0],
+                    "y": close[1],
+                    "reason": f"Dismiss Buy Credits sheet → Close ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "badoo_popup_credits",
+            )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss Buy Credits sheet ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "badoo_popup_credits",
+        )
+    return None
+
+
+def badoo_like_action(planner: str = "badoo_heuristic") -> Dict[str, Any]:
+    """Prefer VoteYes button; swipe recipe also available."""
+    return _fp(
+        {
+            "action": "tap",
+            "x": 855,
+            "y": 1982,
+            "reason": f"Badoo Like (VoteYes) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "badoo_like",
+    )
+
+
+def badoo_pass_action(planner: str = "badoo_heuristic") -> Dict[str, Any]:
+    return _fp(
+        {
+            "action": "tap",
+            "x": 225,
+            "y": 1982,
+            "reason": f"Badoo Pass (VoteNo) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "badoo_pass",
+    )
+
+
+def badoo_like_swipe(planner: str = "badoo_heuristic") -> Dict[str, Any]:
+    x1, y1, x2, y2, dur = DM_APP_PROFILES["badoo"]["like_swipe"]
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "duration_ms": dur,
+            "reason": f"Badoo like swipe ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "badoo_like_swipe",
+    )
+
+
+def badoo_pass_swipe(planner: str = "badoo_heuristic") -> Dict[str, Any]:
+    x1, y1, x2, y2, dur = DM_APP_PROFILES["badoo"]["pass_swipe"]
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "duration_ms": dur,
+            "reason": f"Badoo pass swipe ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "badoo_pass_swipe",
+    )
+
+
 def _label_matches_compose(blob: str, compose_labels: Sequence[str]) -> bool:
     """Match compose hints without treating nav 'Messages' as a compose box."""
     b = (blob or "").strip().lower()
@@ -1368,8 +1870,13 @@ def heuristic_dm_send(
             or "tap visible contact" in str(h).lower()
             or "tap contact" in str(h).lower()
             or "select contact" in str(h).lower()
-            # Avoid matching "Open Chats tab"
-            or re.search(r"open chat(?:\s+with)?\b", str(h).lower()) is not None
+            or "tap yubo conversation" in str(h).lower()
+            or "conversation '" in str(h).lower()
+            # Open chat with X — but NOT "Open Chat(s) tab"
+            or (
+                re.search(r"open chat(?:\s+with)?\b", str(h).lower()) is not None
+                and "tab" not in str(h).lower()
+            )
             or "first search result" in str(h).lower()
         )
         for h in history[-16:]
@@ -1469,6 +1976,94 @@ def heuristic_dm_send(
                     "bumble_open_chats_tab",
                 )
 
+    # --- Yubo real-device path (Compose UI / few ids) ---
+    if app_key == "yubo" and pkg_ok:
+        popup = yubo_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+        sheet = yubo_direct_sheet_action(ui_tree, planner=planner)
+        if sheet:
+            return sheet
+        if (
+            not chat_ok
+            and not typed_message
+            and yubo_on_deck(ui_tree)
+            and not yubo_on_chat_list(ui_tree)
+            and not yubo_on_chat(ui_tree)
+        ):
+            tab = profile.get("inbox_tab_xy") or (343, 2180)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(tab[0]),
+                    "y": int(tab[1]),
+                    "reason": f"Open Chat tab from Yubo deck ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "yubo_open_chat_tab",
+            )
+        if (
+            not chat_ok
+            and not typed_message
+            and not tapped_contact
+            and yubo_on_chat_list(ui_tree)
+        ):
+            row = yubo_find_conversation_tap(ui_tree, contact)
+            if row:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": row[0],
+                        "y": row[1],
+                        "reason": f"Tap Yubo conversation '{contact}' ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "yubo_tap_conversation",
+                )
+
+    # --- Badoo real-device path ---
+    if app_key == "badoo" and pkg_ok:
+        popup = badoo_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if (
+            not chat_ok
+            and not typed_message
+            and badoo_on_encounters(ui_tree)
+            and not badoo_on_connections(ui_tree)
+        ):
+            chats = _tree_id_center(
+                ui_tree,
+                "nav_bar_button_connections",
+                "com.badoo.mobile:id/nav_bar_button_connections",
+            ) or _tree_node_center(ui_tree, "Chats", "Connections")
+            if chats:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": chats[0],
+                        "y": chats[1],
+                        "reason": f"Open Chats from Encounters ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "badoo_open_chats_tab",
+                )
+            tab = profile.get("inbox_tab_xy") or (756, 2210)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(tab[0]),
+                    "y": int(tab[1]),
+                    "reason": f"Open Chats tab (nav bar) ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "badoo_open_chats_tab",
+            )
+
     # 0a) If the contact row is already on-screen (inbox / matches list), tap it
     # before any search field — dating decks often expose a Search affordance
     # that would otherwise steal the flow.
@@ -1511,11 +2106,18 @@ def heuristic_dm_send(
         and not typed_contact
         and not tapped_search
         and not (app_key == "bumble" and bumble_on_connections(ui_tree))
+        and not (app_key == "yubo" and yubo_on_chat_list(ui_tree))
+        and not (app_key == "badoo" and badoo_on_connections(ui_tree))
     ):
         # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
-        on_deck = bool(
-            _tree_node_center(ui_tree, "Like") or _tree_node_center(ui_tree, "Pass")
-        ) or (app_key == "bumble" and bumble_on_people_deck(ui_tree))
+        on_deck = (
+            bool(
+                _tree_node_center(ui_tree, "Like") or _tree_node_center(ui_tree, "Pass")
+            )
+            or (app_key == "bumble" and bumble_on_people_deck(ui_tree))
+            or (app_key == "yubo" and yubo_on_deck(ui_tree))
+            or (app_key == "badoo" and badoo_on_encounters(ui_tree))
+        )
         if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
             if c:
@@ -1530,8 +2132,8 @@ def heuristic_dm_send(
                     },
                     "open_inbox",
                 )
-            # Bumble: use verified Chats tab xy, never a random toolbar guess
-            if app_key == "bumble":
+            # Dating apps with verified nav tab xy — never a random toolbar guess
+            if app_key in ("bumble", "yubo", "badoo"):
                 tab = profile.get("inbox_tab_xy")
                 if isinstance(tab, (tuple, list)) and len(tab) >= 2:
                     return _fp(
@@ -1543,7 +2145,7 @@ def heuristic_dm_send(
                             "planner": planner,
                             "llm_provider": None,
                         },
-                        "bumble_open_chats_tab",
+                        f"{app_key}_open_chats_tab",
                     )
             elif app_key in ("tinder", "hinge", "instagram") or (
                 profile.get("package") or ""
@@ -1569,9 +2171,11 @@ def heuristic_dm_send(
         and not chat_ok
         and not typed_message
         and not (app_key == "bumble" and bumble_on_connections(ui_tree))
+        and not (app_key == "yubo" and yubo_on_chat_list(ui_tree))
+        and not (app_key == "badoo" and badoo_on_connections(ui_tree))
     ):
         tab = _tree_node_center(
-            ui_tree, "Chats", "Matches", "Messages", "Inbox", "Connections"
+            ui_tree, "Chats", "Chat", "Matches", "Messages", "Inbox", "Connections"
         )
         if tab:
             return _fp(
@@ -1622,7 +2226,14 @@ def heuristic_dm_send(
 
     # 1) Search — prefer resource-id / label (deterministic). No blind coords.
     # Skip entirely when already in the target chat (header + compose verified).
-    if not chat_ok and not typed_contact and not tapped_search:
+    # Yubo/Badoo real maps: contacts live in Conversations/connections lists —
+    # do not invent a Search control or fail search_not_found there.
+    skip_search = (
+        (app_key == "yubo" and (yubo_on_chat_list(ui_tree) or yubo_on_chat(ui_tree)))
+        or (app_key == "badoo" and badoo_on_connections(ui_tree))
+        or (app_key == "bumble" and bumble_on_connections(ui_tree))
+    )
+    if not chat_ok and not typed_contact and not tapped_search and not skip_search:
         search_ids = tuple(profile.get("search_ids") or ())
         # Never treat Meta AI "Ask" send as Search (id-only — "Ask" is a
         # substring of "Ask Meta AI or Search" on the home bar).
@@ -1674,6 +2285,33 @@ def heuristic_dm_send(
                 "llm_provider": None,
             },
             "search_not_found",
+        )
+    if skip_search and not chat_ok and not typed_contact and not tapped_contact:
+        # Scroll the connections list for the contact name
+        if hist.count("swipe") < 3:
+            return _fp(
+                {
+                    "action": "swipe",
+                    "x1": 540,
+                    "y1": 1600,
+                    "x2": 540,
+                    "y2": 900,
+                    "reason": f"Scroll for contact '{contact}' ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "scroll_connections",
+            )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Contact '{contact}' not found in connections list ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "contact_not_in_list",
         )
 
     # 2) Type contact into search — never into the message compose box
@@ -1979,6 +2617,8 @@ def heuristic_dm_send(
             send_ids=send_ids,
             profile=profile,
         )
+        if c is None and app_key == "yubo":
+            c = yubo_find_send_center(ui_tree)
         prefer_tap = bool(profile.get("prefer_tap_send"))
         if c:
             return _fp(

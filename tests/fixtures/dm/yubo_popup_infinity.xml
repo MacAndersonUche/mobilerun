@@ -1,0 +1,6 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n t="Unlock Infinity Pack" xy="540,900" b="100,800,980,1000"/>
+ <n t="Continue" c="1" xy="540,1400" b="200,1340,880,1460"/>
+</w>
+</hierarchy>

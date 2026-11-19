@@ -1,0 +1,13 @@
+<hierarchy windows="1" nodes="18" partial="false" empty="false" mode="compact" packages="com.badoo.mobile">
+<w id="active" t="active" p="com.badoo.mobile" f="1">
+ <n i="com.badoo.mobile:id/connections_root" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="com.badoo.mobile:id/match_bar_container" xy="540,400" b="0,200,1080,600"/>
+ <n t="Likes" c="1" xy="120,400" b="40,340,200,460"/>
+ <n i="com.badoo.mobile:id/connection_list_component" xy="540,1400" b="0,620,1080,2100"/>
+ <n i="com.badoo.mobile:id/connection_container" c="1" xy="540,800" b="0,700,1080,900"/>
+ <n t="Sam" i="com.badoo.mobile:id/profileInfo_name" c="1" xy="300,780" b="200,740,400,820"/>
+ <n t="Hey there" i="com.badoo.mobile:id/connectionItem_messageTextComponent" xy="300,840" b="200,820,600,860"/>
+ <n i="com.badoo.mobile:id/connectionItem_favoriteContainer" c="1" xy="1000,800" b="960,760,1040,840"/>
+ <n i="com.badoo.mobile:id/nav_bar_button_connections" d="Chats" c="1" xy="756,2210" b="650,2140,860,2280"/>
+</w>
+</hierarchy>

@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n d="Back" c="1" xy="77,148" b="20,100,130,196"/>
+ <n t="Sam" xy="400,148" b="200,100,600,196"/>
+ <n e="1" f="1" t="" h="Aa" c="1" xy="540,2201" b="120,2160,900,2240"/>
+ <n d="Send" c="1" xy="1008,1336" b="960,1290,1050,1380"/>
+</w>
+</hierarchy>

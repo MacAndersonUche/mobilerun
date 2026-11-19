@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="12" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n t="Send a message" xy="540,400" b="200,360,880,440"/>
+ <n t="Blast" c="1" xy="490,540" b="400,500,580,580"/>
+ <n t="Direct" c="1" xy="855,656" b="754,525,871,570"/>
+ <n e="1" f="1" t="Hey" h="Hey" c="1" xy="540,1336" b="200,1280,900,1390"/>
+ <n d="Send" c="1" xy="985,1336" b="950,1300,1020,1370"/>
+</w>
+</hierarchy>
