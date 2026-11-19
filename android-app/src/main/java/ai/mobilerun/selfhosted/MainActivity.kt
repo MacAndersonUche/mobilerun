@@ -467,9 +467,9 @@ fun MainScreen(
                     // subtypes are present and the user toggles the IME on.
                     Text(
                         if (keyboardSelected) {
-                            "Mobilerun Keyboard is selected."
+                            "MacAuto Keyboard is selected."
                         } else {
-                            "Required for reliable typing: enable Mobilerun Keyboard " +
+                            "Required for reliable typing: enable MacAuto Keyboard " +
                                 "in system settings, then pick it. Agents still fall " +
                                 "back to accessibility SET_TEXT if the IME is off."
                         },

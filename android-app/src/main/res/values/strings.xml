@@ -1,16 +1,17 @@
 <resources>
     <string name="app_name">Mobilerun</string>
     <string name="accessibility_service_description">Allows Mobilerun to control your device for automation tasks</string>
-    <string name="keyboard_name">Mobilerun Keyboard</string>
-    <string name="keyboard_on">Mobilerun Keyboard</string>
+    <string name="keyboard_name">MacAuto Keyboard</string>
+    <string name="keyboard_on">MacAuto Keyboard</string>
     <string name="switch_keyboard">Switch</string>
     <string name="keyboard_switch_settings_help">Enable another keyboard, then switch to it.</string>
     <string name="keyboard_switch_unavailable">Could not open keyboard switching options.</string>
-    <string name="ime_subtype_en_gb">English (UK)</string>
-    <string name="ime_subtype_en_us">English (US)</string>
-    <string name="ime_settings_title">Mobilerun Keyboard</string>
-    <string name="ime_settings_body">Turn on Mobilerun Keyboard in system settings, then select it as the current keyboard. Agents still type via accessibility if the IME is off.</string>
+    <!-- Subtype labels include MacAuto so Samsung/IME picker lists are unambiguous -->
+    <string name="ime_subtype_en_gb">MacAuto Keyboard (UK)</string>
+    <string name="ime_subtype_en_us">MacAuto Keyboard (US)</string>
+    <string name="ime_settings_title">MacAuto Keyboard</string>
+    <string name="ime_settings_body">Turn on MacAuto Keyboard in system settings, then select it as the current keyboard. Agents still type via accessibility if the IME is off.</string>
     <string name="ime_settings_open">Open keyboard settings</string>
     <string name="ime_settings_picker">Show keyboard picker</string>
-    <string name="ime_enable_help">1) Enable “Mobilerun Keyboard”\n2) Return here and tap Show keyboard picker\n3) Choose Mobilerun Keyboard</string>
+    <string name="ime_enable_help">1) Enable “MacAuto Keyboard”\n2) Return here and tap Show keyboard picker\n3) Choose MacAuto Keyboard</string>
 </resources>
