@@ -114,7 +114,12 @@ def sample_human_delay(rng: random.Random) -> float:
 def _is_mixed_bulk_instruction(low: str) -> bool:
     """True when swipe/bulk is mixed with chat/reply — leave to DM heuristics."""
     has_swipe = (
-        bool(re.search(r"(?:auto[- ]?)?swipe|\bswipe\s+\d+|auto-swipe", low))
+        bool(
+            re.search(
+                r"(?:auto[- ]?)?swipe|\bswipe\s+\d+|auto-swipe|\blike\s+\d+\s+profiles?",
+                low,
+            )
+        )
         or "swipe 50" in low
     )
     has_bulk_msg = (
@@ -180,10 +185,35 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
                     app = key
                     break
 
-    m = re.search(r"(?:auto[- ]?)?swipe\s+(\d+)\s+profiles?", low)
-    if m or "swipe 50" in low or "auto-swipe" in low:
-        n = int(m.group(1)) if m else counts["swipe"]
-        return {"kind": "swipe", "count": n, "message": None, "app": app}
+    # Swipe / like wording variants (never invent a count)
+    swipe_patterns = (
+        # swipe right on 5 profiles / swipe 5 profiles / auto-swipe 50 profiles
+        r"(?:auto[- ]?)?swipe(?:\s+right)?(?:\s+on)?\s+(\d+)\s+profiles?",
+        # swipe right 5 times / swipe 5 times
+        r"(?:auto[- ]?)?swipe(?:\s+right)?\s+(\d+)\s+times?",
+        # like 5 profiles
+        r"\blike\s+(\d+)\s+profiles?",
+        # swipe 5 on yubo / swipe 5 on <app>
+        r"(?:auto[- ]?)?swipe(?:\s+right)?\s+(\d+)\s+on\s+([a-z0-9._]+)",
+    )
+    for pat in swipe_patterns:
+        m = re.search(pat, low)
+        if m:
+            n = int(m.group(1))
+            if m.lastindex and m.lastindex >= 2 and m.group(2):
+                # "swipe N on <app>" — prefer explicit app token
+                token = m.group(2).strip().lower()
+                if token in DM_APP_PROFILES:
+                    app = token
+                else:
+                    for key, prof in DM_APP_PROFILES.items():
+                        aliases = tuple(prof.get("aliases") or ()) + (key,)
+                        if token in aliases or any(a == token for a in aliases):
+                            app = key
+                            break
+            return {"kind": "swipe", "count": n, "message": None, "app": app}
+    if "swipe 50" in low or "auto-swipe" in low:
+        return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
     m = re.search(
         r"(?:auto[- ]?)?message\s+(\d+)\s+(?:matches|contacts|people)",
@@ -191,8 +221,8 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     )
     if m or "message 50" in low or "auto-message" in low:
         n = int(m.group(1)) if m else counts["message"]
-        # Exact bank text: "tell them hi baby" / "message … hi baby"
-        msg = "hi baby"
+        # Message body: ONLY explicit instruction text or bank phrase — never invent
+        msg = None
         tm = re.search(
             r"(?:tell them|say|with(?: the)?(?: message)?|text)\s+(.+)$",
             text,
@@ -204,8 +234,20 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
         qm = re.search(r"[\"']([^\"']+)[\"']\s*$", text)
         if qm:
             msg = qm.group(1).strip()
-        if "hi baby" in low:
+        if msg is None and "hi baby" in low:
+            # Only when the user literally wrote hi baby in the instruction
             msg = "hi baby"
+        if not msg:
+            return {
+                "kind": "message",
+                "count": n,
+                "message": None,
+                "app": app,
+                "error": (
+                    "No message text in instruction — refuse default; "
+                    "provide say/tell text or a message-bank entry"
+                ),
+            }
         return {"kind": "message", "count": n, "message": msg, "app": app}
     return None
 
@@ -479,8 +521,29 @@ def plan_bulk_swipe(
     hist = " | ".join(history[-12:]).lower()
     app = (goal.get("app") or "") or ""
 
-    # If deck controls are already on-screen, do not open_app (relaunches reset
-    # cold start races and used to rewind the deck cursor).
+    # ALWAYS verify FG package matches the named app before any swipe/tap.
+    # (Previously skipped open_app when any deck was visible — swiped Bumble for Yubo.)
+    want_pkg = ""
+    if app and app in DM_APP_PROFILES:
+        want_pkg = str(DM_APP_PROFILES[app].get("package") or "").lower()
+    pkg_l = (package or "").lower()
+    if want_pkg and want_pkg not in pkg_l:
+        opened = _ensure_app_open(goal.get("app"), package, history, planner)
+        if opened:
+            return opened
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Wrong foreground app for bulk swipe: want {app} "
+                    f"({want_pkg}) got '{package or '?'}' ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_wrong_app",
+        )
+
     deck_visible = _deck_visible(app, ui_tree)
     if not deck_visible:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
@@ -663,20 +726,38 @@ def plan_bulk_swipe(
             "bulk_swipe_done",
         )
 
-    # Do not act while FG is wrong
-    want = ""
-    if goal.get("app") and goal["app"] in DM_APP_PROFILES:
-        want = str(DM_APP_PROFILES[goal["app"]].get("package") or "").lower()
-    if want and want not in (package or "").lower():
-        opened = _ensure_app_open(goal.get("app"), package, history, planner)
-        if opened:
-            return opened
-
     if not deck_visible:
-        disc = _tree_node_center(
-            ui_tree, "Discover", "Open Discover", "People", "Encounters"
-        )
+        # Prefer People (Bumble) over Discover — Discover is often a different tab
+        if app == "bumble":
+            disc = _exact_label_center(ui_tree, "People") or _tree_node_center(
+                ui_tree, "People", "Encounters"
+            )
+        else:
+            disc = (
+                _exact_label_center(ui_tree, "People")
+                or _exact_label_center(ui_tree, "Discover")
+                or _tree_node_center(
+                    ui_tree, "People", "Encounters", "Discover", "Open Discover"
+                )
+            )
         if disc and "open swipe deck" not in hist:
+            if dry_run:
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] would open swipe deck at {disc} "
+                            f"— deck not yet visible ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "bulk_swipe_done": done,
+                        "bulk_swipe_target": target,
+                        "screenshot": True,
+                    },
+                    "bulk_dry_run_would_open_deck",
+                )
             return _fp(
                 {
                     "action": "tap",
@@ -689,14 +770,33 @@ def plan_bulk_swipe(
                 "bulk_open_deck",
             )
 
-    # dry_run: never like — stop before action (do not mutate the deck)
+    # dry_run: verify deck/like is present, then stop — never mutate
     if dry_run:
+        like_ok = bool(
+            (app in _REAL_GESTURE_APPS and _real_like_action(app, tree=ui_tree))
+            or _fake_like_center(app, ui_tree)
+            or deck_visible
+        )
+        if not like_ok and not deck_visible:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — deck/like control not visible for {app or '?'} "
+                        f"at {done}/{target}; refusing silent 0/{target} ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                },
+                "bulk_dry_run_no_deck",
+            )
         return _fp(
             {
                 "action": "done",
                 "reason": (
-                    f"dry_run — bulk like skipped at {done}/{target} "
-                    f"(no like/swipe) ({planner})"
+                    f"[DRY RUN] would like/swipe {done}/{target} on {app or 'app'} "
+                    f"— deck verified, no like/swipe ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -790,7 +890,24 @@ def plan_bulk_message(
     )
     target = int(bulk.get("target") or goal["count"])
     done = int(bulk.get("done") or 0)
-    message = goal["message"] or "hi baby"
+    if goal.get("error") or not (goal.get("message") or "").strip():
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    goal.get("error")
+                    or (
+                        "No message text — refuse AI-authored default; "
+                        "provide say/tell text or a message-bank entry "
+                        "(bulk_message_heuristic)"
+                    )
+                ),
+                "planner": "bulk_message_heuristic",
+                "llm_provider": None,
+            },
+            "bulk_message_missing_text",
+        )
+    message = str(goal["message"]).strip()
     planner = "bulk_message_heuristic"
     nodes = _parse_compact_nodes(ui_tree)
 

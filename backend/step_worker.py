@@ -22,13 +22,22 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
-    from storage import get_device_connections, get_job, list_due_jobs, put_job
-except ImportError:
-    from backend.storage import (  # type: ignore
+    from storage import (
+        acquire_job_lease,
         get_device_connections,
         get_job,
         list_due_jobs,
         put_job,
+        save_job_progress,
+    )
+except ImportError:
+    from backend.storage import (  # type: ignore
+        acquire_job_lease,
+        get_device_connections,
+        get_job,
+        list_due_jobs,
+        put_job,
+        save_job_progress,
     )
 
 logger = logging.getLogger("mobilerun.step")
@@ -372,6 +381,9 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     except ImportError:
         from backend.cloud_agent import run_one_agent_step  # type: ignore
 
+    # Suppress per-step Lambda self-kicks while chaining in-process — one kick
+    # after the chain if still running (avoids 6 workers racing one job).
+    job["_suppress_kick"] = True
     updated = run_one_agent_step(job)
     # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
     # 1-minute ticks (target <3–5s/step; humanize sleeps happen inside each step).
@@ -383,10 +395,20 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Respect intentional backoff (rate-limit / offline waits)
         if nra > int(time.time()) + 3:
             break
+        updated["_suppress_kick"] = True
         updated = run_one_agent_step(updated)
     if updated.get("status") in ("completed", "failed", "stopped"):
         updated["completed_at"] = int(time.time())
     updated["updated_at"] = int(time.time())
+    updated.pop("_suppress_kick", None)
+    # Single follow-up kick after the in-process chain (not per step)
+    if updated.get("status") == "running":
+        nra = int(updated.get("next_run_at") or 0)
+        delay = max(0, nra - int(time.time()))
+        if delay <= 15:
+            _kick_job_later(
+                str(updated.get("job_id") or ""), delay_s=max(1, delay or 1)
+            )
     return updated
 
 
@@ -534,9 +556,31 @@ def _kick_job_later(job_id: str, delay_s: int = 2) -> None:
         logger.warning("kick later schedule failed: %s", e)
 
 
-def process_job(job: Dict[str, Any]) -> None:
+def _worker_owner(context: Any = None) -> str:
+    """Stable-enough lease owner id for this Lambda invoke / local process."""
+    req = ""
+    try:
+        req = str(getattr(context, "aws_request_id", "") or "")
+    except Exception:
+        req = ""
+    if not req:
+        req = f"local-{os.getpid()}-{time.time_ns()}"
+    return req
+
+
+def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
+        return
+    job_id = str(job.get("job_id") or "")
+    owner = owner or _worker_owner()
+    # Lease: second concurrent worker skips — prevents parallel swipes
+    if job_id and not acquire_job_lease(job_id, owner):
+        logger.info(
+            "process_job skip job=%s — lease held by another worker (owner=%s)",
+            job_id,
+            owner,
+        )
         return
     try:
         if kind == "dating":
@@ -545,7 +589,13 @@ def process_job(job: Dict[str, Any]) -> None:
             updated = run_social_step(job)
         else:
             updated = run_agent_step(job)
-        put_job(_dynamo_safe(updated))
+        # Targeted update — never put_item whole item (would revive cancelled jobs)
+        ok = save_job_progress(_to_plain(updated), owner=owner)
+        if not ok:
+            logger.warning(
+                "process_job progress not saved job=%s — status changed or lease lost",
+                job_id,
+            )
     except Exception as e:
         # Persist the crash so Tasks/tick show a real error instead of idle-0.
         logger.exception("process_job crash job=%s: %s", job.get("job_id"), e)
@@ -558,7 +608,7 @@ def process_job(job: Dict[str, Any]) -> None:
             job["error"] = f"step_worker crash: {e}"
             job["completed_at"] = int(time.time())
             job["updated_at"] = int(time.time())
-            put_job(_dynamo_safe(job))
+            save_job_progress(_to_plain(job), owner=owner)
         except Exception as persist_err:
             logger.exception(
                 "failed to persist process_job crash for %s: %s",
@@ -570,11 +620,12 @@ def process_job(job: Dict[str, Any]) -> None:
 
 def handler(event: Dict[str, Any], context: Any):
     """EventBridge tick or direct invoke with job_id."""
+    owner = _worker_owner(context)
     if event.get("job_id"):
         job = get_job(event["job_id"])
         if job:
             try:
-                process_job(job)
+                process_job(job, owner=owner)
             except Exception as e:
                 return {
                     "processed": 0,
@@ -587,11 +638,27 @@ def handler(event: Dict[str, Any], context: Any):
     due = list_due_jobs(limit=10)
     processed = 0
     errors = 0
+    skipped = 0
     for job in due:
         try:
-            process_job(job)
-            processed += 1
+            before = str(job.get("lease_owner") or "")
+            process_job(job, owner=f"{owner}-{job.get('job_id')}")
+            # If lease was held, process_job returns without raising
+            after = get_job(str(job.get("job_id") or "")) or {}
+            if (
+                before
+                and before != f"{owner}-{job.get('job_id')}"
+                and after.get("lease_owner") == before
+            ):
+                skipped += 1
+            else:
+                processed += 1
         except Exception as e:
             errors += 1
             logger.exception("job failed: %s", e)
-    return {"processed": processed, "due": len(due), "errors": errors}
+    return {
+        "processed": processed,
+        "due": len(due),
+        "errors": errors,
+        "skipped": skipped,
+    }
