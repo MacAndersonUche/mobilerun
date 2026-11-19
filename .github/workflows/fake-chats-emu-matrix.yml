@@ -1,0 +1,133 @@
+name: Fake Chats Emulator Matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/**]
+    paths:
+      - 'test-apps/fake-chats/**'
+      - 'scripts/fake_chats_emu_*.py'
+      - 'scripts/fake_chats_emu_e2e.sh'
+      - 'backend/dm_heuristics.py'
+      - 'backend/cloud_agent.py'
+      - 'backend/device_push.py'
+      - 'backend/device_rpc.py'
+      - 'backend/main.py'
+      - 'android-app/**'
+      - '.github/workflows/fake-chats-emu-matrix.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'test-apps/fake-chats/**'
+      - 'scripts/fake_chats_emu_*.py'
+      - 'scripts/fake_chats_emu_e2e.sh'
+      - 'backend/dm_heuristics.py'
+      - 'backend/device_push.py'
+      - 'backend/device_rpc.py'
+      - 'backend/main.py'
+      - 'android-app/**'
+      - '.github/workflows/fake-chats-emu-matrix.yml'
+
+jobs:
+  fake-chats-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3 consecutive green runs required by the bench contract
+        attempt: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger
+          sudo apt-get update -y
+          sudo apt-get install -y qemu-kvm libvirt-daemon-system || true
+          ls -l /dev/kvm || (echo "ERROR: /dev/kvm missing — cannot run emulator"; exit 1)
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        run: |
+          pip install -r backend/requirements.txt fastapi uvicorn python-jose qrcode pillow websockets
+          pip install -e ".[dev]" || true
+
+      - name: Android SDK
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platform-tools" >> "$GITHUB_PATH"
+          yes | ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          ${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager \
+            "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" \
+            "system-images;android-34;google_apis;x86_64" || true
+
+      - name: Build Mobilerun APK
+        working-directory: android-app
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          find build -name '*.apk' -print
+
+      - name: Build fake-chats APKs
+        working-directory: test-apps/fake-chats
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          find app/build/outputs/apk -name '*.apk' -print
+
+      - name: Start backend
+        env:
+          ALLOW_UNAUTHENTICATED: 'true'
+          JWT_SECRET: fake-chats-e2e-secret
+          PORT: '8000'
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          nohup python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+          for i in $(seq 1 40); do
+            curl -sfS http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+          grep -q ALLOW_UNAUTHENTICATED=true <(tr '\0' '\n' < /proc/$(cat /tmp/backend.pid)/environ) || echo "WARN: ALLOW_UNAUTHENTICATED not in env"
+
+      - name: Run emulator + fake-chats matrix
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ARTIFACTS_DIR: /tmp/fake-chats-e2e-${{ matrix.attempt }}
+          HOST_BACKEND_URL: http://127.0.0.1:8000
+          E2E_USER: ci-e2e
+          E2E_PASSWORD: admin
+          MATRIX_TIMEOUT: '900'
+          FAKE_CHATS_FAST: '1'
+          PYTHONPATH: ${{ github.workspace }}
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: Nexus 6
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash scripts/fake_chats_emu_e2e.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fake-chats-matrix-attempt-${{ matrix.attempt }}
+          path: /tmp/fake-chats-e2e-${{ matrix.attempt }}
+          retention-days: 14
