@@ -238,9 +238,13 @@ def test_whatsapp_already_in_chat_skips_search_dry_run():
         assert a0["text"].lower() == "hi baby"
         hist = ['type("hi baby") — Type message']
     a2 = _heuristic_whatsapp_send(instr, compose, hist, package=pkg, dry_run=True)
-    assert a2 and a2["action"] == "done"
-    assert "dry_run" in a2["reason"].lower()
-    assert "hi baby" in a2["reason"].lower()
+    assert a2 and a2["action"] == "type"
+    assert a2.get("clear") is True and a2.get("text") == ""
+    hist = hist + [f'type("") — {a2["reason"]}']
+    a3 = _heuristic_whatsapp_send(instr, compose, hist, package=pkg, dry_run=True)
+    assert a3 and a3["action"] == "done"
+    assert "dry_run" in a3["reason"].lower()
+    assert a3.get("dry_run_verified") is True
 
 
 def test_plan_next_action_uses_whatsapp_heuristic(monkeypatch):

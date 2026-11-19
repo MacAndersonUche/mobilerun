@@ -481,21 +481,19 @@ def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
 
 
 def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
-    """True for paid / premium CTAs that must never fire in dry_run (or ever unpaid)."""
+    """True for paid / premium CTAs that must never fire in dry_run (or ever unpaid).
+
+    Match ONLY the tapped node's label / text / content-desc — never the
+    planner reason (e.g. 'Select Direct (never Blast/Yubucks)' is not paid).
+    """
     blobs: List[str] = []
-    for k in (
-        "label",
-        "text",
-        "desc",
-        "content_desc",
-        "reason",
-        "fastpath_step",
-        "_fastpath_step",
-    ):
+    for k in ("label", "text", "desc", "content_desc", "contentDescription"):
         v = (action or {}).get(k)
         if v:
             blobs.append(str(v).lower())
-    blob = " ".join(blobs)
+    blob = " ".join(blobs).strip()
+    if not blob:
+        return False
     paid_toks = (
         "continue",  # GOLD Continue
         "gold",
@@ -514,6 +512,40 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "send a super like",
     )
     return any(t in blob for t in paid_toks)
+
+
+def _is_chat_list_scroll_swipe(action: Dict[str, Any], kind: str) -> bool:
+    """True for non-mutating vertical scrolls in chat/match lists (allowed in dry_run)."""
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k != "swipe":
+        return False
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    reason = str((action or {}).get("reason") or "").lower()
+    if any(t in fp for t in ("bulk_scroll", "scroll_list", "chat_list_scroll")):
+        return True
+    if any(
+        t in reason
+        for t in ("deck", "like", "pass", "vote", "swipe right", "swipe left")
+    ):
+        return False
+    if "scroll" in reason and any(
+        t in reason for t in ("list", "match", "chat", "inbox", "connection", "people")
+    ):
+        return True
+    try:
+        x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+        x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+    except (TypeError, ValueError):
+        return False
+    # Vertical list fling (large dy, small dx) with list-ish reason
+    if abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 200:
+        if any(t in reason for t in ("list", "match", "chat", "inbox", "more")):
+            return True
+    return False
 
 
 def apply_dry_run_send_guard(
@@ -555,6 +587,9 @@ def apply_dry_run_send_guard(
     elif _action_looks_like_paid(action, kind):
         blocked = True
         would = "paid tap"
+    elif k == "swipe" and _is_chat_list_scroll_swipe(action, kind):
+        # Non-mutating chat-list scrolls are allowed in dry_run; deck swipes are not.
+        return kind, reason, action
     elif k == "swipe" or _action_looks_like_swipe_or_like(action, kind):
         blocked = True
         would = "swipe" if k == "swipe" else "like/pass tap"
@@ -570,6 +605,8 @@ def apply_dry_run_send_guard(
         "reason": new_reason,
         "screenshot": True,
         "dry_run": True,
+        # A blocked mutation is not proof the goal was verified.
+        "dry_run_verified": False,
     }
     return "done", new_reason, new_action
 
@@ -933,6 +970,15 @@ def plan_next_action(
             "message 50",
             "fake-chats",
             "fake chats",
+            "auto-message",
+            "auto message",
+            "existing chats",
+            "existing matches",
+        )
+    ) or bool(
+        re.search(
+            r"(?:message|reply to)\s+\d+\s+(?:existing\s+)?(?:matches?|people|contacts?|chats?)",
+            instr_l,
         )
     )
     bulk_goal = None
@@ -1688,6 +1734,58 @@ def _maybe_restore_ime(job: Dict[str, Any], device_id: str, call_device) -> None
         logger.warning("restore_ime failed: %s", e)
 
 
+def _press_home_end_job(job: Dict[str, Any], device_id: str, call_device) -> None:
+    """Always return to HOME at the end of a job (dry-run or live)."""
+    state = job.setdefault("state", {}) if isinstance(job.get("state"), dict) else {}
+    if state.get("went_home"):
+        return
+    try:
+        call_device(device_id, "press_button", {"button": "home"}, timeout_s=10)
+        state["went_home"] = True
+        hist = list(state.get("history") or [])
+        hist.append("Went home")
+        state["history"] = hist[-40:]
+        job["state"] = state
+    except Exception as e:
+        logger.warning("end-of-job HOME failed: %s", e)
+
+
+def _end_job_cleanup(job: Dict[str, Any], device_id: str, call_device) -> None:
+    """IME restore + HOME after every terminal job status."""
+    try:
+        _maybe_restore_ime(job, device_id, call_device)
+    except Exception:
+        pass
+    try:
+        _press_home_end_job(job, device_id, call_device)
+    except Exception:
+        pass
+
+
+def _dry_run_done_is_verified(
+    action: Dict[str, Any], reason: str, state: Dict[str, Any]
+) -> bool:
+    """True when a dry-run done actually proved the expected UI elements."""
+    if action.get("dry_run_verified") is True:
+        return True
+    if state.get("dry_run_verified") is True:
+        return True
+    low = (reason or "").lower()
+    # Explicit verified markers from heuristics
+    if "deck verified" in low or "compose verified" in low:
+        return True
+    if "dry_run_verified" in low:
+        return True
+    # A bare skip without verification is NOT success
+    if "[dry run] would" in low and "skipped" in low:
+        return False
+    if "send skipped" in low and "verified" not in low and "cleared" not in low:
+        return False
+    if "would open" in low and "verified" not in low:
+        return False
+    return bool(action.get("dry_run_verified"))
+
+
 def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     try:
         from device_rpc import call_device
@@ -1917,6 +2015,11 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     if kind == "home":
         call_device(device_id, "press_button", {"button": "home"})
         return "Went home"
+    if kind in ("wait", "noop"):
+        delay = float(action.get("seconds") or action.get("delay_s") or 0.05)
+        if delay > 0:
+            time.sleep(min(delay, 2.0))
+        return str(action.get("reason") or "Waited")
     if kind in ("open_app", "start_app"):
         app = str(action.get("app") or action.get("package") or "")
         raw = call_device(
@@ -2513,11 +2616,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "no-progress: goal visible, forcing done job=%s", job.get("job_id")
                 )
             elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
-                kind = "back"
-                reason = "no-progress: refused repeated tap on unchanged UI"
-                action = {"action": "back", "reason": reason}
+                kind = "fail"
+                reason = (
+                    "same tap repeated with no screen change — aborting "
+                    "(heuristic loop guard)"
+                )
+                action = {"action": "fail", "reason": reason}
                 logger.info(
-                    "no-progress: forcing back after repeated tap job=%s",
+                    "no-progress: failing after repeated tap job=%s",
                     job.get("job_id"),
                 )
 
@@ -2719,6 +2825,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 from backend.agent_humanize import update_step_timing_stats  # type: ignore
 
             stats = update_step_timing_stats(state, (time.time() - step_t0) * 1000.0)
+            is_dry = bool(
+                job.get("dry_run") or state.get("dry_run") or action.get("dry_run")
+            )
+            verified = _dry_run_done_is_verified(
+                action if isinstance(action, dict) else {}, reason, state
+            )
+            if is_dry and not verified:
+                _record_step(f"done: {reason}", ok=False, screenshot_key=shot_key)
+                job["state"] = state
+                job["status"] = "failed"
+                job["error"] = (
+                    "dry_run ended without verifying the goal "
+                    f"({reason or 'no verification'})"
+                )
+                job["result"] = job["error"]
+                job["completed_at"] = int(time.time())
+                _end_job_cleanup(job, device_id, call_device)
+                return job
+            if verified:
+                state["dry_run_verified"] = True
             _record_step(f"done: {reason}", screenshot_key=shot_key)
             job["state"] = state
             job["status"] = "completed"
@@ -2728,7 +2854,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "result"
                 ] += f" · p50={stats['p50_ms']:.0f}ms p95={stats.get('p95_ms') or 0:.0f}ms"
             job["completed_at"] = int(time.time())
-            _maybe_restore_ime(job, device_id, call_device)
+            _end_job_cleanup(job, device_id, call_device)
             return job
         if kind == "fail":
             low_reason = (reason or "").lower()
@@ -2873,6 +2999,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     _attach_failure_artifacts(
                         job, device_id, ui_tree, call_device=call_device
                     )
+                    _end_job_cleanup(job, device_id, call_device)
                     return job
             else:
                 state["steps"] = step + 1
@@ -2888,6 +3015,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 _attach_failure_artifacts(
                     job, device_id, ui_tree, call_device=call_device
                 )
+                _end_job_cleanup(job, device_id, call_device)
                 return job
 
         # In-app swipes are fine. Only soft-redirect messaging E2E away from
@@ -3188,7 +3316,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     f"(pkg={fg_now or rpc_pkg or 'n/a'}; {verify_msg or summary})"
                 )
                 job["completed_at"] = int(time.time())
-                _maybe_restore_ime(job, device_id, call_device)
+                _end_job_cleanup(job, device_id, call_device)
                 return job
 
         # Multi-step goals: if the answer is now on screen, complete
@@ -3198,7 +3326,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if verify_msg:
                 job["result"] += f" · {verify_msg}"
             job["completed_at"] = int(time.time())
-            _maybe_restore_ime(job, device_id, call_device)
+            _end_job_cleanup(job, device_id, call_device)
             return job
 
         # Human-like inter-step gap (0.3–1.5s) then immediate next tick.
@@ -3313,6 +3441,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["error"] = msg
             try:
                 _attach_failure_artifacts(job, device_id, call_device=call_device)
+            except Exception:
+                pass
+            try:
+                _end_job_cleanup(job, device_id, call_device)
             except Exception:
                 pass
         else:

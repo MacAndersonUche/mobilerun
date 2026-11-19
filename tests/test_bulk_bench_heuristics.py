@@ -175,12 +175,13 @@ def test_bulk_swipe_dry_run_skips_like():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act.get("action") == "done"
+    assert act and act.get("action") in ("wait", "done")
     assert act.get("dry_run") is True
     reason = (act.get("reason") or "").lower()
     assert "dry run" in reason or act.get("dry_run") is True
-    assert "would" in reason or "no like" in reason or "skip" in reason
-    assert st.get("bulk_swipe", {}).get("done") == 0
+    assert "would like/pass" in reason or "would" in reason
+    # Never mutates the deck via like tap
+    assert not (act.get("action") == "tap" and "like" in reason)
 
 
 def test_bulk_message_dry_run_stops_before_send():
@@ -199,6 +200,7 @@ def test_bulk_message_dry_run_stops_before_send():
             "current": "Match01",
             "typed": True,
             "counted_current": False,
+            "cleared": False,
         }
     }
     act = plan_bulk_message(
@@ -209,11 +211,21 @@ def test_bulk_message_dry_run_stops_before_send():
         package="com.tinder",
         dry_run=True,
     )
-    assert act and act.get("action") == "done"
-    assert act.get("dry_run") is True
-    assert "send" in (act.get("reason") or "").lower()
-    assert "skip" in (act.get("reason") or "").lower()
-    assert act.get("fastpath_step") == "bulk_dry_run_skip_send"
+    # Clears composer draft before any done/back
+    assert act and act.get("action") == "type"
+    assert act.get("clear") is True and act.get("text") == ""
+    assert act.get("fastpath_step") == "bulk_dry_run_clear_composer"
+    st["bulk_message"]["cleared"] = True
+    act2 = plan_bulk_message(
+        "tinder auto-message 5 matches tell them hi baby",
+        chat,
+        ["Opened Tinder — launch", "tap — Open Match01", "type — hi baby", "clear"],
+        state=st,
+        package="com.tinder",
+        dry_run=True,
+    )
+    assert act2 and act2.get("action") in ("back", "done")
+    assert act2.get("dry_run") is True
 
 
 def test_bulk_message_send_reason_is_bulk_send_step():

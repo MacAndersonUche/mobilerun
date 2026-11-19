@@ -192,8 +192,16 @@ def test_hily_dry_run_stops_before_send():
         'type("hi") — Type message',
     ]
     a = _heuristic_dm_send(HILY_INSTR, chat, hist, package="com.hily.app", dry_run=True)
-    assert a and a["action"] == "done"
-    assert a.get("dry_run") is True
+    # First clears the composer draft, then done with dry_run_verified
+    assert a and a["action"] == "type"
+    assert a.get("clear") is True and a.get("text") == ""
+    hist2 = hist + [f'type("") — {a["reason"]}']
+    a2 = _heuristic_dm_send(
+        HILY_INSTR, chat, hist2, package="com.hily.app", dry_run=True
+    )
+    assert a2 and a2["action"] == "done"
+    assert a2.get("dry_run") is True
+    assert a2.get("dry_run_verified") is True
 
 
 def test_hily_bulk_uses_like_button_not_nav():
@@ -226,9 +234,11 @@ def test_hily_bulk_dry_run_skips_like():
         package="com.hily.app",
         dry_run=True,
     )
-    assert act and act.get("action") == "done"
+    # Simulates likes via wait/done — never taps Like
+    assert act and act.get("action") in ("wait", "done")
     assert act.get("dry_run") is True
-    assert st.get("bulk_swipe", {}).get("done") == 0
+    assert "would like/pass" in (act.get("reason") or "").lower()
+    assert act.get("action") != "tap" or "like" not in (act.get("reason") or "").lower()
 
 
 # --- BLK ---
@@ -354,8 +364,15 @@ def test_blk_thread_type_send_dry_run():
     a2 = _heuristic_dm_send(
         BLK_INSTR, tree, hist2, package="com.affinityapps.blk", dry_run=True
     )
-    assert a2 and a2["action"] == "done"
-    assert a2.get("dry_run") is True
+    assert a2 and a2["action"] == "type"
+    assert a2.get("clear") is True and a2.get("text") == ""
+    hist3 = hist2 + [f'type("") — {a2["reason"]}']
+    a3 = _heuristic_dm_send(
+        BLK_INSTR, tree, hist3, package="com.affinityapps.blk", dry_run=True
+    )
+    assert a3 and a3["action"] == "done"
+    assert a3.get("dry_run") is True
+    assert a3.get("dry_run_verified") is True
 
 
 def test_blk_outgoing_requires_sent():
