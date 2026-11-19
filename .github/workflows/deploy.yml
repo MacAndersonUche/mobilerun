@@ -1,21 +1,9 @@
 name: Deploy Backend to AWS
 
 on:
+  # Main-only: PR/cursor/** deploys were cancelling each other under
+  # concurrency cancel-in-progress and never reached AWS.
   push:
-    branches: [main, 'cursor/**']
-    paths:
-      - 'backend/**'
-      - 'infra/**'
-      - 'mobilerun/connectivity/**'
-      - 'mobilerun/dating/**'
-      - 'mobilerun/needs_you/**'
-      - 'mobilerun/selectors/**'
-      - 'mobilerun/safety/**'
-      - 'mobilerun/social/**'
-      - 'mobilerun/agent/humanizer.py'
-      - 'config/dating_openers.json'
-      - '.github/workflows/deploy.yml'
-  pull_request:
     branches: [main]
     paths:
       - 'backend/**'
