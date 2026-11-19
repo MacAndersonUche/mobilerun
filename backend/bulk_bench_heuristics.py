@@ -216,10 +216,18 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
         return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
     m = re.search(
-        r"(?:auto[- ]?)?message\s+(\d+)\s+(?:matches|contacts|people)",
+        r"(?:auto[- ]?)?(?:message|reply to)\s+(\d+)\s+"
+        r"(?:existing\s+)?(?:matches|contacts|people|chats)",
         low,
     )
-    if m or "message 50" in low or "auto-message" in low:
+    if (
+        m
+        or "message 50" in low
+        or "auto-message" in low
+        or "auto message" in low
+        or "existing chats" in low
+        or "existing matches" in low
+    ):
         n = int(m.group(1)) if m else counts["message"]
         # Message body: ONLY explicit instruction text or bank phrase — never invent
         msg = None
@@ -250,6 +258,59 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
             }
         return {"kind": "message", "count": n, "message": msg, "app": app}
     return None
+
+
+def _visible_chat_list_rows(
+    ui_tree: str,
+    app: Optional[str],
+    *,
+    skip_names: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Visible inbox/match row names from the a11y tree (skip already-done)."""
+    try:
+        from dm_heuristics import _looks_like_chat_list_row
+    except ImportError:
+        from backend.dm_heuristics import _looks_like_chat_list_row  # type: ignore
+
+    skip = {str(s).strip().lower() for s in (skip_names or []) if s}
+    profile = DM_APP_PROFILES.get((app or "").lower(), {}) if app else {}
+    result_ids = tuple(profile.get("result_ids") or ())
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+    for n in _parse_compact_nodes(ui_tree):
+        if not _looks_like_chat_list_row(n, result_ids):
+            continue
+        label = (n.get("text") or n.get("label") or "").strip()
+        if not label:
+            continue
+        # Strip "Chat with X" / "Match X" prefixes for the contact key
+        name = label
+        low = label.lower()
+        for pref in ("chat with ", "match "):
+            if low.startswith(pref):
+                name = label[len(pref) :].strip()
+                break
+        # Skip counters / chrome
+        if re.search(r"^\d+\s*(matches?|people|likes?)$", name, re.I):
+            continue
+        if "they liked you" in low or "liked you" == low:
+            continue
+        key = name.lower()
+        if key in skip or key in seen:
+            continue
+        if len(name) < 2 or len(name) > 40:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "name": name,
+                "x": int(n["x"]),
+                "y": int(n["y"]),
+                "label": label,
+            }
+        )
+    rows.sort(key=lambda r: (r["y"], r["x"]))
+    return rows
 
 
 def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
@@ -741,23 +802,8 @@ def plan_bulk_swipe(
                 )
             )
         if disc and "open swipe deck" not in hist:
-            if dry_run:
-                return _fp(
-                    {
-                        "action": "done",
-                        "reason": (
-                            f"[DRY RUN] would open swipe deck at {disc} "
-                            f"— deck not yet visible ({planner})"
-                        ),
-                        "planner": planner,
-                        "llm_provider": None,
-                        "dry_run": True,
-                        "bulk_swipe_done": done,
-                        "bulk_swipe_target": target,
-                        "screenshot": True,
-                    },
-                    "bulk_dry_run_would_open_deck",
-                )
+            # Dry-run: tap the harmless nav tab so we can verify the like
+            # control next — never stop at "would open deck" without proof.
             return _fp(
                 {
                     "action": "tap",
@@ -766,17 +812,16 @@ def plan_bulk_swipe(
                     "reason": f"Open swipe deck ({planner})",
                     "planner": planner,
                     "llm_provider": None,
+                    "dry_run": bool(dry_run),
                 },
                 "bulk_open_deck",
             )
 
-    # dry_run: verify deck/like is present, then stop — never mutate
+    # dry_run: verify deck/like, then simulate N would like/pass logs (no taps)
     if dry_run:
-        like_ok = bool(
-            (app in _REAL_GESTURE_APPS and _real_like_action(app, tree=ui_tree))
-            or _fake_like_center(app, ui_tree)
-            or deck_visible
-        )
+        # Require a visible deck / like control — mapped gestures alone are not proof
+        # (e.g. Bumble like-swipe coords always exist even on the nav-only screen).
+        like_ok = bool(deck_visible or _fake_like_center(app, ui_tree))
         if not like_ok and not deck_visible:
             return _fp(
                 {
@@ -788,24 +833,49 @@ def plan_bulk_swipe(
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": True,
+                    "dry_run_verified": False,
                 },
                 "bulk_dry_run_no_deck",
             )
+        card = deck_card_name(app, ui_tree) or f"profile_{done + 1}"
+        logs = list(bulk.get("dry_logs") or [])
+        logs.append(f"[DRY RUN] would like/pass {card}")
+        bulk["dry_logs"] = logs
+        bulk["done"] = done + 1
+        st["bulk_swipe"] = bulk
+        if bulk["done"] >= target:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"{'; '.join(logs[-target:])} — deck verified, "
+                        f"no like/swipe ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "bulk_swipe_done": bulk["done"],
+                    "bulk_swipe_target": target,
+                    "screenshot": True,
+                },
+                "bulk_dry_run_skip_like",
+            )
+        # Continue the simulated loop without mutating the deck
         return _fp(
             {
-                "action": "done",
-                "reason": (
-                    f"[DRY RUN] would like/swipe {done}/{target} on {app or 'app'} "
-                    f"— deck verified, no like/swipe ({planner})"
-                ),
+                "action": "wait",
+                "seconds": 0.05,
+                "reason": f"[DRY RUN] would like/pass {card} ({done + 1}/{target})",
                 "planner": planner,
                 "llm_provider": None,
                 "dry_run": True,
-                "bulk_swipe_done": done,
+                "dry_run_verified": True,
+                "bulk_swipe_done": bulk["done"],
                 "bulk_swipe_target": target,
                 "screenshot": True,
             },
-            "bulk_dry_run_skip_like",
+            "bulk_dry_run_sim_like",
         )
 
     card_name = deck_card_name(app, ui_tree)
@@ -936,14 +1006,25 @@ def plan_bulk_message(
             "bulk_message_done",
         )
 
-    next_name = "Match%02d" % (done + 1)
+    done_names = list(bulk.get("done_names") or [])
+    next_name = str(bulk.get("current") or "").strip()
+    if not next_name:
+        # Prefer real visible chat-list rows; fall back to Match%02d only when
+        # the list exposes synthetic bench names.
+        rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
+        if rows:
+            next_name = str(rows[0]["name"])
+            bulk["_next_row"] = rows[0]
+        else:
+            next_name = "Match%02d" % (done + 1)
+            bulk.pop("_next_row", None)
 
     # On conversation with current match
-    header_hit = any(
+    header_hit = bool(next_name) and any(
         next_name.lower() in f"{n.get('label')}".lower() and int(n.get("y") or 0) < 400
         for n in nodes
     )
-    if header_hit or (bulk.get("current") == next_name):
+    if header_hit or (bulk.get("current") == next_name and next_name):
         bulk["current"] = next_name
         # If already sent (new outgoing), go back
         if (
@@ -955,6 +1036,12 @@ def plan_bulk_message(
                 bulk["done"] = done + 1
                 bulk["counted_current"] = True
                 bulk["typed"] = False
+                bulk["cleared"] = False
+                if next_name and next_name.lower() not in {
+                    str(x).lower() for x in done_names
+                }:
+                    done_names.append(next_name)
+                bulk["done_names"] = done_names
                 bulk["current"] = None
                 st["bulk_message"] = bulk
             return _fp(
@@ -1001,6 +1088,7 @@ def plan_bulk_message(
             )
         if not bulk.get("typed"):
             bulk["typed"] = True
+            bulk["cleared"] = False
             st["bulk_message"] = bulk
             return _fp(
                 {
@@ -1014,23 +1102,72 @@ def plan_bulk_message(
                 },
                 "bulk_type",
             )
-        # dry_run: stop before send
+        # dry_run: verify compose, CLEAR draft, go back, continue until target
         if dry_run:
+            if not bulk.get("cleared"):
+                bulk["cleared"] = True
+                st["bulk_message"] = bulk
+                return _fp(
+                    {
+                        "action": "type",
+                        "text": "",
+                        "clear": True,
+                        "reason": (
+                            f"[DRY RUN] clear composer after verify "
+                            f"('{message}' for {next_name})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "screenshot": True,
+                    },
+                    "bulk_dry_run_clear_composer",
+                )
+            # Count this dry-run reply and return to list
+            if not bulk.get("counted_current"):
+                bulk["done"] = done + 1
+                bulk["counted_current"] = True
+                bulk["typed"] = False
+                bulk["cleared"] = False
+                if next_name and next_name.lower() not in {
+                    str(x).lower() for x in done_names
+                }:
+                    done_names.append(next_name)
+                bulk["done_names"] = done_names
+                bulk["current"] = None
+                st["bulk_message"] = bulk
+            if bulk["done"] >= target:
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"dry_run — replied (typed+cleared) to "
+                            f"{bulk['done']}/{target} chats; send skipped ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "screenshot": True,
+                        "bulk_message_done": bulk["done"],
+                        "bulk_message_target": target,
+                    },
+                    "bulk_dry_run_skip_send",
+                )
             return _fp(
                 {
-                    "action": "done",
+                    "action": "back",
                     "reason": (
-                        f"dry_run — compose filled with '{message}' for "
-                        f"{next_name}; send skipped ({planner})"
+                        f"[DRY RUN] cleared composer for {next_name}; "
+                        f"back to list ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": True,
-                    "screenshot": True,
-                    "bulk_message_done": done,
-                    "bulk_message_target": target,
+                    "dry_run_verified": True,
                 },
-                "bulk_dry_run_skip_send",
+                "bulk_dry_run_back",
             )
         send = find_send_center_safe(
             ui_tree,
@@ -1065,7 +1202,8 @@ def plan_bulk_message(
         )
 
     # Open Matches tab / list
-    if "match" not in ui_tree.lower() and "connection" not in ui_tree.lower():
+    tl_low = ui_tree.lower()
+    if not any(t in tl_low for t in ("match", "connection", "chat", "dialog")):
         c = _tree_node_center(ui_tree, "Matches", "Connections", "Chats")
         if c:
             return _fp(
@@ -1080,19 +1218,26 @@ def plan_bulk_message(
                 "bulk_open_matches",
             )
 
-    # Tap next match row
-    c = _tree_node_center(ui_tree, next_name, f"Match {next_name}")
-    if c:
-        bulk["current"] = next_name
+    # Tap next visible chat-list row (skip already-done names)
+    rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
+    row = rows[0] if rows else None
+    if row is None:
+        # Bench fallback: Match%02d synthetic rows
+        c = _tree_node_center(ui_tree, next_name, f"Match {next_name}")
+        if c:
+            row = {"name": next_name, "x": c[0], "y": c[1]}
+    if row:
+        bulk["current"] = str(row["name"])
         bulk["typed"] = False
+        bulk["cleared"] = False
         bulk["counted_current"] = False
         st["bulk_message"] = bulk
         return _fp(
             {
                 "action": "tap",
-                "x": c[0],
-                "y": c[1],
-                "reason": f"Open {next_name} ({planner})",
+                "x": int(row["x"]),
+                "y": int(row["y"]),
+                "reason": f"Open {row['name']} ({planner})",
                 "planner": planner,
                 "llm_provider": None,
                 "delay_s": sample_human_delay(random.Random(f"open:{done}")),
@@ -1100,7 +1245,7 @@ def plan_bulk_message(
             "bulk_open_match",
         )
 
-    # Scroll for more matches
+    # Scroll for more matches (allowed in dry_run — non-mutating list scroll)
     return _fp(
         {
             "action": "swipe",
@@ -1108,11 +1253,11 @@ def plan_bulk_message(
             "y1": 1800,
             "x2": 540,
             "y2": 700,
-            "reason": f"Scroll matches for {next_name} ({planner})",
+            "reason": f"Scroll chat list for more matches ({next_name}) ({planner})",
             "planner": planner,
             "llm_provider": None,
         },
-        "bulk_scroll_matches",
+        "bulk_scroll",
     )
 
 

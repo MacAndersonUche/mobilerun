@@ -940,6 +940,69 @@ def _fuzzy_score(needle: str, hay: str) -> float:
     return hit / len(nt)
 
 
+def _name_exact_or_whole_word(contact: str, label: str) -> bool:
+    """True when label equals contact or contains it as a whole word (not substring)."""
+    c = re.sub(r"\s+", " ", (contact or "").strip().lower())
+    lab = re.sub(r"\s+", " ", (label or "").strip().lower())
+    if not c or not lab:
+        return False
+    if c == lab:
+        return True
+    # "Name, 24" / "Name · online" — name is the first segment
+    first = re.split(r"[,·|•\-–]", lab, maxsplit=1)[0].strip()
+    if first == c:
+        return True
+    return bool(re.search(rf"(?<!\w){re.escape(c)}(?!\w)", lab))
+
+
+def _looks_like_chat_list_row(
+    node: Dict[str, Any], result_ids: Sequence[str] = ()
+) -> bool:
+    """Restrict contact taps to inbox/match row nodes — never deck cards / counters."""
+    nid = str(node.get("id") or "").lower()
+    label = (node.get("label") or node.get("text") or "").lower()
+    if result_ids and _node_id_matches(node, result_ids):
+        return True
+    row_id_toks = (
+        "dialogmessageitem",
+        "usernamefield",
+        "messagefield",
+        "match_row",
+        "match_name",
+        "connection_row",
+        "like_row",
+        "like_name",
+        "dating_match_row",
+        "dating_inbox_row",
+        "contact_row",
+        "conversations_row",
+        "row_inbox",
+        "thread_list_item",
+        "center_name",
+    )
+    if any(t in nid for t in row_id_toks):
+        return True
+    # Fake-chats / bench rows: "Chat with X" / "Match X" / "Match01"
+    if label.startswith("chat with ") or label.startswith("match "):
+        return True
+    if re.match(r"^match\d{1,3}$", label.replace(" ", "")):
+        return True
+    return False
+
+
+def _is_bulk_quantity_contact(contact: str) -> bool:
+    """True for '5 matches' / '3 people' — not a real contact name."""
+    c = (contact or "").strip().lower()
+    if not c:
+        return False
+    return bool(
+        re.match(
+            r"^\d+\s*(?:existing\s+)?(?:matches?|people|contacts?|chats?)$",
+            c,
+        )
+    )
+
+
 def _is_searchish_node(node: Dict[str, Any], search_labels: Sequence[str]) -> bool:
     if node.get("editable"):
         hint = (node.get("hint") or "").lower()
@@ -985,13 +1048,13 @@ def find_contact_result_center(
     result_ids: Sequence[str] = (),
     exclude_ids: Sequence[str] = (),
 ) -> Optional[Tuple[int, int]]:
-    """Best fuzzy match for a contact *result row* — never the search EditText.
+    """Best match for a contact *chat-list row* — never deck cards / counters.
 
-    WhatsApp SM-G996B: prefer contact_row_container / conversations_row_contact_name
-    under the 'Chats' header — never message hits or 'From X' chips.
+    Requires exact or whole-word name match on a row-like node (result_ids /
+    known inbox row ids). Substring hits like '5' inside '15 matches' are refused.
     """
     nodes = _parse_compact_nodes(tree)
-    if not nodes:
+    if not nodes or _is_bulk_quantity_contact(contact):
         return None
     chats_y = _chats_section_y(nodes)
     candidates: List[Tuple[float, int, Dict[str, Any]]] = []
@@ -1000,27 +1063,21 @@ def find_contact_result_center(
             continue
         if exclude_ids and _node_id_matches(node, exclude_ids):
             continue
-        label = node.get("label") or ""
+        if not _looks_like_chat_list_row(node, result_ids):
+            continue
+        label = node.get("label") or node.get("text") or ""
         low = label.lower()
         # "From Precious Achalugo" chip / message snippet rows
         if low.startswith("from "):
             continue
         if "search_message" in str(node.get("id") or "").lower():
             continue
-        score = _fuzzy_score(contact, label)
-        if score < 0.5:
-            first = (contact.split() or [""])[0]
-            if first and len(first) >= 3:
-                score = max(score, _fuzzy_score(first, label) * 0.85)
-        # Photo content-desc: "<Name> picture" — usable but prefer name/row
-        if score < 0.5 and "picture" in low:
-            score = max(
-                score,
-                _fuzzy_score(contact, re.sub(r"\s+picture\s*$", "", low, flags=re.I))
-                * 0.9,
-            )
-        if score < 0.5:
+        # Counters / deck chrome — never treat as a contact row
+        if re.search(r"\b\d+\s*(matches?|people|likes?)\b", low):
             continue
+        if not _name_exact_or_whole_word(contact, label):
+            continue
+        score = 1.0 if label.strip().lower() == contact.strip().lower() else 0.92
         y = int(node.get("y") or 0)
         if y < 260:
             score *= 0.4
@@ -1705,24 +1762,28 @@ def hily_on_finder(tree: str) -> bool:
     )
 
 
-def hily_on_chats_list(tree: str) -> bool:
-    return bool(
-        _tree_id_center(
-            tree,
-            "dialogMessageItem",
-            "dialogsSearchButton",
-            "userNameField",
-        )
-    )
-
-
 def hily_on_thread(tree: str) -> bool:
+    """True on an open Hily conversation (toolbar + compose), not the chats list."""
     return bool(
         _tree_id_center(
             tree,
             "threadInputFieldText",
             "threadToolBarName",
             "threadSend",
+        )
+    )
+
+
+def hily_on_chats_list(tree: str) -> bool:
+    """True on Hily chats inbox. Thread screens must not count as the list."""
+    if hily_on_thread(tree):
+        return False
+    return bool(
+        _tree_id_center(
+            tree,
+            "dialogMessageItem",
+            "dialogsSearchButton",
+            "userNameField",
         )
     )
 
@@ -2857,6 +2918,9 @@ def parse_dm_instruction(instruction: str) -> Optional[Dict[str, str]]:
         message = re.sub(r"^(?:her|him|them)\s+", "", message, flags=re.I).strip(
             " .,\"'"
         )
+        # Never treat "N matches/people/chats" as a contact (bulk goals).
+        if _is_bulk_quantity_contact(contact):
+            continue
         if contact and message and len(contact) <= 80 and len(message) <= 500:
             return {"app": app_key, "contact": contact, "message": message}
     return None
@@ -2979,6 +3043,12 @@ def heuristic_dm_send(
             or "select contact" in str(h).lower()
             or "tap yubo conversation" in str(h).lower()
             or "conversation '" in str(h).lower()
+            or "tap hily chat" in str(h).lower()
+            or "tap blk match" in str(h).lower()
+            or "tap taimi chat" in str(h).lower()
+            or "hily_tap_chat" in str(h).lower()
+            or "blk_tap_match" in str(h).lower()
+            or "taimi_tap_chat" in str(h).lower()
             # Open chat with X — but NOT "Open Chat(s) tab"
             or (
                 re.search(r"open chat(?:\s+with)?\b", str(h).lower()) is not None
@@ -3344,8 +3414,16 @@ def heuristic_dm_send(
 
     # 0a) If the contact row is already on-screen (inbox / matches list), tap it
     # before any search field — dating decks often expose a Search affordance
-    # that would otherwise steal the flow.
-    if not chat_ok and not typed_message and not tapped_contact:
+    # that would otherwise steal the flow. Never tap deck cards / counters /
+    # substring hits; require chat-list row + exact/whole-word name.
+    if (
+        not chat_ok
+        and not typed_message
+        and not tapped_contact
+        and not (app_key == "hily" and hily_on_thread(ui_tree))
+        and not (app_key == "blk" and blk_on_thread(ui_tree))
+        and not (app_key == "taimi" and taimi_on_thread(ui_tree))
+    ):
         visible = find_contact_result_center(
             ui_tree,
             contact,
@@ -3354,13 +3432,15 @@ def heuristic_dm_send(
             exclude_ids=tuple(profile.get("result_exclude_ids") or ()),
         )
         if visible is None:
-            # Fake-chats rows use "Chat with X" / "Match X" content-desc
-            visible = _tree_node_center(
-                ui_tree,
-                f"Chat with {contact}",
-                f"Match {contact}",
-                contact,
-            )
+            # Fake-chats rows: exact "Chat with X" / "Match X" labels only
+            for needle in (f"Chat with {contact}", f"Match {contact}"):
+                for n in _parse_compact_nodes(ui_tree):
+                    lab = (n.get("label") or n.get("text") or "").strip()
+                    if lab.lower() == needle.lower() and _looks_like_chat_list_row(n):
+                        visible = (int(n["x"]), int(n["y"]))
+                        break
+                if visible:
+                    break
         if visible:
             return _fp(
                 {
@@ -3938,20 +4018,55 @@ def heuristic_dm_send(
             "type_message",
         )
 
-    # 6) Send — prefer visible Send ImageButton (appears after text). Dry-run stops.
+    # 6) Send — prefer visible Send ImageButton (appears after text).
+    # Dry-run: verify compose, CLEAR typed text (never leave a draft), then stop.
     # WA: never IME Enter in search (Meta AI); prefer tap Send in chat too.
     if typed_message and not tapped_send:
         if dry_run:
+            cleared = any(
+                "clear composer" in str(h).lower()
+                or "dry_run clear" in str(h).lower()
+                or (
+                    "typed" in str(h).lower()
+                    and '""' in str(h)
+                    and "clear" in str(h).lower()
+                )
+                for h in history[-16:]
+            )
+            # Verify the body landed before clearing
+            verified = bool(message) and (
+                message.lower()[: max(4, min(12, len(message)))] in tl
+                or message.lower() in hist
+            )
+            if not cleared:
+                return _fp(
+                    {
+                        "action": "type",
+                        "text": "",
+                        "clear": True,
+                        "reason": (
+                            f"[DRY RUN] clear composer after verify "
+                            f"('{message}' for {contact})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": bool(verified),
+                        "screenshot": True,
+                    },
+                    "dry_run_clear_composer",
+                )
             return _fp(
                 {
                     "action": "done",
                     "reason": (
-                        f"dry_run — compose filled with '{message}' "
-                        f"for {contact}; send skipped"
+                        f"dry_run — compose verified then cleared for "
+                        f"'{contact}'; send skipped"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": True,
+                    "dry_run_verified": True,
                     "screenshot": True,
                 },
                 "dry_run_stop",

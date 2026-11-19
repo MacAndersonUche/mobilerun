@@ -268,14 +268,15 @@ def test_bumble_dry_run_requires_deck_not_silent_zero():
         package="com.bumble.app",
         dry_run=True,
     )
-    # Must not silently claim 0/5 success without deck
+    # Must not silently claim success without a visible deck / like control
     assert act is not None
-    assert act.get("action") in ("done", "fail")
+    assert act.get("action") in ("done", "fail", "tap")
     if act.get("action") == "done" and act.get("dry_run"):
-        # would open deck is OK; silent complete without verify is not
         assert (
-            "would" in (act.get("reason") or "").lower()
-            or "deck" in (act.get("reason") or "").lower()
+            act.get("dry_run_verified") is not True
+            or "deck verified" in (act.get("reason") or "").lower()
         )
     if act.get("fastpath_step") == "bulk_swipe_done":
         raise AssertionError("dry_run must not complete bulk without deck verify")
+    if act.get("fastpath_step") == "bulk_dry_run_sim_like":
+        raise AssertionError("dry_run must not simulate likes without deck visible")

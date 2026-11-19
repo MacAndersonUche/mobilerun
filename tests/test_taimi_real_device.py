@@ -185,8 +185,15 @@ def test_taimi_dry_run_stops_before_send():
     a = _heuristic_dm_send(
         INSTR, chat, hist, package="com.takimi.android", dry_run=True
     )
-    assert a and a["action"] == "done"
-    assert a.get("dry_run") is True
+    assert a and a["action"] == "type"
+    assert a.get("clear") is True and a.get("text") == ""
+    hist2 = hist + [f'type("") — {a["reason"]}']
+    a2 = _heuristic_dm_send(
+        INSTR, chat, hist2, package="com.takimi.android", dry_run=True
+    )
+    assert a2 and a2["action"] == "done"
+    assert a2.get("dry_run") is True
+    assert a2.get("dry_run_verified") is True
 
 
 def test_taimi_bulk_like_right_button_not_nav():
@@ -263,6 +270,6 @@ def test_taimi_bulk_dry_run_skips_like():
         package="com.takimi.android",
         dry_run=True,
     )
-    assert act and act.get("action") == "done"
+    assert act and act.get("action") in ("wait", "done")
     assert act.get("dry_run") is True
-    assert st.get("bulk_swipe", {}).get("done") == 0
+    assert "would like/pass" in (act.get("reason") or "").lower()
