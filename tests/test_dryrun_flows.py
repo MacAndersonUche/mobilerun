@@ -233,7 +233,8 @@ def test_dry_run_swipe_logs_n_would_like_pass():
 
 
 def test_dry_run_allows_chat_list_scroll_blocks_deck_swipe():
-    scroll = {
+    # Unverified list scrolls stay blocked in dry_run
+    unverified = {
         "action": "swipe",
         "x1": 540,
         "y1": 1800,
@@ -242,11 +243,22 @@ def test_dry_run_allows_chat_list_scroll_blocks_deck_swipe():
         "reason": "Scroll chat list for more matches (Nancy)",
         "fastpath_step": "bulk_scroll",
     }
+    assert not _is_chat_list_scroll_swipe(unverified, "swipe")
+    kind_u, _, _ = apply_dry_run_send_guard(
+        dry_run=True, action=unverified, kind="swipe", reason=unverified["reason"]
+    )
+    assert kind_u == "done"
+
+    scroll = {
+        **unverified,
+        "chat_list_verified": True,
+    }
     assert _is_chat_list_scroll_swipe(scroll, "swipe")
     kind, _, out = apply_dry_run_send_guard(
         dry_run=True, action=scroll, kind="swipe", reason=scroll["reason"]
     )
     assert kind == "swipe"
+    assert out is scroll
 
     deck_swipe = {
         "action": "swipe",

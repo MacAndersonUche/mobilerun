@@ -215,20 +215,33 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     if "swipe 50" in low or "auto-swipe" in low:
         return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
+    # Quoted message BEFORE "to N": reply "hey" to 5 existing chats on Hily
+    qm_first = re.search(
+        r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
+        r"to\s+(\d+)\s+(?:existing\s+)?(?:matches|contacts|people|chats?)",
+        text,
+        re.I,
+    )
+    if qm_first:
+        return {
+            "kind": "message",
+            "count": int(qm_first.group(2)),
+            "message": qm_first.group(1).strip(),
+            "app": app,
+        }
+
     m = re.search(
         r"(?:auto[- ]?)?(?:message|reply to)\s+(\d+)\s+"
-        r"(?:existing\s+)?(?:matches|contacts|people|chats)",
+        r"(?:existing\s+)?(?:matches|contacts|people|chats?)",
         low,
     )
-    if (
-        m
-        or "message 50" in low
-        or "auto-message" in low
-        or "auto message" in low
-        or "existing chats" in low
-        or "existing matches" in low
-    ):
-        n = int(m.group(1)) if m else counts["message"]
+    # Explicit "message 50" / "auto-message" with a countable N only — never
+    # invent count=50 from bare "existing chats" without a number.
+    if m or re.search(r"(?:message|auto[- ]?message)\s+50\b", low):
+        if m:
+            n = int(m.group(1))
+        else:
+            n = 50
         # Message body: ONLY explicit instruction text or bank phrase — never invent
         msg = None
         tm = re.search(
@@ -242,6 +255,14 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
         qm = re.search(r"[\"']([^\"']+)[\"']\s*$", text)
         if qm:
             msg = qm.group(1).strip()
+        # Leading quoted body: message "hi" to 5 matches (without existing)
+        qm2 = re.search(
+            r"(?:message|reply|auto[- ]?message)\s+[\"']([^\"']+)[\"']",
+            text,
+            re.I,
+        )
+        if qm2:
+            msg = qm2.group(1).strip()
         if msg is None and "hi baby" in low:
             # Only when the user literally wrote hi baby in the instruction
             msg = "hi baby"
@@ -257,6 +278,19 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
                 ),
             }
         return {"kind": "message", "count": n, "message": msg, "app": app}
+
+    # Bare "existing chats" without a parseable count → fail (never default 50)
+    if "existing chat" in low or "existing match" in low:
+        return {
+            "kind": "message",
+            "count": 0,
+            "message": None,
+            "app": app,
+            "error": (
+                "Could not parse chat count — refuse default 50; "
+                'use e.g. reply "hi" to 5 existing chats'
+            ),
+        }
     return None
 
 
@@ -311,6 +345,130 @@ def _visible_chat_list_rows(
         )
     rows.sort(key=lambda r: (r["y"], r["x"]))
     return rows
+
+
+MAX_LIST_SCROLLS = 3
+
+
+def _is_fake_chats_bench(
+    ui_tree: str, package: str = "", instruction: str = ""
+) -> bool:
+    """True only for the fake-chats test APK (Match%02d rows / instruction hint)."""
+    instr = (instruction or "").lower()
+    if "fake-chats" in instr or "fake chats" in instr:
+        return True
+    # Synthetic Match01..MatchNN labels are exclusive to the bench app
+    if re.search(r"\bMatch\d{2}\b", ui_tree or ""):
+        return True
+    pkg = (package or "").lower()
+    if "fakechats" in pkg or "fake_chats" in pkg:
+        return True
+    return False
+
+
+def _chat_list_screen_verified(app: Optional[str], ui_tree: str) -> bool:
+    """True when the foreground looks like an inbox / matches list (not deck/thread)."""
+    app_l = (app or "").lower()
+    try:
+        from dm_heuristics import (
+            badoo_on_connections,
+            blk_on_matches,
+            bumble_on_connections,
+            hily_on_chats_list,
+            taimi_on_chats_list,
+            yubo_on_chat_list,
+        )
+    except ImportError:
+        from backend.dm_heuristics import (  # type: ignore
+            badoo_on_connections,
+            blk_on_matches,
+            bumble_on_connections,
+            hily_on_chats_list,
+            taimi_on_chats_list,
+            yubo_on_chat_list,
+        )
+
+    if app_l == "hily":
+        return hily_on_chats_list(ui_tree)
+    if app_l == "blk":
+        return blk_on_matches(ui_tree)
+    if app_l == "taimi":
+        return taimi_on_chats_list(ui_tree)
+    if app_l == "bumble":
+        return bumble_on_connections(ui_tree)
+    if app_l == "yubo":
+        return yubo_on_chat_list(ui_tree)
+    if app_l == "badoo":
+        return badoo_on_connections(ui_tree)
+    if app_l == "whatsapp":
+        # Home chats list: conversation row name / contact row
+        return bool(
+            _tree_id_center(
+                ui_tree,
+                "conversations_row_contact_name",
+                "contact_row_container",
+                "id/conversations_row_contact_name",
+                "id/contact_row_container",
+            )
+            or _visible_chat_list_rows(ui_tree, "whatsapp")
+        )
+    # Generic: visible chat-list rows OR known result ids
+    if _visible_chat_list_rows(ui_tree, app):
+        return True
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
+    result_ids = tuple(profile.get("result_ids") or ())
+    return bool(result_ids and _tree_id_center(ui_tree, *result_ids))
+
+
+def _open_chats_tab_action(
+    app: Optional[str],
+    ui_tree: str,
+    history: List[str],
+    planner: str,
+) -> Optional[Dict[str, Any]]:
+    """Tap the app's Chats/Messages/Matches nav using the UI map (never invent)."""
+    hist = " ".join(history[-12:]).lower()
+    if any(
+        t in hist
+        for t in (
+            "open chats",
+            "open matches",
+            "open messages",
+            "bulk_open_chats",
+            "chats/messages tab",
+        )
+    ):
+        return None  # already tried — caller should verify/fail
+    profile = DM_APP_PROFILES.get((app or "").lower(), {}) if app else {}
+    labels = tuple(
+        profile.get("inbox_tab_labels")
+        or profile.get("inbox_labels")
+        or ("Chats", "Messages", "Matches", "Connections")
+    )
+    c = _tree_node_center(ui_tree, *labels)
+    if c is None:
+        # Exact content-desc match for bottom nav
+        for lab in labels:
+            c = _exact_label_center(ui_tree, lab)
+            if c:
+                break
+    if c is None:
+        xy = profile.get("inbox_tab_xy")
+        if isinstance(xy, (tuple, list)) and len(xy) >= 2:
+            c = (int(xy[0]), int(xy[1]))
+    if not c:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(c[0]),
+            "y": int(c[1]),
+            "reason": f"Open chats/messages tab ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bulk_open_chats",
+    )
 
 
 def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
@@ -1007,16 +1165,63 @@ def plan_bulk_message(
         )
 
     done_names = list(bulk.get("done_names") or [])
+    fake_bench = _is_fake_chats_bench(ui_tree, package, instruction)
+    list_ok = _chat_list_screen_verified(app_key, ui_tree)
+    bulk["chat_list_verified"] = bool(list_ok)
+    st["bulk_message"] = bulk
+
+    # Ensure we're on the Chats/Messages list before inventing targets
+    if not list_ok and not bulk.get("current"):
+        open_tab = _open_chats_tab_action(app_key, ui_tree, history, planner)
+        if open_tab:
+            return open_tab
+        # Already tried opening the tab (or no tab found) and still not a list
+        if any(
+            "open chats" in str(h).lower() or "bulk_open_chats" in str(h).lower()
+            for h in history[-8:]
+        ):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Chat list not verified for {app_key or 'app'} — "
+                        f"refusing Match%02d / blind scroll ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                },
+                "bulk_chat_list_unverified",
+            )
+        # First attempt with mapped coords even if label miss
+        open_tab = _open_chats_tab_action(app_key, ui_tree, [], planner)
+        if open_tab:
+            return open_tab
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"No Chats/Messages tab found for {app_key or 'app'} ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_chats_tab_missing",
+        )
+
     next_name = str(bulk.get("current") or "").strip()
     if not next_name:
-        # Prefer real visible chat-list rows; fall back to Match%02d only when
-        # the list exposes synthetic bench names.
         rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
         if rows:
             next_name = str(rows[0]["name"])
             bulk["_next_row"] = rows[0]
-        else:
+        elif fake_bench:
+            # Match%02d ONLY on the fake-chats bench APK
             next_name = "Match%02d" % (done + 1)
+            bulk.pop("_next_row", None)
+        else:
+            next_name = ""
             bulk.pop("_next_row", None)
 
     # On conversation with current match
@@ -1201,28 +1406,11 @@ def plan_bulk_message(
             "bulk_send",
         )
 
-    # Open Matches tab / list
-    tl_low = ui_tree.lower()
-    if not any(t in tl_low for t in ("match", "connection", "chat", "dialog")):
-        c = _tree_node_center(ui_tree, "Matches", "Connections", "Chats")
-        if c:
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": c[0],
-                    "y": c[1],
-                    "reason": f"Open matches list ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "bulk_open_matches",
-            )
-
     # Tap next visible chat-list row (skip already-done names)
     rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
     row = rows[0] if rows else None
-    if row is None:
-        # Bench fallback: Match%02d synthetic rows
+    if row is None and fake_bench and next_name:
+        # Bench fallback: Match%02d synthetic rows only
         c = _tree_node_center(ui_tree, next_name, f"Match {next_name}")
         if c:
             row = {"name": next_name, "x": c[0], "y": c[1]}
@@ -1231,6 +1419,7 @@ def plan_bulk_message(
         bulk["typed"] = False
         bulk["cleared"] = False
         bulk["counted_current"] = False
+        bulk["scroll_count"] = 0
         st["bulk_message"] = bulk
         return _fp(
             {
@@ -1241,23 +1430,48 @@ def plan_bulk_message(
                 "planner": planner,
                 "llm_provider": None,
                 "delay_s": sample_human_delay(random.Random(f"open:{done}")),
+                "chat_list_verified": True,
             },
             "bulk_open_match",
         )
 
-    # Scroll for more matches (allowed in dry_run — non-mutating list scroll)
+    # No rows: scroll only on a verified list, cap at MAX_LIST_SCROLLS
+    scroll_n = int(bulk.get("scroll_count") or 0)
+    if list_ok and scroll_n < MAX_LIST_SCROLLS:
+        bulk["scroll_count"] = scroll_n + 1
+        st["bulk_message"] = bulk
+        return _fp(
+            {
+                "action": "swipe",
+                "x1": 540,
+                "y1": 1800,
+                "x2": 540,
+                "y2": 700,
+                "reason": (
+                    f"Scroll verified chat list for more rows "
+                    f"({scroll_n + 1}/{MAX_LIST_SCROLLS}) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "chat_list_verified": True,
+                "_chat_list_verified": True,
+            },
+            "bulk_scroll",
+        )
+
     return _fp(
         {
-            "action": "swipe",
-            "x1": 540,
-            "y1": 1800,
-            "x2": 540,
-            "y2": 700,
-            "reason": f"Scroll chat list for more matches ({next_name}) ({planner})",
+            "action": "fail",
+            "reason": (
+                f"No chat-list rows for {app_key or 'app'} after "
+                f"{scroll_n} scrolls — refusing Match%02d invent ({planner})"
+            ),
             "planner": planner,
             "llm_provider": None,
+            "dry_run": bool(dry_run),
+            "dry_run_verified": False,
         },
-        "bulk_scroll",
+        "bulk_no_chat_rows",
     )
 
 
