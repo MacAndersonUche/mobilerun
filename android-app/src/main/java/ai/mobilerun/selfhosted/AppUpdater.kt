@@ -42,10 +42,22 @@ object AppUpdater {
         data class Error(val message: String) : CheckResult()
     }
 
-    private val http: OkHttpClient =
+    /** Short timeouts for release metadata (never block UI feel). */
+    private val metaHttp: OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+
+    /** Longer timeouts for the APK download itself. */
+    private val downloadHttp: OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(180, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
@@ -130,7 +142,7 @@ object AppUpdater {
                 .header("Accept", "application/json")
                 .get()
                 .build()
-        http.newCall(req).execute().use { resp ->
+        metaHttp.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return null
             val body = resp.body?.string().orEmpty()
             if (body.isBlank()) return null
@@ -161,7 +173,7 @@ object AppUpdater {
                 .header("User-Agent", "MobilerunSelfHosted/${BuildConfig.VERSION_NAME}")
                 .get()
                 .build()
-        http.newCall(req).execute().use { resp ->
+        metaHttp.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 Log.w(TAG, "GitHub releases HTTP ${resp.code}")
                 return null
@@ -203,7 +215,7 @@ object AppUpdater {
         val out = File(dir, "mobilerun-${release.versionCode}.apk")
         if (out.exists()) out.delete()
         val req = Request.Builder().url(release.apkUrl).get().build()
-        http.newCall(req).execute().use { resp ->
+        downloadHttp.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 throw IllegalStateException("Download HTTP ${resp.code}")
             }

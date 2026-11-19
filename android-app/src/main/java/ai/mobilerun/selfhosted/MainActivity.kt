@@ -279,9 +279,9 @@ fun MainScreen(
     LaunchedEffect(Unit) {
         backendClient.updateAvailableFlow.collect { pendingUpdate = it }
     }
-    // Silent check on launch (no install prompt unless an update exists + user taps Install)
+    // Deferred silent check — wait for cold-start/WS to settle; never auto-install
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(1_500)
+        kotlinx.coroutines.delay(4_000)
         runUpdateCheck(promptInstall = false)
     }
     LaunchedEffect(mediaProjectionGranted) { refreshPerms() }
