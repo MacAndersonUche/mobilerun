@@ -1,19 +1,42 @@
-"""Load test-apps/fake-chats/catalog.json for matrix + heuristics."""
+"""Load test-apps/fake-chats/catalog.json for matrix + heuristics.
+
+On Lambda the catalog file is not packaged — return safe empty defaults so
+normal (non-bench) agent jobs never crash on import/plan.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
+logger = logging.getLogger("mobilerun.fake_chats_catalog")
+
 _ROOT = Path(__file__).resolve().parents[1]
 _CATALOG_PATH = _ROOT / "test-apps" / "fake-chats" / "catalog.json"
+
+# Minimal fallback when catalog.json is absent (prod Lambda asset).
+_EMPTY_CATALOG: Dict[str, Any] = {
+    "apps": [],
+    "bulk": {"swipe_count": 50, "message_count": 50},
+}
 
 
 @lru_cache(maxsize=1)
 def load_catalog() -> Dict[str, Any]:
-    return json.loads(_CATALOG_PATH.read_text())
+    try:
+        if not _CATALOG_PATH.is_file():
+            logger.warning(
+                "fake-chats catalog missing at %s — using empty defaults",
+                _CATALOG_PATH,
+            )
+            return dict(_EMPTY_CATALOG)
+        return json.loads(_CATALOG_PATH.read_text())
+    except Exception as e:
+        logger.warning("fake-chats catalog load failed: %s — using empty defaults", e)
+        return dict(_EMPTY_CATALOG)
 
 
 def apps() -> List[Dict[str, Any]]:

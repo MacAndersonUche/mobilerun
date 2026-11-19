@@ -602,14 +602,35 @@ def plan_next_action(
     """
     # Bulk swipe / bulk message bench goals skip the single-DM "goal visible"
     # short-circuit (seed bubbles / match lists would false-complete).
-    try:
-        from bulk_bench_heuristics import parse_bulk_goal as _parse_bulk
-    except ImportError:
-        from backend.bulk_bench_heuristics import (  # type: ignore
-            parse_bulk_goal as _parse_bulk,
+    # Lazy: only parse bulk when the instruction looks like a bench goal so
+    # prod Lambda (no catalog.json) never pays the import cost on normal DMs.
+    instr_l = (instruction or "").lower()
+    maybe_bulk = any(
+        tok in instr_l
+        for tok in (
+            "swipe ",
+            "auto-swipe",
+            "bulk ",
+            "50 profiles",
+            "message 50",
+            "fake-chats",
+            "fake chats",
         )
-    bulk_goal = _parse_bulk(instruction)
-    secure_folder_goal = "secure folder" in (instruction or "").lower()
+    )
+    bulk_goal = None
+    if maybe_bulk:
+        try:
+            from bulk_bench_heuristics import parse_bulk_goal as _parse_bulk
+        except ImportError:
+            from backend.bulk_bench_heuristics import (  # type: ignore
+                parse_bulk_goal as _parse_bulk,
+            )
+        try:
+            bulk_goal = _parse_bulk(instruction)
+        except Exception as e:
+            logger.warning("parse_bulk_goal skipped: %s", e)
+            bulk_goal = None
+    secure_folder_goal = "secure folder" in instr_l
 
     # Deterministic short-circuit: goal already visible → done (avoids tap loops)
     if not bulk_goal and not secure_folder_goal:
