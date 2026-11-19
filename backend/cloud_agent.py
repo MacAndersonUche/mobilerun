@@ -1471,16 +1471,82 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         text = str(action.get("text") or "")
         # Device ACK is fast (typing may continue briefly). Cap wait well above
         # the old 20s wall that caused offline_streak after chunked SET_TEXT.
-        raw = call_device(
-            device_id,
-            "input_text",
-            {
-                "text": text,
-                "clear": bool(action.get("clear")),
-                "humanize": True,
-            },
-            timeout_s=45,
-        )
+        last_err: Optional[Exception] = None
+        raw: Any = None
+        for attempt in range(3):
+            try:
+                raw = call_device(
+                    device_id,
+                    "input_text",
+                    {
+                        "text": text,
+                        "clear": bool(action.get("clear")),
+                        "humanize": True,
+                    },
+                    timeout_s=45,
+                )
+                last_err = None
+                break
+            except Exception as te:
+                last_err = te
+                low = str(te).lower()
+                focus_miss = "focus a text field" in low or "input_text failed" in low
+                if not focus_miss or attempt >= 2:
+                    raise
+                # Re-snapshot → tap focused/search editable → retry (max 2 recoveries)
+                try:
+                    info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                    tree = str(info.get("tree") or "")
+                    try:
+                        from dm_heuristics import (
+                            _tree_editable_center,
+                            _tree_id_center,
+                            _tree_node_center,
+                        )
+                    except ImportError:
+                        from backend.dm_heuristics import (  # type: ignore
+                            _tree_editable_center,
+                            _tree_id_center,
+                            _tree_node_center,
+                        )
+                    c = (
+                        _tree_editable_center(tree)
+                        or _tree_id_center(
+                            tree,
+                            "com.whatsapp:id/search_src_text",
+                            "com.whatsapp:id/search_input",
+                            "id/search_src_text",
+                            "id/entry",
+                        )
+                        or _tree_node_center(
+                            tree,
+                            "Search",
+                            "Ask Meta AI or Search",
+                            "Type a message",
+                            "Message",
+                        )
+                    )
+                    if not c:
+                        raise
+                    call_device(
+                        device_id,
+                        "tap",
+                        {"x": int(c[0]), "y": int(c[1])},
+                        timeout_s=12,
+                    )
+                    time.sleep(0.45)
+                    action["_refocus_attempt"] = attempt + 1
+                    action["_refocus_xy"] = [int(c[0]), int(c[1])]
+                    logger.info(
+                        "input_text refocus attempt=%s xy=%s after %s",
+                        attempt + 1,
+                        c,
+                        te,
+                    )
+                except Exception:
+                    raise te from te
+        if last_err is not None:
+            raise last_err
         if isinstance(raw, dict):
             if isinstance(raw.get("timing"), dict):
                 action["_timing"] = raw["timing"]
@@ -2895,25 +2961,41 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         msg = str(e)
         low = msg.lower()
         a11y_fail = "accessibility service not connected" in low
-        hard = any(
-            t in low
-            for t in (
-                "no llm",
-                "no working llm",
-                "llm unavailable",
-                "offline",
-                "api key",
-                "failed to push",
-                "swipe loop",
+        focus_fail_n = sum(
+            1
+            for h in history
+            if "focus a text field" in str(h).lower()
+            or "input_text failed" in str(h).lower()
+        )
+        hard = (
+            any(
+                t in low
+                for t in (
+                    "no llm",
+                    "no working llm",
+                    "llm unavailable",
+                    "offline",
+                    "api key",
+                    "failed to push",
+                    "swipe loop",
+                    "search control not found",
+                    "refusing coord guess",
+                )
             )
-        ) or (
-            a11y_fail
-            and sum(
-                1
-                for h in history
-                if "accessibility service not connected" in str(h).lower()
+            or (
+                a11y_fail
+                and sum(
+                    1
+                    for h in history
+                    if "accessibility service not connected" in str(h).lower()
+                )
+                >= 2
             )
-            >= 2
+            or (
+                # Never burn max_steps retyping into an unfocused field
+                ("focus a text field" in low or "input_text failed" in low)
+                and focus_fail_n >= 2
+            )
         )
         rate_limited = any(t in low for t in ("429", "503", "quota", "high demand"))
         if hard or step + 1 >= max_steps:
