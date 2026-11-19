@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <n i="android:id/alertTitle" t="Interested?" xy="540,900" b="200,850,880,950"/>
+ <n i="android:id/button1" t="YES" c="1" xy="700,1200" b="560,1140,840,1260"/>
+ <n i="android:id/button2" t="CANCEL" c="1" xy="380,1200" b="240,1140,520,1260"/>
+</w>
+</hierarchy>

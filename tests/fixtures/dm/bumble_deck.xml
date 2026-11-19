@@ -1,0 +1,17 @@
+<hierarchy windows="1" nodes="18" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <n i="com.bumble.app:id/profile_root_container" cls="FrameLayout" xy="540,1171" b="21,243,1059,2099"/>
+ <n i="com.bumble.app:id/encountersGridItem_summaryContainer" xy="540,1171" b="21,243,1059,2099"/>
+ <n t="Alex, 28" xy="200,1861" b="74,1820,400,1902"/>
+ <n d="Alex’s main photo" c="1" xy="540,900" b="21,243,1059,1600"/>
+ <n i="com.bumble.app:id/toolbar_backtrackContainer" d="Undo" c="1" xy="120,400" b="40,350,200,450"/>
+ <n i="com.bumble.app:id/profile_details_badgeSuperSwipe" d="SuperSwipe" c="1" xy="900,1900" b="850,1850,980,1980"/>
+ <n d="Send a compliment" c="1" xy="540,2000" b="200,1960,880,2040"/>
+ <n i="com.bumble.app:id/mainApp_navigationTabBar" xy="540,2197" b="0,2120,1080,2274"/>
+ <n d="Profile" c="1" xy="108,2197" b="0,2120,216,2274"/>
+ <n d="Discover" c="1" xy="324,2197" b="216,2120,432,2274"/>
+ <n d="People" c="1" xy="540,2197" b="432,2120,648,2274"/>
+ <n d="Liked You" c="1" xy="756,2197" b="648,2120,864,2274"/>
+ <n d="Chats" c="1" xy="972,2197" b="864,2120,1080,2274"/>
+</w>
+</hierarchy>

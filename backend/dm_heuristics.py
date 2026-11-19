@@ -229,23 +229,85 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "compose_fallback": (540, 2250),
     },
     "bumble": {
+        # Real-device map: Mac SM-G996B 1080x2400 main profile (19 Nov 2025).
         "aliases": ("bumble",),
         "package": "com.bumble.app",
         "pkg_markers": ("bumble",),
         "open_label": "Bumble",
-        "inbox_labels": ("Messages", "Connections", "Chats", "Inbox"),
-        "new_chat_labels": ("Messages", "Connections"),
+        "launch_activity": "com.bumble.app/.ui.launcher.BumbleLauncherActivity",
+        "open_settle_s": 5.0,  # splash
+        "family": "swipe",
+        # People deck (no like/pass buttons — gesture only)
+        "deck_ids": (
+            "com.bumble.app:id/profile_root_container",
+            "id/profile_root_container",
+            "encountersGridItem_summaryContainer",
+            "id/encountersGridItem_summaryContainer",
+        ),
+        "deck_name_hint": "Name, Age",  # TextView near bottom of card
+        # Verified swipe recipe (adb input swipe timings)
+        "like_swipe": (250, 1000, 1050, 1050, 300),
+        "pass_swipe": (850, 1000, 30, 1050, 300),
+        # Bottom nav — content-desc on mainApp_navigationTabBar
+        "nav_bar_id": "com.bumble.app:id/mainApp_navigationTabBar",
+        "inbox_labels": ("Chats", "Messages", "Connections", "Inbox"),
+        "inbox_ids": (
+            "com.bumble.app:id/connections_root",
+            "id/connections_root",
+        ),
+        "inbox_tab_labels": ("Chats",),
+        "inbox_tab_xy": (972, 2197),  # Chats tab center [864,2120][1080,2274]
+        "people_tab_xy": (540, 2197),  # People [432..648]
+        "new_chat_labels": ("Chats", "Connections"),
         "search_labels": ("Search", "Search…"),
-        "search_ids": ("id/connections_search", "id/connections_search_input"),
-        "search_fallback": (980, 160),
-        "result_ids": ("id/connection_row", "id/connection_name"),
-        "header_ids": ("id/chat_title",),
-        "compose_labels": ("Type a message", "Message", "Say something"),
-        "compose_ids": ("id/message_box", ":id/message_box"),
+        "search_ids": (),
+        "search_fallback": None,  # never coordinate-guess search
+        # Connections list
+        "result_ids": (
+            "com.bumble.app:id/connectionItem",
+            "id/connectionItem",
+            "com.bumble.app:id/connectionsItem_personName",
+            "id/connectionsItem_personName",
+        ),
+        "result_exclude_ids": (
+            "com.bumble.app:id/connections_stickyPromoContainer",
+            "id/connections_stickyPromoContainer",
+            "connections_matchQueue",
+        ),
+        "connections_list_id": "com.bumble.app:id/connections_connectionsList",
+        "header_ids": (
+            "com.bumble.app:id/chatToolbar_title",
+            "id/chatToolbar_title",
+        ),
+        "compose_labels": ("Aa", "Message", "Type a message", "Say something"),
+        "compose_ids": (
+            "com.bumble.app:id/chatInput_text",
+            "id/chatInput_text",
+        ),
         "send_labels": ("Send",),
-        "send_ids": ("id/send_cta", ":id/send_cta"),
-        "send_fallback": (1000, 2280),
-        "compose_fallback": (540, 2250),
+        # Send appears only after typing — match id containing "send"
+        "send_ids": (
+            "send",
+            "com.bumble.app:id/chatInput_send",
+            "id/chatInput_send",
+            "id/send_cta",
+        ),
+        "send_fallback": None,  # never coordinate-guess Send
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        # NEVER tap these (undo / paid / AV)
+        "never_tap_ids": (
+            "toolbar_backtrackContainer",
+            "profile_details_badgeSuperSwipe",
+            "chatToolbar_audioChatButton",
+            "chatToolbar_videoChatButton",
+            "connections_stickyPromoContainer",
+        ),
+        "never_tap_labels": (
+            "Send a compliment",
+            "Undo",
+            "SuperSwipe",
+        ),
     },
     "hinge": {
         "aliases": ("hinge",),
@@ -685,6 +747,274 @@ def find_search_clear_center(tree: str, profile: Dict[str, Any]) -> Optional[Tup
     return _tree_node_center(tree, *labels)
 
 
+def _is_forbidden_tap_target(
+    node: Dict[str, Any], profile: Dict[str, Any]
+) -> bool:
+    """True when a node must never be tapped (undo / paid / AV)."""
+    ids = tuple(profile.get("never_tap_ids") or ())
+    labels = tuple(profile.get("never_tap_labels") or ())
+    if ids and _node_id_matches(node, ids):
+        return True
+    lab = (node.get("label") or "").strip().lower()
+    for forbid in labels:
+        fl = (forbid or "").strip().lower()
+        if fl and (lab == fl or fl in lab):
+            return True
+    return False
+
+
+def find_send_center_safe(
+    tree: str,
+    send_labels: Sequence[str],
+    send_ids: Sequence[str] = (),
+    *,
+    profile: Optional[Dict[str, Any]] = None,
+) -> Optional[Tuple[int, int]]:
+    """Locate Send; skip forbidden nodes. Prefer id substring 'send'."""
+    profile = profile or {}
+    # Prefer explicit send ids / labels, then any id containing "send"
+    c = find_send_center(tree, send_labels, send_ids=send_ids)
+    if c:
+        # Ensure we did not resolve a forbidden node at the same xy
+        for n in _parse_compact_nodes(tree):
+            if int(n.get("x") or -1) == c[0] and int(n.get("y") or -1) == c[1]:
+                if _is_forbidden_tap_target(n, profile):
+                    c = None
+                break
+    if c:
+        return c
+    for n in _parse_compact_nodes(tree):
+        if _is_forbidden_tap_target(n, profile):
+            continue
+        nid = str(n.get("id") or "").lower()
+        lab = (n.get("label") or "").lower()
+        if "send" in nid or lab == "send":
+            # Avoid "Send a compliment" paid CTA
+            if "compliment" in lab:
+                continue
+            return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def bumble_on_people_deck(tree: str) -> bool:
+    """True when Bumble People tab card stack is visible."""
+    if _tree_id_center(
+        tree,
+        "profile_root_container",
+        "encountersGridItem_summaryContainer",
+        "com.bumble.app:id/profile_root_container",
+    ):
+        return True
+    # Name TextView "Name, Age" near bottom of card + main photo desc
+    for n in _parse_compact_nodes(tree):
+        lab = (n.get("label") or "")
+        low = lab.lower()
+        if "main photo" in low and ("'s" in low or "\u2019s" in lab):
+            return True
+        if re.search(r",\s*\d{2}\s*$", lab.strip()) and int(n.get("y") or 0) > 1600:
+            return True
+    return False
+
+
+def bumble_on_connections(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "connections_root",
+            "connections_connectionsList",
+            "com.bumble.app:id/connections_root",
+        )
+    )
+
+
+def bumble_dismiss_popup(
+    tree: str, planner: str = "bumble_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Handle post-swipe / upsell dialogs from the S21 real-device map.
+
+    Returns a tagged action or None when no known popup is present.
+    """
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join(f"{n.get('id')} {n.get('label')}" for n in nodes).lower()
+    titles = " ".join(
+        (n.get("label") or "")
+        for n in nodes
+        if "alert" in str(n.get("id") or "").lower()
+        or (n.get("label") or "").endswith("?")
+    ).lower()
+
+    # AlertDialog Interested? / Not interested?
+    if "interested?" in blob or "not interested?" in blob:
+        # Prefer positive / confirm button1
+        btn = _tree_id_center(tree, "android:id/button1", "id/button1", "button1")
+        if btn is None:
+            btn = _tree_node_center(
+                tree, "YES", "Yes", "NOT INTERESTED", "Not interested"
+            )
+        if btn:
+            reason = (
+                "Dismiss Interested? → YES"
+                if "not interested" not in blob
+                else "Dismiss Not interested? → NOT INTERESTED"
+            )
+            if "not interested?" in blob:
+                reason = "Dismiss Not interested? → NOT INTERESTED"
+            elif "interested?" in blob:
+                reason = "Dismiss Interested? → YES"
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": btn[0],
+                    "y": btn[1],
+                    "reason": f"{reason} ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bumble_popup_alert",
+            )
+
+    # Bottom sheet "Enjoying Bumble?" → BACK
+    if "enjoying bumble" in blob:
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss Enjoying Bumble? sheet ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bumble_popup_enjoying",
+        )
+
+    # Full-screen compliments upsell "Second time's a charm"
+    if "second time" in blob and "charm" in blob:
+        back = _tree_node_center(tree, "Back")
+        if back:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": back[0],
+                    "y": back[1],
+                    "reason": f"Dismiss compliments upsell Back ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bumble_popup_upsell",
+            )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss compliments upsell ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bumble_popup_upsell",
+        )
+
+    # Premium / Spotlight / buy screens → BACK
+    if any(
+        k in blob
+        for k in (
+            "premium",
+            "spotlight",
+            "boost",
+            "subscribe",
+            "start free trial",
+            "bumble premium",
+        )
+    ):
+        # Only if it looks like a paywall (not a chat about premium)
+        if "chatinput" not in blob and "chattoolbar" not in blob:
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Dismiss Premium/Spotlight paywall ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bumble_popup_paywall",
+            )
+
+    # It's a match — generic dismiss or continue to chat if Message CTA present
+    if re.search(r"it['\u2019`]?s a match", blob) or re.search(
+        r"it['\u2019`]?s a match", titles
+    ):
+        msg_cta = _tree_node_center(
+            tree, "Send a message", "Message", "Say hello", "Chat"
+        )
+        if msg_cta:
+            # Avoid "Send a compliment"
+            for n in nodes:
+                if int(n.get("x") or -1) == msg_cta[0] and int(n.get("y") or -1) == msg_cta[1]:
+                    if "compliment" in (n.get("label") or "").lower():
+                        msg_cta = None
+                    break
+        if msg_cta:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": msg_cta[0],
+                    "y": msg_cta[1],
+                    "reason": f"It's a match → open chat ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bumble_match_chat",
+            )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss It's a match ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bumble_match_dismiss",
+        )
+
+    return None
+
+
+def bumble_like_swipe(planner: str = "bumble_heuristic") -> Dict[str, Any]:
+    """Verified like gesture: swipe right across the card."""
+    x1, y1, x2, y2, dur = DM_APP_PROFILES["bumble"]["like_swipe"]
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "duration_ms": dur,
+            "reason": f"Bumble like swipe ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bumble_like_swipe",
+    )
+
+
+def bumble_pass_swipe(planner: str = "bumble_heuristic") -> Dict[str, Any]:
+    """Verified pass gesture: swipe left across the card."""
+    x1, y1, x2, y2, dur = DM_APP_PROFILES["bumble"]["pass_swipe"]
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2,
+            "duration_ms": dur,
+            "reason": f"Bumble pass swipe ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bumble_pass_swipe",
+    )
+
+
 def _label_matches_compose(blob: str, compose_labels: Sequence[str]) -> bool:
     """Match compose hints without treating nav 'Messages' as a compose box."""
     b = (blob or "").strip().lower()
@@ -1021,9 +1351,11 @@ def heuristic_dm_send(
     tapped_contact = any(
         (
             "tap matching contact" in str(h).lower()
+            or "tap visible contact" in str(h).lower()
             or "tap contact" in str(h).lower()
             or "select contact" in str(h).lower()
-            or "open chat" in str(h).lower()
+            # Avoid matching "Open Chats tab"
+            or re.search(r"open chat(?:\s+with)?\b", str(h).lower()) is not None
             or "first search result" in str(h).lower()
         )
         for h in history[-16:]
@@ -1084,6 +1416,45 @@ def heuristic_dm_send(
     sparse_after_search = typed_contact and tree_is_sparse(ui_tree)
     needs_inbox = bool(profile.get("inbox_labels")) and app_key != "whatsapp"
 
+    # --- Bumble real-device path (SM-G996B main profile) ---
+    if app_key == "bumble" and pkg_ok:
+        popup = bumble_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+        # DM goal: leave People deck → Chats before hunting contacts
+        if (
+            not chat_ok
+            and not typed_message
+            and bumble_on_people_deck(ui_tree)
+            and not bumble_on_connections(ui_tree)
+        ):
+            chats = _tree_node_center(ui_tree, "Chats")
+            if chats:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": chats[0],
+                        "y": chats[1],
+                        "reason": f"Open Chats tab from People deck ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bumble_open_chats_tab",
+                )
+            tab = profile.get("inbox_tab_xy")
+            if isinstance(tab, (tuple, list)) and len(tab) >= 2:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(tab[0]),
+                        "y": int(tab[1]),
+                        "reason": f"Open Chats tab (nav bar) ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bumble_open_chats_tab",
+                )
+
     # 0a) If the contact row is already on-screen (inbox / matches list), tap it
     # before any search field — dating decks often expose a Search affordance
     # that would otherwise steal the flow.
@@ -1117,11 +1488,20 @@ def heuristic_dm_send(
             )
 
     # 0) Enter DMs / inbox when still on feed/home (Instagram / dating)
-    if needs_inbox and not tapped_inbox and not typed_contact and not tapped_search:
+    # Skip when already in a verified chat or on the connections list.
+    if (
+        needs_inbox
+        and not chat_ok
+        and not typed_message
+        and not tapped_inbox
+        and not typed_contact
+        and not tapped_search
+        and not (app_key == "bumble" and bumble_on_connections(ui_tree))
+    ):
         # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
         on_deck = bool(
             _tree_node_center(ui_tree, "Like") or _tree_node_center(ui_tree, "Pass")
-        )
+        ) or (app_key == "bumble" and bumble_on_people_deck(ui_tree))
         if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
             if c:
@@ -1136,9 +1516,24 @@ def heuristic_dm_send(
                     },
                     "open_inbox",
                 )
-            if app_key in ("tinder", "bumble", "hinge", "instagram") or (
+            # Bumble: use verified Chats tab xy, never a random toolbar guess
+            if app_key == "bumble":
+                tab = profile.get("inbox_tab_xy")
+                if isinstance(tab, (tuple, list)) and len(tab) >= 2:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(tab[0]),
+                            "y": int(tab[1]),
+                            "reason": f"Open Chats tab (nav bar) ({planner})",
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "bumble_open_chats_tab",
+                    )
+            elif app_key in ("tinder", "hinge", "instagram") or (
                 profile.get("package") or ""
-            ).startswith(("com.tinder", "com.bumble", "co.hinge")):
+            ).startswith(("com.tinder", "co.hinge")):
                 return _fp(
                     {
                         "action": "tap",
@@ -1159,6 +1554,7 @@ def heuristic_dm_send(
         and not typed_contact
         and not chat_ok
         and not typed_message
+        and not (app_key == "bumble" and bumble_on_connections(ui_tree))
     ):
         tab = _tree_node_center(
             ui_tree, "Chats", "Matches", "Messages", "Inbox", "Connections"
@@ -1563,7 +1959,12 @@ def heuristic_dm_send(
                 "dry_run_stop",
             )
         send_ids = tuple(profile.get("send_ids") or ())
-        c = find_send_center(ui_tree, tuple(profile["send_labels"]), send_ids=send_ids)
+        c = find_send_center_safe(
+            ui_tree,
+            tuple(profile["send_labels"]),
+            send_ids=send_ids,
+            profile=profile,
+        )
         prefer_tap = bool(profile.get("prefer_tap_send"))
         if c:
             return _fp(
@@ -1674,8 +2075,11 @@ def heuristic_dm_send(
             < 3
         ):
             send_ids = tuple(profile.get("send_ids") or ())
-            c = find_send_center(
-                ui_tree, tuple(profile["send_labels"]), send_ids=send_ids
+            c = find_send_center_safe(
+                ui_tree,
+                tuple(profile["send_labels"]),
+                send_ids=send_ids,
+                profile=profile,
             )
             fb = profile.get("send_fallback")
             if c:
