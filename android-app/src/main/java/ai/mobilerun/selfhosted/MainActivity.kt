@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 /**
  * Pairing + minimal setup.
@@ -216,10 +217,45 @@ fun MainScreen(
     var snap by remember {
         mutableStateOf(PermissionStatus.snapshot(activity, mediaProjectionGranted))
     }
+    var updateStatus by remember { mutableStateOf<String?>(null) }
+    var updateBusy by remember { mutableStateOf(false) }
+    var pendingUpdate by remember { mutableStateOf<AppUpdater.ReleaseInfo?>(null) }
+    val scope = rememberCoroutineScope()
 
     fun refreshPerms() {
         snap = PermissionStatus.snapshot(activity, mediaProjectionGranted)
         onPermissionsChanged()
+    }
+
+    suspend fun runUpdateCheck(promptInstall: Boolean) {
+        updateBusy = true
+        updateStatus = "Checking for updates…"
+        when (
+            val result =
+                AppUpdater.checkLatest(activity, backendClient.defaultBackendHttp())
+        ) {
+            is AppUpdater.CheckResult.UpToDate -> {
+                pendingUpdate = null
+                backendClient.clearUpdateAvailable()
+                updateStatus = "Up to date (v${BuildConfig.VERSION_NAME} / ${result.current})"
+            }
+            is AppUpdater.CheckResult.Available -> {
+                pendingUpdate = result.release
+                backendClient.offerUpdate(result.release)
+                updateStatus =
+                    "Update ${result.release.tag} available (v${result.release.versionName})"
+                if (promptInstall) {
+                    updateStatus =
+                        AppUpdater.downloadAndPromptInstall(activity, result.release) {
+                            updateStatus = it
+                        }
+                }
+            }
+            is AppUpdater.CheckResult.Error -> {
+                updateStatus = "Update check failed: ${result.message}"
+            }
+        }
+        updateBusy = false
     }
 
     LaunchedEffect(Unit) {
@@ -239,6 +275,14 @@ fun MainScreen(
             paired = it
             if (it) onEnsureAutoGrants()
         }
+    }
+    LaunchedEffect(Unit) {
+        backendClient.updateAvailableFlow.collect { pendingUpdate = it }
+    }
+    // Silent check on launch (no install prompt unless an update exists + user taps Install)
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(1_500)
+        runUpdateCheck(promptInstall = false)
     }
     LaunchedEffect(mediaProjectionGranted) { refreshPerms() }
     LaunchedEffect(paired) {
@@ -505,6 +549,61 @@ fun MainScreen(
                                 "Enable live view capture (optional)"
                             },
                         )
+                    }
+                }
+            }
+
+            // Self-update (same applicationId + signing key → in-place over previous build)
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "App updates",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "Installed v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    updateStatus?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                runUpdateCheck(promptInstall = pendingUpdate == null)
+                            }
+                        },
+                        enabled = !updateBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (updateBusy) "Working…" else "Check for update")
+                    }
+                    val offer = pendingUpdate
+                    if (offer != null && offer.versionCode > BuildConfig.VERSION_CODE) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    updateBusy = true
+                                    updateStatus =
+                                        AppUpdater.downloadAndPromptInstall(activity, offer) {
+                                            updateStatus = it
+                                        }
+                                    updateBusy = false
+                                }
+                            },
+                            enabled = !updateBusy,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Download & install ${offer.tag}")
+                        }
                     }
                 }
             }

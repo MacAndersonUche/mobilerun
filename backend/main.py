@@ -1719,11 +1719,75 @@ async def update_llm_config(
     }
 
 
+def _latest_apk_release() -> dict:
+    """Resolve newest GitHub release tagged apk-N (skips apk-preview-*)."""
+    import re
+    import urllib.request
+
+    repo = os.environ.get("GITHUB_REPO") or "MacAndersonUche/mobilerun"
+    api = f"https://api.github.com/repos/{repo}/releases?per_page=30"
+    req = urllib.request.Request(
+        api,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "mobilerun-backend",
+        },
+    )
+    best: Optional[dict] = None
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            releases = json.loads(resp.read().decode() or "[]")
+    except Exception as e:
+        logger.warning("GitHub releases fetch failed: %s", e)
+        releases = []
+    tag_re = re.compile(r"^apk-(\d+)$")
+    for rel in releases or []:
+        if not isinstance(rel, dict) or rel.get("draft"):
+            continue
+        tag = str(rel.get("tag_name") or "")
+        m = tag_re.match(tag)
+        if not m:
+            continue
+        code = int(m.group(1))
+        apk_url = ""
+        for asset in rel.get("assets") or []:
+            name = str((asset or {}).get("name") or "")
+            url = str((asset or {}).get("browser_download_url") or "")
+            if name.lower() == "mobilerun.apk":
+                apk_url = url
+                break
+            if name.endswith(".apk") and not apk_url:
+                apk_url = url
+        if not apk_url:
+            apk_url = f"https://github.com/{repo}/releases/download/{tag}/mobilerun.apk"
+        row = {
+            "version_code": code,
+            "version_name": f"1.0.{code}",
+            "version": f"1.0.{code}",
+            "tag": tag,
+            "apk_url": apk_url,
+            "release_notes": str(rel.get("body") or "")[:2000],
+        }
+        if best is None or code > int(best["version_code"]):
+            best = row
+    if best is None:
+        latest_url = f"https://github.com/{repo}/releases/latest/download/mobilerun.apk"
+        best = {
+            "version_code": 0,
+            "version_name": "latest",
+            "version": "latest",
+            "tag": "latest",
+            "apk_url": latest_url,
+            "release_notes": "Latest build from main branch",
+        }
+    return best
+
+
 @app.get("/api/releases/latest")
 async def get_latest_release():
-    """Get latest APK release info with QR code."""
-    repo = "MacAndersonUche/mobilerun"
-    latest_url = f"https://github.com/{repo}/releases/latest/download/mobilerun.apk"
+    """Get latest apk-N release info with QR code (used by in-app self-update)."""
+    info = await asyncio.to_thread(_latest_apk_release)
+    apk_url = str(info.get("apk_url") or "")
 
     qr = qrcode.QRCode(
         version=1,
@@ -1731,7 +1795,7 @@ async def get_latest_release():
         box_size=10,
         border=4,
     )
-    qr.add_data(latest_url)
+    qr.add_data(apk_url)
     qr.make(fit=True)
 
     img = qr.make_image(fill_color="black", back_color="white")
@@ -1741,11 +1805,49 @@ async def get_latest_release():
     qr_base64 = base64.b64encode(buf.getvalue()).decode()
 
     return {
-        "version": "latest",
-        "apk_url": latest_url,
+        **info,
         "qr_code": qr_base64,
-        "release_notes": "Latest build from main branch",
     }
+
+
+class PushUpdateBody(BaseModel):
+    version_code: Optional[int] = None
+    version_name: Optional[str] = None
+    tag: Optional[str] = None
+    apk_url: Optional[str] = None
+
+
+@app.post("/api/devices/{device_id}/push_update")
+async def push_update_available(
+    device_id: str,
+    body: Optional[PushUpdateBody] = None,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """Push an `update_available` WS message so the phone can self-update."""
+    if auth is None and os.environ.get("ALLOW_UNAUTHENTICATED", "").lower() != "true":
+        raise HTTPException(status_code=401, detail="Sign in required")
+    info = await asyncio.to_thread(_latest_apk_release)
+    code = (body.version_code if body and body.version_code else None) or int(
+        info.get("version_code") or 0
+    )
+    tag = (body.tag if body and body.tag else None) or str(
+        info.get("tag") or f"apk-{code}"
+    )
+    name = (body.version_name if body and body.version_name else None) or str(
+        info.get("version_name") or f"1.0.{code}"
+    )
+    apk_url = (body.apk_url if body and body.apk_url else None) or str(
+        info.get("apk_url") or ""
+    )
+    payload = {
+        "type": "update_available",
+        "version_code": code,
+        "version_name": name,
+        "tag": tag,
+        "apk_url": apk_url,
+    }
+    ok = await _send_to_device(device_id, payload)
+    return {"ok": bool(ok), "device_id": device_id, "payload": payload}
 
 
 # === Dating Mode API ===

@@ -148,6 +148,19 @@ class BackendClient(private val context: Context) {
     private val _pairErrorFlow = MutableStateFlow<String?>(null)
     val pairErrorFlow: StateFlow<String?> = _pairErrorFlow
 
+    private val _updateAvailableFlow = MutableStateFlow<AppUpdater.ReleaseInfo?>(null)
+    val updateAvailableFlow: StateFlow<AppUpdater.ReleaseInfo?> = _updateAvailableFlow
+
+    fun clearUpdateAvailable() {
+        _updateAvailableFlow.value = null
+    }
+
+    fun offerUpdate(release: AppUpdater.ReleaseInfo) {
+        if (release.versionCode > BuildConfig.VERSION_CODE) {
+            _updateAvailableFlow.value = release
+        }
+    }
+
     private val _pairBusyFlow = MutableStateFlow(false)
     val pairBusyFlow: StateFlow<Boolean> = _pairBusyFlow
 
@@ -1057,6 +1070,59 @@ class BackendClient(private val context: Context) {
                         nm.notify(9001, notif)
                     } catch (e: Exception) {
                         Log.w(tag, "push_notification: ${e.message}")
+                    }
+                }
+                "update_available" -> {
+                    val release = AppUpdater.releaseFromWs(message)
+                    if (release == null) {
+                        Log.w(tag, "update_available missing version_code/tag")
+                    } else if (release.versionCode <= BuildConfig.VERSION_CODE) {
+                        Log.i(
+                            tag,
+                            "update_available ignored — already on ${BuildConfig.VERSION_CODE}",
+                        )
+                    } else {
+                        _taskFlow.value =
+                            "Update available: ${release.tag} (v${release.versionName})"
+                        _updateAvailableFlow.value = release
+                        try {
+                            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                                as android.app.NotificationManager
+                            val channelId = "app_updates"
+                            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                                nm.createNotificationChannel(
+                                    android.app.NotificationChannel(
+                                        channelId,
+                                        "App updates",
+                                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                                    ),
+                                )
+                            }
+                            val open =
+                                android.content.Intent(context, MainActivity::class.java).apply {
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    putExtra("open_update", true)
+                                }
+                            val pi =
+                                android.app.PendingIntent.getActivity(
+                                    context,
+                                    9101,
+                                    open,
+                                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                                        android.app.PendingIntent.FLAG_IMMUTABLE,
+                                )
+                            val notif =
+                                android.app.Notification.Builder(context, channelId)
+                                    .setContentTitle("Mobilerun update ${release.tag}")
+                                    .setContentText("Tap to install v${release.versionName}")
+                                    .setSmallIcon(R.drawable.ic_stat_mobilerun)
+                                    .setContentIntent(pi)
+                                    .setAutoCancel(true)
+                                    .build()
+                            nm.notify(9101, notif)
+                        } catch (e: Exception) {
+                            Log.w(tag, "update_available notification: ${e.message}")
+                        }
                     }
                 }
             }
