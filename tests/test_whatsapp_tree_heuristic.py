@@ -46,12 +46,13 @@ def test_parse_whatsapp_instruction_variants():
 def test_compact_tree_finds_search_and_send_by_content_desc():
     home = _load("whatsapp_home_tree.xml")
     compose = _load("whatsapp_compose_tree.xml")
-    search = _tree_node_center(home, "Search")
+    # SM-G996B: search bar, not toolbar menuitem_search
+    search = _tree_node_center(home, "Ask Meta AI or Search")
     send = _tree_node_center(compose, "Send")
-    assert search == (980, 150)
+    assert search == (540, 296)
     assert send == (1000, 2280)
-    # ImageButton-style: content-desc only, no text
-    assert 'd="Search"' in home
+    assert "search_bar_inner_layout" in home
+    assert "menuitem_camera" in home  # old (983,158) would hit this
     assert 'd="Send"' in compose
     assert 't="Send"' not in compose
 
@@ -86,7 +87,9 @@ def test_whatsapp_heuristic_open_then_search_type_send_flow():
     )
     assert a1 and a1["action"] == "tap"
     assert "precious" in a1["reason"].lower() or "contact" in a1["reason"].lower()
-    assert (a1["x"], a1["y"]) == (540, 480)
+    # Prefer conversations_row / contact_row (not toolbar camera)
+    assert a1["y"] >= 400
+    assert abs(a1["x"] - 540) < 50
 
     # Search results already list Precious → tap that row (or type into Search)
     a2 = _heuristic_whatsapp_send(
@@ -146,6 +149,65 @@ def test_whatsapp_heuristic_open_then_search_type_send_flow():
     a7 = _heuristic_whatsapp_send(INSTR, sent, hist_done, package=pkg)
     assert a7 and a7["action"] == "done"
     assert "hi baby" in a7["reason"].lower()
+
+
+def test_whatsapp_s21_search_bar_not_camera_overflow():
+    """Home without visible contact → tap Ask Meta AI bar, never toolbar."""
+    from backend.dm_heuristics import _tree_id_center
+
+    home = _load("whatsapp_home_tree.xml")
+    # Strip contact rows so Search is required
+    bare = "\n".join(
+        ln
+        for ln in home.splitlines()
+        if "Precious" not in ln and "contact_row" not in ln and "contact_photo" not in ln
+    )
+    a = _heuristic_whatsapp_send(
+        INSTR, bare, ["Opened WhatsApp[com.whatsapp] — launch"], package="com.whatsapp"
+    )
+    assert a and a["action"] == "tap"
+    assert "search" in a["reason"].lower()
+    assert (a["x"], a["y"]) == (540, 296)
+    # Must not be camera/overflow
+    cam = _tree_id_center(home, "com.whatsapp:id/menuitem_camera")
+    ov = _tree_id_center(home, "com.whatsapp:id/menuitem_overflow")
+    assert (a["x"], a["y"]) != cam
+    assert (a["x"], a["y"]) != ov
+
+
+def test_whatsapp_clears_search_filter_chip_before_type():
+    chip = _load("whatsapp_search_chip_tree.xml")
+    a = _heuristic_whatsapp_send(
+        INSTR,
+        chip,
+        [
+            "Opened WhatsApp[com.whatsapp] — launch",
+            "tap(540,296) — Tap Search id/label (whatsapp_heuristic)",
+        ],
+        package="com.whatsapp",
+    )
+    assert a and a["action"] == "tap"
+    assert "clear" in a["reason"].lower()
+    assert a.get("fastpath_step") == "clear_search_filter"
+
+
+def test_whatsapp_prefers_chats_row_over_message_hit():
+    from backend.dm_heuristics import find_contact_result_center
+
+    search = _load("whatsapp_search_tree.xml")
+    c = find_contact_result_center(
+        search,
+        "Precious Achalugo",
+        result_ids=(
+            "com.whatsapp:id/contact_row_container",
+            "com.whatsapp:id/conversations_row_contact_name",
+        ),
+        exclude_ids=(
+            "com.whatsapp:id/search_message_container",
+            "com.whatsapp:id/search_contact_token",
+        ),
+    )
+    assert c == (540, 420)
 
 
 def test_whatsapp_already_in_chat_skips_search_dry_run():

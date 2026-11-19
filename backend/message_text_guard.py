@@ -41,8 +41,11 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
         return None
     patterns = (
         r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']\s*$",
-        # tell her / tell him / tell them / say / send
-        r"(?:and\s+)?(?:say|send|tell(?:\s+(?:her|him|them))?)\s+(.+)$",
+        # Prefer "say …" / "tell her …" — never match "send a message to …"
+        r"(?:and\s+)?(?:say|tell(?:\s+(?:her|him|them))?)\s+(.+)$",
+        # "send: hello" / "send hello" only when not "send a message"
+        r"(?:and\s+)?send\s*[:\-]\s*(.+)$",
+        r"(?:and\s+)?send\s+(?!a\s+message\b)(.+)$",
     )
     for pat in patterns:
         m = re.search(pat, text, re.I)
