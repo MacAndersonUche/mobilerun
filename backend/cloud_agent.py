@@ -574,6 +574,127 @@ def apply_dry_run_send_guard(
     return "done", new_reason, new_action
 
 
+PHONE_LOCKED_ERROR = "phone locked / systemui in foreground - unlock phone"
+MAX_STEPS_UNMET_ERROR = "max_steps reached, goal not met"
+
+
+def _is_lock_screen_package(package: str) -> bool:
+    """True when foreground is SystemUI / keyguard (lock screen), not the app."""
+    p = (package or "").lower().strip()
+    if not p:
+        return False
+    return "systemui" in p or "keyguard" in p
+
+
+def _fg_matches_open_target(app_name: str, fg_package: str) -> bool:
+    """True when the foreground package is the app we meant to open."""
+    fg = (fg_package or "").lower().strip()
+    app_l = (app_name or "").lower().strip()
+    if not fg or not app_l:
+        return False
+    if _is_lock_screen_package(fg):
+        return False
+    if app_l.startswith("com.") or app_l.startswith("ai."):
+        if app_l == fg or app_l in fg:
+            return True
+    if app_l.replace(" ", "") in fg.replace(".", ""):
+        return True
+    if "whatsapp" in app_l and "whatsapp" in fg:
+        return True
+    if "setting" in app_l and "settings" in fg:
+        return True
+    if "chrome" in app_l and "chrome" in fg:
+        return True
+    if ("message" in app_l or "sms" in app_l) and "messaging" in fg:
+        return True
+    if "snap" in app_l and "snapchat" in fg:
+        return True
+    return False
+
+
+def _verify_open_app_result(
+    *,
+    app_name: str,
+    fg_package: str,
+    tree: str = "",
+    rpc_pkg: str = "",
+    prior_lock_retries: int = 0,
+) -> Dict[str, Any]:
+    """Verify open_app from foreground package — never from RPC alone.
+
+    If SystemUI/keyguard stays in front after the initial open plus one retry,
+    fail fast with PHONE_LOCKED_ERROR.
+    """
+    fg = (fg_package or "").lower().strip()
+    app_l = (app_name or "").lower().strip()
+    tree_l = (tree or "").lower()
+    prior = int(prior_lock_retries or 0)
+
+    if _is_lock_screen_package(fg):
+        # First lock sighting → allow one retry; second → fail fast
+        if prior >= 1:
+            return {
+                "opened": False,
+                "verify_msg": f"phone_locked package={fg}",
+                "lock_retries": prior + 1,
+                "fail_locked": True,
+                "error": PHONE_LOCKED_ERROR,
+            }
+        return {
+            "opened": False,
+            "verify_msg": f"open_unconfirmed package={fg!r} (lock_screen)",
+            "lock_retries": prior + 1,
+            "fail_locked": False,
+            "error": None,
+        }
+
+    opened = _fg_matches_open_target(app_l, fg)
+    if not opened and fg:
+        tokens: List[str] = []
+        pkg_tokens: List[str] = []
+        if "setting" in app_l:
+            tokens.append("settings")
+            pkg_tokens.append("com.android.settings")
+        if "whatsapp" in app_l or app_l == "wa":
+            tokens.append("whatsapp")
+            pkg_tokens.append("com.whatsapp")
+        if "chrome" in app_l:
+            tokens.append("chrome")
+            pkg_tokens.append("com.android.chrome")
+        if "snap" in app_l:
+            tokens.append("snapchat")
+            pkg_tokens.append("com.snapchat.android")
+        if "message" in app_l or "sms" in app_l:
+            tokens.append("messaging")
+            pkg_tokens.append("com.google.android.apps.messaging")
+        opened = bool(
+            any(tok in fg for tok in tokens + pkg_tokens)
+            or app_l.replace(" ", "") in fg.replace(".", "")
+            or any(tok in tree_l for tok in tokens)
+            or any(p in tree_l for p in pkg_tokens)
+        )
+    # Intentionally ignore rpc_pkg / RPC ok — PackageManager can "succeed"
+    # while the lock screen still owns the foreground.
+
+    if opened:
+        return {
+            "opened": True,
+            "verify_msg": f"open_ok package={fg or rpc_pkg}",
+            "lock_retries": 0,
+            "fail_locked": False,
+            "error": None,
+        }
+    return {
+        "opened": False,
+        "verify_msg": (
+            f"open_unconfirmed package={fg_package!r} " f"tree_chars={len(tree or '')}"
+        ),
+        "lock_retries": prior,
+        "fail_locked": False,
+        "error": None,
+    }
+
+
 def _history_shows_app_opened(hist_blob: str, app: str) -> bool:
     """True if prior steps already launched ``app`` successfully."""
     if not hist_blob:
@@ -2032,9 +2153,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     # LLM keys are only required when deterministic fast-paths cannot plan.
     # DM / messaging / open-app heuristics run without an LLM round-trip.
     if step >= max_steps:
-        job["status"] = "completed"
+        # Hitting the step cap is not success unless the goal was already met.
+        goal_met = bool(
+            state.get("outgoing_confirmed")
+            or state.get("goal_met")
+            or state.get("goal_satisfied")
+        )
         job["result"] = state.get("last_action") or f"Reached max_steps={max_steps}"
         job["completed_at"] = now
+        job["state"] = state
+        if goal_met:
+            job["status"] = "completed"
+            if state.get("goal_result"):
+                job["result"] = state["goal_result"]
+            return job
+        job["status"] = "failed"
+        job["error"] = MAX_STEPS_UNMET_ERROR
+        try:
+            _attach_failure_artifacts(job, device_id)
+        except Exception:
+            pass
         return job
     # Swipe-loop abort is evaluated after actions (launcher + unchanged only).
     # Never abort here on a single in-app swipe.
@@ -2388,14 +2526,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             app_name = str(action.get("app") or action.get("package") or "")
             hist_blob = " ".join(history).lower()
             fg = (tree_info.get("package") or "").lower()
-            app_l = app_name.lower()
-            fg_matches = bool(fg) and (
-                app_l.replace(" ", "") in fg.replace(".", "")
-                or ("whatsapp" in app_l and "whatsapp" in fg)
-                or ("setting" in app_l and "settings" in fg)
-                or ("chrome" in app_l and "chrome" in fg)
-                or ("message" in app_l and "messaging" in fg)
-            )
+            fg_matches = _fg_matches_open_target(app_name, fg)
             # History alone is not enough: open_ok can race while SystemUI /
             # launcher / MobileRun still owns the foreground. Only skip when FG
             # actually matches the target app.
@@ -2826,53 +2957,46 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Verify: re-fetch tree / package after action (retry empty/offline)
         verify_msg = ""
         rpc_pkg = str(action.get("_rpc_package") or "")
-        rpc_ok_flag = bool(action.get("_rpc_ok"))
         try:
             after = _fetch_ui_tree_retry(device_id, call_device, attempts=3)
             if kind in ("open_app", "start_app"):
-                app_l = str(action.get("app") or "").lower()
-                pkg_l = (after.get("package") or rpc_pkg or "").lower()
-                tree_l = (after.get("tree") or "").lower()
-                tokens = []
-                pkg_tokens = []
-                if "setting" in app_l:
-                    tokens.append("settings")
-                    pkg_tokens.append("com.android.settings")
-                if "whatsapp" in app_l or app_l == "wa":
-                    tokens.append("whatsapp")
-                    pkg_tokens.append("com.whatsapp")
-                if "chrome" in app_l:
-                    tokens.append("chrome")
-                    pkg_tokens.append("com.android.chrome")
-                if "snap" in app_l:
-                    tokens.append("snapchat")
-                    pkg_tokens.append("com.snapchat.android")
-                if "message" in app_l or "sms" in app_l:
-                    tokens.append("messaging")
-                    pkg_tokens.append("com.google.android.apps.messaging")
-                opened = bool(pkg_l) and (
-                    any(tok in pkg_l for tok in tokens + pkg_tokens)
-                    or app_l.replace(" ", "") in pkg_l.replace(".", "")
-                    or any(tok in tree_l for tok in tokens)
-                    or any(p in tree_l for p in pkg_tokens)
+                app_name = str(action.get("app") or action.get("package") or "")
+                ov = _verify_open_app_result(
+                    app_name=app_name,
+                    fg_package=str(after.get("package") or ""),
+                    tree=str(after.get("tree") or ""),
+                    rpc_pkg=rpc_pkg,
+                    prior_lock_retries=int(state.get("lock_screen_open_retries") or 0),
                 )
-                if rpc_ok_flag and rpc_pkg:
-                    opened = True
-                if (
-                    not opened
-                    and after.get("package")
-                    and after["package"] != tree_info.get("package")
-                    and after["package"] not in ("android", "com.android.systemui")
-                ):
-                    opened = True
-                    verify_msg = f"package→{after['package']}"
-                elif opened:
-                    verify_msg = f"open_ok package={after.get('package') or rpc_pkg}"
-                else:
-                    verify_msg = (
-                        f"open_unconfirmed package={after.get('package')!r} "
-                        f"tree_chars={after.get('chars')}"
+                state["lock_screen_open_retries"] = int(ov.get("lock_retries") or 0)
+                verify_msg = str(ov.get("verify_msg") or "")
+                if ov.get("fail_locked"):
+                    # Fail fast after open + 1 retry still on lock screen
+                    state["steps"] = step + 1
+                    state["last_progress_at"] = int(time.time())
+                    state["last_action"] = summary
+                    state["last_reason"] = reason
+                    state["last_verify"] = verify_msg
+                    history.append(f"{summary} — {reason}".strip(" —"))
+                    state["history"] = history
+                    _record_step(
+                        summary,
+                        ok=False,
+                        screenshot_key=shot_key,
+                        verify=verify_msg,
                     )
+                    job["state"] = state
+                    job["status"] = "failed"
+                    job["error"] = str(ov.get("error") or PHONE_LOCKED_ERROR)
+                    job["result"] = job["error"]
+                    job["completed_at"] = int(time.time())
+                    _attach_failure_artifacts(
+                        job,
+                        device_id,
+                        str(after.get("tree") or ui_tree),
+                        call_device=call_device,
+                    )
+                    return job
             else:
                 verify_msg = (
                     f"after_chars={after.get('chars')} pkg={after.get('package')}"
@@ -2991,9 +3115,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             after_tree = ""
             after_pkg = ""
             sat_after = None
-            # Trust PackageManager launch even when verify tree times out
-            if kind in ("open_app", "start_app") and (rpc_ok_flag or rpc_pkg):
-                verify_msg = f"open_ok package={rpc_pkg or 'rpc'} (verify_skipped={ve})"
+            # Cannot confirm foreground — never claim open_ok from RPC alone
+            # (lock screen / SystemUI often still owns FG after PackageManager).
+            if kind in ("open_app", "start_app"):
+                verify_msg = f"open_unconfirmed package={rpc_pkg!r} (verify_error={ve})"
             else:
                 verify_msg = f"verify_error={ve}"
 
@@ -3044,42 +3169,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if dry_tag and not str(job.get("result") or "").startswith("[DRY RUN]"):
             job["result"] = dry_tag + str(job.get("result") or "")
 
-        # Pure open_app goal → complete once PackageManager launched
+        # Pure open_app goal → complete only when FG package matches target
         open_target = _trivial_open_app_target(instruction)
         if open_target and kind in ("open_app", "start_app"):
-            # Prefer RPC package in summary: Opened X[com.foo]
-            if not rpc_pkg:
-                m = re.search(r"\[([a-zA-Z0-9._]+)\]\s*$", summary or "")
-                if m:
-                    rpc_pkg = m.group(1).lower()
-            known = {
-                "settings": ("com.android.settings", "settings"),
-                "whatsapp": ("com.whatsapp", "whatsapp"),
-                "chrome": ("com.android.chrome", "chrome"),
-                "snapchat": ("com.snapchat.android", "snap"),
-                "messages": ("com.google.android.apps.messaging", "messaging"),
-            }
-            tokens = []
-            for key, (pkg, tok) in known.items():
-                if key in open_target.lower():
-                    tokens.extend([pkg, tok])
-            rpc_ok = bool(rpc_pkg) and (
-                any(t in rpc_pkg for t in tokens)
-                or open_target.lower() in rpc_pkg
-                or rpc_ok_flag
+            fg_now = (after_pkg or "").lower()
+            verify_ok = (
+                "open_ok" in (verify_msg or "")
+                and "open_unconfirmed" not in (verify_msg or "")
+                and "phone_locked" not in (verify_msg or "")
             )
-            verify_ok = "open_ok" in verify_msg or (
-                "open_unconfirmed" not in verify_msg
-                and bool(verify_msg)
-                and "verify_error" not in verify_msg
+            fg_ok = _fg_matches_open_target(open_target, fg_now) or (
+                bool(fg_now) and not _is_lock_screen_package(fg_now) and verify_ok
             )
-            # Overlays (ANR / permission) may report package=android briefly;
-            # trust PackageManager launch result for trivial open goals.
-            if rpc_ok or verify_ok or rpc_ok_flag:
+            if fg_ok and verify_ok:
                 job["status"] = "completed"
                 job["result"] = (
                     f"Opened {open_target} "
-                    f"(pkg={rpc_pkg or 'n/a'}; {verify_msg or summary})"
+                    f"(pkg={fg_now or rpc_pkg or 'n/a'}; {verify_msg or summary})"
                 )
                 job["completed_at"] = int(time.time())
                 _maybe_restore_ime(job, device_id, call_device)
