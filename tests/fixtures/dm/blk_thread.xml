@@ -1,0 +1,11 @@
+<hierarchy windows="1" nodes="12" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="Maya" xy="400,148" b="200,100,700,196"/>
+ <n t="Get messages notifications" xy="540,300" b="80,260,900,340"/>
+ <n t="Close" c="1" xy="980,300" b="920,260,1040,340"/>
+ <n t="hey" xy="700,700" b="500,660,900,740"/>
+ <n t="Sent" xy="820,760" b="760,740,880,780"/>
+ <n e="1" f="1" t="" h="Message" cls="android.widget.EditText" c="1" xy="480,1324" b="80,1290,940,1358"/>
+ <n c="1" xy="985,1324" b="959,1298,1012,1351"/>
+</w>
+</hierarchy>

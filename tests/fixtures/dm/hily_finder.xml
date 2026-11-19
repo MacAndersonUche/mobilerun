@@ -1,0 +1,14 @@
+<hierarchy windows="1" nodes="18" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n i="finderCardUser123" xy="540,900" b="40,200,1040,1800"/>
+ <n t="Evie, 22" i="userNameAgeField" xy="300,1700" b="80,1660,600,1740"/>
+ <n i="ActionButton_SKIP" d="Pass" c="1" xy="330,1959" b="250,1890,410,2028"/>
+ <n i="ActionButton_LIKE" d="Like" c="1" xy="750,1959" b="670,1890,830,2028"/>
+ <n i="ActionButton_CRUSH" d="Crush" c="1" xy="540,1959" b="470,1890,610,2028"/>
+ <n i="bottomNavTab_1" d="Finder" c="1" xy="142,2190" b="60,2140,220,2240"/>
+ <n i="bottomNavTab_2" d="Chats" c="1" xy="341,2190" b="260,2140,420,2240"/>
+ <n i="bottomNavTab_7" d="Discover" c="1" xy="540,2190" b="460,2140,620,2240"/>
+ <n i="bottomNavTab_4" d="Activity" c="1" xy="740,2190" b="660,2140,820,2240"/>
+ <n i="bottomNavTab_5" d="Me" c="1" xy="940,2190" b="860,2140,1020,2240"/>
+</w>
+</hierarchy>

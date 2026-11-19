@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="You reached the end" xy="540,1000" b="100,920,980,1080"/>
+ <n i="nav_swipe" d="Discover" c="1" xy="135,2170" b="50,2120,220,2220"/>
+ <n i="nav_connections" d="Matches" c="1" xy="675,2170" b="590,2120,760,2220"/>
+</w>
+</hierarchy>

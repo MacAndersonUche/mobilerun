@@ -479,6 +479,112 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "Undo",
         ),
     },
+    "hily": {
+        # Real-device map: Mac SM-G996B 1080x2400 (19 Nov). Bare resource-ids.
+        "aliases": ("hily",),
+        "package": "com.hily.app",
+        "pkg_markers": ("hily",),
+        "open_label": "Hily",
+        "launch_activity": "com.hily.app/.main.MainActivity",
+        "open_settle_s": 5.0,
+        "family": "swipe",
+        # Swipe gesture does NOT register — buttons only
+        "like_ids": ("ActionButton_LIKE", "id/ActionButton_LIKE"),
+        "pass_ids": ("ActionButton_SKIP", "id/ActionButton_SKIP"),
+        "like_xy": (750, 1959),
+        "pass_xy": (330, 1959),
+        "deck_name_id": "userNameAgeField",
+        "deck_card_id_prefix": "finderCardUser",
+        "inbox_labels": ("Chats", "Messages", "Inbox"),
+        "inbox_tab_labels": ("Chats",),
+        "inbox_tab_xy": (341, 2190),  # bottomNavTab_2
+        "deck_tab_xy": (142, 2190),  # bottomNavTab_1 Finder
+        "activity_tab_xy": (740, 2190),  # bottomNavTab_4
+        "new_chat_labels": ("Chats",),
+        "search_labels": ("Search", "Search…"),
+        "search_ids": ("dialogsSearchButton", "id/dialogsSearchButton"),
+        "search_fallback": None,
+        "result_ids": (
+            "dialogMessageItem",
+            "id/dialogMessageItem",
+            "userNameField",
+            "id/userNameField",
+            "center_name",
+            "id/center_name",
+        ),
+        "result_exclude_ids": ("threadReadyForDateToggleSwitch",),
+        "header_ids": ("threadToolBarName", "id/threadToolBarName"),
+        "compose_labels": ("Aa", "Message", "Type a message"),
+        "compose_ids": (
+            "threadInputFieldText",
+            "id/threadInputFieldText",
+            "textInput",
+            "id/textInput",
+        ),
+        "send_labels": ("Send",),
+        "send_ids": (
+            "threadSend",
+            "id/threadSend",
+            "sendMessageButton",
+            "id/sendMessageButton",
+        ),
+        "send_fallback": None,
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        "prefer_clear_before_type": True,
+        "never_tap_ids": (
+            "ActionButton_CRUSH",
+            "threadReadyForDateToggleSwitch",
+        ),
+        "never_tap_labels": (
+            "Crush",
+            "Major Crush",
+            "They liked you!",
+            "Allow",
+            "Audio message",
+            "Locked",
+        ),
+    },
+    "blk": {
+        # Real-device map: Mac SM-G996B 1080x2400 (19 Nov). Compose UI — few ids.
+        "aliases": ("blk", "b.l.k", "black people meet"),
+        "package": "com.affinityapps.blk",
+        "pkg_markers": ("affinityapps.blk", "blk"),
+        "open_label": "BLK",
+        "launch_activity": "com.affinityapps.blk/com.aa.swipe.v3.MainActivity",
+        "open_settle_s": 5.0,
+        "family": "swipe",
+        # Two "Like Icon" nodes — only RIGHT cyan heart (left>=850, top<1900)
+        "like_desc": "Like Icon",
+        "like_min_x1": 850,
+        "like_max_y1": 1900,
+        "inbox_labels": ("Matches", "Connections", "Chats", "Messages"),
+        "inbox_tab_labels": ("Matches",),
+        "inbox_tab_xy": (675, 2170),  # nav_connections
+        "deck_tab_xy": (135, 2170),  # nav_swipe Discover
+        "likes_tab_xy": (405, 2170),
+        "new_chat_labels": ("Matches", "Your turn", "Their turn"),
+        "search_labels": ("Search", "Search…"),
+        "search_ids": (),
+        "search_fallback": None,
+        "result_ids": (),
+        "header_ids": (),
+        "compose_labels": ("Message", "Type a message", "Aa", "Say something"),
+        "compose_ids": (),  # only EditText on thread
+        "send_labels": ("Send",),
+        "send_ids": (),  # unlabeled View right of EditText
+        "send_fallback": None,
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        "prefer_clear_before_type": True,
+        "never_tap_labels": (
+            "Boost",
+            "Send a Super Like",
+            "Super Like",
+            "Send a message",  # on card = message-before-match / super path
+        ),
+        "never_tap_ids": (),
+    },
     "hinge": {
         "aliases": ("hinge",),
         "package": "co.hinge.app",
@@ -1531,6 +1637,551 @@ def badoo_pass_swipe(planner: str = "badoo_heuristic") -> Dict[str, Any]:
     )
 
 
+# --- Hily (com.hily.app) SM-G996B — buttons only; swipe does not register ---
+
+
+def hily_on_finder(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "ActionButton_LIKE",
+            "ActionButton_SKIP",
+            "userNameAgeField",
+            "finderCardUser",
+        )
+    )
+
+
+def hily_on_chats_list(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "dialogMessageItem",
+            "dialogsSearchButton",
+            "userNameField",
+        )
+    )
+
+
+def hily_on_thread(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "threadInputFieldText",
+            "threadToolBarName",
+            "threadSend",
+        )
+    )
+
+
+def hily_on_mbm(tree: str) -> bool:
+    """Message Before Match / majorCrushScreen."""
+    blob = " ".join(
+        f"{n.get('id')} {n.get('label')}" for n in _parse_compact_nodes(tree)
+    ).lower()
+    return "message before match" in blob or "majorcrush" in blob.replace("_", "")
+
+
+def hily_deck_card_name(tree: str) -> Optional[str]:
+    for n in _parse_compact_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if "usernameagefield" not in nid:
+            continue
+        text = (n.get("text") or "").strip()
+        if text and "," in text:
+            return text.split(",")[0].strip()
+        if text:
+            return text
+    return None
+
+
+def hily_dismiss_popup(
+    tree: str, planner: str = "hily_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Dismiss first-like / notif / filter / tutorial / MBM sheets — never Allow."""
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join(f"{n.get('id')} {n.get('label')}" for n in nodes).lower()
+
+    # Tutorial Got It by id
+    tut = _tree_id_center(
+        tree,
+        "threadReadyForDateTutorialGotIt",
+        "id/threadReadyForDateTutorialGotIt",
+    )
+    if tut and (
+        "threadreadyfordatetutorial" in blob.replace("_", "")
+        or "ready for date" in blob
+    ):
+        return _fp(
+            {
+                "action": "tap",
+                "x": tut[0],
+                "y": tut[1],
+                "reason": f"Dismiss Ready for Date tutorial Got it ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_tutorial_got_it",
+        )
+
+    got_it_triggers = (
+        "you gave your first like",
+        "filter your chats",
+        "message sent",
+        "major crush",
+    )
+    if any(t in blob for t in got_it_triggers):
+        got = _tree_node_center(tree, "Got it", "Got it!")
+        if got:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": got[0],
+                    "y": got[1],
+                    "reason": f"Dismiss Hily sheet → Got it ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_got_it",
+            )
+
+    # Notif permission — Maybe later (never Allow)
+    if any(
+        t in blob for t in ("see when", "reacts", "notification", "notif permission")
+    ):
+        later = _tree_node_center(tree, "Maybe later", "Not now", "No thanks")
+        if later:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": later[0],
+                    "y": later[1],
+                    "reason": f"Dismiss notif prompt → Maybe later ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_maybe_later",
+            )
+
+    # Paywall / zero allowance → back out
+    if "paywall" in blob or "upgrade" in blob and "message before match" in blob:
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss Hily paywall ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_paywall_back",
+        )
+    return None
+
+
+def hily_like_action(
+    tree: str = "", planner: str = "hily_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Free Like via ActionButton_LIKE — never CRUSH. Prefer tree; else map xy."""
+    for n in _parse_compact_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if "actionbutton_crush" in nid:
+            continue
+        if "actionbutton_like" not in nid:
+            continue
+        return _fp(
+            {
+                "action": "tap",
+                "x": int(n["x"]),
+                "y": int(n["y"]),
+                "reason": f"Hily Like (ActionButton_LIKE) ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_like",
+        )
+    # Verified map coords (1080x2400) — only when tree had no LIKE id
+    xy = DM_APP_PROFILES["hily"].get("like_xy") or (750, 1959)
+    if tree and not hily_on_finder(tree):
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Hily Like map xy ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hily_like",
+    )
+
+
+def hily_pass_action(
+    tree: str = "", planner: str = "hily_heuristic"
+) -> Optional[Dict[str, Any]]:
+    for n in _parse_compact_nodes(tree):
+        if "actionbutton_skip" not in str(n.get("id") or "").lower():
+            continue
+        return _fp(
+            {
+                "action": "tap",
+                "x": int(n["x"]),
+                "y": int(n["y"]),
+                "reason": f"Hily Pass (ActionButton_SKIP) ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_pass",
+        )
+    xy = DM_APP_PROFILES["hily"].get("pass_xy") or (330, 1959)
+    if tree and not hily_on_finder(tree):
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Hily Pass map xy ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hily_pass",
+    )
+
+
+def hily_mbm_allowance(tree: str) -> Optional[int]:
+    """Parse Major Crush allowance from content-desc 'button  N'."""
+    for n in _parse_compact_nodes(tree):
+        d = str(n.get("desc") or "").strip().lower()
+        if not d.startswith("button"):
+            continue
+        parts = d.replace("button", "").strip().split()
+        for p in parts:
+            if p.isdigit():
+                return int(p)
+    return None
+
+
+def hily_find_chat_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
+    """Tap dialogMessageItem / userNameField matching contact."""
+    best: Optional[Tuple[float, int, int]] = None
+    for n in _parse_compact_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        text = (n.get("text") or n.get("label") or "").strip()
+        if not text:
+            continue
+        if "usernamefield" not in nid and "dialogmessageitem" not in nid:
+            # Also allow plain name match in chats list
+            if "dialog" not in nid and "center_name" not in nid:
+                if "username" not in nid:
+                    continue
+        score = _fuzzy_score(contact, text)
+        if score < 0.6:
+            continue
+        if best is None or score > best[0]:
+            best = (score, int(n["x"]), int(n["y"]))
+    if best is None:
+        return None
+    return (best[1], best[2])
+
+
+def hily_send_is_audio(tree: str) -> bool:
+    """threadSend shows 'Audio message' when empty — never tap."""
+    for n in _parse_compact_nodes(tree):
+        if "threadsend" not in str(n.get("id") or "").lower():
+            continue
+        d = str(n.get("desc") or "").strip().lower()
+        if "audio" in d:
+            return True
+        if d == "send":
+            return False
+    return False
+
+
+def hily_find_send_center(tree: str) -> Optional[Tuple[int, int]]:
+    """Send only when content-desc is Send (not Audio message)."""
+    if hily_send_is_audio(tree):
+        return None
+    c = find_send_center_safe(
+        tree,
+        ("Send",),
+        send_ids=("threadSend", "id/threadSend", "sendMessageButton"),
+        profile=DM_APP_PROFILES["hily"],
+    )
+    return c
+
+
+def hily_outgoing_verified(tree: str, message: str) -> bool:
+    """threadTextMessage with true (sent) containing message text."""
+    needle = (message or "").strip().lower()
+    if len(needle) < 2:
+        return False
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable"):
+            continue
+        nid = str(n.get("id") or "").lower()
+        text = (n.get("text") or "").strip().lower()
+        if text != needle:
+            continue
+        if "threadtextmessage" in nid:
+            # id may encode true|false; also check desc/label for true
+            blob = f"{nid} {n.get('desc') or ''} {n.get('label') or ''}".lower()
+            if "false" in blob and "true" not in blob.replace("false", ""):
+                continue
+            return True
+        # Fallback: non-editable bubble + Sent status nearby
+        if int(n.get("y") or 0) > 280:
+            return True
+    return outgoing_bubble_present(tree, message)
+
+
+# --- BLK (com.affinityapps.blk) SM-G996B — Compose UI, few ids ---
+
+
+def blk_on_deck(tree: str) -> bool:
+    if blk_end_of_deck(tree):
+        return False
+    # Discover card: Like Icon and/or "Send a message" + name
+    has_like = False
+    has_send_msg = False
+    for n in _parse_compact_nodes(tree):
+        d = str(n.get("desc") or "").strip().lower()
+        t = str(n.get("text") or "").strip().lower()
+        if d == "like icon":
+            has_like = True
+        if t == "send a message":
+            has_send_msg = True
+    return has_like or (has_send_msg and "your turn" not in (tree or "").lower())
+
+
+def blk_on_matches(tree: str) -> bool:
+    blob = " ".join(
+        (n.get("text") or n.get("label") or "") for n in _parse_compact_nodes(tree)
+    ).lower()
+    return (
+        "your turn" in blob
+        or "their turn" in blob
+        or ("matches" in blob and "like icon" not in blob)
+    )
+
+
+def blk_on_thread(tree: str) -> bool:
+    # Only EditText composer + header name; few ids
+    has_edit = any(n.get("editable") for n in _parse_compact_nodes(tree))
+    blob = " ".join((n.get("text") or "") for n in _parse_compact_nodes(tree)).lower()
+    if "get messages notifications" in blob:
+        return True
+    # Thread usually has Back + name + EditText, no Like Icon
+    has_like = any(
+        str(n.get("desc") or "").strip().lower() == "like icon"
+        for n in _parse_compact_nodes(tree)
+    )
+    return has_edit and not has_like and not blk_on_matches(tree)
+
+
+def blk_end_of_deck(tree: str) -> bool:
+    blob = " ".join(
+        (n.get("text") or n.get("label") or "") for n in _parse_compact_nodes(tree)
+    ).lower()
+    return "you reached the end" in blob or "reached the end" in blob
+
+
+def blk_deck_card_name(tree: str) -> Optional[str]:
+    """Name = TextView immediately before 'Send a message' on the card."""
+    texts: List[Tuple[int, int, str]] = []
+    for n in _parse_compact_nodes(tree):
+        t = (n.get("text") or "").strip()
+        if not t:
+            continue
+        y = int(n.get("y1") if n.get("y1") is not None else n.get("y") or 0)
+        x = int(n.get("x1") if n.get("x1") is not None else n.get("x") or 0)
+        texts.append((y, x, t))
+    texts.sort(key=lambda x: (x[0], x[1]))
+    for i, (_y, _x, t) in enumerate(texts):
+        if t.lower() == "send a message" and i > 0:
+            prev = texts[i - 1][2].strip()
+            if prev and prev.lower() not in (
+                "send a message",
+                "like icon",
+                "boost",
+                "pass",
+                "discover",
+            ):
+                return prev.split(",")[0].strip()
+    return None
+
+
+def blk_dismiss_popup(
+    tree: str, planner: str = "blk_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Super Like upsell → Send Like anyway; notif banner → Close."""
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
+    if "super like" in blob and ("instead" in blob or "send a super like" in blob):
+        anyway = _tree_node_center(tree, "Send Like anyway", "Send like anyway")
+        if anyway:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": anyway[0],
+                    "y": anyway[1],
+                    "reason": f"Dismiss Super Like upsell → Send Like anyway ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "blk_send_like_anyway",
+            )
+        # Never tap "Send a Super Like"
+    if "get messages notifications" in blob or "messages notifications" in blob:
+        close = _tree_node_center(tree, "Close", "Dismiss", "Not now", "No thanks")
+        if close:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": close[0],
+                    "y": close[1],
+                    "reason": f"Dismiss BLK notif banner → Close ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "blk_notif_close",
+            )
+    return None
+
+
+def blk_like_action(
+    tree: str, planner: str = "blk_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Normal Like = 'Like Icon' with left>=850 and top<1900 (cyan heart).
+
+    Left Like Icon (~749) is green crown SUPER LIKE — never tap.
+    """
+    best: Optional[Tuple[int, int, int]] = None  # x1, x, y
+    for n in _parse_compact_nodes(tree):
+        if str(n.get("desc") or "").strip().lower() != "like icon":
+            continue
+        x1 = n.get("x1")
+        y1 = n.get("y1")
+        if x1 is None or y1 is None:
+            continue
+        if int(x1) < 850 or int(y1) >= 1900:
+            continue
+        if best is None or int(x1) > best[0]:
+            best = (int(x1), int(n["x"]), int(n["y"]))
+    if best is None:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": best[1],
+            "y": best[2],
+            "reason": f"BLK Like Icon (right/cyan, never super) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "blk_like",
+    )
+
+
+def blk_find_match_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
+    """Matches list: skip Hidden section; tap name/avatar+last msg row."""
+    nodes = _parse_compact_nodes(tree)
+    hidden_y: Optional[int] = None
+    for n in nodes:
+        t = (n.get("text") or "").strip().lower()
+        if t.startswith("hidden"):
+            hidden_y = int(n.get("y") or 0)
+            break
+    best: Optional[Tuple[float, int, int]] = None
+    for n in nodes:
+        text = (n.get("text") or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        if low.startswith(("your turn", "their turn", "hidden")):
+            continue
+        y = int(n.get("y") or 0)
+        if hidden_y is not None and y >= hidden_y:
+            continue
+        score = _fuzzy_score(contact, text)
+        if score < 0.6:
+            continue
+        if best is None or score > best[0]:
+            best = (score, int(n["x"]), y)
+    if best is None:
+        return None
+    return (best[1], best[2])
+
+
+def blk_send_relative_to_edittext(tree: str) -> Optional[Tuple[int, int]]:
+    """Send = unlabeled View immediately right of the only EditText composer."""
+    edit: Optional[Dict[str, Any]] = None
+    for n in _parse_compact_nodes(tree):
+        if not n.get("editable"):
+            continue
+        if edit is None or int(n.get("y") or 0) > int(edit.get("y") or 0):
+            edit = n
+    if not edit:
+        return None
+    ex2 = edit.get("x2")
+    ey1 = edit.get("y1")
+    ey2 = edit.get("y2")
+    if ex2 is None or ey1 is None or ey2 is None:
+        return None
+    best: Optional[Tuple[int, int, int]] = None  # dx, x, y
+    for n in _parse_compact_nodes(tree):
+        if n is edit or n.get("editable"):
+            continue
+        t = str(n.get("text") or "").strip().lower()
+        d = str(n.get("desc") or "").strip().lower()
+        blob = f"{t} {d}"
+        if any(bad in blob for bad in ("boost", "super like", "gift", "premium")):
+            continue
+        x1 = n.get("x1")
+        y1 = n.get("y1")
+        x2 = n.get("x2")
+        y2 = n.get("y2")
+        if x1 is None or y1 is None or x2 is None or y2 is None:
+            continue
+        if int(x1) < int(ex2) - 20:
+            continue
+        if int(y2) < int(ey1) - 40 or int(y1) > int(ey2) + 40:
+            continue
+        w, h = int(x2) - int(x1), int(y2) - int(y1)
+        if w > 200 or h > 200 or w < 20 or h < 20:
+            continue
+        # Prefer unlabeled / "Send"
+        if t and t not in ("send",) and d and d not in ("send", ""):
+            continue
+        dx = int(x1) - int(ex2)
+        if dx < 0:
+            continue
+        if best is None or dx < best[0]:
+            best = (dx, int(n["x"]), int(n["y"]))
+    if best is None:
+        return None
+    return (best[1], best[2])
+
+
+def blk_outgoing_verified(tree: str, message: str) -> bool:
+    """New bubble with message text and 'Sent' status."""
+    needle = (message or "").strip().lower()
+    if len(needle) < 2:
+        return False
+    saw_msg = False
+    saw_sent = False
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable"):
+            continue
+        text = (n.get("text") or "").strip()
+        low = text.lower()
+        if low == needle and int(n.get("y") or 0) > 280:
+            saw_msg = True
+        if low == "sent":
+            saw_sent = True
+    return saw_msg and saw_sent
+
+
 def _label_matches_compose(blob: str, compose_labels: Sequence[str]) -> bool:
     """Match compose hints without treating nav 'Messages' as a compose box."""
     b = (blob or "").strip().lower()
@@ -2064,6 +2715,121 @@ def heuristic_dm_send(
                 "badoo_open_chats_tab",
             )
 
+    # --- Hily real-device path (buttons only; never CRUSH / Allow / Audio) ---
+    if app_key == "hily" and pkg_ok:
+        popup = hily_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+        # MBM: stop if allowance is 0
+        if hily_on_mbm(ui_tree):
+            allow = hily_mbm_allowance(ui_tree)
+            if allow == 0:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Hily Message Before Match allowance is 0 "
+                            f"— stop (never paywall) ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hily_mbm_exhausted",
+                )
+        if (
+            not chat_ok
+            and not typed_message
+            and hily_on_finder(ui_tree)
+            and not hily_on_chats_list(ui_tree)
+            and not hily_on_thread(ui_tree)
+        ):
+            tab = profile.get("inbox_tab_xy") or (341, 2190)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(tab[0]),
+                    "y": int(tab[1]),
+                    "reason": f"Open Chats tab from Hily Finder ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_open_chats_tab",
+            )
+        if (
+            not chat_ok
+            and not typed_message
+            and not tapped_contact
+            and hily_on_chats_list(ui_tree)
+        ):
+            # Never tap "They liked you!" premium row
+            row = hily_find_chat_row(ui_tree, contact)
+            if row:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": row[0],
+                        "y": row[1],
+                        "reason": f"Tap Hily chat '{contact}' ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hily_tap_chat",
+                )
+
+    # --- BLK real-device path (right Like Icon only; never Super/Boost) ---
+    if app_key == "blk" and pkg_ok:
+        popup = blk_dismiss_popup(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if blk_end_of_deck(ui_tree) and not chat_ok and not typed_message:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": f"BLK deck end — stop gracefully ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "blk_deck_end",
+            )
+        if (
+            not chat_ok
+            and not typed_message
+            and blk_on_deck(ui_tree)
+            and not blk_on_matches(ui_tree)
+            and not blk_on_thread(ui_tree)
+        ):
+            tab = profile.get("inbox_tab_xy") or (675, 2170)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(tab[0]),
+                    "y": int(tab[1]),
+                    "reason": f"Open Matches from BLK Discover ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "blk_open_matches_tab",
+            )
+        if (
+            not chat_ok
+            and not typed_message
+            and not tapped_contact
+            and blk_on_matches(ui_tree)
+        ):
+            row = blk_find_match_row(ui_tree, contact)
+            if row:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": row[0],
+                        "y": row[1],
+                        "reason": f"Tap BLK match '{contact}' ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "blk_tap_match",
+                )
+
     # 0a) If the contact row is already on-screen (inbox / matches list), tap it
     # before any search field — dating decks often expose a Search affordance
     # that would otherwise steal the flow.
@@ -2108,6 +2874,8 @@ def heuristic_dm_send(
         and not (app_key == "bumble" and bumble_on_connections(ui_tree))
         and not (app_key == "yubo" and yubo_on_chat_list(ui_tree))
         and not (app_key == "badoo" and badoo_on_connections(ui_tree))
+        and not (app_key == "hily" and hily_on_chats_list(ui_tree))
+        and not (app_key == "blk" and blk_on_matches(ui_tree))
     ):
         # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
         on_deck = (
@@ -2117,6 +2885,8 @@ def heuristic_dm_send(
             or (app_key == "bumble" and bumble_on_people_deck(ui_tree))
             or (app_key == "yubo" and yubo_on_deck(ui_tree))
             or (app_key == "badoo" and badoo_on_encounters(ui_tree))
+            or (app_key == "hily" and hily_on_finder(ui_tree))
+            or (app_key == "blk" and blk_on_deck(ui_tree))
         )
         if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
@@ -2133,7 +2903,7 @@ def heuristic_dm_send(
                     "open_inbox",
                 )
             # Dating apps with verified nav tab xy — never a random toolbar guess
-            if app_key in ("bumble", "yubo", "badoo"):
+            if app_key in ("bumble", "yubo", "badoo", "hily", "blk"):
                 tab = profile.get("inbox_tab_xy")
                 if isinstance(tab, (tuple, list)) and len(tab) >= 2:
                     return _fp(
@@ -2173,6 +2943,8 @@ def heuristic_dm_send(
         and not (app_key == "bumble" and bumble_on_connections(ui_tree))
         and not (app_key == "yubo" and yubo_on_chat_list(ui_tree))
         and not (app_key == "badoo" and badoo_on_connections(ui_tree))
+        and not (app_key == "hily" and hily_on_chats_list(ui_tree))
+        and not (app_key == "blk" and blk_on_matches(ui_tree))
     ):
         tab = _tree_node_center(
             ui_tree, "Chats", "Chat", "Matches", "Messages", "Inbox", "Connections"
@@ -2232,6 +3004,11 @@ def heuristic_dm_send(
         (app_key == "yubo" and (yubo_on_chat_list(ui_tree) or yubo_on_chat(ui_tree)))
         or (app_key == "badoo" and badoo_on_connections(ui_tree))
         or (app_key == "bumble" and bumble_on_connections(ui_tree))
+        or (
+            app_key == "hily"
+            and (hily_on_chats_list(ui_tree) or hily_on_thread(ui_tree))
+        )
+        or (app_key == "blk" and (blk_on_matches(ui_tree) or blk_on_thread(ui_tree)))
     )
     if not chat_ok and not typed_contact and not tapped_search and not skip_search:
         search_ids = tuple(profile.get("search_ids") or ())
@@ -2543,6 +3320,38 @@ def heuristic_dm_send(
 
     # 5) Type message — ONLY if chat verified AND target is compose (not search)
     if chat_ok and not typed_message:
+        # Hily: app once backgrounded — require FG package before typing
+        if app_key == "hily" and want_pkg and want_pkg not in pkg and not fg:
+            return _fp(
+                {
+                    "action": "open_app",
+                    "app": open_label,
+                    "reason": (
+                        f"Re-focus Hily before typing; FG={package or '?'} ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_refocus_before_type",
+            )
+        # Locked composer → skip (never paid unlock)
+        if app_key == "hily":
+            for n in _parse_compact_nodes(ui_tree):
+                if "threadinput" in str(n.get("id") or "").lower():
+                    blob = f"{n.get('text')} {n.get('hint')} {n.get('desc')}".lower()
+                    if "locked" in blob:
+                        return _fp(
+                            {
+                                "action": "fail",
+                                "reason": (
+                                    f"Hily composer Locked — skip (never paid) "
+                                    f"({planner})"
+                                ),
+                                "planner": planner,
+                                "llm_provider": None,
+                            },
+                            "hily_composer_locked",
+                        )
         if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
             compose_ids = tuple(profile.get("compose_ids") or ())
             c = find_compose_center(
@@ -2619,6 +3428,10 @@ def heuristic_dm_send(
         )
         if c is None and app_key == "yubo":
             c = yubo_find_send_center(ui_tree)
+        if c is None and app_key == "hily":
+            c = hily_find_send_center(ui_tree)
+        if c is None and app_key == "blk":
+            c = blk_send_relative_to_edittext(ui_tree)
         prefer_tap = bool(profile.get("prefer_tap_send"))
         if c:
             return _fp(
@@ -2683,7 +3496,12 @@ def heuristic_dm_send(
     if tapped_send:
         want_pkg = str(profile.get("package") or "").lower()
         pkg_ok = (not want_pkg) or (want_pkg in pkg) or fg
-        if pkg_ok and outgoing_bubble_present(ui_tree, message):
+        outgoing_ok = outgoing_bubble_present(ui_tree, message)
+        if app_key == "hily":
+            outgoing_ok = hily_outgoing_verified(ui_tree, message)
+        elif app_key == "blk":
+            outgoing_ok = blk_outgoing_verified(ui_tree, message)
+        if pkg_ok and outgoing_ok:
             return _fp(
                 {
                     "action": "done",
@@ -2697,7 +3515,7 @@ def heuristic_dm_send(
                 },
                 "done_outgoing_bubble",
             )
-        if not pkg_ok and outgoing_bubble_present(ui_tree, message):
+        if not pkg_ok and outgoing_ok:
             # Bubble on wrong package — re-open target app
             return _fp(
                 {
@@ -2735,6 +3553,10 @@ def heuristic_dm_send(
                 send_ids=send_ids,
                 profile=profile,
             )
+            if c is None and app_key == "hily":
+                c = hily_find_send_center(ui_tree)
+            if c is None and app_key == "blk":
+                c = blk_send_relative_to_edittext(ui_tree)
             fb = profile.get("send_fallback")
             if c:
                 x, y = c

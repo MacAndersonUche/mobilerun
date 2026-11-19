@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="See when Evie reacts to your like" xy="540,900" b="80,800,1000,1000"/>
+ <n t="Allow" c="1" xy="540,1500" b="300,1440,780,1560"/>
+ <n t="Maybe later" c="1" xy="540,1650" b="300,1590,780,1710"/>
+</w>
+</hierarchy>
