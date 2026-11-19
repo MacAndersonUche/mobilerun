@@ -1,0 +1,18 @@
+<hierarchy windows="1" nodes="20" partial="false" empty="false" mode="compact" packages="com.takimi.android">
+<w id="active" t="active" p="com.takimi.android" f="1">
+ <n t="12 left" xy="700,124" b="618,100,820,148"/>
+ <n c="1" xy="850,145" b="810,105,890,185"/>
+ <n c="1" xy="985,145" b="945,105,1025,185"/>
+ <n t="Alex" xy="300,1580" b="80,1507,600,1665"/>
+ <n t="Active today" xy="300,1700" b="80,1670,400,1730"/>
+ <n t=", Alex, Coffee?" c="1" xy="540,1780" b="200,1740,880,1820"/>
+ <n c="1" xy="320,1948" b="200,1875,440,2022"/>
+ <n c="1" xy="541,1948" b="460,1875,620,2022"/>
+ <n c="1" xy="761,1948" b="680,1875,840,2022"/>
+ <n d="Profile" c="1" xy="108,2200" b="40,2140,176,2260"/>
+ <n d="Trending" c="1" xy="324,2200" b="250,2140,398,2260"/>
+ <n d="People" c="1" xy="540,2200" b="470,2140,610,2260"/>
+ <n d="Likes, New notification" c="1" xy="756,2200" b="680,2140,832,2260"/>
+ <n d="Chats" c="1" xy="972,2200" b="900,2140,1044,2260"/>
+</w>
+</hierarchy>

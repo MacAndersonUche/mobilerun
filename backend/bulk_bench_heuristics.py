@@ -42,6 +42,14 @@ try:
         hily_like_action,
         hily_on_finder,
         hily_pass_action,
+        taimi_deck_card_name,
+        taimi_dismiss_paywall,
+        taimi_is_curated_card,
+        taimi_is_paywall,
+        taimi_like_action,
+        taimi_on_people_deck,
+        taimi_pass_action,
+        taimi_swipes_left,
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_deck,
@@ -73,6 +81,14 @@ except ImportError:
         hily_like_action,
         hily_on_finder,
         hily_pass_action,
+        taimi_deck_card_name,
+        taimi_dismiss_paywall,
+        taimi_is_curated_card,
+        taimi_is_paywall,
+        taimi_like_action,
+        taimi_on_people_deck,
+        taimi_pass_action,
+        taimi_swipes_left,
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_deck,
@@ -80,7 +96,7 @@ except ImportError:
     )
 
 # Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
-_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk"})
+_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk", "taimi"})
 
 
 def _delay_band() -> tuple[float, float]:
@@ -229,6 +245,8 @@ def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
         return hily_deck_card_name(tree)
     if app == "blk":
         return blk_deck_card_name(tree)
+    if app == "taimi":
+        return taimi_deck_card_name(tree)
     # Fake-chats / generic: ProfileNN or first mid-card title
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or n.get("desc") or "").strip()
@@ -256,6 +274,10 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
     if app == "hily" and hily_on_finder(tree):
         return True
     if app == "blk" and (blk_on_deck(tree) or blk_end_of_deck(tree)):
+        return True
+    if app == "taimi" and (
+        taimi_on_people_deck(tree) or taimi_swipes_left(tree) is not None
+    ):
         return True
     if app and app in DM_APP_PROFILES:
         ids = tuple(DM_APP_PROFILES[app].get("deck_ids") or ())
@@ -296,6 +318,12 @@ def _real_like_action(
         if act:
             act["reason"] = f"BLK Like Icon right/cyan ({planner})"
         return act
+    if app == "taimi":
+        # Curated → Skip (Like opens GOLD); Instant Chat never for bulk
+        act = taimi_like_action(tree, planner=planner)
+        if act:
+            act["reason"] = f"Taimi Like/Skip ({planner})"
+        return act
     return None
 
 
@@ -312,6 +340,8 @@ def _real_pass_action(
         return badoo_pass_action(planner=planner)
     if app == "hily":
         return hily_pass_action(tree, planner=planner)
+    if app == "taimi":
+        return taimi_pass_action(tree, planner=planner)
     return None
 
 
@@ -482,6 +512,29 @@ def plan_bulk_swipe(
         popup = blk_dismiss_popup(ui_tree, planner=planner)
         if popup:
             return popup
+    if app == "taimi":
+        if taimi_is_paywall(ui_tree):
+            # Count as skipped — never Continue; do not increment likes
+            bulk["awaiting_verify"] = False
+            bulk["last_name"] = None
+            st["bulk_swipe"] = bulk
+            return taimi_dismiss_paywall(ui_tree, planner=planner)
+        left = taimi_swipes_left(ui_tree)
+        if left == 0:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"Taimi 0 left after {done}/{target} — stop ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "bulk_swipe_done": done,
+                    "bulk_swipe_target": target,
+                    "stopped_reason": "swipes_exhausted",
+                },
+                "bulk_taimi_exhausted",
+            )
 
     # Interruptions first (match / upsell / out-of-likes)
     tl = (ui_tree or "").lower()
@@ -555,16 +608,37 @@ def plan_bulk_swipe(
 
     # Verify previous like: only count when top-card name changed
     if bulk.get("awaiting_verify"):
+        if app == "taimi" and taimi_is_paywall(ui_tree):
+            bulk["awaiting_verify"] = False
+            bulk["last_name"] = None
+            st["bulk_swipe"] = bulk
+            return taimi_dismiss_paywall(ui_tree, planner=planner)
         name_now = deck_card_name(app, ui_tree)
         last = bulk.get("last_name")
-        if name_now and last and name_now != last:
+        left_now = taimi_swipes_left(ui_tree) if app == "taimi" else None
+        left_last = bulk.get("last_left")
+        name_ok = bool(name_now and last and name_now != last)
+        left_ok = (
+            left_now is None
+            or left_last is None
+            or (
+                isinstance(left_now, int)
+                and isinstance(left_last, int)
+                and left_now < left_last
+            )
+        )
+        if name_ok and left_ok:
             bulk["done"] = done + 1
             done = int(bulk["done"])
             bulk["last_name"] = name_now
+            if left_now is not None:
+                bulk["last_left"] = left_now
             bulk["awaiting_verify"] = False
             st["bulk_swipe"] = bulk
         elif name_now and not last:
             bulk["last_name"] = name_now
+            if left_now is not None:
+                bulk["last_left"] = left_now
             bulk["awaiting_verify"] = False
             st["bulk_swipe"] = bulk
         elif name_now and last and name_now == last:
@@ -651,6 +725,8 @@ def plan_bulk_swipe(
                 "bulk_like_missing",
             )
         bulk["last_name"] = card_name
+        if app == "taimi":
+            bulk["last_left"] = taimi_swipes_left(ui_tree)
         bulk["awaiting_verify"] = True
         bulk["_bulk_swipe_inc"] = False  # only after name change
         st["bulk_swipe"] = bulk
@@ -1004,7 +1080,8 @@ def plan_bulk_bench(
         if (
             app
             and app not in swipe_keys()
-            and app not in ("facebook", "bumble", "yubo", "badoo", "hily", "blk")
+            and app
+            not in ("facebook", "bumble", "yubo", "badoo", "hily", "blk", "taimi")
         ):
             # messaging apps: no-op skip with done reason
             return _fp(
