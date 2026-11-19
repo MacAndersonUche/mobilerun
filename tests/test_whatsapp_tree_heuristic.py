@@ -109,7 +109,9 @@ def test_whatsapp_heuristic_open_then_search_type_send_flow():
             "tap(980,150) — Tap Search id/label (whatsapp_heuristic)",
             'type("Precious Achalugo") — Type contact',
         ]
-        a3 = _heuristic_whatsapp_send(INSTR, search_tree, hist_after_search, package=pkg)
+        a3 = _heuristic_whatsapp_send(
+            INSTR, search_tree, hist_after_search, package=pkg
+        )
         assert a3 and a3["action"] == "tap"
         assert "contact" in a3["reason"].lower() or "precious" in a3["reason"].lower()
         hist_compose = hist_after_search + [
@@ -160,7 +162,9 @@ def test_whatsapp_s21_search_bar_not_camera_overflow():
     bare = "\n".join(
         ln
         for ln in home.splitlines()
-        if "Precious" not in ln and "contact_row" not in ln and "contact_photo" not in ln
+        if "Precious" not in ln
+        and "contact_row" not in ln
+        and "contact_photo" not in ln
     )
     a = _heuristic_whatsapp_send(
         INSTR, bare, ["Opened WhatsApp[com.whatsapp] — launch"], package="com.whatsapp"
@@ -219,9 +223,10 @@ def test_whatsapp_already_in_chat_skips_search_dry_run():
     a0 = _heuristic_whatsapp_send(instr, compose, [], package=pkg, dry_run=True)
     assert a0 is not None
     assert a0.get("action") != "fail"
-    assert "search" not in (a0.get("reason") or "").lower() or "focus" in (
-        a0.get("reason") or ""
-    ).lower()
+    assert (
+        "search" not in (a0.get("reason") or "").lower()
+        or "focus" in (a0.get("reason") or "").lower()
+    )
     assert a0.get("action") in ("tap", "type")
     if a0["action"] == "tap":
         assert "compose" in a0["reason"].lower() or "message" in a0["reason"].lower()
@@ -255,7 +260,9 @@ def test_plan_next_action_uses_whatsapp_heuristic(monkeypatch):
     assert action["planner"] == "whatsapp_heuristic"
     assert action["action"] == "tap"
     # Inbox already shows Precious — prefer visible contact over Search
-    assert "precious" in action["reason"].lower() or "search" in action["reason"].lower()
+    assert (
+        "precious" in action["reason"].lower() or "search" in action["reason"].lower()
+    )
 
 
 def test_goal_satisfied_whatsapp_bubble():

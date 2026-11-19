@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.badoo.mobile">
+<w id="active" t="active" p="com.badoo.mobile" f="1">
+ <n t="Buy Credits" xy="540,1100" b="200,1000,880,1200"/>
+ <n d="Close" c="1" xy="985,1247" b="940,1200,1030,1294"/>
+ <n t="Continue" c="1" xy="540,1500" b="200,1440,880,1560"/>
+</w>
+</hierarchy>

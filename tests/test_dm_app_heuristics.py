@@ -65,6 +65,8 @@ def test_detect_and_parse_per_app():
         ("telegram message Bob and say ping", "telegram", "Bob", "ping"),
         ("tinder message Alex and say hey", "tinder", "Alex", "hey"),
         ("bumble message Sam and say hi", "bumble", "Sam", "hi"),
+        ("yubo message Sam and say hi", "yubo", "Sam", "hi"),
+        ("badoo message Sam and say hi", "badoo", "Sam", "hi"),
         ("hinge message Riley and say hello", "hinge", "Riley", "hello"),
     ]
     for instr, app, contact, msg in cases:

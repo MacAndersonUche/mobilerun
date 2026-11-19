@@ -1,0 +1,10 @@
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <n d="Back" c="1" xy="80,148" b="20,75,147,222"/>
+ <n t="Sam" i="com.bumble.app:id/chatToolbar_title" xy="400,148" b="200,100,700,196"/>
+ <n i="com.bumble.app:id/chatToolbar_audioChatButton" d="Audio call" c="1" xy="900,148" b="850,100,950,196"/>
+ <n i="com.bumble.app:id/chatToolbar_videoChatButton" d="Video call" c="1" xy="1000,148" b="950,100,1050,196"/>
+ <n e="1" f="1" t="" h="Aa" i="com.bumble.app:id/chatInput_text" c="1" xy="498,2210" b="21,2163,975,2258"/>
+ <n i="com.bumble.app:id/chatInput_send" d="Send" c="1" xy="1020,2210" b="980,2165,1060,2255"/>
+</w>
+</hierarchy>

@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="12" partial="false" empty="false" mode="compact" packages="com.badoo.mobile">
+<w id="active" t="active" p="com.badoo.mobile" f="1">
+ <n d="Back" c="1" xy="80,148" b="20,100,140,196"/>
+ <n t="Sam" i="com.badoo.mobile:id/chatToolbar_title" xy="400,148" b="200,100,700,196"/>
+ <n i="com.badoo.mobile:id/chatToolbar_videoChatButton" d="Video call" c="1" xy="1000,148" b="950,100,1050,196"/>
+ <n e="1" f="1" t="" h="Type a message..." i="com.badoo.mobile:id/chatInput_text" c="1" xy="500,2210" b="80,2160,900,2260"/>
+ <n i="com.badoo.mobile:id/chatInput_button_send" d="Send message" c="1" xy="1000,2210" b="940,2160,1060,2260"/>
+</w>
+</hierarchy>

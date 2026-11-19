@@ -1,8 +1,10 @@
-<hierarchy windows="2" nodes="12" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<hierarchy windows="2" nodes="14" partial="false" empty="false" mode="compact" packages="com.bumble.app">
 <w id="active" t="active" p="com.bumble.app" f="1">
- <n t="Messages" xy="200,140" b="40,80,400,200"/>
- <n d="Search" c="1" xy="980,150" b="900,80,1060,220"/>
- <n t="Sam" c="1" xy="540,480" b="0,400,1080,560"/>
+ <n i="com.bumble.app:id/connections_root" xy="540,1200" b="0,0,1080,2400"/>
+ <n t="Chats" xy="200,140" b="40,80,400,200"/>
+ <n i="com.bumble.app:id/connectionItem" c="1" xy="540,480" b="0,400,1080,560"/>
+ <n t="Sam" i="com.bumble.app:id/connectionsItem_personName" c="1" xy="540,480" b="160,420,800,540"/>
+ <n d="Chats" c="1" xy="972,2197" b="864,2120,1080,2274"/>
  <n d="Connections" c="1" xy="900,2280" b="820,2220,980,2340"/>
 </w>
 </hierarchy>

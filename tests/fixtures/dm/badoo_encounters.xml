@@ -1,0 +1,13 @@
+<hierarchy windows="1" nodes="16" partial="false" empty="false" mode="compact" packages="com.badoo.mobile">
+<w id="active" t="active" p="com.badoo.mobile" f="1">
+ <n i="com.badoo.mobile:id/encounters_stackView" xy="540,1100" b="0,200,1080,2000"/>
+ <n t="Alex" i="com.badoo.mobile:id/profileInfo_name" d="Alex, 28 years old" xy="300,500" b="100,460,500,540"/>
+ <n i="com.badoo.mobile:id/encounters_profile_voting_buttonVoteNo" d="Pass" c="1" xy="225,1982" b="150,1910,300,2054"/>
+ <n i="com.badoo.mobile:id/encounters_profile_voting_buttonVoteYes" d="Like" c="1" xy="855,1982" b="780,1910,930,2054"/>
+ <n i="com.badoo.mobile:id/encounters_profile_voting_buttonChat" d="Chat" c="1" xy="540,1982" b="470,1910,610,2054"/>
+ <n i="com.badoo.mobile:id/encounters_profile_voting_buttonCrush" d="Crush" c="1" xy="1000,1900" b="940,1840,1060,1960"/>
+ <n i="com.badoo.mobile:id/encountersCards_undo" d="Undo" c="1" xy="100,400" b="40,350,160,450"/>
+ <n i="com.badoo.mobile:id/nav_bar_button_encounters" d="Encounters" c="1" xy="324,2210" b="200,2140,448,2280"/>
+ <n i="com.badoo.mobile:id/nav_bar_button_connections" d="Chats" c="1" xy="756,2210" b="650,2140,860,2280"/>
+</w>
+</hierarchy>
