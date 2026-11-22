@@ -239,16 +239,19 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     /** IME Enter / editor action on the focused input (API 30+). */
     fun pressEnter(): Boolean {
+        // ACTION_IME_ENTER = 0x100 — not always visible on older compile stubs
+        val actionImeEnter = 0x00000100
         val root = rootInActiveWindow ?: return false
         val focused =
             root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
         if (focused != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val ok = focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER)
+            val ok = focused.performAction(actionImeEnter)
             focused.recycle()
             if (ok) return true
+        } else {
+            focused?.recycle()
         }
-        focused?.recycle()
         // Fallback: KEYCODE_ENTER via shell (best-effort)
         return try {
             Runtime.getRuntime().exec(arrayOf("input", "keyevent", "66")).waitFor() == 0
