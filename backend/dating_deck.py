@@ -522,3 +522,73 @@ def mark_like_issued(
     bulk["awaiting_verify"] = True
     bulk["card_wait_n"] = 0
     state["bulk_swipe"] = bulk
+
+
+def skip_new_contact_on_paywall(
+    state: Dict[str, Any],
+    *,
+    tree: str,
+    package: str = "",
+    planner: str = "dating_deck",
+    name: str = "",
+) -> Optional[Dict[str, Any]]:
+    """If paywall/upsell while messaging a new person: dismiss, skip, continue.
+
+    Clears ``bulk_message_new.current`` and records the name in ``skipped`` so
+    the planner tries the next person. Never taps paid CTAs.
+    """
+    pay = dismiss_paywall_action(tree, package=package, planner=planner)
+    if not pay:
+        return None
+    bulk = state.setdefault("bulk_message_new", {})
+    if not isinstance(bulk, dict):
+        bulk = {}
+        state["bulk_message_new"] = bulk
+    skipped = list(bulk.get("skipped") or [])
+    cur = (name or str(bulk.get("current") or "")).strip()
+    if cur and cur.lower() not in {str(x).lower() for x in skipped}:
+        skipped.append(cur)
+    bulk["skipped"] = skipped
+    bulk["current"] = None
+    bulk["typed"] = False
+    bulk["awaiting_send"] = False
+    bulk["_paywall_skips"] = int(bulk.get("_paywall_skips") or 0) + 1
+    state["bulk_message_new"] = bulk
+    out = dict(pay)
+    out["_new_contact_paywall_skip"] = True
+    out["reason"] = (
+        f"Paywall on new contact"
+        f"{f' ({cur})' if cur else ''} — dismiss + skip to next ({planner})"
+    )
+    return out
+
+
+def find_free_compose_center(tree: str) -> Optional[Tuple[int, int]]:
+    """Locate a free message composer (EditText / Message hint) — not Crush/Rose."""
+    for m in re.finditer(r"<n\b([^>]*)>", tree or "", re.I):
+        attrs = m.group(1)
+        editable = 'e="1"' in attrs or "editable" in attrs.lower()
+        hint = ""
+        for key in ("h", "t", "d"):
+            hm = re.search(rf'\b{key}="([^"]*)"', attrs, re.I)
+            if hm and hm.group(1).strip():
+                hint = hm.group(1).strip().lower()
+                break
+        xy = re.search(r'\bxy="(\d+),(\d+)"', attrs)
+        if not xy:
+            continue
+        x, y = int(xy.group(1)), int(xy.group(2))
+        if y < 1200:
+            continue
+        if any(bad in hint for bad in ("search", "crush", "rose", "boost", "super")):
+            continue
+        if editable or hint in (
+            "message",
+            "type a message",
+            "say something",
+            "write a message",
+            "aa",
+            "hey",
+        ):
+            return (x, y)
+    return None

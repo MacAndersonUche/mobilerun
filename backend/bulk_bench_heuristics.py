@@ -32,6 +32,9 @@ try:
         blk_end_of_deck,
         blk_like_action,
         blk_on_deck,
+        blk_on_matches,
+        blk_on_thread,
+        blk_send_relative_to_edittext,
         blk_deck_card_name,
         bumble_back_from_photo_browser,
         bumble_collapsed_older_chats_center,
@@ -111,6 +114,9 @@ except ImportError:
         blk_end_of_deck,
         blk_like_action,
         blk_on_deck,
+        blk_on_matches,
+        blk_on_thread,
+        blk_send_relative_to_edittext,
         blk_deck_card_name,
         bumble_back_from_photo_browser,
         bumble_collapsed_older_chats_center,
@@ -3062,10 +3068,14 @@ def plan_bulk_message_new(
 ) -> Optional[Dict[str, Any]]:
     """Message NEW contacts (not existing chats).
 
-    Hinge: heart → like-sheet comment → Send Like / Send Like anyway (never Rose).
+    Try free messaging from profile/match on every dating app. If a paywall /
+    upsell appears, dismiss it and continue with the next person. Fall back to
+    like/swipe only when no free compose/match surface is available.
+
+    Hinge: heart → like-sheet comment → Send Like (never Rose).
     Tagged: chatBtn on Match card.
     Hily: first free message; skip Message Before Match / paid.
-    Other swipe apps: like-only (delegate to swipe planner).
+    BLK / Bumble / Badoo: Matches/Connections → free composer when allowed.
     """
     goal = parse_bulk_goal(instruction)
     if not goal or goal.get("kind") != "message_new":
@@ -3089,13 +3099,15 @@ def plan_bulk_message_new(
     st = state if isinstance(state, dict) else {}
     bulk = st.setdefault(
         "bulk_message_new",
-        {"done": 0, "typed": False, "awaiting_send": False},
+        {"done": 0, "typed": False, "awaiting_send": False, "skipped": []},
     )
     done = int(bulk.get("done") or 0)
     hist = " ".join(history[-16:]).lower()
+    skipped = {str(x).lower() for x in (bulk.get("skipped") or [])}
 
-    # Swipe-only apps: new-contact "message" = like only
-    like_only = {
+    # Apps with no reliable free new-message surface → like FALLBACK only after
+    # we fail to find Matches/Connections/composer (never hard-replace).
+    like_fallback_apps = {
         "bumble",
         "yubo",
         "badoo",
@@ -3104,17 +3116,6 @@ def plan_bulk_message_new(
         "tinder",
         "facebook",
     }
-    if app in like_only:
-        # Rewrite as swipe so dry-run/like path runs
-        fake = f"{app} like {target} profiles"
-        return plan_bulk_swipe(
-            fake,
-            ui_tree,
-            history,
-            state=state,
-            package=package,
-            dry_run=dry_run,
-        )
 
     opened = _ensure_app_open(app, package, history, planner)
     if opened:
@@ -3133,16 +3134,27 @@ def plan_bulk_message_new(
             "bulk_hily_mbm_skip_new",
         )
 
+    # Paywall while messaging a new person → dismiss, skip that person, continue
     try:
-        from dating_deck import dismiss_paywall_action as _dismiss_pay_new
+        from dating_deck import (
+            find_free_compose_center,
+            skip_new_contact_on_paywall,
+        )
     except ImportError:
         from backend.dating_deck import (  # type: ignore
-            dismiss_paywall_action as _dismiss_pay_new,
+            find_free_compose_center,
+            skip_new_contact_on_paywall,
         )
 
-    pay_new = _dismiss_pay_new(ui_tree, package=package, planner=planner)
-    if pay_new:
-        return _fp(pay_new, "bulk_msg_new_paywall_dismiss")
+    pay_skip = skip_new_contact_on_paywall(
+        st,
+        tree=ui_tree,
+        package=package,
+        planner=planner,
+        name=str(bulk.get("current") or ""),
+    )
+    if pay_skip:
+        return _fp(pay_skip, "bulk_msg_new_paywall_skip")
 
     allow_thread = bool(str(bulk.get("current") or "").strip())
     recover = _recover_to_root_action(
@@ -3509,6 +3521,203 @@ def plan_bulk_message_new(
         if like_ctl:
             return like_ctl
 
+    # --- BLK / Bumble / Badoo / others: free message from Matches/Connections ---
+    if app in ("blk", "bumble", "badoo", "taimi", "yubo", "tinder"):
+        # Already in a free thread with composer → type / dry-run / send
+        compose = find_free_compose_center(ui_tree)
+        on_thread = False
+        if app == "blk":
+            on_thread = blk_on_thread(ui_tree)
+        elif compose and not _deck_visible(app, ui_tree):
+            on_thread = True
+        if on_thread and compose:
+            if dry_run:
+                bulk["done"] = max(done, 1)
+                bulk["current"] = None
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] free composer verified for new contact "
+                            f"— would send '{message}' — never typed ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "would_send_text": message,
+                    },
+                    "bulk_new_free_compose_dry",
+                )
+            if not bulk.get("typed"):
+                if "tap" in hist and (
+                    "compose" in hist or "message" in hist or "focus" in hist
+                ):
+                    bulk["typed"] = True
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "type",
+                            "text": message,
+                            "reason": (f"Type free opener to new contact ({planner})"),
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "bulk_new_free_type",
+                    )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": compose[0],
+                        "y": compose[1],
+                        "reason": f"Focus free composer for new contact ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Message",
+                    },
+                    "bulk_new_free_focus",
+                )
+            # Typed → send (prefer labeled Send; BLK unlabeled right of EditText)
+            prof = DM_APP_PROFILES.get(app) or {}
+            send = find_send_center_safe(
+                ui_tree,
+                tuple(prof.get("send_labels") or ("Send",)),
+                send_ids=tuple(prof.get("send_ids") or ()),
+                profile=prof,
+            )
+            if send is None and app == "blk":
+                send = blk_send_relative_to_edittext(ui_tree)
+            if send:
+                bulk["done"] = done + 1
+                bulk["typed"] = False
+                bulk["current"] = None
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(send[0]),
+                        "y": int(send[1]),
+                        "reason": (
+                            f"Send free opener to new contact "
+                            f"{bulk.get('done')}/{target} ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_new_free_send",
+                )
+
+        # Open Matches / Connections inbox for free-messageable people
+        on_inbox = False
+        if app == "blk":
+            on_inbox = blk_on_matches(ui_tree)
+            popup = blk_dismiss_popup(ui_tree, planner=planner)
+            if popup:
+                return popup
+        elif app == "bumble":
+            on_inbox = bool(
+                _nav_tab_center(ui_tree, "Connections", "Chats")
+                and not bumble_on_people_deck(ui_tree)
+            ) or ("connections" in (ui_tree or "").lower() and "for you" not in hist)
+            # Prefer connections list rows
+            on_inbox = bool(
+                _visible_chat_list_rows(ui_tree, "bumble", skip_names=list(skipped))
+            )
+        elif app == "badoo":
+            on_inbox = bool(
+                _visible_chat_list_rows(ui_tree, "badoo", skip_names=list(skipped))
+            ) or badoo_on_connections(ui_tree)
+
+        if not on_inbox and not on_thread:
+            # Navigate to Matches/Connections (per-app map) before like-fallback
+            tries = int(bulk.get("_inbox_nav_tries") or 0)
+            if tries < 2:
+                bulk["_inbox_nav_tries"] = tries + 1
+                st["bulk_message_new"] = bulk
+                opened_tab = _open_chats_tab_action(app, ui_tree, history, planner)
+                if opened_tab:
+                    return opened_tab
+                xy = DM_APP_PROFILES.get(app, {}).get("inbox_tab_xy")
+                if xy:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(xy[0]),
+                            "y": int(xy[1]),
+                            "reason": (
+                                f"Open {app} Matches/Connections for free "
+                                f"new-person messaging ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "label": "Matches",
+                        },
+                        "bulk_new_open_matches",
+                    )
+
+        if on_inbox and not on_thread:
+            # Tap next match/connection row not yet skipped
+            row_dicts = _visible_chat_list_rows(ui_tree, app, skip_names=list(skipped))
+            if not row_dicts and app == "blk":
+                row_dicts = [
+                    {"name": n, "x": x, "y": y}
+                    for n, x, y in _blk_new_message_rows(ui_tree, skipped=skipped)
+                ]
+            if row_dicts:
+                row0 = row_dicts[0]
+                name = str(row0.get("name") or row0.get("label") or f"match{done + 1}")
+                xy = (int(row0["x"]), int(row0["y"]))
+                bulk["current"] = name
+                st["bulk_message_new"] = bulk
+                if dry_run:
+                    bulk["done"] = max(done, 1)
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "done",
+                            "reason": (
+                                f"[DRY RUN] would open new match '{name}' → "
+                                f"free message — no send ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "dry_run_verified": True,
+                        },
+                        "bulk_new_match_row_dry",
+                    )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Open new match '{name}' for free messaging "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": name,
+                    },
+                    "bulk_new_open_match_row",
+                )
+
+        # No free match/composer after inbox tries → like FALLBACK (not hard replace)
+        if app in like_fallback_apps and int(bulk.get("_inbox_nav_tries") or 0) >= 2:
+            if not bulk.get("_liked_fallback"):
+                bulk["_liked_fallback"] = True
+                st["bulk_message_new"] = bulk
+            fake = f"{app} like {target} profiles"
+            return plan_bulk_swipe(
+                fake,
+                ui_tree,
+                history,
+                state=state,
+                package=package,
+                dry_run=dry_run,
+            )
+
     return _fp(
         {
             "action": "fail",
@@ -3521,6 +3730,39 @@ def plan_bulk_message_new(
         },
         "bulk_message_new_unsupported",
     )
+
+
+def _blk_new_message_rows(
+    tree: str, *, skipped: Optional[set] = None
+) -> List[Tuple[str, int, int]]:
+    """BLK Matches name rows for free outreach — skip Hidden section + skipped."""
+    skipped = skipped or set()
+    rows: List[Tuple[str, int, int]] = []
+    in_hidden = False
+    for n in _parse_compact_nodes(tree):
+        t = (n.get("text") or n.get("label") or "").strip()
+        if not t:
+            continue
+        low = t.lower()
+        y = int(n.get("y") or 0)
+        if low.startswith("hidden"):
+            in_hidden = True
+            continue
+        if low.startswith("your turn") or low.startswith("their turn"):
+            in_hidden = False
+            continue
+        if in_hidden or y < 200 or y > 2000:
+            continue
+        if low in skipped:
+            continue
+        # Person name — Title Case / short token
+        if re.match(r"^[A-Z][a-zA-Z'\-]{1,24}$", t) or (
+            "," in t and re.match(r"^[A-Za-z]", t)
+        ):
+            if t.lower() in ("matches", "discover", "likes", "boost", "pass"):
+                continue
+            rows.append((t.split(",")[0].strip(), int(n.get("x") or 300), y))
+    return rows
 
 
 def plan_bulk_bench(
