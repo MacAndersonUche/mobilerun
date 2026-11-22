@@ -51,10 +51,13 @@ try:
         hily_dismiss_popup,
         hily_first_grid_tile_center,
         hily_like_action,
+        hily_back_from_photo_viewer,
         hily_on_finder,
         hily_on_mbm,
+        hily_on_photo_viewer,
         hily_on_top_picks_grid,
         hily_pass_action,
+        _is_system_chrome_package,
         hinge_deck_card_name,
         hinge_dismiss_enable_prompt,
         hinge_dismiss_play_review,
@@ -123,10 +126,13 @@ except ImportError:
         hily_dismiss_popup,
         hily_first_grid_tile_center,
         hily_like_action,
+        hily_back_from_photo_viewer,
         hily_on_finder,
         hily_on_mbm,
+        hily_on_photo_viewer,
         hily_on_top_picks_grid,
         hily_pass_action,
+        _is_system_chrome_package,
         hinge_deck_card_name,
         hinge_dismiss_enable_prompt,
         hinge_dismiss_play_review,
@@ -643,6 +649,27 @@ _ROOT_RECOVER_APPS = frozenset(
 )
 
 
+def _app_tree_empty(ui_tree: str, app: Optional[str] = None) -> bool:
+    """True when the dump has no useful app-window nodes (SystemUI-only / blank)."""
+    nodes = _parse_compact_nodes(ui_tree)
+    if not nodes:
+        return True
+    app_l = (app or "").lower()
+    pkg = ""
+    if app_l and app_l in DM_APP_PROFILES:
+        pkg = str(DM_APP_PROFILES[app_l].get("package") or "")
+    useful = 0
+    for n in nodes:
+        p = str(n.get("package") or "")
+        if _is_system_chrome_package(p):
+            continue
+        if pkg and pkg.lower() not in p.lower() and p:
+            # Other apps OK if we have interactive content
+            pass
+        useful += 1
+    return useful < 3
+
+
 def _recover_to_root_action(
     app: Optional[str],
     ui_tree: str,
@@ -654,6 +681,7 @@ def _recover_to_root_action(
     """Back out / relaunch until deck, chat list, or tab bar is visible.
 
     Only for real dating apps that leave leftover sheets/threads between jobs.
+    Hard-caps relaunches/backs so we never loop open↔back unbounded.
     """
     app_l = (app or "").lower()
     if app_l not in _ROOT_RECOVER_APPS:
@@ -662,11 +690,47 @@ def _recover_to_root_action(
         return None
     st = state if isinstance(state, dict) else {}
     key = f"_root_recover_{app_l}"
-    bucket = st.setdefault(key, {"backs": 0, "relaunched": False})
-    hist = " ".join(history[-10:]).lower()
+    bucket = st.setdefault(
+        key, {"backs": 0, "relaunches": 0, "relaunched": False}
+    )
+    hist = " ".join(history[-16:]).lower()
+    relaunches = int(bucket.get("relaunches") or 0)
+    backs = int(bucket.get("backs") or 0)
+
+    # Empty app tree → fail fast (don't thrash Back/Home)
+    if _app_tree_empty(ui_tree, app_l):
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Empty app a11y tree for {app_l} after recover — "
+                    f"fail fast (needs vision / unlock) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+            },
+            "bulk_recover_empty_tree",
+        )
+
+    if relaunches >= 3 or backs >= 8:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Root recover exhausted for {app_l} "
+                    f"(backs={backs} relaunches={relaunches}) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_exhausted",
+        )
 
     if app_l == "bumble" and bumble_on_photo_browser(ui_tree):
         return bumble_back_from_photo_browser(planner=planner)
+    if app_l == "hily" and hily_on_photo_viewer(ui_tree):
+        return hily_back_from_photo_viewer(planner=planner)
     # Hily MBM is handled in plan_bulk_message (skip contact) — not here
     if app_l == "hinge":
         play = hinge_dismiss_play_review(ui_tree, planner=planner)
@@ -689,7 +753,7 @@ def _recover_to_root_action(
         and not badoo_on_encounters(ui_tree)
         and not badoo_on_connections(ui_tree)
     ):
-        bucket["backs"] = int(bucket.get("backs") or 0) + 1
+        bucket["backs"] = backs + 1
         st[key] = bucket
         return _fp(
             {
@@ -702,8 +766,11 @@ def _recover_to_root_action(
             "bulk_recover_back",
         )
 
-    backs = int(bucket.get("backs") or 0)
-    if backs < 4 and "bulk_recover_back" not in hist[-80:]:
+    # Count recent recover backs across full recent history (not last 80 chars)
+    recent_backs = sum(
+        1 for h in history[-12:] if "bulk_recover_back" in str(h).lower()
+    )
+    if backs < 4 and recent_backs < 3:
         bucket["backs"] = backs + 1
         st[key] = bucket
         return _fp(
@@ -716,9 +783,10 @@ def _recover_to_root_action(
             },
             "bulk_recover_back",
         )
-    if not bucket.get("relaunched") and app_l in DM_APP_PROFILES:
+    if relaunches < 3 and app_l in DM_APP_PROFILES:
+        bucket["relaunches"] = relaunches + 1
         bucket["relaunched"] = True
-        bucket["backs"] = 0
+        # Do NOT reset backs — keep the hard cap honest
         st[key] = bucket
         label = str(DM_APP_PROFILES[app_l].get("open_label") or app_l)
         return _fp(
@@ -731,7 +799,17 @@ def _recover_to_root_action(
             },
             "bulk_recover_relaunch",
         )
-    return None
+    return _fp(
+        {
+            "action": "fail",
+            "reason": (
+                f"Could not reach known root for {app_l} ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bulk_recover_fail",
+    )
 
 
 def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
@@ -1044,10 +1122,20 @@ def plan_bulk_swipe(
     # Bumble photo browser (SuperSwipe only) — back out before deck checks
     if app == "bumble" and bumble_on_photo_browser(ui_tree):
         return bumble_back_from_photo_browser(planner=planner)
-    # Hily Discover grid: open first tile → profile, or fail safely in dry_run
+    # Hily photo viewer ('1 of 4' + app_top_bar_back) — back before swipe/HOME
+    if app == "hily" and hily_on_photo_viewer(ui_tree):
+        return hily_back_from_photo_viewer(planner=planner)
+    # Hily Discover grid: open first tile → profile once; never loop tile 3x
     if app == "hily" and hily_on_top_picks_grid(ui_tree):
+        tile_taps = sum(
+            1
+            for h in history[-10:]
+            if "hily grid tile" in str(h).lower()
+            or "bulk_hily_open_grid_tile" in str(h).lower()
+            or "open grid tile" in str(h).lower()
+        )
         tile = hily_first_grid_tile_center(ui_tree)
-        if tile and "hily grid tile" not in hist and "open grid tile" not in hist:
+        if tile and tile_taps < 1:
             return _fp(
                 {
                     "action": "tap",
@@ -1060,32 +1148,48 @@ def plan_bulk_swipe(
                 },
                 "bulk_hily_open_grid_tile",
             )
-        if dry_run:
+        if tile_taps >= 1 or dry_run:
             return _fp(
                 {
                     "action": "fail",
                     "reason": (
                         f"dry_run — Hily Discover is a Top picks grid "
-                        f"(Crush tiles paid); open tile first or fail safely "
+                        f"(Crush tiles paid); refuse repeated tile taps "
                         f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
-                    "dry_run": True,
+                    "dry_run": bool(dry_run),
                     "dry_run_verified": False,
                 },
                 "bulk_dry_run_hily_grid",
             )
     # People photo-grid ≠ swipe deck. Opening a tile lands in PhotoBrowser
-    # (Send SuperSwipe only — paid). Never tile→viewer→back loop; require the
-    # real Discover/People card stack (pass/like), else fail cleanly.
+    # (Send SuperSwipe only — paid). Switch to Discover tab (card deck) once.
     if app == "bumble" and bumble_on_photo_grid(ui_tree):
+        if "bumble_open_discover" not in hist and "open swipe deck" not in hist:
+            xy = DM_APP_PROFILES["bumble"].get("discover_tab_xy") or (324, 2197)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Bumble People grid → Discover card deck "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                },
+                "bumble_open_discover",
+            )
         return _fp(
             {
                 "action": "fail",
                 "reason": (
                     f"Bumble People photo grid is not a swipe deck — "
-                    f"open the Discover/People card stack (pass/like), "
+                    f"Discover card stack required (pass/like); "
                     f"do not tap grid tiles (PhotoBrowser SuperSwipe is paid) "
                     f"({planner})"
                 ),
@@ -1420,11 +1524,29 @@ def plan_bulk_swipe(
         )
 
     if not deck_visible:
-        # Prefer People (Bumble) over Discover — Discover is often a different tab
+        # Bumble: People is a photo GRID — Discover (left tab) is the card deck.
+        # Badoo: Encounters (nav_bar_button_encounters), never People/Discover.
         if app == "bumble":
-            disc = _exact_label_center(ui_tree, "People") or _tree_node_center(
-                ui_tree, "People", "Encounters"
+            disc = (
+                _exact_label_center(ui_tree, "Discover")
+                or _tree_node_center(ui_tree, "Discover", "Open Discover")
             )
+            if not disc:
+                xy = DM_APP_PROFILES["bumble"].get("discover_tab_xy") or (324, 2197)
+                disc = (int(xy[0]), int(xy[1]))
+        elif app == "badoo":
+            disc = (
+                _tree_id_center(
+                    ui_tree,
+                    "nav_bar_button_encounters",
+                    "com.badoo.mobile:id/nav_bar_button_encounters",
+                )
+                or _exact_label_center(ui_tree, "Encounters")
+                or _tree_node_center(ui_tree, "Encounters")
+            )
+            if not disc:
+                xy = DM_APP_PROFILES["badoo"].get("encounters_tab_xy") or (324, 2210)
+                disc = (int(xy[0]), int(xy[1]))
         else:
             disc = (
                 _exact_label_center(ui_tree, "People")
@@ -2332,9 +2454,17 @@ def plan_bulk_message_new(
         )
 
     if app == "hily":
+        if hily_on_photo_viewer(ui_tree):
+            return hily_back_from_photo_viewer(planner=planner)
         if hily_on_top_picks_grid(ui_tree):
+            tile_taps = sum(
+                1
+                for h in history[-8:]
+                if "grid tile" in str(h).lower()
+                or "bulk_hily_new_grid_tile" in str(h).lower()
+            )
             tile = hily_first_grid_tile_center(ui_tree)
-            if tile and "grid tile" not in hist:
+            if tile and tile_taps < 1:
                 return _fp(
                     {
                         "action": "tap",
@@ -2346,7 +2476,28 @@ def plan_bulk_message_new(
                     },
                     "bulk_hily_new_grid_tile",
                 )
+        # Dry-run must verify a real profile + message/like control — never bare done
+        card = hily_deck_card_name(ui_tree)
+        like_ctl = hily_like_action(ui_tree, planner=planner)
+        compose = _tree_node_center(
+            ui_tree, "Type a message", "Message", "Say something"
+        ) or _tree_id_center(ui_tree, "messageInput", "id/messageInput")
         if dry_run:
+            if not card and not like_ctl and not compose:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"dry_run — Hily: no profile card / like / composer "
+                            f"verified for {target} new contacts ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": False,
+                    },
+                    "bulk_dry_run_hily_new_unverified",
+                )
             bulk["done"] = target
             st["bulk_message_new"] = bulk
             return _fp(
@@ -2354,7 +2505,8 @@ def plan_bulk_message_new(
                     "action": "done",
                     "reason": (
                         f"[DRY RUN] would first-message {target} new Hily "
-                        f"contacts when free — skip MBM/paid ({planner})"
+                        f"contacts (verified on {card or 'like/composer'}) "
+                        f"— skip MBM/paid ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -2363,9 +2515,8 @@ def plan_bulk_message_new(
                 },
                 "bulk_dry_run_hily_new",
             )
-        like = hily_like_action(ui_tree, planner=planner)
-        if like:
-            return like
+        if like_ctl:
+            return like_ctl
 
     return _fp(
         {
@@ -2403,7 +2554,17 @@ def plan_bulk_bench(
             app
             and app not in swipe_keys()
             and app
-            not in ("facebook", "bumble", "yubo", "badoo", "hily", "blk", "taimi")
+            not in (
+                "facebook",
+                "bumble",
+                "yubo",
+                "badoo",
+                "hily",
+                "blk",
+                "taimi",
+                "hinge",
+                "tagged",
+            )
         ):
             # messaging apps: no-op skip with done reason
             return _fp(

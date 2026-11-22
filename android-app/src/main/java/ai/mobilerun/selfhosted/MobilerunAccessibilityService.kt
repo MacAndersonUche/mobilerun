@@ -96,6 +96,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val bytes: Int,
         val treeGzB64: String?,
         val anrDismissed: Boolean,
+        /** App-window nodes excluding SystemUI / nav bars (for MIN_USEFUL). */
+        val appNodes: Int = 0,
     )
 
     private val screenshotExecutor = Executors.newSingleThreadExecutor { r ->
@@ -684,26 +686,52 @@ class MobilerunAccessibilityService : AccessibilityService() {
         return if (result.empty) preferStaleNonEmpty(result) else result
     }
 
+    private fun isSystemChromePackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        if (p.isEmpty()) return false
+        return p.contains("systemui") ||
+            p.contains("permissioncontroller") ||
+            p.contains("inputmethod") ||
+            p.contains("navigationbar") ||
+            p.contains("android.launcher") ||
+            p.endsWith(".launcher") ||
+            p.contains("edgepanels") ||
+            p.contains("samsung.android.app.cocktailbarservice")
+    }
+
     private fun dumpUITreeCompact(deadlineMs: Long): TreeResult {
         // First pass: compact (interactive / text / desc). If too thin for the
-        // foreground app, immediately re-walk in full mode (no interesting filter).
+        // *app* window (exclude SystemUI bars), re-walk in full mode.
         val compact = dumpUITreeWalk(deadlineMs, fullMode = false)
-        if (compact.nodes >= MIN_USEFUL_NODES || compact.empty) {
+        val appUseful = compact.appNodes
+        if (appUseful >= MIN_USEFUL_NODES || compact.empty) {
             return compact
         }
         val remaining = deadlineMs - SystemClock.elapsedRealtime()
         if (remaining < 400) {
-            Log.w(TAG, "thin tree nodes=${compact.nodes}; no budget left for full re-dump")
+            Log.w(
+                TAG,
+                "thin app tree appNodes=$appUseful total=${compact.nodes}; " +
+                    "no budget left for full re-dump",
+            )
             return compact.copy(partial = true)
         }
-        Log.i(TAG, "thin tree nodes=${compact.nodes}; re-dumping uncompacted")
+        Log.i(
+            TAG,
+            "thin app tree appNodes=$appUseful total=${compact.nodes}; re-dumping uncompacted",
+        )
         val full = dumpUITreeWalk(deadlineMs, fullMode = true)
-        return if (full.nodes >= compact.nodes) full.copy(partial = true) else compact.copy(partial = true)
+        return if (full.appNodes >= compact.appNodes) {
+            full.copy(partial = true)
+        } else {
+            compact.copy(partial = true)
+        }
     }
 
     private fun dumpUITreeWalk(deadlineMs: Long, fullMode: Boolean): TreeResult {
         val sb = StringBuilder(8192)
         val counter = intArrayOf(0)
+        val appCounter = intArrayOf(0)
         val pkgs = linkedSetOf<String>()
         var windowCount = 0
         var partial = false
@@ -720,9 +748,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
             windowCount++
             val pkg = root.packageName?.toString().orEmpty()
             if (pkg.isNotEmpty()) pkgs.add(pkg)
+            val countApp = !isSystemChromePackage(pkg)
             sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\">\n")
             buildCompactNodes(
                 root, " ", sb, counter, 0, deadlineMs, fullMode,
+                appCounter = if (countApp) appCounter else null,
             ) { partial = true }
             sb.append("</w>\n")
         }
@@ -813,6 +843,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 bytes = 0,
                 treeGzB64 = null,
                 anrDismissed = false,
+                appNodes = 0,
             )
         }
         val truncated = body.length >= MAX_TREE_CHARS || counter[0] >= MAX_NODES || partial
@@ -823,10 +854,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
         val primaryPkg = pkgs.firstOrNull().orEmpty()
         val nodeCount = counter[0]
-        val isEmpty = nodeCount == 0
+        val appNodeCount = appCounter[0]
+        // Empty for the FG app when only SystemUI chrome was dumped
+        val isEmpty = nodeCount == 0 || appNodeCount == 0
         val mode = if (fullMode) "full" else "compact"
         val tree = buildString {
             append("<hierarchy windows=\"$windowCount\" nodes=\"$nodeCount\" ")
+            append("app_nodes=\"$appNodeCount\" ")
             append("partial=\"$truncated\" empty=\"$isEmpty\" mode=\"$mode\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
@@ -844,6 +878,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             bytes = tree.toByteArray(Charsets.UTF_8).size,
             treeGzB64 = null,
             anrDismissed = false,
+            appNodes = appNodeCount,
         )
     }
 
@@ -889,7 +924,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
     /**
      * Emit interactive / text-bearing nodes with short keys:
      * t=text, d=desc, h=hint, i=id, c=clickable, e=editable, s=scrollable,
-     * xy=center, b=bounds. Never drop EditText or clickable=true.
+     * v=0 when not visibleToUser, xy=center, b=bounds.
+     * Never prune subtrees on isVisibleToUser=false (Hinge/Taimi OEM quirk).
      */
     private fun buildCompactNodes(
         node: AccessibilityNodeInfo?,
@@ -900,6 +936,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         deadlineMs: Long,
         fullMode: Boolean,
         markPartial: () -> Unit,
+        appCounter: IntArray? = null,
     ) {
         if (node == null || counter[0] >= MAX_NODES || depth > MAX_DEPTH) return
         if (sb.length >= MAX_TREE_CHARS) return
@@ -944,16 +981,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             true
         }
-        // Keep clickable/editable even if isVisibleToUser is flaky on OEM skins
+        // Keep clickable/editable even if isVisibleToUser is flaky on OEM skins.
+        // IMPORTANT: do NOT return early on !visible — still walk children
+        // (Hinge Discover / Taimi park useful nodes under invisible parents).
         val mustKeep = node.isClickable || node.isEditable || node.isCheckable ||
             node.isLongClickable
-        if (!visible && !mustKeep) return
 
         val interactive = mustKeep || node.isScrollable
         val hasLabel = text.isNotEmpty() || contentDesc.isNotEmpty() || hint.isNotEmpty()
+        // Invisible alone is not enough to emit — but we still recurse children below
         val interesting = interactive || hasLabel || fullMode
 
-        // Skip inert wrappers; still recurse into visible children
+        // Skip inert wrappers; always recurse into children (even if parent invisible)
         if (!interesting) {
             val childCount = node.childCount
             for (i in 0 until childCount) {
@@ -968,7 +1007,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     null
                 }
                 buildCompactNodes(
-                    child, indent, sb, counter, depth + 1, deadlineMs, fullMode, markPartial,
+                    child, indent, sb, counter, depth + 1, deadlineMs, fullMode,
+                    markPartial, appCounter,
                 )
                 try {
                     child?.recycle()
@@ -986,6 +1026,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
 
         counter[0]++
+        appCounter?.let { it[0]++ }
         val bounds = android.graphics.Rect()
         node.getBoundsInScreen(bounds)
         val cx = (bounds.left + bounds.right) / 2
@@ -1003,6 +1044,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (node.isFocused) sb.append(" f=\"1\"")
         if (node.isCheckable) sb.append(" k=\"${if (node.isChecked) 1 else 0}\"")
         if (node.isScrollable) sb.append(" s=\"1\"")
+        if (!visible) sb.append(" v=\"0\"")
         sb.append(" xy=\"$cx,$cy\"")
         sb.append(" b=\"${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}\"")
         sb.append("/>\n")
@@ -1021,7 +1063,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 null
             }
             buildCompactNodes(
-                child, indent, sb, counter, depth + 1, deadlineMs, fullMode, markPartial,
+                child, indent, sb, counter, depth + 1, deadlineMs, fullMode,
+                markPartial, appCounter,
             )
             try {
                 child?.recycle()

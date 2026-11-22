@@ -257,7 +257,10 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         ),
         "inbox_tab_labels": ("Chats",),
         "inbox_tab_xy": (972, 2197),  # Chats tab center [864,2120][1080,2274]
-        "people_tab_xy": (540, 2197),  # People [432..648]
+        "people_tab_xy": (540, 2197),  # People [432..648] — photo GRID, not deck
+        # Discover card stack (pass/like) — left of People on S21 (22 Nov dry-run)
+        "discover_tab_xy": (324, 2197),
+        "deck_tab_xy": (324, 2197),
         "new_chat_labels": ("Chats", "Connections"),
         "search_labels": ("Search", "Search…"),
         # Fake-chats emu ids; real Bumble Connections has no search field
@@ -1056,17 +1059,38 @@ def _parse_one_node(
     }
 
 
+_SYSTEM_UI_PKGS = (
+    "com.android.systemui",
+    "com.samsung.android.app.cocktailbarservice",
+    "com.android.launcher",
+    "com.sec.android.app.launcher",
+    "com.google.android.apps.nexuslauncher",
+    "com.android.permissioncontroller",
+)
+
+
+def _is_system_chrome_package(package: str) -> bool:
+    p = (package or "").lower()
+    if not p:
+        return False
+    return any(s in p for s in _SYSTEM_UI_PKGS) or p.endswith(".systemui")
+
+
 def _parse_compact_nodes(
     tree: str,
     *,
     package_filter: Optional[str] = None,
     active_window_only: bool = False,
+    include_systemui: bool = False,
 ) -> List[Dict[str, Any]]:
     """Parse compact a11y dump nodes into dicts with center/flags.
 
     When ``package_filter`` is set (e.g. ``com.bumble.app``), only nodes inside
     matching ``<w p="…">`` windows are returned — Samsung launcher overlays
     like Edge panels must not count as Bumble deck content.
+
+    By default SystemUI / launcher / permissioncontroller windows are excluded
+    so status-bar icons never look like chat threads or deck cards.
     """
     out: List[Dict[str, Any]] = []
     pkg_want = (package_filter or "").lower().strip()
@@ -1093,6 +1117,8 @@ def _parse_compact_nodes(
             cur_active = wid == "active" or _attr(attrs, "f") in ("1", "true", "True")
             continue
         node_attrs = m.group(3) or ""
+        if not include_systemui and _is_system_chrome_package(cur_pkg):
+            continue
         if pkg_want:
             if has_windows and pkg_want not in (cur_pkg or "").lower():
                 continue
@@ -1286,6 +1312,26 @@ def find_contact_result_center(
         if low.startswith("from "):
             continue
         if "search_message" in str(node.get("id") or "").lower():
+            continue
+        # WhatsApp Community / Announcements / Channels are not DMs
+        if any(
+            tok in low
+            for tok in (
+                "community",
+                "communities",
+                "announcement",
+                "announcements",
+                "channel",
+                "channels",
+                "broadcast",
+            )
+        ):
+            continue
+        nid_l = str(node.get("id") or "").lower()
+        if any(
+            tok in nid_l
+            for tok in ("community", "announcement", "newsletter", "channel")
+        ):
             continue
         # Counters / deck chrome — never treat as a contact row
         if re.search(r"\b\d+\s*(matches?|people|likes?)\b", low):
@@ -1600,23 +1646,36 @@ def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
         "connection_name",
     ):
         return True
-    # Header / section signals (do not require !deck). Use text= (t=) headers —
-    # never bare content-desc "Chats" from the bottom nav on the People deck.
-    has_title = bool(
-        re.search(r'\bt="Chats"', tree or "", re.I)
-        or re.search(r'\bt="Connections"', tree or "", re.I)
-    )
+    # Require real chat rows (name + preview) in the Bumble window — never the
+    # bottom-nav tab label alone.
     has_your_matches = bool(
         re.search(r'\bt="Your matches"', tree or "", re.I)
         or _exact_label_center(tree, "Your matches")
     )
     has_older = bool(re.search(r"older chats", tree or "", re.I))
-    has_chats_tab = bool(
-        _exact_label_center(tree, "Chats") or _tree_node_center(tree, "Chats")
-    )
-    if has_your_matches or has_older:
+    row_hit = False
+    for n in _bumble_nodes(tree) or _parse_compact_nodes(
+        tree, package_filter="com.bumble.app"
+    ):
+        text = (n.get("text") or "").strip()
+        y = int(n.get("y") or 0)
+        if not text or y < 400 or y > 2000:
+            continue
+        low = text.lower()
+        if low in ("chats", "people", "discover", "liked you", "profile", "for you"):
+            continue
+        if _is_badge_or_numeric_label(text):
+            continue
+        # Name-ish left column or preview mid row
+        if len(text) <= 40 and not low.startswith("older"):
+            row_hit = True
+            break
+    if (has_your_matches or has_older) and row_hit:
         return True
-    if has_title and has_chats_tab:
+    if row_hit and (
+        re.search(r'\bt="Chats"', tree or "", re.I)
+        or re.search(r'\bt="Connections"', tree or "", re.I)
+    ):
         return True
     if _log:
         _log_detector_false("bumble_on_connections", tree, "com.bumble.app")
@@ -1981,10 +2040,35 @@ def yubo_on_chat_list(tree: str, *, _log: bool = True) -> bool:
 
 
 def yubo_on_chat(tree: str) -> bool:
+    """True in an open Yubo thread — never match SystemUI 'Messages notification'."""
+    nodes = _parse_compact_nodes(tree, package_filter="co.yellw.yellowapp")
+    if not nodes:
+        nodes = [
+            n
+            for n in _parse_compact_nodes(tree)
+            if not _is_system_chrome_package(str(n.get("package") or ""))
+        ]
+    has_aa = False
+    has_back = False
+    for n in nodes:
+        lab = (n.get("label") or n.get("text") or n.get("desc") or "").strip().lower()
+        nid = str(n.get("id") or "").lower()
+        if lab == "aa" or (n.get("editable") and lab in ("aa", "message", "")):
+            has_aa = True
+        if lab == "back" or nid.endswith("/back") or "navigate up" in lab:
+            # App back — not system nav
+            if "systemui" not in str(n.get("package") or "").lower():
+                has_back = True
+    if has_aa and has_back:
+        return True
+    # Compose-only fallback inside Yubo window
     return bool(
-        _tree_node_center(tree, "Aa")
-        or find_compose_center(tree, ("Aa", "Message"), ())
-    ) and bool(_tree_node_center(tree, "Back"))
+        find_compose_center(tree, ("Aa", "Message"), ())
+        and any(
+            (n.get("label") or "").strip().lower() == "back"
+            for n in nodes
+        )
+    )
 
 
 def yubo_dismiss_popup(
@@ -2216,13 +2300,35 @@ def badoo_on_connections(tree: str, *, _log: bool = True) -> bool:
         or _exact_label_center(tree, "Chats")
     )
     if chats_tab and not badoo_on_encounters(tree, _log=False):
-        # Require at least one mid-list name-ish node
-        for n in _parse_compact_nodes(tree):
+        # Require a real chat row: name + preview (or connection_container),
+        # not just any mid-screen text near the Chats tab.
+        has_row_id = bool(
+            _tree_id_center(
+                tree,
+                "connection_container",
+                "profileInfo_name",
+                "com.badoo.mobile:id/connection_container",
+                "com.badoo.mobile:id/profileInfo_name",
+            )
+        )
+        name_hit = False
+        preview_hit = False
+        for n in _parse_compact_nodes(tree, package_filter="com.badoo.mobile"):
             text = (n.get("text") or "").strip()
             y = int(n.get("y") or 0)
-            if text and 600 < y < 2000 and not _is_badge_or_numeric_label(text):
-                if text.lower() not in ("likes", "chats", "encounters", "buy credits"):
-                    return True
+            if not text or y < 600 or y > 2000:
+                continue
+            low = text.lower()
+            if low in ("likes", "chats", "encounters", "buy credits", "people"):
+                continue
+            if _is_badge_or_numeric_label(text):
+                continue
+            if len(text) <= 32 and int(n.get("x") or 0) < 700:
+                name_hit = True
+            elif len(text) > 8:
+                preview_hit = True
+        if has_row_id or (name_hit and preview_hit):
+            return True
     if _log:
         _log_detector_false("badoo_on_connections", tree, "com.badoo.mobile")
     return False
@@ -2552,6 +2658,38 @@ def hily_on_mbm(tree: str) -> bool:
         f"{n.get('id')} {n.get('label')}" for n in _parse_compact_nodes(tree)
     ).lower()
     return "message before match" in blob or "majorcrush" in blob.replace("_", "")
+
+
+def hily_on_photo_viewer(tree: str) -> bool:
+    """Full-screen photo pager ('1 of 4') with app_top_bar_back — not the deck."""
+    blob = (tree or "").lower()
+    has_pager = bool(re.search(r"\b\d+\s+of\s+\d+\b", blob))
+    has_back = bool(
+        _tree_id_center(tree, "app_top_bar_back", "id/app_top_bar_back")
+        or _tree_node_center(tree, "Navigate up")
+    )
+    # Photo viewer lacks Like/Pass gamepad
+    has_like = bool(
+        _tree_id_center(tree, "likeButton", "id/likeButton", "dislikeButton")
+    )
+    return has_pager and has_back and not has_like
+
+
+def hily_back_from_photo_viewer(
+    planner: str = "hily_heuristic",
+) -> Dict[str, Any]:
+    return _fp(
+        {
+            "action": "press_button",
+            "button": "back",
+            "reason": (
+                f"Back out of Hily photo viewer before swipe/chats ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hily_photo_viewer_back",
+    )
 
 
 def hily_deck_card_name(tree: str) -> Optional[str]:
@@ -2886,9 +3024,25 @@ def blk_deck_card_name(tree: str) -> Optional[str]:
 def blk_dismiss_popup(
     tree: str, planner: str = "blk_heuristic"
 ) -> Optional[Dict[str, Any]]:
-    """Super Like upsell → Send Like anyway; notif banner → Close."""
+    """Super Like upsell → Send Like anyway; Streaks → Got it; notif → Close."""
     nodes = _parse_compact_nodes(tree)
     blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
+    if "introducing streaks" in blob or (
+        "streaks" in blob and ("got it" in blob or "got it!" in blob)
+    ):
+        got = _tree_node_center(tree, "Got it!", "Got it", "GOT IT")
+        if got:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": got[0],
+                    "y": got[1],
+                    "reason": f"Dismiss BLK Introducing Streaks → Got it ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "blk_streaks_got_it",
+            )
     if "super like" in blob and ("instead" in blob or "send a super like" in blob):
         anyway = _tree_node_center(tree, "Send Like anyway", "Send like anyway")
         if anyway:

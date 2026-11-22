@@ -40,6 +40,8 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
     if not text:
         return None
     patterns = (
+        # message "hello miss" to 3 new profiles / reply "hey" to 5 chats
+        r"(?:message|reply|auto[- ]?message|send)\s+[\"']([^\"']+)[\"']\s+to\b",
         r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']\s*$",
         # Prefer "say …" / "tell her …" — never match "send a message to …"
         r"(?:and\s+)?(?:say|tell(?:\s+(?:her|him|them))?)\s+(.+)$",
@@ -312,16 +314,19 @@ def enforce_message_text(
     if selected:
         return _force(selected, "forced_user_or_bank")
 
-    # If exactly one allowed body, force it
-    if len(allowed) == 1:
-        return _force(allowed[0], "forced_user_or_bank")
-
-    # Multiple bank entries — pick only if LLM text is empty; else reject
+    # Never invent / default to an arbitrary bank entry. Text must be the
+    # user's quoted instruction text or an explicitly selected bank entry.
     if not text:
-        out = dict(action)
-        out["text"] = allowed[0]
-        out["_text_source"] = "bank_default"
-        return out
+        return {
+            "action": "fail",
+            "reason": (
+                "Message text guard: no allowed message text — provide quoted "
+                "instruction text or an explicitly selected bank entry "
+                "(refusing bank_default fallback)"
+            ),
+            "planner": "message_text_guard",
+            "llm_provider": None,
+        }
 
     return {
         "action": "fail",

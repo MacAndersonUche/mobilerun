@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="5" empty="false" packages="com.affinityapps.blk">
+ <w id="active" t="1" p="com.affinityapps.blk" f="1">
+  <n t="Introducing Streaks!" xy="540,800"/>
+  <n t="Keep chatting every day" xy="540,950"/>
+  <n t="Got it!" xy="540,1600" c="1"/>
+ </w>
+</hierarchy>

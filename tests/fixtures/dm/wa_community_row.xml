@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="8" empty="false" packages="com.whatsapp">
+ <w id="active" t="1" p="com.whatsapp" f="1">
+  <n i="com.whatsapp:id/contact_row_container" t="Announcements" xy="300,500" c="1"/>
+  <n i="com.whatsapp:id/conversations_row_contact_name" t="Community" xy="300,700" c="1"/>
+  <n i="com.whatsapp:id/conversations_row_contact_name" t="Precious Achalugo" xy="300,900" c="1"/>
+  <n i="com.whatsapp:id/conversations_row_message" t="hi" xy="400,940"/>
+ </w>
+</hierarchy>

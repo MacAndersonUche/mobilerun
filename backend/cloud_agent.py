@@ -661,11 +661,69 @@ MAX_STEPS_UNMET_ERROR = "max_steps reached, goal not met"
 
 
 def _is_lock_screen_package(package: str) -> bool:
-    """True when foreground is SystemUI / keyguard (lock screen), not the app."""
+    """True when foreground is keyguard / lock screen — not permission dialogs.
+
+    ``com.android.permissioncontroller`` and notification/permission sheets
+    ride on SystemUI chrome but are NOT a locked phone.
+    """
     p = (package or "").lower().strip()
     if not p:
         return False
-    return "systemui" in p or "keyguard" in p
+    if "permissioncontroller" in p or "permission" in p:
+        return False
+    if "keyguard" in p:
+        return True
+    # Bare systemui alone is ambiguous; require lock/keyguard signals
+    if "systemui" in p and ("keyguard" in p or "lock" in p):
+        return True
+    return False
+
+
+def _is_permission_dialog_package(package: str) -> bool:
+    p = (package or "").lower().strip()
+    return "permissioncontroller" in p or p.endswith(".permissioncontroller")
+
+
+def permission_dialog_action(
+    tree: str,
+    package: str = "",
+    planner: str = "permission_heuristic",
+) -> Optional[Dict[str, Any]]:
+    """Tap Don't allow / Deny on notification permission dialogs (free, reversible)."""
+    pkg = (package or "").lower()
+    blob = (tree or "").lower()
+    if not (
+        _is_permission_dialog_package(pkg)
+        or "allow.*notifications" in blob
+        or "notification" in blob
+        and ("don't allow" in blob or "dont allow" in blob or "deny" in blob)
+    ):
+        # Still match common labels even without package
+        if "don't allow" not in blob and "dont allow" not in blob:
+            if "deny" not in blob or "permission" not in blob:
+                return None
+    try:
+        from dm_heuristics import _tree_node_center, _fp
+    except ImportError:
+        from backend.dm_heuristics import _tree_node_center, _fp  # type: ignore
+
+    deny = (
+        _tree_node_center(tree, "Don't allow", "Dont allow", "Don't Allow")
+        or _tree_node_center(tree, "Deny", "No thanks", "No Thanks")
+    )
+    if not deny:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": deny[0],
+            "y": deny[1],
+            "reason": f"Dismiss permission dialog — Don't allow ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "permission_dont_allow",
+    )
 
 
 def _fg_matches_open_target(app_name: str, fg_package: str) -> bool:
@@ -711,6 +769,23 @@ def _verify_open_app_result(
     app_l = (app_name or "").lower().strip()
     tree_l = (tree or "").lower()
     prior = int(prior_lock_retries or 0)
+
+    # Permission dialogs ride on SystemUI chrome — not a locked phone
+    if _is_permission_dialog_package(fg) or (
+        "permission" in (tree or "").lower()
+        and (
+            "don't allow" in (tree or "").lower()
+            or "dont allow" in (tree or "").lower()
+        )
+    ):
+        return {
+            "opened": False,
+            "verify_msg": f"permission_dialog package={fg!r}",
+            "lock_retries": prior,
+            "fail_locked": False,
+            "error": None,
+            "permission_dialog": True,
+        }
 
     if _is_lock_screen_package(fg):
         # First lock sighting → allow one retry; second → fail fast
@@ -1026,11 +1101,23 @@ def plan_next_action(
             "existing chats",
             "existing matches",
             "existing chat",
+            "new profiles",
+            "new people",
+            "new matches",
+            "new contacts",
         )
     ) or bool(
         re.search(
-            r"(?:message|reply(?:\s+to)?)\s+(?:\d+|[\"'][^\"']+[\"'])\s+"
-            r"(?:to\s+\d+\s+)?(?:existing\s+)?(?:matches?|people|contacts?|chats?)",
+            r"(?:message|reply(?:\s+to)?|send|auto[- ]?message)\s+"
+            r"(?:\d+|[\"'][^\"']+[\"'])\s+"
+            r"(?:to\s+\d+\s+)?(?:existing\s+|new\s+)?"
+            r"(?:profiles?|matches?|people|contacts?|chats?)",
+            instr_l,
+        )
+    ) or bool(
+        re.search(
+            r"(?:message|send|auto[- ]?message)\s+[\"'][^\"']+[\"']\s+"
+            r"to\s+\d+\s+new\s+(?:profiles?|people|matches?|contacts?)",
             instr_l,
         )
     )
@@ -1075,6 +1162,11 @@ def plan_next_action(
 
     def _guard(action: Dict[str, Any]) -> Dict[str, Any]:
         return _enforce_msg(action, instruction, history=history)
+
+    # Notification / runtime permission sheets — never treat as phone locked
+    perm = permission_dialog_action(ui_tree, package=package)
+    if perm:
+        return perm
 
     # Fake-chats bulk bench + Secure Folder path — before single-DM path
     if bulk_goal or secure_folder_goal:
@@ -1911,10 +2003,27 @@ def _press_home_end_job(job: Dict[str, Any], device_id: str, call_device) -> Non
         logger.warning("end-of-job HOME failed: %s", e)
 
 
+def _set_device_job_busy(device_id: str, call_device, busy: bool) -> None:
+    """Hide/show overlay bubble for the whole job (not per-step)."""
+    try:
+        call_device(
+            device_id,
+            "job_busy" if busy else "job_idle",
+            {},
+            timeout_s=5,
+        )
+    except Exception as e:
+        logger.warning("job_%s notify failed: %s", "busy" if busy else "idle", e)
+
+
 def _end_job_cleanup(job: Dict[str, Any], device_id: str, call_device) -> None:
-    """IME restore + HOME after every terminal job status."""
+    """IME restore + bubble idle + HOME after every terminal job status."""
     try:
         _maybe_restore_ime(job, device_id, call_device)
+    except Exception:
+        pass
+    try:
+        _set_device_job_busy(device_id, call_device, False)
     except Exception:
         pass
     try:
@@ -2408,6 +2517,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["status"] = "failed"
         job["error"] = "No instruction on job"
         return job
+
+    # Hide Connected bubble for the whole job (not per-step) — restore in cleanup
+    if not state.get("job_busy_sent"):
+        try:
+            _set_device_job_busy(device_id, call_device, True)
+            state["job_busy_sent"] = True
+        except Exception as e:
+            logger.warning("job_busy at start failed: %s", e)
 
     # Own keyboard: switch to Mobilerun IME once per messaging job (restore on done)
     try:
@@ -3340,15 +3457,34 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             after = _fetch_ui_tree_retry(device_id, call_device, attempts=3)
             if kind in ("open_app", "start_app"):
                 app_name = str(action.get("app") or action.get("package") or "")
+                after_tree = str(after.get("tree") or "")
+                after_pkg = str(after.get("package") or "")
+                # Permission sheet after open — Don't allow (not phone locked)
+                if ov_perm := permission_dialog_action(after_tree, package=after_pkg):
+                    try:
+                        call_device(
+                            device_id,
+                            "tap",
+                            {"x": ov_perm["x"], "y": ov_perm["y"]},
+                            timeout_s=8,
+                        )
+                        verify_msg = "permission_dont_allow"
+                        history.append("Dismissed permission dialog — Don't allow")
+                        state["history"] = history[-40:]
+                        after = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                        after_tree = str(after.get("tree") or "")
+                        after_pkg = str(after.get("package") or "")
+                    except Exception as e:
+                        logger.warning("permission dismiss after open failed: %s", e)
                 ov = _verify_open_app_result(
                     app_name=app_name,
-                    fg_package=str(after.get("package") or ""),
-                    tree=str(after.get("tree") or ""),
+                    fg_package=after_pkg,
+                    tree=after_tree,
                     rpc_pkg=rpc_pkg,
                     prior_lock_retries=int(state.get("lock_screen_open_retries") or 0),
                 )
                 state["lock_screen_open_retries"] = int(ov.get("lock_retries") or 0)
-                verify_msg = str(ov.get("verify_msg") or "")
+                verify_msg = str(ov.get("verify_msg") or verify_msg or "")
                 if ov.get("fail_locked"):
                     # Fail fast after open + 1 retry still on lock screen
                     state["steps"] = step + 1

@@ -25,6 +25,7 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlin.random.Random
@@ -126,6 +127,9 @@ class BackendClient(private val context: Context) {
     private var heartbeatJob: Job? = null
     private var registerAckJob: Job? = null
     private var proactiveRefreshJob: Job? = null
+    private var bubbleIdleJob: Job? = null
+    /** Whole-job bubble hide (job_busy → job_idle); not cleared per-step. */
+    private val jobSessionBusy = AtomicBoolean(false)
     private var userDisconnected = false
     @Volatile private var connecting = false
     @Volatile private var lastOpenAtMs: Long = 0L
@@ -1226,8 +1230,19 @@ class BackendClient(private val context: Context) {
         val params = message["params"] as? Map<String, Any?>
         val t0 = SystemClock.elapsedRealtime()
 
-        // Hide floating bubble while steps run so it never eats automation taps
+        // Hide floating bubble for the job (or this step if no job_busy yet)
         OverlayBubbleService.setJobBusy(context.applicationContext, true)
+        // Cancel any pending idle restore — keep hidden across step gaps
+        bubbleIdleJob?.cancel()
+
+        // Whole-job overlay control from cloud (job start → job end)
+        if (command == "job_busy" || command == "job_idle") {
+            val busy = command == "job_busy"
+            jobSessionBusy.set(busy)
+            OverlayBubbleService.setJobBusy(context.applicationContext, busy)
+            sendCommandResponse(requestId, mapOf("ok" to true, "job_busy" to busy), null)
+            return
+        }
 
         // CRITICAL: ACK tap/swipe/press on the OkHttp reader thread BEFORE any
         // executor queue. Fresh heartbeats + timed-out taps meant hung get_ui_tree
@@ -1708,11 +1723,24 @@ class BackendClient(private val context: Context) {
         }
     }
 
-    /** Re-show Connected bubble shortly after the last step (idle). */
+    /**
+     * Re-show Connected bubble only when the *job* is over.
+     * During jobSessionBusy (job_busy → job_idle) never restore — planning
+     * gaps of ~3 min between step bursts used to flash the bubble touchable.
+     */
     private fun scheduleBubbleIdle() {
-        scope.launch {
-            delay(600)
-            OverlayBubbleService.setJobBusy(context.applicationContext, false)
+        if (jobSessionBusy.get()) {
+            // Keep hidden for the whole job; cloud sends job_idle on cleanup
+            OverlayBubbleService.setJobBusy(context.applicationContext, true)
+            return
+        }
+        bubbleIdleJob?.cancel()
+        bubbleIdleJob = scope.launch {
+            // Long quiet window for ad-hoc RPCs outside a leased job
+            delay(120_000)
+            if (!jobSessionBusy.get()) {
+                OverlayBubbleService.setJobBusy(context.applicationContext, false)
+            }
         }
     }
 
