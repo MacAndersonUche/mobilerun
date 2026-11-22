@@ -140,13 +140,6 @@ test('dating and social live activity views', async ({ page }) => {
       body: JSON.stringify({ status: 'ok', apps: [], config: {} }),
     });
   });
-  await page.route('**/api/dating/status**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ items: [], badge: 0 }),
-    });
-  });
   await page.route('**/api/social/**', async (route) => {
     const url = route.request().url();
     if (url.includes('/status')) {
