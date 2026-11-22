@@ -1,31 +1,95 @@
 name: Build and Release Android APK
 
+# Faster CI: path filters, Gradle/SDK caches, preview APK (no R8), concurrency cancel.
+# Runs in parallel with Deploy Backend (separate workflow) — never waits on deploy.
+
 on:
   push:
     branches: [ main, cursor/** ]
+    paths:
+      - 'android-app/**'
+      - 'scripts/verify_apk_upgrade.py'
+      - 'scripts/generate-apk-qr.mjs'
+      - 'scripts/update-readme-apk.mjs'
+      - '.github/workflows/android-build.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'android-app/**'
+      - 'scripts/verify_apk_upgrade.py'
+      - 'scripts/generate-apk-qr.mjs'
+      - 'scripts/update-readme-apk.mjs'
+      - '.github/workflows/android-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   android-build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+    outputs:
+      apk_variant: ${{ steps.variant.outputs.variant }}
+      version_code: ${{ steps.build.outputs.vc }}
+
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Choose build variant
+        id: variant
+        run: |
+          # main → release; feature/PR → preview (no minify, faster)
+          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" = "push" ]; then
+            echo "variant=release" >> "$GITHUB_OUTPUT"
+            echo "assemble=assembleRelease" >> "$GITHUB_OUTPUT"
+            echo "apk_glob=android-app/build/outputs/apk/release/*.apk" >> "$GITHUB_OUTPUT"
+          else
+            echo "variant=preview" >> "$GITHUB_OUTPUT"
+            echo "assemble=assemblePreview" >> "$GITHUB_OUTPUT"
+            echo "apk_glob=android-app/build/outputs/apk/preview/*.apk" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Android SDK packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/licenses
+            ${{ env.ANDROID_SDK_ROOT }}/licenses
+            ${{ env.ANDROID_HOME }}/platforms
+            ${{ env.ANDROID_HOME }}/build-tools
+            ${{ env.ANDROID_HOME }}/ndk
+            ${{ env.ANDROID_SDK_ROOT }}/platforms
+            ${{ env.ANDROID_SDK_ROOT }}/build-tools
+            ${{ env.ANDROID_SDK_ROOT }}/ndk
+          key: android-sdk-${{ runner.os }}-api35-buildtools-${{ hashFiles('android-app/build.gradle.kts') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-api35-
+            android-sdk-${{ runner.os }}-
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-      
-      - name: Build Release APK
+        with:
+          # Write cache on push; PRs read-only to avoid polluting main cache
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          gradle-home-cache-cleanup: true
+          cache-overwrite-existing: false
+
+      - name: Build APK
+        id: build
         run: |
+          set -euo pipefail
           cd android-app
           chmod +x gradlew || true
           # IME Samsung fix branch publishes as fixed apk-386 (not run_number)
@@ -38,18 +102,34 @@ jobs:
             if [ "$RN" -lt 500 ]; then VC=500; else VC="$RN"; fi
             VN="1.0.$VC"
           fi
-          echo "Building VERSION_CODE=$VC VERSION_NAME=$VN"
+          VARIANT="${{ steps.variant.outputs.variant }}"
+          ASSEMBLE="${{ steps.variant.outputs.assemble }}"
+          echo "Building VARIANT=$VARIANT VERSION_CODE=$VC VERSION_NAME=$VN"
           echo "VC=$VC" >> "$GITHUB_ENV"
-          ./gradlew assembleRelease \
-            --no-daemon \
+          echo "vc=$VC" >> "$GITHUB_OUTPUT"
+          START=$(date +%s)
+          ./gradlew "$ASSEMBLE" \
+            --build-cache \
+            --parallel \
+            --configuration-cache \
             -PVERSION_CODE="$VC" \
             -PVERSION_NAME="$VN"
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+          echo "gradle_seconds=$ELAPSED" >> "$GITHUB_OUTPUT"
+          echo "Gradle $ASSEMBLE took ${ELAPSED}s (variant=$VARIANT)"
+          echo "### Gradle build time" >> "$GITHUB_STEP_SUMMARY"
+          echo "- variant: \`$VARIANT\` (\`$ASSEMBLE\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- wall: **${ELAPSED}s**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- versionCode: \`$VC\`" >> "$GITHUB_STEP_SUMMARY"
+          # Baseline before speedups: assembleRelease ~88s gradle / ~90–145s job
+          echo "- baseline (pre-speedup assembleRelease): ~88s gradle / ~90–145s job" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify package id, versionCode, signing fingerprint
         run: |
           set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq aapt >/dev/null
-          APK=$(ls android-app/build/outputs/apk/release/*.apk | head -1)
+          APK=$(ls ${{ steps.variant.outputs.apk_glob }} | head -1)
           echo "APK=$APK"
           # Phone has 489 — min 490. Non-IME builds also floor at 500 in the build step.
           MIN_VC=490
@@ -62,15 +142,16 @@ jobs:
           {
             echo "## APK upgrade-safe"
             echo "- package: \`ai.mobilerun.selfhosted\`"
+            echo "- variant: \`${{ steps.variant.outputs.variant }}\`"
             echo "- versionCode: \`${VC:-}\` (must be > 489 on this branch)"
             echo "- signer SHA-256: \`$EXPECTED\` (android-app/debug.keystore / CN=Android Debug)"
           } >> "$GITHUB_STEP_SUMMARY"
-      
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: mobilerun-apk
-          path: android-app/build/outputs/apk/release/*.apk
+          path: ${{ steps.variant.outputs.apk_glob }}
           retention-days: 30
 
   # Fixed tag apk-386 for Mobilerun Keyboard Samsung subtype fix (this branch only)
@@ -179,64 +260,64 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
           name: mobilerun-apk
           path: ./apk
-      
+
       - name: Rename APK
         run: |
           mv apk/*.apk apk/mobilerun.apk
-      
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
+
       - name: Install qrcode package
         run: npm install qrcode
-      
+
       - name: Generate QR code
         run: node scripts/generate-apk-qr.mjs
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
-      
+
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="apk-${{ github.run_number }}"
           REPO="${{ github.repository }}"
-          
+
           gh release create "$TAG" \
             --title "Android Build ${{ github.run_number }}" \
             --notes "**Mobilerun Android App - Build ${{ github.run_number }}**
-          
+
           Scan the QR code below or download the APK directly.
-          
+
           ![Download QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)
-          
+
           **Installation:**
           1. Download the APK on your Android device
           2. Enable \"Install from unknown sources\" in Settings
           3. Open the downloaded APK to install
           4. If you see Play Protect warning, tap \"More details\" then \"Install anyway\"
-          
+
           **Note:** New builds will update in place (same signing key).
-          
+
           **Links:**
           - [Commit ${{ github.sha }}](https://github.com/$REPO/commit/${{ github.sha }})
           - [Workflow run](https://github.com/$REPO/actions/runs/${{ github.run_id }})" \
             --latest \
             apk/mobilerun.apk \
             apk-download-qr.png
-      
+
       - name: Update README with latest APK
         run: node scripts/update-readme-apk.mjs
         env:
@@ -245,7 +326,7 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-      
+
       - name: Commit updated README
         run: |
           git config user.name "github-actions[bot]"
@@ -257,7 +338,7 @@ jobs:
             git commit -m "docs: update latest APK links [skip ci]"
             git push
           fi
-      
+
       - name: Add summary to workflow
         run: |
           TAG="apk-${{ github.run_number }}"
@@ -271,7 +352,7 @@ jobs:
           echo "- [QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "![QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)" >> $GITHUB_STEP_SUMMARY
-      
+
       - name: Upload QR code artifact
         uses: actions/upload-artifact@v4
         with:
@@ -336,13 +417,37 @@ jobs:
           TAG="apk-preview-$TAG_VC"
           REPO="${{ github.repository }}"
           BRANCH="${GITHUB_REF#refs/heads/}"
-          gh release create "$TAG" \
-            --prerelease \
-            --title "APK Preview $TAG_VC ($BRANCH)" \
-            --notes "**Mobilerun APK preview (prerelease)**
+          # Replace if tag already exists (re-push same run_number after cancel)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" apk/mobilerun.apk apk-download-qr.png --clobber
+            gh release edit "$TAG" \
+              --prerelease \
+              --title "APK Preview $TAG_VC ($BRANCH)" \
+              --notes "**Mobilerun APK preview (prerelease, no R8)**
 
           Branch: \`$BRANCH\`
           Commit: ${{ github.sha }}
+          variant: preview (minify/shrink off)
+          versionCode: $TAG_VC / versionName: ${VN:-1.0.$TAG_VC}
+          package: \`ai.mobilerun.selfhosted\`
+          signer SHA-256: \`16AD2626AC90F0B72DB78BF1DABDBD0FA85205D24FBD35D89F6B1A2E774D3386\`
+          (matches phone 1.0.489 — upgrades in place)
+
+          ![Download QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)
+
+          - [mobilerun.apk](https://github.com/$REPO/releases/download/$TAG/mobilerun.apk)
+          - [Workflow](https://github.com/$REPO/actions/runs/${{ github.run_id }})
+
+          Safety + humanizer preview — not marked latest."
+          else
+            gh release create "$TAG" \
+              --prerelease \
+              --title "APK Preview $TAG_VC ($BRANCH)" \
+              --notes "**Mobilerun APK preview (prerelease, no R8)**
+
+          Branch: \`$BRANCH\`
+          Commit: ${{ github.sha }}
+          variant: preview (minify/shrink off)
           versionCode: $TAG_VC / versionName: ${VN:-1.0.$TAG_VC}
           package: \`ai.mobilerun.selfhosted\`
           signer SHA-256: \`16AD2626AC90F0B72DB78BF1DABDBD0FA85205D24FBD35D89F6B1A2E774D3386\`
@@ -354,8 +459,9 @@ jobs:
           - [Workflow](https://github.com/$REPO/actions/runs/${{ github.run_id }})
 
           Safety + humanizer preview — not marked latest." \
-            apk/mobilerun.apk \
-            apk-download-qr.png
+              apk/mobilerun.apk \
+              apk-download-qr.png
+          fi
 
       - name: Upload QR artifact
         uses: actions/upload-artifact@v4
@@ -366,8 +472,8 @@ jobs:
 
       - name: Summary
         run: |
-          TAG="apk-preview-${{ github.run_number }}"
+          TAG="apk-preview-${VC:-${{ github.run_number }}}"
           REPO="${{ github.repository }}"
-          echo "## APK prerelease" >> $GITHUB_STEP_SUMMARY
+          echo "## APK prerelease (preview variant)" >> $GITHUB_STEP_SUMMARY
           echo "- [mobilerun.apk](https://github.com/$REPO/releases/download/$TAG/mobilerun.apk)" >> $GITHUB_STEP_SUMMARY
           echo "- [QR](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)" >> $GITHUB_STEP_SUMMARY
