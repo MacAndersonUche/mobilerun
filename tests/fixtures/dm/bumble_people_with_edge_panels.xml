@@ -1,0 +1,14 @@
+<hierarchy windows="2" nodes="20" partial="false" empty="false" mode="compact" packages="com.bumble.app,com.sec.android.app.launcher">
+<!-- People shell + Samsung Edge panels overlay (must NOT count as deck) -->
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <n i="com.bumble.app:id/mainApp_navigationTabBar" xy="540,2197" b="0,2120,1080,2274"/>
+ <n d="Profile" c="1" xy="108,2197" b="0,2120,216,2274"/>
+ <n d="Discover" c="1" xy="324,2197" b="216,2120,432,2274"/>
+ <n d="People" c="1" xy="540,2197" b="432,2120,648,2274"/>
+ <n d="Liked You" c="1" xy="756,2197" b="648,2120,864,2274"/>
+ <n d="Chats" c="1" xy="972,2197" b="864,2120,1080,2274"/>
+</w>
+<w id="edge" t="Edge panels" p="com.sec.android.app.launcher" f="0">
+ <n d="Edge panels" c="1" xy="1070,1261" b="1050,1100,1080,1420"/>
+</w>
+</hierarchy>

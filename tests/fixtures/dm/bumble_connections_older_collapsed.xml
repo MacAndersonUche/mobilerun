@@ -1,0 +1,11 @@
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <n i="com.bumble.app:id/connections_root" xy="540,1200" b="0,0,1080,2400"/>
+ <n t="Chats" xy="200,140" b="40,80,400,200"/>
+ <n t="Your matches" xy="300,400" b="40,360,500,440"/>
+ <!-- Collapsed Older chats · (12) — must expand before picking rows -->
+ <n t="Older chats · (12)" c="1" xy="540,1648" b="0,1596,1080,1701"/>
+ <n d="Chats" c="1" xy="972,2197" b="864,2120,1080,2274"/>
+ <n d="People" c="1" xy="540,2197" b="432,2120,648,2274"/>
+</w>
+</hierarchy>

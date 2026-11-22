@@ -388,6 +388,8 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
     # 1-minute ticks (target <3–5s/step; humanize sleeps happen inside each step).
     chain_budget = int(os.environ.get("AGENT_STEP_CHAIN") or "6")
+    lease_owner = str(job.get("_lease_owner") or job.get("lease_owner") or "")
+    lease_jid = str(job.get("job_id") or "")
     for _ in range(max(0, chain_budget - 1)):
         if updated.get("status") != "running":
             break
@@ -395,6 +397,11 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Respect intentional backoff (rate-limit / offline waits)
         if nra > int(time.time()) + 3:
             break
+        # Renew between chained steps so a long chain cannot expire the lease
+        if lease_jid and lease_owner:
+            acquire_job_lease(lease_jid, lease_owner)
+            updated["_lease_owner"] = lease_owner
+            updated["lease_owner"] = lease_owner
         updated["_suppress_kick"] = True
         updated = run_one_agent_step(updated)
     if updated.get("status") in ("completed", "failed", "stopped"):
@@ -576,12 +583,22 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     owner = owner or _worker_owner()
     # Lease: second concurrent worker skips — prevents parallel swipes
     if job_id and not acquire_job_lease(job_id, owner):
+        holder = "?"
+        try:
+            cur = get_job(job_id) or {}
+            holder = str(cur.get("lease_owner") or "?")
+        except Exception:
+            holder = "?"
         logger.info(
-            "process_job skip job=%s — lease held by another worker (owner=%s)",
+            "process_job skip job=%s — lease held by %s (skipper=%s)",
             job_id,
+            holder,
             owner,
         )
         return
+    # Propagate owner so step code can renew before slow screenshot/RPC calls
+    job["_lease_owner"] = owner
+    job["lease_owner"] = owner
     try:
         if kind == "dating":
             updated = run_dating_step(job)
@@ -589,7 +606,11 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             updated = run_social_step(job)
         else:
             updated = run_agent_step(job)
+        # Renew after the step (slow screenshots / RPC may have burned most of TTL)
+        if job_id:
+            acquire_job_lease(job_id, owner)
         # Targeted update — never put_item whole item (would revive cancelled jobs)
+        # and never write lease fields (stale writeback bug).
         ok = save_job_progress(_to_plain(updated), owner=owner)
         if not ok:
             logger.warning(

@@ -213,22 +213,19 @@ def test_dry_run_swipe_taps_nav_then_simulates_likes():
 def test_dry_run_swipe_logs_n_would_like_pass():
     deck = _load("bumble_deck.xml")
     st: dict = {"bulk_swipe": {"done": 0, "target": 2}}
-    logs = []
-    for _ in range(3):
-        act = plan_bulk_swipe(
-            "bumble auto-swipe 2 profiles",
-            deck,
-            ["Opened Bumble — launch"] + logs,
-            state=st,
-            package="com.bumble.app",
-            dry_run=True,
-        )
-        assert act
-        logs.append(f"{act['action']} — {act.get('reason')}")
-        if act["action"] == "done":
-            break
-    assert any("would like/pass" in str(h).lower() for h in logs)
-    assert st["bulk_swipe"]["done"] >= 2
+    act = plan_bulk_swipe(
+        "bumble auto-swipe 2 profiles",
+        deck,
+        ["Opened Bumble — launch"],
+        state=st,
+        package="com.bumble.app",
+        dry_run=True,
+    )
+    assert act and act["action"] == "done"
+    reason = (act.get("reason") or "").lower()
+    assert "would like/pass 2 cards" in reason
+    assert "deck verified on alex" in reason
+    assert st["bulk_swipe"]["done"] == 2
     assert act.get("dry_run_verified") is True
 
 

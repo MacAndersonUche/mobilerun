@@ -1724,7 +1724,31 @@ def _fetch_ui_tree_retry(
     return last
 
 
-def _fetch_screenshot_b64(device_id: str) -> Optional[str]:
+def _renew_job_lease(job: Optional[Dict[str, Any]]) -> None:
+    """Extend the job lease before/after slow work (screenshot RPC, etc.)."""
+    if not isinstance(job, dict):
+        return
+    jid = str(job.get("job_id") or "")
+    owner = str(job.get("_lease_owner") or job.get("lease_owner") or "")
+    if not jid or not owner:
+        return
+    try:
+        from storage import DEFAULT_JOB_LEASE_S, acquire_job_lease
+    except ImportError:
+        from backend.storage import (  # type: ignore
+            DEFAULT_JOB_LEASE_S,
+            acquire_job_lease,
+        )
+    try:
+        acquire_job_lease(jid, owner, ttl_s=DEFAULT_JOB_LEASE_S)
+    except Exception as e:
+        logger.warning("lease renew failed job=%s: %s", jid, e)
+
+
+def _fetch_screenshot_b64(
+    device_id: str, *, job: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    _renew_job_lease(job)
     try:
         from device_rpc import call_device
     except ImportError:
@@ -2275,7 +2299,7 @@ def _attach_failure_artifacts(
                 job["failure_ui_tree_key"] = tree_key
                 job.setdefault("state", {})["failure_ui_tree_key"] = tree_key
                 logger.info("failure tree s3 key=%s", tree_key)
-        shot = _fetch_screenshot_b64(device_id) if device_id else None
+        shot = _fetch_screenshot_b64(device_id, job=job) if device_id else None
         if shot:
             key = _store_step_screenshot(jid, "failure", shot)
             if key:
@@ -2310,6 +2334,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     steps_detail: List[Dict[str, Any]] = list(state.get("steps_detail") or [])
     now = int(time.time())
     created = int(job.get("created_at") or now)
+    # Renew at step start — covers slow tree dump + screenshot below
+    _renew_job_lease(job)
 
     if not device_id:
         job["status"] = "failed"
@@ -2555,7 +2581,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             use_vision = False
             if action.get("_force_vision"):
                 try:
-                    image_b64 = _fetch_screenshot_b64(device_id)
+                    image_b64 = _fetch_screenshot_b64(device_id, job=job)
                     use_vision = bool(image_b64)
                 except Exception:
                     use_vision = False
@@ -2654,7 +2680,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["force_vision_once"] = False
             try:
                 if sparse_tree or force_vision or np_streak >= 2:
-                    image_b64 = _fetch_screenshot_b64(device_id)
+                    image_b64 = _fetch_screenshot_b64(device_id, job=job)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
@@ -2960,7 +2986,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or action.get("screenshot")
             ):
                 try:
-                    final_b64 = _fetch_screenshot_b64(device_id)
+                    final_b64 = _fetch_screenshot_b64(device_id, job=job)
                     if final_b64:
                         shot_key = _store_step_screenshot(
                             str(job.get("job_id") or ""), step + 1, final_b64
