@@ -118,6 +118,17 @@ def test_bumble_dry_run_stops_before_send():
         'type("hi") — Type message',
     ]
     a = _heuristic_dm_send(INSTR, chat, hist, package="com.bumble.app", dry_run=True)
-    assert a and a["action"] == "done"
-    assert "dry_run" in a["reason"].lower()
-    assert "hi" in a["reason"].lower()
+    assert a and a["action"] in ("type", "done")
+    reason = (a.get("reason") or "").lower()
+    assert "dry run" in reason or a.get("dry_run") is True
+    if a["action"] == "type":
+        assert a.get("clear") is True
+        hist2 = hist + [a.get("reason") or "clear composer"]
+        a2 = _heuristic_dm_send(
+            INSTR, chat, hist2, package="com.bumble.app", dry_run=True
+        )
+        assert a2 and a2["action"] == "done"
+        assert a2.get("dry_run_verified") is True
+        assert "sam" in (a2.get("reason") or "").lower()
+    else:
+        assert a.get("dry_run_verified") is True

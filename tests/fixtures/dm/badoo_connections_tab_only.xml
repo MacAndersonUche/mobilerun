@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="10" partial="false" empty="false" mode="compact" packages="com.badoo.mobile">
+<w id="active" t="active" p="com.badoo.mobile" f="1">
+ <!-- Chats tab selected; list root id missing; one mid-list name -->
+ <n t="Sam" xy="300,900" b="200,860,400,940"/>
+ <n t="hey" xy="300,960" b="200,940,500,980"/>
+ <n i="com.badoo.mobile:id/nav_bar_button_connections" d="Chats" c="1" xy="756,2210" b="650,2140,860,2280"/>
+ <n i="com.badoo.mobile:id/nav_bar_button_encounters" d="Encounters" c="1" xy="324,2210" b="200,2140,448,2280"/>
+</w>
+</hierarchy>

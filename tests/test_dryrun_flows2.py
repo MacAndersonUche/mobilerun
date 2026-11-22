@@ -94,20 +94,21 @@ def test_real_app_opens_chats_tab_before_inventing_rows():
 
 
 def test_real_app_fails_without_chat_list_no_match_pct_scroll():
-    # Nav-only tree after open-chats already attempted
+    # Nav-only tree after open-chats + settle already attempted
     tree = """
     <hierarchy packages="com.hily.app"><w p="com.hily.app">
      <n d="Finder" c="1" xy="142,2190"/>
      <n d="Chats" c="1" xy="341,2190"/>
     </w></hierarchy>
     """
-    st: dict = {}
+    st: dict = {"bulk_message": {"_chats_settle_done": True}}
     act = plan_bulk_message(
         'reply "hey" to 3 existing chats on hily',
         tree,
         [
             "Opened Hily — launch",
             "Tapped (341,2190) — Open chats/messages tab (bulk_message_heuristic)",
+            "wait — Settle after chats tab",
         ],
         state=st,
         package="com.hily.app",
