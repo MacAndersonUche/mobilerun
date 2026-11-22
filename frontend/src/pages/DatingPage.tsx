@@ -463,12 +463,12 @@ export default function DatingPage() {
 
   return (
     <div className="mr-page space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Heart className="text-rose-400" /> Run
+            <Heart className="text-rose-400 shrink-0" /> Run
           </h1>
-          <p className="text-mute mt-1">
+          <p className="text-mute mt-1 text-sm sm:text-base">
             MacMobileRun · app selection, dry-run, openers, start/stop, activity
           </p>
           <p className="text-mute mt-1 text-sm">
@@ -481,7 +481,7 @@ export default function DatingPage() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span
-            className={`px-3 py-1 rounded text-sm ${
+            className={`min-h-[44px] inline-flex items-center px-3 py-2 rounded text-sm ${
               status?.running && !status.paused
                 ? 'bg-green-900 text-green-300'
                 : status?.paused
@@ -494,10 +494,11 @@ export default function DatingPage() {
           </span>
           <button
             onClick={() => loadAll()}
-            className="p-2 rounded bg-surface-elev hover:bg-gray-600"
+            className="tap-target rounded-xl bg-surface-elev hover:bg-gray-600"
             title="Refresh"
+            aria-label="Refresh"
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={18} />
           </button>
         </div>
       </div>
@@ -515,45 +516,48 @@ export default function DatingPage() {
         onSpeedChange={onSpeedChange}
       />
 
-      {/* Controls */}
-      <div className="flex flex-wrap gap-3 items-center">
-        <button
-          disabled={loading}
-          onClick={() => control('start')}
-          className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded"
-          data-testid="dating-start"
-          title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
-        >
-          <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
-        </button>
-        <button
-          disabled={loading || !status?.running}
-          onClick={() => control('pause')}
-          className="flex items-center gap-2 px-4 py-2 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded"
-        >
-          <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
-        </button>
-        <button
-          disabled={loading || !status?.running}
-          onClick={() => control('stop')}
-          className="flex items-center gap-2 px-4 py-2 bg-surface-elev hover:bg-gray-600 disabled:opacity-50 rounded"
-          data-testid="dating-stop"
-        >
-          <Square size={16} /> Stop
-        </button>
-        <label className="flex items-center gap-2 text-sm text-mute ml-2">
+      {/* Controls — stack on phone for one-handed use */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+          <button
+            disabled={loading}
+            onClick={() => control('start')}
+            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-3 text-sm font-medium hover:bg-rose-500 disabled:opacity-50"
+            data-testid="dating-start"
+            title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
+          >
+            <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
+          </button>
+          <button
+            disabled={loading || !status?.running}
+            onClick={() => control('pause')}
+            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-yellow-700 px-3 text-sm font-medium hover:bg-yellow-600 disabled:opacity-50"
+          >
+            <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
+          </button>
+          <button
+            disabled={loading || !status?.running}
+            onClick={() => control('stop')}
+            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-surface-elev px-3 text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
+            data-testid="dating-stop"
+          >
+            <Square size={16} /> Stop
+          </button>
+        </div>
+        <label className="tap-target flex items-center gap-2 text-sm text-mute">
           <input
             type="checkbox"
+            className="h-5 w-5 accent-rose-500"
             checked={dryRun}
             onChange={(e) => setDryRun(e.target.checked)}
             data-testid="dating-dry-run"
           />
           Dry-run (no real likes/messages)
         </label>
-        <label className="flex items-center gap-2 text-sm text-mute">
+        <label className="flex w-full flex-col gap-1 text-sm text-mute sm:w-auto sm:flex-row sm:items-center sm:gap-2">
           Contacts
           <select
-            className="mr-input text-sm"
+            className="mr-input text-sm sm:min-w-[12rem]"
             value={contactScope}
             onChange={(e) =>
               setContactScope(e.target.value as 'new' | 'existing' | 'both')
@@ -568,7 +572,7 @@ export default function DatingPage() {
         </label>
         {devices.length > 0 && (
           <select
-            className="mr-input text-sm max-w-xs"
+            className="mr-input w-full text-sm sm:max-w-xs"
             value={deviceId}
             onChange={(e) => setDeviceId(e.target.value)}
             data-testid="dating-device"

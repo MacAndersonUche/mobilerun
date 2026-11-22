@@ -33,3 +33,11 @@ jobs:
           name: ui-screenshots
           path: docs/ui-screenshots/
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-ui-screenshots
+          path: |
+            docs/ui-screenshots/s21-*.png
+            docs/ui-screenshots/mobile-*.png
+          if-no-files-found: ignore

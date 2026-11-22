@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   BrowserRouter,
   NavLink,
@@ -5,6 +6,7 @@ import {
   Routes,
   Navigate,
   Link,
+  useLocation,
 } from 'react-router-dom';
 import {
   Heart,
@@ -12,6 +14,9 @@ import {
   Settings,
   History,
   MessageCircle,
+  Menu,
+  X,
+  User,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth';
 import LoginPage from './pages/LoginPage';
@@ -29,8 +34,74 @@ import AuthCallbackPage from './pages/AuthCallbackPage';
 import PairPage from './pages/PairPage';
 import { cn } from './lib/cn';
 
+function MobileMenu({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const location = useLocation();
+  useEffect(() => {
+    onClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  if (!open) return null;
+  const links = [
+    { to: '/social', icon: MessageCircle, label: 'Social' },
+    { to: '/account', icon: User, label: 'Account' },
+    { to: '/chat', icon: MessageCircle, label: 'Chat' },
+    { to: '/tasks', icon: History, label: 'Tasks' },
+    { to: '/live', icon: Smartphone, label: 'Live view' },
+  ];
+  return (
+    <div
+      className="fixed inset-0 z-50 md:hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Menu"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/60"
+        aria-label="Close menu backdrop"
+        onClick={onClose}
+      />
+      <div className="absolute inset-x-0 top-0 border-b border-line bg-canvas-elev px-4 pb-4 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-sheet">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-base font-semibold">Menu</p>
+          <button
+            type="button"
+            className="tap-target inline-flex items-center justify-center rounded-xl text-mute hover:text-white"
+            aria-label="Close menu"
+            onClick={onClose}
+          >
+            <X size={22} />
+          </button>
+        </div>
+        <nav className="space-y-1">
+          {links.map((l) => (
+            <Link
+              key={l.to}
+              to={l.to}
+              className="tap-target flex items-center gap-3 rounded-xl px-3 text-sm text-white hover:bg-surface"
+              onClick={onClose}
+            >
+              <l.icon size={18} />
+              {l.label}
+            </Link>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
   const { token } = useAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
+
   // Cognito redirect + HTTPS pairing landing must render without a token
   if (
     typeof window !== 'undefined' &&
@@ -96,7 +167,29 @@ function Shell() {
           </nav>
         </aside>
 
-        <main className="relative min-w-0 flex-1">
+        <main className="relative min-w-0 flex-1 overflow-x-clip">
+          {/* Mobile top bar — brand + hamburger */}
+          <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur md:hidden pt-[max(0.5rem,env(safe-area-inset-top))]">
+            <Link to="/" className="min-w-0">
+              <p className="truncate text-base font-semibold tracking-tight">
+                MacMobileRun
+              </p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-mute">
+                Dating & social
+              </p>
+            </Link>
+            <button
+              type="button"
+              className="tap-target inline-flex items-center justify-center rounded-xl border border-line bg-surface text-white"
+              aria-label="Open menu"
+              aria-expanded={menuOpen}
+              data-testid="mobile-menu-button"
+              onClick={() => setMenuOpen(true)}
+            >
+              <Menu size={22} />
+            </button>
+          </header>
+
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/dating" element={<DatingPage />} />
@@ -119,8 +212,14 @@ function Shell() {
         </main>
       </div>
 
-      {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden">
+      <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} />
+
+      {/* Mobile bottom nav — ≥44px tap targets, no horizontal scroll */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden"
+        data-testid="mobile-bottom-nav"
+        aria-label="Primary"
+      >
         <div className="mx-auto flex max-w-content justify-around px-1 pb-[env(safe-area-inset-bottom)]">
           {tabs.map((t) => (
             <NavLink
@@ -128,13 +227,13 @@ function Shell() {
               to={t.to}
               className={({ isActive }) =>
                 cn(
-                  'flex flex-1 flex-col items-center gap-1 py-2 text-[10px]',
+                  'tap-target flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] leading-tight',
                   isActive ? 'text-accent' : 'text-mute'
                 )
               }
             >
-              <t.icon size={20} />
-              {t.label}
+              <t.icon size={22} aria-hidden />
+              <span className="truncate">{t.label}</span>
             </NavLink>
           ))}
         </div>

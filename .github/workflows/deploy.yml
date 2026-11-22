@@ -1,5 +1,8 @@
 name: Deploy Backend to AWS
 
+# Portal UI (frontend/) deploys via Netlify (macsmobilerun.netlify.app).
+# This workflow deploys the Lambda/API backend only.
+
 on:
   # Main-only by default (PR/cursor/** deploys were cancelling each other).
   # Temporary: also deploy cursor/macmobilerun-final-df3e for real-phone verify

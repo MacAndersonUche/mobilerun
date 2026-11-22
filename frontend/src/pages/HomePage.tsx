@@ -57,7 +57,7 @@ export default function HomePage() {
         <button
           type="button"
           onClick={() => setAccountOpen(true)}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-sm font-semibold"
+          className="tap-target flex items-center justify-center rounded-full bg-accent text-sm font-semibold"
           title="Account"
           aria-label="Open account"
         >
