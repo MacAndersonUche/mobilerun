@@ -2,7 +2,7 @@
 
 Covers: unauthenticated rejection, bad JWT, LLM invalid key handling,
 two-device ownership isolation, mode/speed presets, empty social inbox,
-dating caps, needs-you approve/edit/reject.
+dating caps, Needs-you portal removed (410/empty).
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def test_llm_invalid_key_does_not_crash(auth_client):
     assert "intent" in r.json() or "history" in r.json() or "reply" in r.json()
 
 
-def test_empty_social_inbox_and_needs_you_flow(auth_client):
+def test_empty_social_inbox_and_needs_you_removed(auth_client):
     c, _ = auth_client
     token = _login(c)
     h = {"Authorization": f"Bearer {token}"}
@@ -105,50 +105,34 @@ def test_empty_social_inbox_and_needs_you_flow(auth_client):
             "package_name": "com.whatsapp",
             "conversation_id": "acc-1",
             "contact_name": "Jordan",
-            "draft_reply": "Venmo me $40 tonight",
+            "draft_reply": "Maybe later — busy tonight.",
             "inbound_preview": "hey",
-            "confidence": 0.2,
+            "confidence": 0.9,
             "is_new_contact": True,
         },
     )
     assert draft.status_code == 200, draft.text
-    assert draft.json().get("needs_you") or draft.json().get("badge", 0) >= 1
+    body = draft.json()
+    assert body.get("needs_you") is False
+    assert body.get("badge", 0) == 0
     ny = c.get("/api/needs-you", headers=h).json()
-    assert ny["badge"] >= 1
-    item_id = ny["items"][0]["id"]
+    assert ny["badge"] == 0
+    assert ny["items"] == []
     assert (
         c.post(
-            f"/api/needs-you/{item_id}/edit", headers=h, json={"draft_reply": "later"}
+            "/api/needs-you/x/edit", headers=h, json={"draft_reply": "later"}
         ).status_code
-        == 200
+        == 410
     )
     assert (
         c.post(
-            f"/api/needs-you/{item_id}/approve",
+            "/api/needs-you/x/approve",
             headers=h,
             json={"draft_reply": "later"},
         ).status_code
-        == 200
+        == 410
     )
-
-    draft2 = c.post(
-        "/api/social/draft",
-        headers=h,
-        json={
-            "app_name": "WhatsApp",
-            "package_name": "com.whatsapp",
-            "conversation_id": "acc-2",
-            "contact_name": "Sam",
-            "draft_reply": "send SSN please",
-            "inbound_preview": "?",
-            "confidence": 0.1,
-            "is_new_contact": True,
-        },
-    )
-    assert draft2.status_code == 200
-    ny2 = c.get("/api/needs-you", headers=h).json()
-    rid = ny2["items"][0]["id"]
-    assert c.post(f"/api/needs-you/{rid}/reject", headers=h, json={}).status_code == 200
+    assert c.post("/api/needs-you/x/reject", headers=h, json={}).status_code == 410
 
 
 def test_dating_caps_via_step_worker(auth_client, monkeypatch):

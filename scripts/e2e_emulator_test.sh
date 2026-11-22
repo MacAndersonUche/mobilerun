@@ -663,11 +663,12 @@ data = json.loads(urllib.request.urlopen(req, timeout=30).read())
 (artifacts / "safety_pause.json").write_text(json.dumps(data, indent=2))
 assert data.get("paused") is True, data
 assert data.get("dating_paused") is True, data
-assert data.get("needs_you_id"), data
+# Needs-you portal removed — list stays empty; pause/resume is the contract
 ny = json.loads(urllib.request.urlopen(urllib.request.Request(
     host + "/api/needs-you", headers=headers)).read())
 (artifacts / "safety_needs_you.json").write_text(json.dumps(ny, indent=2))
-assert any(i.get("source") == "safety" for i in (ny.get("items") or [])), ny
+assert ny.get("removed") is True or (ny.get("items") or []) == [], ny
+assert (ny.get("badge") or 0) == 0, ny
 # Resume only via explicit API (simulates Mac tapping Resume in UI)
 resume = json.loads(urllib.request.urlopen(urllib.request.Request(
     host + "/api/safety/resume",
@@ -958,9 +959,9 @@ assert job["state"]["openers_sent"] + job["state"]["replies_sent"] <= 2, job
 print("dating caps/pause ok", job["state"])
 PY
 
-echo "== Social mode signature + Needs-you approve/edit/reject =="
+echo "== Social mode signature + Needs-you removed =="
 python3 - <<'PY'
-import json, os, urllib.request
+import json, os, urllib.error, urllib.request
 from pathlib import Path
 host = os.environ.get("HOST_BACKEND_URL", "http://127.0.0.1:8000")
 artifacts = Path(os.environ["ARTIFACTS_DIR"])
@@ -987,46 +988,36 @@ req("POST", "/api/social/config", {"signature_enabled": False, "signature_text":
 cfg_off = req("GET", "/api/social/config")
 (artifacts / "social_config_off.json").write_text(json.dumps(cfg_off, indent=2))
 
-# Draft that escalates to Needs-you (new contact + money/personal)
+# Draft always auto-ok (Needs-you portal removed) — risky copy still returns text
 draft = req("POST", "/api/social/draft", {
     "app_name": "Messages",
     "package_name": "com.google.android.apps.messaging",
     "conversation_id": "e2e-c1",
     "contact_name": "Alex",
     "inbound_preview": "Are you free tonight?",
-    "draft_reply": "Sure, come over to my place alone — Venmo me $20",
-    "confidence": 0.4,
+    "draft_reply": "Maybe later — busy tonight.",
+    "confidence": 0.9,
     "is_new_contact": True,
 })
 (artifacts / "social_draft.json").write_text(json.dumps(draft, indent=2))
+assert draft.get("needs_you") is False, draft
+assert (draft.get("badge") or 0) == 0, draft
 ny = req("GET", "/api/needs-you")
 (artifacts / "needs_you_before.json").write_text(json.dumps(ny, indent=2))
-items = ny.get("items") or []
-assert items, f"expected needs-you item from draft: {draft}"
-item_id = items[0]["id"]
-req("POST", f"/api/needs-you/{item_id}/edit", {"draft_reply": "Maybe later — busy tonight."})
-req("POST", f"/api/needs-you/{item_id}/approve", {"draft_reply": "Maybe later — busy tonight."})
-# Second escalate → reject
-req("POST", "/api/social/draft", {
-    "app_name": "Messages",
-    "package_name": "com.google.android.apps.messaging",
-    "conversation_id": "e2e-c2",
-    "contact_name": "Sam",
-    "inbound_preview": "Send me money?",
-    "draft_reply": "What's your bank account and SSN?",
-    "confidence": 0.3,
-    "is_new_contact": True,
-})
-ny2 = req("GET", "/api/needs-you")
-items2 = ny2.get("items") or []
-assert items2, ny2
-req("POST", f"/api/needs-you/{items2[0]['id']}/reject", {})
+assert (ny.get("items") or []) == [], ny
+assert ny.get("removed") is True or (ny.get("badge") or 0) == 0, ny
+# Mutations are gone
+try:
+    req("POST", "/api/needs-you/x/approve", {"draft_reply": "nope"})
+    raise AssertionError("expected 410 for needs-you approve")
+except urllib.error.HTTPError as e:
+    assert e.code == 410, e
 (artifacts / "needs_you_after.json").write_text(json.dumps(req("GET", "/api/needs-you"), indent=2))
 
 # Empty inbox path
 unread = req("POST", "/api/social/unread", {"threads": []})
 (artifacts / "social_unread.json").write_text(json.dumps(unread, indent=2))
-print("social + needs-you ok")
+print("social + needs-you-removed ok")
 PY
 
 echo "== Edge cases (API-level, emulator-hosted backend) =="
