@@ -428,20 +428,54 @@ def _visible_chat_list_rows(
 ) -> List[Dict[str, Any]]:
     """Visible inbox/match row names from the a11y tree (skip already-done)."""
     try:
-        from dm_heuristics import _looks_like_chat_list_row
+        from dm_heuristics import (
+            _blk_looks_like_person_name,
+            _looks_like_chat_list_row,
+            blk_on_matches,
+        )
     except ImportError:
-        from backend.dm_heuristics import _looks_like_chat_list_row  # type: ignore
+        from backend.dm_heuristics import (  # type: ignore
+            _blk_looks_like_person_name,
+            _looks_like_chat_list_row,
+            blk_on_matches,
+        )
 
     skip = {str(s).strip().lower() for s in (skip_names or []) if s}
-    profile = DM_APP_PROFILES.get((app or "").lower(), {}) if app else {}
+    app_l = (app or "").lower()
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
     result_ids = tuple(profile.get("result_ids") or ())
+    # BLK Compose Matches list has no row resource-ids — fall back to names
+    blk_name_fallback = app_l == "blk" and (not result_ids or blk_on_matches(ui_tree))
     rows: List[Dict[str, Any]] = []
     seen: set = set()
+    # BLK: never open Hidden-section rows
+    hidden_y: Optional[int] = None
+    if app_l == "blk":
+        for n0 in _parse_compact_nodes(ui_tree):
+            t0 = (n0.get("text") or "").strip().lower()
+            if t0.startswith("hidden"):
+                hidden_y = int(n0.get("y") or 0)
+                break
     for n in _parse_compact_nodes(ui_tree):
-        if not _looks_like_chat_list_row(n, result_ids):
-            continue
         label = (n.get("text") or n.get("label") or "").strip()
         if not label:
+            continue
+        row_ok = _looks_like_chat_list_row(n, result_ids)
+        if not row_ok and blk_name_fallback:
+            # Person name mid-list (Your turn / Their turn) — Title Case only so
+            # message previews like "hey" / "ok" are never treated as rows.
+            y = int(n.get("y") or 0)
+            if (
+                250 <= y <= 2000
+                and label[:1].isupper()
+                and _blk_looks_like_person_name(label)
+                and not label.lower().startswith(("your turn", "their turn", "hidden"))
+                and " " not in label  # single given name, not preview sentence
+            ):
+                row_ok = True
+        if not row_ok:
+            continue
+        if hidden_y is not None and int(n.get("y") or 0) >= hidden_y:
             continue
         # Strip "Chat with X" / "Match X" prefixes for the contact key
         name = label
@@ -496,11 +530,46 @@ def _visible_chat_list_rows(
             )
         ):
             continue
-        # Header chrome (Chat / Chats / Matches title) — never a row
-        if key in ("chat", "chats", "matches", "messages", "inbox", "connections"):
+        # Header chrome / section headers / menu text — never a row
+        if key in (
+            "chat",
+            "chats",
+            "matches",
+            "messages",
+            "inbox",
+            "connections",
+            "live now",
+            "older chats",
+            "your matches",
+            "new friends",
+            "conversations",
+            "reactions",
+        ):
+            continue
+        if any(
+            tok in key
+            for tok in (
+                "unmatch",
+                "report",
+                "did you meet",
+                "live now",
+                "older chats",
+                "your turn",
+                "their turn",
+            )
+        ):
+            continue
+        # Phone numbers are not contact display names for dating DMs
+        if re.fullmatch(r"[\d\s\-()+]{7,}", name):
             continue
         if int(n.get("y") or 0) < 200:
             continue
+        unread = bool(
+            n.get("unread")
+            or "unread" in nid
+            or "badge" in nid
+            or re.search(r"\bunread\b", low)
+        )
         seen.add(key)
         rows.append(
             {
@@ -508,6 +577,7 @@ def _visible_chat_list_rows(
                 "x": int(n["x"]),
                 "y": int(n["y"]),
                 "label": label,
+                "unread": unread,
             }
         )
     rows.sort(key=lambda r: (r["y"], r["x"]))
@@ -663,8 +733,10 @@ def _open_chats_tab_action(
         inbox_ids = inbox_ids + ("tab_chats", "id/tab_chats")
     c = _nav_tab_center(ui_tree, *labels, ids=inbox_ids)
     if c is None:
+        # Exact label ONLY in the bottom nav band — never header titles
+        # (Yubo 'Chat' at y≈159 / Hily 'Chats' header).
         for lab in labels:
-            c = _exact_label_center(ui_tree, lab)
+            c = _exact_label_center(ui_tree, lab, y_min=1800)
             if c:
                 break
     if c is None and app_l == "yubo":
@@ -795,6 +867,8 @@ def _app_tree_empty(ui_tree: str, app: Optional[str] = None) -> bool:
         if _is_system_chrome_package(p):
             continue
         if "mobilerun.selfhosted" in p or p.endswith(".selfhosted"):
+            continue
+        if "spay" in p or "samsungpay" in p:
             continue
         useful += 1
         if pkg and pkg in p:
@@ -1134,6 +1208,9 @@ def _deck_has_like_pass_controls(app: Optional[str], tree: str) -> bool:
         return True
     if app == "yubo" and yubo_on_deck(tree):
         return True
+    # BLK unlabeled X/heart/crown cluster (age card, no Like Icon desc)
+    if app == "blk" and blk_on_deck(tree):
+        return True
     return False
 
 
@@ -1158,6 +1235,9 @@ def _deck_markers_ok(app: Optional[str], tree: str) -> bool:
             return True
         return False
     low = name.lower().strip()
+    # BLK age-only marker (age_29) is a real card when like/pass cluster present
+    if low.startswith("age_") and app == "blk" and blk_on_deck(tree):
+        return True
     if low in (
         "education",
         "height",
@@ -1300,12 +1380,23 @@ def _dialog_center(tree: str, labels: Sequence[str]) -> Optional[tuple[int, int]
     return _tree_node_center(tree, *labels)
 
 
-def _exact_label_center(tree: str, label: str) -> Optional[tuple[int, int]]:
+def _exact_label_center(
+    tree: str,
+    label: str,
+    *,
+    y_min: Optional[int] = None,
+    y_max: Optional[int] = None,
+) -> Optional[tuple[int, int]]:
     """Center of a node whose text/desc equals label (avoids 'Like' ⊂ 'Super Like')."""
     needle = (label or "").strip().lower()
     if not needle:
         return None
     for n in _parse_compact_nodes(tree):
+        y = int(n.get("y") or 0)
+        if y_min is not None and y < y_min:
+            continue
+        if y_max is not None and y > y_max:
+            continue
         blob = " ".join(
             str(n.get(k) or "").strip() for k in ("text", "desc", "hint", "label")
         ).lower()
@@ -1316,7 +1407,7 @@ def _exact_label_center(tree: str, label: str) -> Optional[tuple[int, int]]:
         ]
         if needle not in fields and blob != needle:
             continue
-        x, y = int(n.get("x") or 0), int(n.get("y") or 0)
+        x = int(n.get("x") or 0)
         if x or y:
             return (x, y)
     # Regex exact attr match on compact / uiautomator dumps
@@ -1333,9 +1424,16 @@ def _exact_label_center(tree: str, label: str) -> Optional[tuple[int, int]]:
             continue
         g = [int(x) for x in m.groups()]
         if len(g) == 2:
-            return (g[0], g[1])
-        if len(g) >= 4:
-            return ((g[0] + g[2]) // 2, (g[1] + g[3]) // 2)
+            xy = (g[0], g[1])
+        elif len(g) >= 4:
+            xy = ((g[0] + g[2]) // 2, (g[1] + g[3]) // 2)
+        else:
+            continue
+        if y_min is not None and xy[1] < y_min:
+            continue
+        if y_max is not None and xy[1] > y_max:
+            continue
+        return xy
     return None
 
 
@@ -1494,17 +1592,38 @@ def plan_bulk_swipe(
         if not bulk.get("_yubo_tried_deck"):
             bulk["_yubo_tried_deck"] = True
             st["bulk_swipe"] = bulk
+            # Prefer a labeled bottom-nav hit; unlabeled index xy needs vision
+            labeled = _nav_tab_center(ui_tree, "For you", "Discover", "People", "Swipe")
+            if labeled and int(labeled[1]) >= 1800:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(labeled[0]),
+                        "y": int(labeled[1]),
+                        "reason": f"Leave Yubo Chat list → deck tab ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Deck",
+                    },
+                    "bulk_yubo_open_deck",
+                )
             xy = DM_APP_PROFILES.get("yubo", {}).get("deck_tab_xy") or (140, 2194)
             return _fp(
                 {
                     "action": "tap",
                     "x": int(xy[0]),
                     "y": int(xy[1]),
-                    "reason": f"Leave Yubo Chat list → deck tab ({planner})",
+                    "reason": (
+                        f"Leave Yubo Chat list → deck tab index "
+                        f"(unlabeled — vision) ({planner})"
+                    ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
                     "label": "Deck",
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_yubo_open_deck",
             )
@@ -2476,9 +2595,12 @@ def plan_bulk_message(
     next_name = str(bulk.get("current") or "").strip()
     if not next_name:
         rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
+        # Prefer already-read chats (avoid marking unread as read when possible)
         if rows:
-            next_name = str(rows[0]["name"])
-            bulk["_next_row"] = rows[0]
+            read_rows = [r for r in rows if not r.get("unread")]
+            pick = (read_rows or rows)[0]
+            next_name = str(pick["name"])
+            bulk["_next_row"] = pick
         elif fake_bench:
             # Match%02d ONLY on the fake-chats bench APK
             next_name = "Match%02d" % (done + 1)
@@ -2487,36 +2609,8 @@ def plan_bulk_message(
             next_name = ""
             bulk.pop("_next_row", None)
 
-    # Dry-run: verify list + row targets WITHOUT opening threads (opening marks
-    # WhatsApp/Tagged unread as read). Count visible unread-safe rows.
-    if dry_run and list_ok and not bulk.get("current") and not fake_bench:
-        rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
-        if rows:
-            take = rows[: max(0, target - done)]
-            names = [str(r["name"]) for r in take]
-            bulk["done"] = done + len(names)
-            bulk["done_names"] = list(done_names) + names
-            bulk["current"] = None
-            st["bulk_message"] = bulk
-            shown = ", ".join(names[:5]) + ("…" if len(names) > 5 else "")
-            return _fp(
-                {
-                    "action": "done",
-                    "reason": (
-                        f"[DRY RUN] verified chat list + {len(names)} row(s) "
-                        f"({shown}) — did not open threads / mark read "
-                        f"({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": True,
-                    "dry_run_verified": True,
-                    "screenshot": True,
-                    "bulk_message_done": bulk["done"],
-                    "bulk_message_target": target,
-                },
-                "bulk_dry_run_list_only",
-            )
+    # Reply dry-run must open a real 1:1 thread + reach composer before
+    # counting — list-only "verified rows" is a false pass (APK 530).
 
     # On conversation with current match — require verified thread header
     header_hit = bool(next_name) and thread_header_verified(app_key, ui_tree, next_name)

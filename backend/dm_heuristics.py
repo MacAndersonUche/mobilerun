@@ -1131,6 +1131,9 @@ _SYSTEM_UI_PKGS = (
     "com.sec.android.app.launcher",
     "com.google.android.apps.nexuslauncher",
     "com.android.permissioncontroller",
+    # Samsung Pay quick-access overlay stole FG trees on S21 (APK 530)
+    "com.samsung.android.spay",
+    "samsung.android.spay",
 )
 
 
@@ -1138,7 +1141,12 @@ def _is_system_chrome_package(package: str) -> bool:
     p = (package or "").lower()
     if not p:
         return False
-    return any(s in p for s in _SYSTEM_UI_PKGS) or p.endswith(".systemui")
+    return (
+        any(s in p for s in _SYSTEM_UI_PKGS)
+        or p.endswith(".systemui")
+        or "spay" in p
+        or "samsungpay" in p
+    )
 
 
 def _parse_compact_nodes(
@@ -2797,11 +2805,39 @@ def hily_on_chats_list(tree: str) -> bool:
 
 
 def hily_on_mbm(tree: str) -> bool:
-    """Message Before Match / majorCrushScreen."""
-    blob = " ".join(
-        f"{n.get('id')} {n.get('label')}" for n in _parse_compact_nodes(tree)
-    ).lower()
-    return "message before match" in blob or "majorcrush" in blob.replace("_", "")
+    """True only on the Message Before Match *sheet*, not a chats-list row.
+
+    List rows often preview 'Message before match' under a name (Paige) — that
+    must NOT trigger Back/close loops. Require sheet chrome (closeButton /
+    allowanceCounter / majorCrush + title), or title without chats list.
+    """
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join(f"{n.get('id')} {n.get('label')}" for n in nodes).lower()
+    has_phrase = "message before match" in blob or "majorcrush" in blob.replace("_", "")
+    if not has_phrase:
+        return False
+    # Sheet chrome ids
+    if _tree_id_center(
+        tree,
+        "closeButton",
+        "id/closeButton",
+        "allowanceCounter",
+        "id/allowanceCounter",
+        "sendMessageButton",
+        "id/sendMessageButton",
+        "userInfoBlockTitle",
+        "id/userInfoBlockTitle",
+    ):
+        # If chats list chrome is also present and title is mid-list, it's a row
+        if hily_on_chats_list(tree) and not _tree_id_center(
+            tree, "closeButton", "id/closeButton", "allowanceCounter"
+        ):
+            return False
+        return True
+    # Title-only without chats list → sheet
+    if "message before match" in blob and not hily_on_chats_list(tree):
+        return True
+    return False
 
 
 def hily_on_photo_viewer(tree: str) -> bool:
@@ -3128,28 +3164,65 @@ def hily_outgoing_verified(tree: str, message: str) -> bool:
 def blk_on_deck(tree: str) -> bool:
     if blk_end_of_deck(tree):
         return False
-    # Discover card: Like Icon and/or "Send a message" + name
+    # Discover card: Like Icon / heart / X+crown row and/or "Send a message" + name/age
     has_like = False
+    has_pass = False
     has_send_msg = False
+    has_age = False
     for n in _parse_compact_nodes(tree):
         d = str(n.get("desc") or "").strip().lower()
         t = str(n.get("text") or "").strip().lower()
-        if d == "like icon":
+        lab = str(n.get("label") or "").strip().lower()
+        if d == "like icon" or d in ("like", "heart") or lab in ("like", "heart"):
             has_like = True
+        if d in ("pass", "x", "dislike", "nope") or t == "×" or lab == "x":
+            has_pass = True
         if t == "send a message":
             has_send_msg = True
-    return has_like or (has_send_msg and "your turn" not in (tree or "").lower())
+        # Age alone on card (e.g. "29") mid-screen
+        if re.fullmatch(r"\d{2}", t) and 18 <= int(t) <= 80:
+            y = int(n.get("y") or 0)
+            if 400 < y < 2000:
+                has_age = True
+    if has_like or has_pass:
+        return True
+    if has_send_msg and "your turn" not in (tree or "").lower():
+        return True
+    # Age + bottom action cluster (X/heart/crown unlabeled) counts as deck
+    if has_age and not blk_on_matches(tree):
+        click_mid = [
+            n
+            for n in _parse_compact_nodes(tree)
+            if n.get("clickable") and 1600 < int(n.get("y") or 0) < 2100
+        ]
+        if len(click_mid) >= 2:
+            return True
+    return False
 
 
 def blk_on_matches(tree: str) -> bool:
-    blob = " ".join(
-        (n.get("text") or n.get("label") or "") for n in _parse_compact_nodes(tree)
-    ).lower()
-    return (
-        "your turn" in blob
-        or "their turn" in blob
-        or ("matches" in blob and "like icon" not in blob)
-    )
+    """True on Matches inbox — not Discover deck with bottom-nav 'Matches' tab."""
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
+    if "your turn" in blob or "their turn" in blob:
+        return True
+    # Section header 'Matches' mid-screen — never the bottom-nav tab alone
+    has_mid_matches = False
+    for n in nodes:
+        t = (n.get("text") or "").strip().lower()
+        if t.startswith("matches") and 200 < int(n.get("y") or 0) < 1800:
+            has_mid_matches = True
+            break
+    if not has_mid_matches:
+        return False
+    # Veto when Discover card chrome is present
+    if any(
+        str(n.get("desc") or "").strip().lower() == "like icon"
+        or (n.get("text") or "").strip().lower() == "send a message"
+        for n in nodes
+    ):
+        return False
+    return True
 
 
 def blk_on_thread(tree: str) -> bool:
@@ -3231,6 +3304,7 @@ def blk_deck_card_name(tree: str) -> Optional[str]:
     """Name = TextView immediately before 'Send a message' on the card.
 
     Rejects filter chips (Education, Height, …) that sit near the CTA.
+    Also accepts Name / 'Name, 29' / age-adjacent person labels on Discover.
     """
     texts: List[Tuple[int, int, str]] = []
     for n in _parse_compact_nodes(tree):
@@ -3249,15 +3323,65 @@ def blk_deck_card_name(tree: str) -> Optional[str]:
                 if _blk_looks_like_person_name(prev):
                     return prev.split(",")[0].strip()
             return None
+    # Fallback: Name, Age mid-card or person name above age digit
+    for y, _x, t in texts:
+        if 400 < y < 1900 and _blk_looks_like_person_name(t):
+            if t.lower() in _BLK_FILTER_CHIP_WORDS:
+                continue
+            return t.split(",")[0].strip()
+    for i, (y, _x, t) in enumerate(texts):
+        if re.fullmatch(r"\d{2}", t) and 18 <= int(t) <= 80 and 400 < y < 2000:
+            for j in range(i - 1, max(-1, i - 4), -1):
+                prev = texts[j][2].strip()
+                if _blk_looks_like_person_name(prev):
+                    return prev.split(",")[0].strip()
+            # Age alone still identifies a real card for dry-run markers
+            return f"age_{t}"
     return None
 
 
 def blk_dismiss_popup(
     tree: str, planner: str = "blk_heuristic"
 ) -> Optional[Dict[str, Any]]:
-    """Super Like upsell → Send Like anyway; Streaks → Got it; notif → Close."""
+    """Super Like upsell → Send Like anyway; Streaks → Got it; Boost → Back; notif → Close."""
     nodes = _parse_compact_nodes(tree)
     blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
+    # Peak-time Boost upsell — never Get Boost / Buy
+    if (
+        "get boost" in blob
+        or "it's peak time" in blob
+        or "its peak time" in blob
+        or ("peak time" in blob and "boost" in blob)
+    ):
+        close = (
+            _exact_label_center(tree, "Close")
+            or _exact_label_center(tree, "Not now")
+            or _exact_label_center(tree, "No thanks")
+            or _tree_node_center(tree, "Close", "Not now", "No thanks", "Maybe later")
+        )
+        if close:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": close[0],
+                    "y": close[1],
+                    "reason": f"Dismiss BLK Boost peak-time upsell ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "Close",
+                },
+                "blk_boost_dismiss",
+            )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back — dismiss BLK Boost peak-time upsell ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "blk_boost_back",
+        )
     if "introducing streaks" in blob or (
         "streaks" in blob and ("got it" in blob or "got it!" in blob)
     ):
@@ -3315,22 +3439,48 @@ def blk_dismiss_popup(
 def blk_like_action(
     tree: str, planner: str = "blk_heuristic"
 ) -> Optional[Dict[str, Any]]:
-    """Normal Like = 'Like Icon' with left>=850 and top<1900 (cyan heart).
+    """Normal Like = rightmost heart / 'Like Icon' (never left crown super-like).
 
-    Left Like Icon (~749) is green crown SUPER LIKE — never tap.
+    Prefer desc 'Like Icon' with left>=850 and top<1900 (cyan heart).
+    Fallback: rightmost clickable in the 1600–1950 action band (X | heart | crown).
     """
     best: Optional[Tuple[int, int, int]] = None  # x1, x, y
     for n in _parse_compact_nodes(tree):
-        if str(n.get("desc") or "").strip().lower() != "like icon":
+        d = str(n.get("desc") or "").strip().lower()
+        if d != "like icon" and d not in ("like", "heart"):
             continue
         x1 = n.get("x1")
         y1 = n.get("y1")
         if x1 is None or y1 is None:
-            continue
+            x1 = int(n.get("x") or 0) - 40
+            y1 = int(n.get("y") or 0) - 40
         if int(x1) < 850 or int(y1) >= 1900:
             continue
         if best is None or int(x1) > best[0]:
             best = (int(x1), int(n["x"]), int(n["y"]))
+    if best is None:
+        # Unlabeled X/heart/crown row — pick middle-right clickable (heart)
+        band = [
+            n
+            for n in _parse_compact_nodes(tree)
+            if n.get("clickable") and 1600 <= int(n.get("y") or 0) <= 2000
+        ]
+        band.sort(key=lambda n: int(n.get("x") or 0))
+        # Avoid leftmost (X/pass) and rightmost crown if 3 buttons
+        if len(band) >= 3:
+            heart = band[-2]
+            best = (
+                int(heart.get("x1") or heart["x"]),
+                int(heart["x"]),
+                int(heart["y"]),
+            )
+        elif len(band) == 2:
+            heart = band[-1]
+            best = (
+                int(heart.get("x1") or heart["x"]),
+                int(heart["x"]),
+                int(heart["y"]),
+            )
     if best is None:
         return None
     return _fp(
@@ -3901,14 +4051,22 @@ def keyboard_likely_up(tree: str) -> bool:
 
 def tagged_on_deck(tree: str) -> bool:
     if _tree_id_center(
-        tree, "likeBtn", "id/likeBtn", "dislikeBtn", "id/dislikeBtn", "tvUsername"
+        tree,
+        "likeBtn",
+        "id/likeBtn",
+        "dislikeBtn",
+        "id/dislikeBtn",
+        "chatBtn",
+        "id/chatBtn",
+        "tvUsername",
+        "id/tvUsername",
     ):
         return True
     if _tree_id_center(tree, "id/tagged_like", "tagged_like", "id/tagged_pass"):
         return True
     for n in _parse_compact_nodes(tree):
         t = (n.get("text") or n.get("label") or "").strip().lower()
-        if t not in ("like", "pass"):
+        if t not in ("like", "pass", "chat"):
             continue
         if int(n.get("y") or 0) > 1500:
             return True

@@ -150,12 +150,11 @@ def test_bulk_message_uses_visible_rows_not_match_pct():
         package="com.hily.app",
         dry_run=True,
     )
-    # Dry-run verifies list + rows without opening (avoids marking unread)
-    assert act and act["action"] == "done"
-    assert act.get("dry_run_verified") is True
+    # Reply dry-run must open a real row (not list-only false pass)
+    assert act and act["action"] == "tap"
     assert "Nancy" in (act.get("reason") or "")
     assert "Match01" not in (act.get("reason") or "")
-    assert "did not open" in (act.get("reason") or "").lower()
+    assert "did not open" not in (act.get("reason") or "").lower()
 
 
 # --- 4. Paid-tap false positive ---

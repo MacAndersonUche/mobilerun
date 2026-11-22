@@ -169,7 +169,7 @@ def test_whatsapp_skips_community_announcement_rows():
     assert "hi" not in names  # message preview
 
 
-def test_dry_run_message_verifies_list_without_opening():
+def test_dry_run_message_opens_real_row_not_list_only():
     tree = _load("bumble_connections.xml")
     act = plan_bulk_message(
         'reply "hey" to 2 existing chats on Bumble',
@@ -179,10 +179,9 @@ def test_dry_run_message_verifies_list_without_opening():
         dry_run=True,
         state={},
     )
-    assert act and act.get("action") == "done"
-    assert act.get("dry_run_verified") is True
-    assert "did not open" in (act.get("reason") or "").lower()
-    assert "Open Sam" not in (act.get("reason") or "")
+    assert act and act.get("action") == "tap"
+    assert "Open" in (act.get("reason") or "")
+    assert "did not open" not in (act.get("reason") or "").lower()
 
 
 def test_selfhosted_fg_counts_as_empty_target_tree():

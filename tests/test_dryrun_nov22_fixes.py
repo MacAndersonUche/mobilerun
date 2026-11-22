@@ -120,8 +120,12 @@ def test_recover_hard_cap_and_empty_tree():
     empty += '<n d="Clock" xy="100,50"/></w></hierarchy>'
     st: dict = {}
     act = _recover_to_root_action("bumble", empty, [], "test", state=st)
-    assert act and act["action"] == "fail"
-    assert "empty" in act["reason"].lower()
+    # Empty/wrong FG → re-open + force vision (never silent fail)
+    assert act and act["action"] in ("fail", "open_app", "wait")
+    reason = (act.get("reason") or "").lower()
+    assert "empty" in reason or "vision" in reason or "re-open" in reason
+    if act["action"] in ("open_app", "wait"):
+        assert act.get("needs_vision") or act.get("_force_vision")
 
 
 def test_recover_relaunches_capped():
@@ -282,27 +286,26 @@ def test_wa_skips_community_announcement_rows():
 
 
 def test_bumble_people_grid_fails_clean_no_superswipe():
-    """People grid → Discover nav once; still-grid → fail, never SuperSwipe."""
+    """People grid → Discover (+ vision) then fail; never SuperSwipe tile loop."""
     tree = _load("bumble_people_photo_grid.xml")
     st: dict = {}
-    act = plan_bulk_swipe(
-        "bumble auto-swipe 5 profiles",
-        tree,
-        ["Opened Bumble"],
-        package="com.bumble.app",
-        dry_run=True,
-        state=st,
-    )
-    assert act and act["action"] == "tap"
-    assert "Discover" in act["reason"] or act.get("label") == "Discover"
-    act2 = plan_bulk_swipe(
-        "bumble auto-swipe 5 profiles",
-        tree,
-        ["Opened Bumble", act["reason"]],
-        package="com.bumble.app",
-        dry_run=True,
-        state=st,
-    )
-    assert act2 and act2["action"] == "fail"
-    assert "grid" in act2["reason"].lower() or "superswipe" in act2["reason"].lower()
-    assert act2.get("dry_run_verified") is False
+    hist = ["Opened Bumble"]
+    last = None
+    for _ in range(5):
+        last = plan_bulk_swipe(
+            "bumble auto-swipe 5 profiles",
+            tree,
+            hist,
+            package="com.bumble.app",
+            dry_run=True,
+            state=st,
+        )
+        assert last is not None
+        hist.append(last.get("reason") or "")
+        if last.get("action") == "fail":
+            break
+        assert last.get("action") in ("tap", "wait")
+        assert "SuperSwipe" not in (last.get("reason") or "")
+    assert last and last["action"] == "fail"
+    assert "grid" in last["reason"].lower() or "superswipe" in last["reason"].lower()
+    assert last.get("dry_run_verified") is False

@@ -1759,11 +1759,48 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _instruction_target_package(
+    instruction: str, state: Optional[Dict[str, Any]] = None
+) -> str:
+    """Best-effort dating/social package for a11y window selection."""
+    st = state if isinstance(state, dict) else {}
+    cached = str(st.get("target_package") or "").strip()
+    if cached:
+        return cached
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+        from dm_heuristics import DM_APP_PROFILES
+    except ImportError:
+        try:
+            from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+            from backend.dm_heuristics import DM_APP_PROFILES  # type: ignore
+        except ImportError:
+            return ""
+    goal = parse_bulk_goal(instruction or "")
+    app = ""
+    if isinstance(goal, dict):
+        app = str(goal.get("app") or "").lower()
+    if not app:
+        low = (instruction or "").lower()
+        for key, prof in DM_APP_PROFILES.items():
+            aliases = tuple(prof.get("aliases") or ()) + (key,)
+            if any(a and a.lower() in low for a in aliases):
+                app = key
+                break
+    pkg = ""
+    if app and app in DM_APP_PROFILES:
+        pkg = str(DM_APP_PROFILES[app].get("package") or "")
+    if pkg and isinstance(state, dict):
+        state["target_package"] = pkg
+    return pkg
+
+
 def _fetch_ui_tree_retry(
     device_id: str,
     call_device,
     *,
     attempts: int = 4,
+    preferred_package: str = "",
 ) -> Dict[str, Any]:
     """Fetch a UI tree; retry on empty/timeout/offline so the planner never
     plans on a blank hierarchy after a WS drop or a11y blip."""
@@ -1777,6 +1814,9 @@ def _fetch_ui_tree_retry(
         "anr_dismissed": False,
         "timing": {},
     }
+    params: Dict[str, Any] = {}
+    if preferred_package:
+        params["preferred_package"] = preferred_package
     for attempt in range(max(1, attempts)):
         wait_reconnect = 20.0 if attempt == 0 else 45.0
         timeout_s = 8.0 if attempt == 0 else 12.0
@@ -1785,7 +1825,7 @@ def _fetch_ui_tree_retry(
                 call_device(
                     device_id,
                     "get_ui_tree",
-                    {},
+                    params,
                     timeout_s=timeout_s,
                     wait_reconnect_s=wait_reconnect,
                 )
@@ -1875,17 +1915,30 @@ def _fetch_screenshot_b64(
     except ImportError:
         from backend.device_rpc import call_device  # type: ignore
 
-    try:
-        raw = call_device(device_id, "screenshot", {}, timeout_s=15)
-    except Exception as e:
-        logger.warning("screenshot rpc failed: %s", e)
-        return None
-    if isinstance(raw, dict):
-        if raw.get("ok") and raw.get("data"):
-            return str(raw["data"])
-        return None
-    if isinstance(raw, str) and len(raw) > 100:
-        return raw
+    # Samsung One UI a11y takeScreenshot can be slow; allow headroom + one retry
+    for attempt, timeout_s in enumerate((22.0, 28.0)):
+        try:
+            raw = call_device(
+                device_id,
+                "screenshot",
+                {},
+                timeout_s=timeout_s,
+                wait_reconnect_s=12.0,
+            )
+        except Exception as e:
+            logger.warning("screenshot rpc failed attempt=%s: %s", attempt + 1, e)
+            continue
+        if isinstance(raw, dict):
+            if raw.get("ok") and raw.get("data"):
+                return str(raw["data"])
+            logger.warning(
+                "screenshot unavailable attempt=%s err=%s",
+                attempt + 1,
+                raw.get("error"),
+            )
+            continue
+        if isinstance(raw, str) and len(raw) > 100:
+            return raw
     return None
 
 
@@ -2809,8 +2862,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
     step_t0 = time.time()
     try:
-        tree_info = _fetch_ui_tree_retry(device_id, call_device)
+        prefer_pkg = _instruction_target_package(instruction, state)
+        tree_info = _fetch_ui_tree_retry(
+            device_id, call_device, preferred_package=prefer_pkg
+        )
         ui_tree = tree_info["tree"]
+        # Wrong FG (Samsung Pay / selfhosted) → force vision + re-open path
+        fg_now = str(tree_info.get("package") or "").lower()
+        if prefer_pkg and fg_now and prefer_pkg.lower() not in fg_now:
+            if "spay" in fg_now or "selfhosted" in fg_now or "systemui" in fg_now:
+                tree_info["empty"] = True
+                state["force_vision_once"] = True
+                logger.warning(
+                    "wrong FG package=%s want=%s — mark empty + vision",
+                    fg_now,
+                    prefer_pkg,
+                )
         # Auto-dismiss System UI ANR overlays before planning
         tree_l = (ui_tree or "").lower()
         if (
@@ -2827,7 +2894,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     timeout_s=8,
                     wait_reconnect_s=10,
                 )
-                tree_info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                tree_info = _fetch_ui_tree_retry(
+                    device_id,
+                    call_device,
+                    attempts=2,
+                    preferred_package=prefer_pkg,
+                )
                 ui_tree = tree_info["tree"]
             except Exception as anr_err:
                 logger.warning("dismiss_anr failed: %s", anr_err)

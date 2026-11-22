@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="It's peak time! Get Boost" xy="540,900" b="100,820,980,980"/>
+ <n t="Get Boost" c="1" xy="540,1600" b="200,1520,880,1680"/>
+ <n t="Not now" c="1" xy="540,1800" b="300,1740,780,1860"/>
+</w>
+</hierarchy>

@@ -64,6 +64,16 @@ class ScreenCaptureService : Service() {
         /** True when MediaProjection virtual display is actively emitting frames. */
         fun isStreaming(): Boolean = instance?.streaming?.get() == true
 
+        @Volatile
+        private var lastFrameJpegB64: String? = null
+
+        /** Latest live-view JPEG for agent screenshot fallback (no new consent). */
+        fun lastJpegBase64(): String? = lastFrameJpegB64
+
+        internal fun rememberFrame(b64: String) {
+            lastFrameJpegB64 = b64
+        }
+
         /** Adjust fps/quality without re-prompting MediaProjection consent. */
         fun updateParams(fps: Int, quality: Int) {
             instance?.let {
@@ -176,6 +186,7 @@ class ScreenCaptureService : Service() {
                 cropped.recycle()
                 val bytes = baos.toByteArray()
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                rememberFrame(b64)
                 frameListener?.invoke(
                     FramePayload(
                         mime = "image/jpeg",

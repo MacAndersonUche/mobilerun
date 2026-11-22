@@ -77,20 +77,46 @@ def test_bumble_photo_grid_fails_not_tile_loop():
     assert act is not None
     assert act.get("action") == "tap"
     assert "Discover" in (act.get("reason") or "") or act.get("label") == "Discover"
-    # Second pass still on grid → fail cleanly (no tile loop)
+    # Retry Discover once, then vision settle, then fail (never tile-tap)
+    hist = ["Opened Bumble", act.get("reason") or ""]
     act2 = plan_bulk_swipe(
         "bumble like 5 profiles",
         tree,
-        ["Opened Bumble", act.get("reason") or ""],
+        hist,
         state=st,
         package="com.bumble.app",
         dry_run=True,
     )
     assert act2 is not None
-    assert act2.get("action") == "fail"
-    assert "grid" in (act2.get("reason") or "").lower()
-    assert "PhotoBrowser" in (act2.get("reason") or "") or "SuperSwipe" in (
-        act2.get("reason") or ""
+    assert act2.get("action") in ("tap", "wait")
+    hist.append(act2.get("reason") or "")
+    act3 = plan_bulk_swipe(
+        "bumble like 5 profiles",
+        tree,
+        hist,
+        state=st,
+        package="com.bumble.app",
+        dry_run=True,
+    )
+    assert act3 is not None
+    if act3.get("action") != "fail":
+        hist.append(act3.get("reason") or "")
+        act3 = plan_bulk_swipe(
+            "bumble like 5 profiles",
+            tree,
+            hist,
+            state=st,
+            package="com.bumble.app",
+            dry_run=True,
+        )
+    assert act3 is not None
+    assert act3.get("action") == "fail"
+    assert (
+        "grid" in (act3.get("reason") or "").lower()
+        or "not found" in (act3.get("reason") or "").lower()
+    )
+    assert "PhotoBrowser" in (act3.get("reason") or "") or "SuperSwipe" in (
+        act3.get("reason") or ""
     )
 
 

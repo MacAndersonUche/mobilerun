@@ -133,6 +133,8 @@ class BackendClient(private val context: Context) {
     private var userDisconnected = false
     @Volatile private var connecting = false
     @Volatile private var lastOpenAtMs: Long = 0L
+    /** Last successfully launched app package — a11y prefers this window. */
+    @Volatile private var lastOpenedPackage: String? = null
 
     private val _statusFlow = MutableStateFlow("Disconnected")
     val statusFlow: StateFlow<String> = _statusFlow
@@ -1350,7 +1352,50 @@ class BackendClient(private val context: Context) {
             }
         }
 
-        // Slow path: tree / type / open_app / screenshot — never blocks tap ACK
+        // Screenshot must not queue behind get_ui_tree (cloud 15–28s budget).
+        if (command == "screenshot") {
+            fastCommandExecutor.execute {
+                try {
+                    val a11y = MobilerunAccessibilityService.instance
+                    val b64 = a11y?.takeScreenshotJpegBase64(maxWidth = 720, quality = 42)
+                        ?: ScreenCaptureService.lastJpegBase64()
+                    if (b64.isNullOrBlank()) {
+                        sendCommandResponse(
+                            requestId,
+                            mapOf(
+                                "ok" to false,
+                                "error" to "screenshot unavailable",
+                                "a11y" to (a11y != null),
+                                "media_projection" to ScreenCaptureService.isStreaming(),
+                            ),
+                            null,
+                        )
+                    } else {
+                        sendCommandResponse(
+                            requestId,
+                            mapOf(
+                                "ok" to true,
+                                "mime" to "image/jpeg",
+                                "encoding" to "base64",
+                                "data" to b64,
+                                "timing" to mapOf(
+                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
+                                ),
+                            ),
+                            null,
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.e(tag, "screenshot failed", e)
+                    sendCommandResponse(requestId, null, e.message ?: "screenshot failed")
+                } finally {
+                    scheduleBubbleIdle()
+                }
+            }
+            return
+        }
+
+        // Slow path: tree / type / open_app — never blocks tap ACK
         slowCommandExecutor.execute {
             val done = java.util.concurrent.atomic.AtomicBoolean(false)
             val watchdog = scope.launch {
@@ -1574,6 +1619,8 @@ class BackendClient(private val context: Context) {
                                     },
                             )
                         }
+                        lastOpenedPackage = launched
+                        a11yService?.preferredPackageHint = launched
                         // Brief settle — keep agent steps under the 3–5s budget
                         val settle = 280L + kotlin.random.Random.nextLong(0, 180)
                         Thread.sleep(settle)
@@ -1611,19 +1658,44 @@ class BackendClient(private val context: Context) {
                                 ),
                             )
                         } else {
-                            var detailed = a11yService.getUITreeDetailed(allowCache = true)
+                            val prefer = (
+                                params?.get("preferred_package") as? String
+                                    ?: params?.get("package") as? String
+                                    ?: lastOpenedPackage
+                                )?.trim()?.takeIf { it.isNotEmpty() }
+                            var detailed = a11yService.getUITreeDetailed(
+                                allowCache = true,
+                                preferredPackage = prefer,
+                            )
+                            // Wrong FG package (spay/selfhosted) counts as empty for target
+                            val pkgNow = detailed.packageName
+                            val wrongFg = !prefer.isNullOrBlank() &&
+                                pkgNow.isNotBlank() &&
+                                !pkgNow.contains(prefer, ignoreCase = true) &&
+                                !prefer.contains(pkgNow, ignoreCase = true)
                             // One forced rebuild if empty — covers post-reconnect a11y blips
-                            if (detailed.empty) {
+                            if (detailed.empty || wrongFg) {
                                 Thread.sleep(120)
-                                detailed = a11yService.getUITreeDetailed(allowCache = false)
+                                detailed = a11yService.getUITreeDetailed(
+                                    allowCache = false,
+                                    preferredPackage = prefer,
+                                )
                             }
                             val tree = detailed.tree
+                            val reportedPkg = detailed.packageName.ifBlank {
+                                a11yService.activePackageName().orEmpty()
+                            }
+                            val emptyForTarget = detailed.empty || (
+                                !prefer.isNullOrBlank() &&
+                                    reportedPkg.isNotBlank() &&
+                                    !reportedPkg.contains(prefer, ignoreCase = true) &&
+                                    !prefer.contains(reportedPkg, ignoreCase = true)
+                                )
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
-                                "package" to detailed.packageName.ifBlank {
-                                    a11yService.activePackageName().orEmpty()
-                                },
-                                "empty" to detailed.empty,
+                                "package" to reportedPkg,
+                                "preferred_package" to prefer,
+                                "empty" to emptyForTarget,
                                 "chars" to detailed.chars,
                                 "nodes" to detailed.nodes,
                                 "a11y" to true,
@@ -1647,15 +1719,17 @@ class BackendClient(private val context: Context) {
                         }
                     }
                     "screenshot" -> {
+                        // Prefer a11y takeScreenshot; fall back to MediaProjection frame
                         val b64 = a11yService?.takeScreenshotJpegBase64(
                             maxWidth = 720,
                             quality = 42,
-                        )
+                        ) ?: ScreenCaptureService.lastJpegBase64()
                         if (b64.isNullOrBlank()) {
                             mapOf(
                                 "ok" to false,
                                 "error" to "screenshot unavailable",
                                 "a11y" to (a11yService != null),
+                                "media_projection" to ScreenCaptureService.isStreaming(),
                             )
                         } else {
                             mapOf(
