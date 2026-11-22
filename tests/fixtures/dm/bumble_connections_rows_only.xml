@@ -1,0 +1,11 @@
+<hierarchy windows="1" nodes="12" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <!-- Post-tab-tap settle tree: rows present, root id not yet bound -->
+ <n i="com.bumble.app:id/connectionItem" c="1" xy="540,820" b="0,740,1080,900"/>
+ <n t="Sam" i="com.bumble.app:id/connectionsItem_personName" c="1" xy="300,800" b="160,760,500,840"/>
+ <n t="Hey there" i="com.bumble.app:id/connectionsItem_message" xy="300,860" b="160,840,700,880"/>
+ <n t="Older chats" xy="200,1000" b="40,960,400,1040"/>
+ <n d="Chats" c="1" xy="972,2197" b="864,2120,1080,2274"/>
+ <n d="People" c="1" xy="540,2197" b="432,2120,648,2274"/>
+</w>
+</hierarchy>

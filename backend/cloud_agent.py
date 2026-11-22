@@ -1767,6 +1767,83 @@ def _store_step_screenshot(job_id: str, step_n: int, b64: str) -> Optional[str]:
         return None
 
 
+def _store_job_artifact(
+    job_id: str,
+    filename: str,
+    body: bytes | str,
+    *,
+    content_type: str = "application/octet-stream",
+) -> Optional[str]:
+    """Upload a debug artifact under ``tasks/<job_id>/<filename>``; return S3 key."""
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    if not bucket or not job_id or not filename:
+        return None
+    try:
+        import boto3
+
+        key = f"tasks/{job_id}/{filename.lstrip('/')}"
+        raw = body.encode("utf-8") if isinstance(body, str) else body
+        boto3.client("s3").put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=raw,
+            ContentType=content_type,
+        )
+        logger.info("artifact s3 key=%s bytes=%s", key, len(raw))
+        return key
+    except Exception as e:
+        logger.warning("artifact s3 upload failed (%s): %s", filename, e)
+        return None
+
+
+def save_detector_miss_tree(
+    detector: str,
+    ui_tree: str,
+    *,
+    job_id: Optional[str] = None,
+    package: str = "",
+) -> Optional[str]:
+    """Persist a UI tree when a screen detector returns false; log the S3 key."""
+    import json
+    import time as _time
+
+    name = (
+        re.sub(r"[^a-zA-Z0-9._-]+", "_", (detector or "detector").strip()) or "detector"
+    )
+    jid = str(job_id or os.environ.get("MOBILERUN_JOB_ID") or "nojob")
+    payload = {
+        "detector": detector,
+        "package": package or "",
+        "chars": len(ui_tree or ""),
+        "nodes": (ui_tree or "").lower().count("<n ")
+        + (ui_tree or "").lower().count("<node "),
+        "ts": int(_time.time()),
+        "tree": ui_tree or "",
+    }
+    fname = f"detector_{name}_{payload['ts']}.json"
+    key = _store_job_artifact(
+        jid,
+        fname,
+        json.dumps(payload, ensure_ascii=False),
+        content_type="application/json",
+    )
+    if key:
+        logger.info(
+            "detector miss %s → s3://%s/%s",
+            detector,
+            os.environ.get("SCREENSHOT_BUCKET") or "?",
+            key,
+        )
+    else:
+        logger.info(
+            "detector miss %s (no S3) chars=%s nodes=%s",
+            detector,
+            payload["chars"],
+            payload["nodes"],
+        )
+    return key
+
+
 def _maybe_restore_ime(job: Dict[str, Any], device_id: str, call_device) -> None:
     """Restore the user's keyboard after a messaging task ends."""
     state = job.get("state") if isinstance(job.get("state"), dict) else {}
@@ -2142,9 +2219,16 @@ def _attach_failure_artifacts(
     *,
     call_device=None,
 ) -> None:
-    """Persist last full UI tree + screenshot on the job row for debugging."""
+    """Persist full UI tree JSON + screenshot to S3 ``tasks/<id>/`` (and job row).
+
+    Used for failed jobs and dry-run stops so real-phone detector misses are
+    inspectable without re-running on device.
+    """
+    import json
+
     try:
         tree = ui_tree
+        pkg = ""
         if (not tree) and device_id:
             try:
                 if call_device is None:
@@ -2156,10 +2240,12 @@ def _attach_failure_artifacts(
                     call_device = _cd
                 info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
                 tree = info.get("tree") or ""
-                job.setdefault("state", {})["failure_package"] = info.get("package")
+                pkg = str(info.get("package") or "")
+                job.setdefault("state", {})["failure_package"] = pkg
             except Exception as e:
                 logger.warning("failure tree fetch failed: %s", e)
                 tree = tree or ""
+        jid = str(job.get("job_id") or "unknown")
         if tree:
             # Dynamo item limit ~400KB — keep a generous but bounded dump
             job["failure_ui_tree"] = tree[:120_000]
@@ -2167,13 +2253,34 @@ def _attach_failure_artifacts(
             job.setdefault("state", {})["failure_tree_nodes"] = tree.lower().count(
                 "<n "
             ) + tree.lower().count("<node ")
+            payload = {
+                "job_id": jid,
+                "status": job.get("status"),
+                "error": job.get("error"),
+                "package": pkg or (job.get("state") or {}).get("failure_package") or "",
+                "chars": len(tree),
+                "nodes": job["state"]["failure_tree_nodes"],
+                "dry_run": bool(
+                    job.get("dry_run") or (job.get("state") or {}).get("dry_run")
+                ),
+                "tree": tree,
+            }
+            tree_key = _store_job_artifact(
+                jid,
+                "failure_ui_tree.json",
+                json.dumps(payload, ensure_ascii=False),
+                content_type="application/json",
+            )
+            if tree_key:
+                job["failure_ui_tree_key"] = tree_key
+                job.setdefault("state", {})["failure_ui_tree_key"] = tree_key
+                logger.info("failure tree s3 key=%s", tree_key)
         shot = _fetch_screenshot_b64(device_id) if device_id else None
         if shot:
-            key = _store_step_screenshot(
-                str(job.get("job_id") or "unknown"), "failure", shot
-            )
+            key = _store_step_screenshot(jid, "failure", shot)
             if key:
                 job["failure_screenshot_key"] = key
+                logger.info("failure screenshot s3 key=%s", key)
             else:
                 # Local/dev fallback — short prefix only
                 job["failure_screenshot_b64_prefix"] = shot[:2000]
@@ -2888,6 +2995,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 job["result"] = job["error"]
                 job["completed_at"] = int(time.time())
+                _attach_failure_artifacts(
+                    job, device_id, ui_tree, call_device=call_device
+                )
                 _end_job_cleanup(job, device_id, call_device)
                 return job
             if verified:
@@ -2901,6 +3011,11 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "result"
                 ] += f" · p50={stats['p50_ms']:.0f}ms p95={stats.get('p95_ms') or 0:.0f}ms"
             job["completed_at"] = int(time.time())
+            # Dry-run stop: always capture final tree/screenshot for forensics
+            if is_dry:
+                _attach_failure_artifacts(
+                    job, device_id, ui_tree, call_device=call_device
+                )
             _end_job_cleanup(job, device_id, call_device)
             return job
         if kind == "fail":

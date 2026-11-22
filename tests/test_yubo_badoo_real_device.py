@@ -153,8 +153,17 @@ def test_yubo_dry_run_stops_before_send():
     a = _heuristic_dm_send(
         YUBO_INSTR, chat, hist, package="co.yellw.yellowapp", dry_run=True
     )
-    assert a and a["action"] == "done"
+    # Dry-run clears the draft first, then stops
+    assert a and a["action"] in ("type", "done")
     assert a.get("dry_run") is True
+    if a["action"] == "type":
+        assert a.get("clear") is True
+        hist2 = hist + [a.get("reason") or "clear composer"]
+        a2 = _heuristic_dm_send(
+            YUBO_INSTR, chat, hist2, package="co.yellw.yellowapp", dry_run=True
+        )
+        assert a2 and a2["action"] == "done"
+        assert a2.get("dry_run_verified") is True
 
 
 # --- Badoo ---
@@ -259,5 +268,13 @@ def test_badoo_dry_run_stops_before_send():
     a = _heuristic_dm_send(
         BADOO_INSTR, chat, hist, package="com.badoo.mobile", dry_run=True
     )
-    assert a and a["action"] == "done"
+    assert a and a["action"] in ("type", "done")
     assert a.get("dry_run") is True
+    if a["action"] == "type":
+        assert a.get("clear") is True
+        hist2 = hist + [a.get("reason") or "clear composer"]
+        a2 = _heuristic_dm_send(
+            BADOO_INSTR, chat, hist2, package="com.badoo.mobile", dry_run=True
+        )
+        assert a2 and a2["action"] == "done"
+        assert a2.get("dry_run_verified") is True

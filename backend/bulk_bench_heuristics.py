@@ -20,6 +20,7 @@ try:
     from dm_heuristics import (
         DM_APP_PROFILES,
         _fp,
+        _nav_tab_center,
         _parse_compact_nodes,
         _tree_id_center,
         _tree_node_center,
@@ -34,6 +35,7 @@ try:
         bumble_like_swipe,
         bumble_on_people_deck,
         bumble_pass_swipe,
+        compose_center_in_thread,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
@@ -50,6 +52,7 @@ try:
         taimi_on_people_deck,
         taimi_pass_action,
         taimi_swipes_left,
+        thread_header_verified,
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_deck,
@@ -59,6 +62,7 @@ except ImportError:
     from backend.dm_heuristics import (  # type: ignore
         DM_APP_PROFILES,
         _fp,
+        _nav_tab_center,
         _parse_compact_nodes,
         _tree_id_center,
         _tree_node_center,
@@ -73,6 +77,7 @@ except ImportError:
         bumble_like_swipe,
         bumble_on_people_deck,
         bumble_pass_swipe,
+        compose_center_in_thread,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
@@ -89,11 +94,14 @@ except ImportError:
         taimi_on_people_deck,
         taimi_pass_action,
         taimi_swipes_left,
+        thread_header_verified,
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_deck,
         yubo_pass_swipe,
     )
+
+DETECTOR_SETTLE_S = 1.5
 
 # Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
 _REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk", "taimi"})
@@ -426,7 +434,11 @@ def _open_chats_tab_action(
     history: List[str],
     planner: str,
 ) -> Optional[Dict[str, Any]]:
-    """Tap the app's Chats/Messages/Matches nav using the UI map (never invent)."""
+    """Tap the app's Chats/Messages/Matches nav using the UI map (never invent).
+
+    Prefer resource-id / content-desc. Yubo never falls back to fixed xy (that
+    caused no_progress taps at ~340,2181 on real phones).
+    """
     hist = " ".join(history[-12:]).lower()
     if any(
         t in hist
@@ -439,20 +451,30 @@ def _open_chats_tab_action(
         )
     ):
         return None  # already tried — caller should verify/fail
-    profile = DM_APP_PROFILES.get((app or "").lower(), {}) if app else {}
+    app_l = (app or "").lower()
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
     labels = tuple(
         profile.get("inbox_tab_labels")
         or profile.get("inbox_labels")
-        or ("Chats", "Messages", "Matches", "Connections")
+        or ("Chats", "Messages", "Matches", "Connections", "Chat")
     )
-    c = _tree_node_center(ui_tree, *labels)
+    inbox_ids = tuple(profile.get("inbox_tab_ids") or profile.get("inbox_ids") or ())
+    # Badoo / Bumble known nav ids
+    if app_l == "badoo":
+        inbox_ids = inbox_ids + (
+            "nav_bar_button_connections",
+            "com.badoo.mobile:id/nav_bar_button_connections",
+        )
+    if app_l == "hily":
+        inbox_ids = inbox_ids + ("bottomNavTab_2", "id/bottomNavTab_2")
+    c = _nav_tab_center(ui_tree, *labels, ids=inbox_ids)
     if c is None:
-        # Exact content-desc match for bottom nav
         for lab in labels:
             c = _exact_label_center(ui_tree, lab)
             if c:
                 break
-    if c is None:
+    if c is None and app_l != "yubo":
+        # Fixed-xy fallback allowed for apps with a verified map point — not Yubo
         xy = profile.get("inbox_tab_xy")
         if isinstance(xy, (tuple, list)) and len(xy) >= 2:
             c = (int(xy[0]), int(xy[1]))
@@ -519,13 +541,30 @@ def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
 
 
 def _deck_visible(app: Optional[str], tree: str) -> bool:
-    if _exact_label_center(tree, "Like") or _exact_label_center(tree, "Pass"):
+    """True when the swipe/like deck is on screen (map like/pass ids first)."""
+    app = (app or "").lower()
+    profile = DM_APP_PROFILES.get(app, {}) if app else {}
+    # Map like/pass resource-ids first (Hily ActionButton_*, Badoo VoteYes/No, …)
+    like_ids = tuple(profile.get("like_ids") or ())
+    pass_ids = tuple(profile.get("pass_ids") or ())
+    if like_ids and _tree_id_center(tree, *like_ids):
+        return True
+    if pass_ids and _tree_id_center(tree, *pass_ids):
+        return True
+    deck_ids = tuple(profile.get("deck_ids") or ())
+    if deck_ids and _tree_id_center(tree, *deck_ids):
         return True
     if _tree_id_center(
         tree, "id/gamepad_like", "gamepad_like", "id/btn_like", "encounter_like"
     ):
         return True
-    app = (app or "").lower()
+    # Exact bottom-row Like/Pass (avoid matching "likely" etc. via substring)
+    like = _exact_label_center(tree, "Like")
+    pass_ = _exact_label_center(tree, "Pass")
+    if like and int(like[1]) > 1700:
+        return True
+    if pass_ and int(pass_[1]) > 1700:
+        return True
     if app == "bumble" and bumble_on_people_deck(tree):
         return True
     if app == "yubo" and yubo_on_deck(tree):
@@ -540,13 +579,6 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
         taimi_on_people_deck(tree) or taimi_swipes_left(tree) is not None
     ):
         return True
-    if app and app in DM_APP_PROFILES:
-        ids = tuple(DM_APP_PROFILES[app].get("deck_ids") or ())
-        if ids and _tree_id_center(tree, *ids):
-            return True
-        like_ids = tuple(DM_APP_PROFILES[app].get("like_ids") or ())
-        if like_ids and _tree_id_center(tree, *like_ids):
-            return True
     return False
 
 
@@ -768,6 +800,44 @@ def plan_bulk_swipe(
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
             return opened
+        # After open_deck / People / Finder tab — settle once then re-check.
+        # Do NOT settle on a bare "Opened … launch" (that blocks opening the deck).
+        if any(
+            t in hist
+            for t in (
+                "open swipe deck",
+                "bulk_open_deck",
+                "open finder",
+                "open people",
+            )
+        ) and not bulk.get("_deck_settle_done"):
+            bulk["_deck_settle_done"] = True
+            st["bulk_swipe"] = bulk
+            try:
+                from cloud_agent import save_detector_miss_tree as _miss
+            except ImportError:
+                try:
+                    from backend.cloud_agent import (  # type: ignore
+                        save_detector_miss_tree as _miss,
+                    )
+                except ImportError:
+                    _miss = None  # type: ignore
+            if _miss:
+                _miss(f"deck_{app or 'app'}", ui_tree, package=package)
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": DETECTOR_SETTLE_S,
+                    "delay_s": DETECTOR_SETTLE_S,
+                    "reason": (
+                        f"Settle {DETECTOR_SETTLE_S}s for deck detectors "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_settle_deck",
+            )
 
     # App-specific popups (Hily Got it / Maybe later; BLK Send Like anyway)
     if app == "hily":
@@ -1174,12 +1244,49 @@ def plan_bulk_message(
     if not list_ok and not bulk.get("current"):
         open_tab = _open_chats_tab_action(app_key, ui_tree, history, planner)
         if open_tab:
+            bulk.pop("_chats_settle_done", None)
+            st["bulk_message"] = bulk
             return open_tab
-        # Already tried opening the tab (or no tab found) and still not a list
-        if any(
-            "open chats" in str(h).lower() or "bulk_open_chats" in str(h).lower()
+        opened_hist = any(
+            "open chats" in str(h).lower()
+            or "bulk_open_chats" in str(h).lower()
+            or "chats/messages tab" in str(h).lower()
             for h in history[-8:]
-        ):
+        )
+        # Retry once after a short settle — real apps animate the list in.
+        if opened_hist and not bulk.get("_chats_settle_done"):
+            bulk["_chats_settle_done"] = True
+            st["bulk_message"] = bulk
+            try:
+                from cloud_agent import save_detector_miss_tree as _miss
+            except ImportError:
+                try:
+                    from backend.cloud_agent import (  # type: ignore
+                        save_detector_miss_tree as _miss,
+                    )
+                except ImportError:
+                    _miss = None  # type: ignore
+            if _miss:
+                _miss(
+                    f"chat_list_{app_key or 'app'}",
+                    ui_tree,
+                    package=package,
+                )
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": DETECTOR_SETTLE_S,
+                    "delay_s": DETECTOR_SETTLE_S,
+                    "reason": (
+                        f"Settle {DETECTOR_SETTLE_S}s after chats tab "
+                        f"before re-check ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_settle_chats",
+            )
+        if opened_hist:
             return _fp(
                 {
                     "action": "fail",
@@ -1194,7 +1301,7 @@ def plan_bulk_message(
                 },
                 "bulk_chat_list_unverified",
             )
-        # First attempt with mapped coords even if label miss
+        # First attempt with mapped coords even if label miss (not Yubo xy)
         open_tab = _open_chats_tab_action(app_key, ui_tree, [], planner)
         if open_tab:
             return open_tab
@@ -1224,12 +1331,20 @@ def plan_bulk_message(
             next_name = ""
             bulk.pop("_next_row", None)
 
-    # On conversation with current match
-    header_hit = bool(next_name) and any(
-        next_name.lower() in f"{n.get('label')}".lower() and int(n.get("y") or 0) < 400
-        for n in nodes
-    )
-    if header_hit or (bulk.get("current") == next_name and next_name):
+    # On conversation with current match — require verified thread header
+    header_hit = bool(next_name) and thread_header_verified(app_key, ui_tree, next_name)
+    if not header_hit and next_name:
+        # Legacy soft match for apps without header_ids (still top-of-screen)
+        header_hit = any(
+            next_name.lower() in f"{n.get('label')}".lower()
+            and int(n.get("y") or 0) < 400
+            for n in nodes
+        )
+    if header_hit or (
+        bulk.get("current") == next_name
+        and next_name
+        and thread_header_verified(app_key, ui_tree, next_name)
+    ):
         bulk["current"] = next_name
         # If already sent (new outgoing), go back
         if (
@@ -1260,20 +1375,16 @@ def plan_bulk_message(
                 "bulk_back_after_send",
             )
 
-        # Type / send
+        # Type / send — composer ONLY after header verified; bottom 30% ids
         if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
-            # Focus compose — never search; never guessed coords
-            c = _tree_node_center(ui_tree, *compose_labels)
-            compose_ids = tuple(profile.get("compose_ids") or ())
-            if c is None and compose_ids:
-                c = _tree_id_center(ui_tree, *compose_ids)
+            c = compose_center_in_thread(app_key, ui_tree, next_name)
             if c is None:
                 return _fp(
                     {
                         "action": "fail",
                         "reason": (
-                            f"Compose not found for {next_name} — "
-                            f"refusing coord guess ({planner})"
+                            f"Compose not found for {next_name} after header "
+                            f"verify — refusing list Message tap ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,

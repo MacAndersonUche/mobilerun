@@ -766,6 +766,43 @@ def _tree_node_center(tree: str, *needles: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _exact_label_center(tree: str, label: str) -> Optional[Tuple[int, int]]:
+    """Exact text/content-desc match (case-insensitive) — never substring."""
+    want = (label or "").strip().lower()
+    if not want:
+        return None
+    for n in _parse_compact_nodes(tree):
+        for field in ("text", "desc", "label"):
+            val = str(n.get(field) or "").strip().lower()
+            if val == want:
+                return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def _nav_tab_center(
+    tree: str,
+    *labels: str,
+    ids: Sequence[str] = (),
+) -> Optional[Tuple[int, int]]:
+    """Bottom-nav tab by resource-id or exact content-desc/text (never guessed xy)."""
+    if ids:
+        c = _tree_id_center(tree, *tuple(ids))
+        if c:
+            return c
+    for lab in labels:
+        c = _exact_label_center(tree, lab)
+        if c:
+            return c
+        c = _tree_node_center(tree, lab)
+        if c and int(c[1]) >= 2000:  # prefer bottom-nav hits
+            return c
+    for lab in labels:
+        c = _tree_node_center(tree, lab)
+        if c:
+            return c
+    return None
+
+
 def _tree_editable_center(tree: str) -> Optional[Tuple[int, int]]:
     low = (tree or "").lower()
     for pat in (
@@ -1186,35 +1223,95 @@ def find_send_center_safe(
     return None
 
 
-def bumble_on_people_deck(tree: str) -> bool:
-    """True when Bumble People tab card stack is visible."""
+def _log_detector_false(name: str, tree: str, package: str = "") -> None:
+    """Best-effort S3/log capture when a screen detector returns false."""
+    try:
+        from cloud_agent import save_detector_miss_tree
+    except ImportError:
+        try:
+            from backend.cloud_agent import save_detector_miss_tree  # type: ignore
+        except ImportError:
+            return
+    try:
+        save_detector_miss_tree(name, tree or "", package=package)
+    except Exception:
+        pass
+
+
+def bumble_on_people_deck(tree: str, *, _log: bool = True) -> bool:
+    """True when Bumble People tab card stack is visible (S21 map signals)."""
+    # Strong: profile / encounters container ids
     if _tree_id_center(
         tree,
         "profile_root_container",
         "encountersGridItem_summaryContainer",
         "com.bumble.app:id/profile_root_container",
+        "com.bumble.app:id/encountersGridItem_summaryContainer",
     ):
         return True
-    # Name TextView "Name, Age" near bottom of card + main photo desc
+    # Strong: main photo content-desc + Name, Age near bottom of card
+    photo = False
+    name_age = False
     for n in _parse_compact_nodes(tree):
         lab = n.get("label") or ""
         low = lab.lower()
         if "main photo" in low and ("'s" in low or "\u2019s" in lab):
-            return True
-        if re.search(r",\s*\d{2}\s*$", lab.strip()) and int(n.get("y") or 0) > 1600:
-            return True
+            photo = True
+        if re.search(r",\s*\d{2}\s*$", lab.strip()) and int(n.get("y") or 0) > 1500:
+            name_age = True
+    if photo or name_age:
+        return True
+    # Weak: People tab present and Connections list absent
+    people_tab = bool(
+        _exact_label_center(tree, "People") or _tree_node_center(tree, "People")
+    )
+    if people_tab and not _tree_id_center(
+        tree, "connections_root", "connections_connectionsList", "connectionItem"
+    ):
+        # Require at least one mid-screen card-ish node
+        for n in _parse_compact_nodes(tree):
+            if 400 < int(n.get("y") or 0) < 1900 and (n.get("text") or n.get("desc")):
+                return True
+    if _log:
+        _log_detector_false("bumble_on_people_deck", tree, "com.bumble.app")
     return False
 
 
-def bumble_on_connections(tree: str) -> bool:
-    return bool(
-        _tree_id_center(
-            tree,
-            "connections_root",
-            "connections_connectionsList",
-            "com.bumble.app:id/connections_root",
-        )
+def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
+    """True on Bumble Chats/Connections list (multi-signal S21 map)."""
+    # List roots
+    if _tree_id_center(
+        tree,
+        "connections_root",
+        "connections_connectionsList",
+        "com.bumble.app:id/connections_root",
+        "com.bumble.app:id/connections_connectionsList",
+    ):
+        return True
+    # Row ids (person name / connection item)
+    if _tree_id_center(
+        tree,
+        "connectionItem",
+        "connectionsItem_personName",
+        "com.bumble.app:id/connectionItem",
+        "com.bumble.app:id/connectionsItem_personName",
+        "connection_row",
+        "connection_name",
+    ):
+        return True
+    # Header text + Chats tab (without People deck card)
+    has_header = bool(
+        re.search(r'\bt="(?:Chats|Connections|Older chats)"', tree or "", re.I)
+        or re.search(r">\s*(?:Chats|Connections|Older chats)\s*<", tree or "", re.I)
     )
+    has_chats_tab = bool(
+        _exact_label_center(tree, "Chats") or _tree_node_center(tree, "Chats")
+    )
+    if has_header and has_chats_tab and not bumble_on_people_deck(tree, _log=False):
+        return True
+    if _log:
+        _log_detector_false("bumble_on_connections", tree, "com.bumble.app")
+    return False
 
 
 def bumble_dismiss_popup(
@@ -1411,37 +1508,124 @@ def bumble_pass_swipe(planner: str = "bumble_heuristic") -> Dict[str, Any]:
 # --- Yubo (co.yellw.yellowapp) SM-G996B ---
 
 
+def _is_badge_or_numeric_label(text: str) -> bool:
+    """True for counters like '50+', '42', '99+' — never a profile name."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    return bool(re.match(r"^\d+\+?$", t))
+
+
 def yubo_deck_card_name(tree: str) -> Optional[str]:
-    """First text node with left x≈42 is the deck card name."""
+    """Profile name on the Yubo deck (S21 map: left x≈42 name node).
+
+    Skips numeric/badge labels (``50+``, ``42`` Yubucks) that sit on the same edge.
+    """
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or "").strip()
         if not text or len(text) > 40:
             continue
+        if _is_badge_or_numeric_label(text):
+            continue
         x1 = n.get("x1")
         if x1 is None:
             continue
-        if abs(int(x1) - 42) > 2:
+        if abs(int(x1) - 42) > 8:  # allow slight dump jitter vs map's 42
             continue
         y = int(n.get("y") or 0)
         if y < 200 or y > 2100:
             continue
         low = text.lower()
-        if low in ("chat", "likes", "friends", "more", "aa", "direct", "blast"):
+        if low in (
+            "chat",
+            "likes",
+            "friends",
+            "more",
+            "aa",
+            "direct",
+            "blast",
+            "send a message",
+        ):
+            continue
+        return text
+    # Fallback: first non-badge mid-card title (not bottom nav)
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if not text or _is_badge_or_numeric_label(text) or len(text) > 40:
+            continue
+        y = int(n.get("y") or 0)
+        if y < 250 or y > 900:
+            continue
+        low = text.lower()
+        if low in ("chat", "likes", "friends", "more", "send a message"):
+            continue
+        if int(n.get("x") or 0) > 700:  # skip right-side pills
             continue
         return text
     return None
 
 
-def yubo_on_deck(tree: str) -> bool:
+def yubo_on_deck(tree: str, *, _log: bool = True) -> bool:
     if yubo_deck_card_name(tree):
         return True
     blob = (tree or "").lower()
-    return "send a message" in blob and "conversations" not in blob
+    if "send a message" in blob and "conversations" not in blob:
+        return True
+    if _log:
+        _log_detector_false("yubo_on_deck", tree, "co.yellw.yellowapp")
+    return False
 
 
-def yubo_on_chat_list(tree: str) -> bool:
+def yubo_on_chat_list(tree: str, *, _log: bool = True) -> bool:
+    """True on Yubo Chat/Conversations list (multi-signal; not the deck).
+
+    The Chat tab is visible on the deck too — require Conversations/New friends
+    section text and/or conversation rows below the header.
+    """
+    if yubo_on_chat(tree):
+        return False
+    if yubo_on_deck(tree, _log=False) and "conversations" not in (tree or "").lower():
+        # Deck card + Send a message without Conversations section → not inbox
+        if _log:
+            pass  # don't log false when clearly on deck
+        return False
     blob = (tree or "").lower()
-    return "conversations" in blob or ("new friends" in blob and "aa" not in blob)
+    has_section = "conversations" in blob or "new friends" in blob
+    # Conversation rows: leftish name texts under Conversations header (y≳1100)
+    row_hit = False
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if not text or _is_badge_or_numeric_label(text) or len(text) > 40:
+            continue
+        y = int(n.get("y") or 0)
+        if y < 1100 or y > 2000:
+            continue
+        low = text.lower()
+        if low in (
+            "chat",
+            "likes",
+            "friends",
+            "more",
+            "conversations",
+            "new friends",
+            "reactions",
+            "launch a hypersurge",
+            "aa",
+            "direct",
+            "blast",
+            "send a message",
+        ):
+            continue
+        if int(n.get("x") or 0) < 500:
+            row_hit = True
+            break
+    if has_section and row_hit:
+        return True
+    if has_section and "aa" not in blob and "send a message" not in blob:
+        return True
+    if _log:
+        _log_detector_false("yubo_on_chat_list", tree, "co.yellw.yellowapp")
+    return False
 
 
 def yubo_on_chat(tree: str) -> bool:
@@ -1627,27 +1811,69 @@ def yubo_outgoing_verified(tree: str, message: str) -> bool:
 # --- Badoo (com.badoo.mobile) SM-G996B ---
 
 
-def badoo_on_encounters(tree: str) -> bool:
-    return bool(
-        _tree_id_center(
-            tree,
-            "encounters_stackView",
-            "encounters_profile_voting_buttonVoteYes",
-            "encounters_profile_voting_buttonVoteNo",
-            "com.badoo.mobile:id/encounters_stackView",
-        )
-    )
+def badoo_on_encounters(tree: str, *, _log: bool = True) -> bool:
+    """True on Badoo Encounters deck — VoteYes/VoteNo ids from S21 map."""
+    if _tree_id_center(
+        tree,
+        "encounters_stackView",
+        "encounters_profile_voting_buttonVoteYes",
+        "encounters_profile_voting_buttonVoteNo",
+        "com.badoo.mobile:id/encounters_stackView",
+        "com.badoo.mobile:id/encounters_profile_voting_buttonVoteYes",
+        "com.badoo.mobile:id/encounters_profile_voting_buttonVoteNo",
+    ):
+        return True
+    # Exact Like/Pass voting labels near bottom action row
+    like = _exact_label_center(tree, "Like")
+    pass_ = _exact_label_center(tree, "Pass")
+    if like and pass_ and int(like[1]) > 1700 and int(pass_[1]) > 1700:
+        return True
+    if _log:
+        _log_detector_false("badoo_on_encounters", tree, "com.badoo.mobile")
+    return False
 
 
-def badoo_on_connections(tree: str) -> bool:
-    return bool(
+def badoo_on_connections(tree: str, *, _log: bool = True) -> bool:
+    """True on Badoo Chats/Connections list (multi-signal S21 map)."""
+    if _tree_id_center(
+        tree,
+        "connections_root",
+        "connection_list_component",
+        "com.badoo.mobile:id/connections_root",
+        "com.badoo.mobile:id/connection_list_component",
+    ):
+        return True
+    if _tree_id_center(
+        tree,
+        "connection_container",
+        "profileInfo_name",
+        "com.badoo.mobile:id/connection_container",
+        "com.badoo.mobile:id/profileInfo_name",
+    ) and not _tree_id_center(
+        tree,
+        "encounters_stackView",
+        "encounters_profile_voting_buttonVoteYes",
+    ):
+        return True
+    chats_tab = bool(
         _tree_id_center(
             tree,
-            "connections_root",
-            "connection_list_component",
-            "com.badoo.mobile:id/connections_root",
+            "nav_bar_button_connections",
+            "com.badoo.mobile:id/nav_bar_button_connections",
         )
+        or _exact_label_center(tree, "Chats")
     )
+    if chats_tab and not badoo_on_encounters(tree, _log=False):
+        # Require at least one mid-list name-ish node
+        for n in _parse_compact_nodes(tree):
+            text = (n.get("text") or "").strip()
+            y = int(n.get("y") or 0)
+            if text and 600 < y < 2000 and not _is_badge_or_numeric_label(text):
+                if text.lower() not in ("likes", "chats", "encounters", "buy credits"):
+                    return True
+    if _log:
+        _log_detector_false("badoo_on_connections", tree, "com.badoo.mobile")
+    return False
 
 
 def badoo_dismiss_popup(
@@ -1750,16 +1976,35 @@ def badoo_pass_swipe(planner: str = "badoo_heuristic") -> Dict[str, Any]:
 # --- Hily (com.hily.app) SM-G996B — buttons only; swipe does not register ---
 
 
-def hily_on_finder(tree: str) -> bool:
-    return bool(
+def hily_on_finder(tree: str, *, _log: bool = True) -> bool:
+    """True on Hily Finder deck — ActionButton_LIKE / SKIP from S21 map."""
+    if _tree_id_center(
+        tree,
+        "ActionButton_LIKE",
+        "ActionButton_SKIP",
+        "id/ActionButton_LIKE",
+        "id/ActionButton_SKIP",
+    ):
+        return True
+    if (
         _tree_id_center(
             tree,
-            "ActionButton_LIKE",
-            "ActionButton_SKIP",
             "userNameAgeField",
             "finderCardUser",
+            "id/userNameAgeField",
         )
-    )
+        and not hily_on_thread(tree)
+        and not hily_on_chats_list(tree)
+    ):
+        return True
+    # Exact Pass/Like labels on the action row
+    like = _exact_label_center(tree, "Like")
+    pass_ = _exact_label_center(tree, "Pass")
+    if like and pass_ and int(like[1]) > 1700:
+        return True
+    if _log:
+        _log_detector_false("hily_on_finder", tree, "com.hily.app")
+    return False
 
 
 def hily_on_thread(tree: str) -> bool:
@@ -1772,6 +2017,79 @@ def hily_on_thread(tree: str) -> bool:
             "threadSend",
         )
     )
+
+
+def thread_header_verified(
+    app: Optional[str],
+    tree: str,
+    contact: str,
+) -> bool:
+    """True when the open thread toolbar/header matches ``contact``."""
+    contact_l = (contact or "").strip().lower()
+    if not contact_l or contact_l.startswith("__existing_"):
+        return False
+    app_l = (app or "").lower()
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
+    header_ids = tuple(profile.get("header_ids") or ())
+    for n in _parse_compact_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        label = (n.get("text") or n.get("label") or "").strip()
+        if not label:
+            continue
+        id_ok = False
+        if header_ids:
+            id_ok = any(
+                h.lower().split("/")[-1] in nid or h.lower() in nid for h in header_ids
+            )
+        # Toolbar / top-of-screen name
+        y_ok = int(n.get("y") or 0) < 400
+        if (id_ok or y_ok) and _name_exact_or_whole_word(contact_l, label):
+            return True
+    return False
+
+
+def compose_center_in_thread(
+    app: Optional[str],
+    tree: str,
+    contact: str,
+    *,
+    screen_h: int = 2400,
+) -> Optional[Tuple[int, int]]:
+    """Locate composer ONLY after the thread header matches ``contact``.
+
+    Prefers compose resource-ids in the bottom 30% of the screen so list-row
+    'Message' previews (e.g. Hily mid-list) are never tapped.
+    """
+    if not thread_header_verified(app, tree, contact):
+        return None
+    app_l = (app or "").lower()
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
+    compose_ids = tuple(profile.get("compose_ids") or ())
+    compose_labels = tuple(profile.get("compose_labels") or ())
+    y_min = int(screen_h * 0.70)
+    # 1) compose ids in bottom 30%
+    for n in _parse_compact_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if not nid or not compose_ids:
+            continue
+        if not any(
+            c.lower().split("/")[-1] in nid or c.lower() in nid for c in compose_ids
+        ):
+            continue
+        if int(n.get("y") or 0) >= y_min:
+            return (int(n["x"]), int(n["y"]))
+    # 2) any matching compose id (still after header verify)
+    c = _tree_id_center(tree, *compose_ids) if compose_ids else None
+    if c and c[1] >= y_min - 100:
+        return c
+    # 3) editable / exact label in bottom band only
+    for n in _parse_compact_nodes(tree):
+        if int(n.get("y") or 0) < y_min:
+            continue
+        lab = (n.get("label") or n.get("hint") or n.get("text") or "").strip().lower()
+        if n.get("editable") or any(lab == str(x).lower() for x in compose_labels):
+            return (int(n["x"]), int(n["y"]))
+    return None
 
 
 def hily_on_chats_list(tree: str) -> bool:
@@ -3234,15 +3552,35 @@ def heuristic_dm_send(
             not chat_ok
             and not typed_message
             and yubo_on_deck(ui_tree)
-            and not yubo_on_chat_list(ui_tree)
+            and not yubo_on_chat_list(ui_tree, _log=False)
             and not yubo_on_chat(ui_tree)
         ):
-            tab = profile.get("inbox_tab_xy") or (343, 2180)
+            # Prefer content-desc / label from the map — NEVER fixed xy (no_progress).
+            chats = _nav_tab_center(
+                ui_tree,
+                "Chat",
+                "Chats",
+                "Conversations",
+                ids=tuple(profile.get("inbox_tab_ids") or ()),
+            )
+            if not chats:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Yubo Chat tab not found by id/content-desc — "
+                            f"refusing fixed xy ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "yubo_chat_tab_missing",
+                )
             return _fp(
                 {
                     "action": "tap",
-                    "x": int(tab[0]),
-                    "y": int(tab[1]),
+                    "x": int(chats[0]),
+                    "y": int(chats[1]),
                     "reason": f"Open Chat tab from Yubo deck ({planner})",
                     "planner": planner,
                     "llm_provider": None,

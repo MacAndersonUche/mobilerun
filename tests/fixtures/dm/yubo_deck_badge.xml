@@ -1,0 +1,12 @@
+<hierarchy windows="1" nodes="18" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n t="50+" xy="80,158" b="42,138,120,179"/>
+ <n t="42" xy="840,158" b="812,138,869,179"/>
+ <n t="Sam" xy="200,400" b="42,360,360,440"/>
+ <n t="Send a message" c="1" xy="260,2000" b="80,1960,440,2040"/>
+ <n d="Chat" c="1" xy="343,2180" b="250,2120,430,2240"/>
+ <n d="Likes" c="1" xy="540,2180" b="450,2120,630,2240"/>
+ <n d="Friends" c="1" xy="750,2180" b="660,2120,840,2240"/>
+ <n d="More" c="1" xy="940,2180" b="860,2120,1020,2240"/>
+</w>
+</hierarchy>
