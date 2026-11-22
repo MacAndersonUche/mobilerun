@@ -58,22 +58,17 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
+      # Runner image already has Android SDK; cache platforms/build-tools/NDK.
+      # (android-actions/setup-android fails: obsolete sdkmanager 'tools' package)
       - name: Cache Android SDK packages
         uses: actions/cache@v4
         with:
           path: |
-            ${{ env.ANDROID_HOME }}/licenses
-            ${{ env.ANDROID_SDK_ROOT }}/licenses
-            ${{ env.ANDROID_HOME }}/platforms
-            ${{ env.ANDROID_HOME }}/build-tools
-            ${{ env.ANDROID_HOME }}/ndk
-            ${{ env.ANDROID_SDK_ROOT }}/platforms
-            ${{ env.ANDROID_SDK_ROOT }}/build-tools
-            ${{ env.ANDROID_SDK_ROOT }}/ndk
-          key: android-sdk-${{ runner.os }}-api35-buildtools-${{ hashFiles('android-app/build.gradle.kts') }}
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+            /usr/local/lib/android/sdk/ndk
+            /usr/local/lib/android/sdk/licenses
+          key: android-sdk-${{ runner.os }}-api35-${{ hashFiles('android-app/build.gradle.kts') }}
           restore-keys: |
             android-sdk-${{ runner.os }}-api35-
             android-sdk-${{ runner.os }}-
