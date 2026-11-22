@@ -3893,9 +3893,64 @@ def tagged_is_premium(tree: str) -> bool:
     return "tagged premium" in blob
 
 
-def known_root_screen(app: Optional[str], tree: str) -> bool:
-    """Deck, chat list, or verified tab bar — safe place to start a job."""
+def app_overlay_present(app: Optional[str], tree: str) -> Optional[str]:
+    """Return overlay name when a sheet/modal/viewer covers the root UI.
+
+    Discover grids / bottom-nav remaining in the dump under a sheet must NOT
+    count as a safe root — callers must Back/close first.
+    """
     app_l = (app or "").lower()
+    if not tree:
+        return None
+    if keyboard_likely_up(tree):
+        return "keyboard"
+    if app_l == "bumble" and bumble_on_photo_browser(tree):
+        return "bumble_photo_browser"
+    if app_l == "hily":
+        if hily_on_mbm(tree):
+            return "hily_mbm"
+        if hily_on_photo_viewer(tree):
+            return "hily_photo_viewer"
+        if hily_on_profile_sheet(tree):
+            return "hily_profile_sheet"
+    if app_l == "hinge" and hinge_on_like_sheet(tree):
+        return "hinge_like_sheet"
+    if app_l == "yubo":
+        blob = (tree or "").lower()
+        if "blast" in blob and ("direct" in blob or "send a message" in blob):
+            # Direct/Blast compose sheet over deck
+            if "yubucks" in blob or "blast" in blob:
+                return "yubo_direct_sheet"
+    if app_l == "tagged":
+        blob = (tree or "").lower()
+        if "continue" in blob and (
+            "location" in blob or "enable location" in blob or "where are you" in blob
+        ):
+            return "tagged_location_overlay"
+    if app_l == "blk":
+        blob = (tree or "").lower()
+        if "introducing streaks" in blob or ("streaks" in blob and "got it" in blob):
+            return "blk_streaks_sheet"
+        if "super like" in blob and ("send a super like" in blob or "instead" in blob):
+            return "blk_super_like_sheet"
+    if app_l == "badoo":
+        blob = (tree or "").lower()
+        if "buy credits" in blob or (
+            "credits" in blob and ("close" in blob or "not now" in blob)
+        ):
+            return "badoo_credits_sheet"
+    return None
+
+
+def known_root_screen(app: Optional[str], tree: str) -> bool:
+    """Deck, chat list, or verified tab bar — safe place to start a job.
+
+    False whenever a sheet/modal/viewer overlay is present, even if Discover
+    grid / bottom-nav nodes remain underneath in the dump.
+    """
+    app_l = (app or "").lower()
+    if app_overlay_present(app_l, tree):
+        return False
     if tab_bar_verified(app_l, tree):
         return True
     if app_l == "bumble":

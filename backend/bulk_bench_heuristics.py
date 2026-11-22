@@ -584,11 +584,28 @@ def _open_chats_tab_action(
     ):
         return None  # already tried — caller should verify/fail
     app_l = (app or "").lower()
-    # Never blind-tap nav while stuck in photo browser / MBM / keyboard
-    if app_l == "bumble" and bumble_on_photo_browser(ui_tree):
-        return bumble_back_from_photo_browser(planner=planner)
-    if app_l == "hily" and hily_on_mbm(ui_tree):
-        return hily_close_mbm(ui_tree, planner=planner)
+    # Any sheet/modal/viewer → never tap bottom nav underneath
+    try:
+        from dm_heuristics import app_overlay_present
+    except ImportError:
+        from backend.dm_heuristics import app_overlay_present  # type: ignore
+
+    overlay = app_overlay_present(app_l, ui_tree)
+    if overlay:
+        if app_l == "bumble" and overlay == "bumble_photo_browser":
+            return bumble_back_from_photo_browser(planner=planner)
+        if app_l == "hily" and overlay == "hily_mbm":
+            return hily_close_mbm(ui_tree, planner=planner)
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (f"Back — close {overlay} before chats/nav tap ({planner})"),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_chats_overlay_back",
+        )
     if keyboard_likely_up(ui_tree):
         return _fp(
             {
@@ -650,36 +667,29 @@ def _open_chats_tab_action(
                 c = (int(xy[0]), int(xy[1]))
     if not c:
         return None
-    # SAFETY: verify the chats tab is the topmost visible node at that point —
-    # a covering profile sheet (Hily Crush) must not receive the tap.
+    # SAFETY: any node (clickable or not) at the point with paid/crush labels
+    # blocks — real Hily Crush is a non-clickable ImageView over Chats.
     try:
-        from tap_firewall import resolve_topmost_clickable_at, node_matches_keywords
+        from tap_firewall import (
+            find_blocking_label_at,
+            resolve_topmost_clickable_at,
+            _POINT_BLOCK_LABELS,
+        )
     except ImportError:
         from backend.tap_firewall import (  # type: ignore
+            find_blocking_label_at,
             resolve_topmost_clickable_at,
-            node_matches_keywords,
+            _POINT_BLOCK_LABELS,
         )
-    top = resolve_topmost_clickable_at(ui_tree, int(c[0]), int(c[1]))
-    if top and node_matches_keywords(
-        top,
-        (
-            "crush",
-            "major crush",
-            "like",
-            "super",
-            "rose",
-            "boost",
-            "send",
-            "heart",
-        ),
-    ):
+    blocker = find_blocking_label_at(ui_tree, int(c[0]), int(c[1]), _POINT_BLOCK_LABELS)
+    if blocker:
         return _fp(
             {
                 "action": "press_button",
                 "button": "back",
                 "reason": (
                     f"Back — chats tab covered by "
-                    f"{(top.get('label') or top.get('id') or 'sheet')[:40]} "
+                    f"{(blocker.get('label') or blocker.get('id') or 'sheet')[:40]} "
                     f"({planner})"
                 ),
                 "planner": planner,
@@ -687,6 +697,7 @@ def _open_chats_tab_action(
             },
             "bulk_chats_covered_back",
         )
+    top = resolve_topmost_clickable_at(ui_tree, int(c[0]), int(c[1]))
     if top:
         lab = (top.get("label") or top.get("text") or "").lower()
         # Accept if resolved node looks like a chats/messages tab
@@ -757,10 +768,90 @@ def _recover_to_root_action(
 
     Only for real dating apps that leave leftover sheets/threads between jobs.
     Hard-caps relaunches/backs so we never loop open↔back unbounded.
+
+    Sheets/modals/viewers are checked BEFORE known_root_screen — Discover
+    grid / bottom-nav under a covering sheet must not short-circuit recover.
     """
     app_l = (app or "").lower()
     if app_l not in _ROOT_RECOVER_APPS:
         return None
+
+    try:
+        from dm_heuristics import app_overlay_present
+    except ImportError:
+        from backend.dm_heuristics import app_overlay_present  # type: ignore
+
+    # Overlay first — even when Discover/nav underneath looks like a root
+    overlay = app_overlay_present(app_l, ui_tree)
+    if overlay:
+        if app_l == "bumble" and overlay == "bumble_photo_browser":
+            return bumble_back_from_photo_browser(planner=planner)
+        if app_l == "hily" and overlay == "hily_photo_viewer":
+            return hily_back_from_photo_viewer(planner=planner)
+        if app_l == "hily" and overlay == "hily_profile_sheet":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Back out of Hily profile/Crush sheet → root ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_profile_sheet_back",
+            )
+        if app_l == "hily" and overlay == "hily_mbm":
+            # Skip-contact path owns MBM close in message planner; still Back here
+            # when recover is asked from swipe/job-start.
+            return hily_close_mbm(ui_tree, planner=planner) or _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Back out of Hily MBM sheet → root ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_mbm_back",
+            )
+        if app_l == "hinge" and overlay == "hinge_like_sheet":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Back out of Hinge like sheet → root ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_like_sheet_back",
+            )
+        if app_l == "tagged" and overlay == "tagged_location_overlay":
+            loc = tagged_location_overlay_continue(ui_tree, planner=planner)
+            if loc:
+                return loc
+        if overlay == "keyboard":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Dismiss keyboard → root ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_recover_keyboard",
+            )
+        # Generic overlay: Back
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back out of {overlay} → root ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_overlay_back",
+        )
+
     if known_root_screen(app_l, ui_tree):
         return None
     st = state if isinstance(state, dict) else {}
@@ -800,22 +891,6 @@ def _recover_to_root_action(
             "bulk_recover_exhausted",
         )
 
-    if app_l == "bumble" and bumble_on_photo_browser(ui_tree):
-        return bumble_back_from_photo_browser(planner=planner)
-    if app_l == "hily" and hily_on_photo_viewer(ui_tree):
-        return hily_back_from_photo_viewer(planner=planner)
-    if app_l == "hily" and hily_on_profile_sheet(ui_tree):
-        return _fp(
-            {
-                "action": "press_button",
-                "button": "back",
-                "reason": (f"Back out of Hily profile/Crush sheet → root ({planner})"),
-                "planner": planner,
-                "llm_provider": None,
-            },
-            "hily_profile_sheet_back",
-        )
-    # Hily MBM is handled in plan_bulk_message (skip contact) — not here
     if app_l == "hinge":
         play = hinge_dismiss_play_review(ui_tree, planner=planner)
         if play:
@@ -823,9 +898,6 @@ def _recover_to_root_action(
         en = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
         if en:
             return en
-        if hinge_on_like_sheet(ui_tree):
-            # Not a root — back out of like sheet if we landed mid-job
-            pass
     if app_l == "tagged":
         loc = tagged_location_overlay_continue(ui_tree, planner=planner)
         if loc:

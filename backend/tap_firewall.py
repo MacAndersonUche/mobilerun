@@ -115,18 +115,58 @@ def _point_in_node(x: int, y: int, n: Dict[str, Any]) -> bool:
     return abs(cx - x) <= 48 and abs(cy - y) <= 48
 
 
-def resolve_topmost_clickable_at(
+# Labels that block a tap when ANY node (clickable or not) covers the point.
+# Real Hily Crush is a non-clickable ImageView d="Crush" over bottom-nav.
+_POINT_BLOCK_LABELS = (
+    "crush",
+    "major crush",
+    "like",
+    "super like",
+    "superswipe",
+    "super swipe",
+    "rose",
+    "boost",
+    "send like",
+    "send a like",
+    "heart",
+    "likebtn",
+    "actionbutton_like",
+    "actionbutton_crush",
+    "message before match",
+    "vote yes",
+    "pass",
+    "dislike",
+)
+
+_NAV_INTENT_MARKERS = (
+    "chat",
+    "chats",
+    "messages",
+    "matches",
+    "connections",
+    "discover",
+    "people",
+    "finder",
+    "feed",
+    "activity",
+    "me",
+    "home",
+    "inbox",
+    "encounters",
+    "bottom nav",
+    "bottomnav",
+    "tab",
+)
+
+
+def _all_nodes_at(
     tree: str,
     x: int,
     y: int,
     *,
     include_invisible: bool = False,
-) -> Optional[Dict[str, Any]]:
-    """Topmost visible clickable whose bounds contain (x,y).
-
-    Window order: later windows in the dump sit above earlier ones; within a
-    window, later nodes are treated as higher z.
-    """
+    clickable_only: bool = False,
+) -> List[Dict[str, Any]]:
     try:
         from dm_heuristics import _parse_compact_nodes
     except ImportError:
@@ -140,7 +180,7 @@ def resolve_topmost_clickable_at(
     )
     hits: List[Dict[str, Any]] = []
     for n in nodes:
-        if not n.get("clickable") and not n.get("editable"):
+        if clickable_only and not (n.get("clickable") or n.get("editable")):
             continue
         if not include_invisible and not n.get("visible", True):
             continue
@@ -148,16 +188,108 @@ def resolve_topmost_clickable_at(
             continue
         if _point_in_node(x, y, n):
             hits.append(n)
+    return hits
+
+
+def find_blocking_label_at(
+    tree: str,
+    x: int,
+    y: int,
+    keywords: Optional[Sequence[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Any visible node (clickable or not) at (x,y) matching paid/mutate labels.
+
+    Dump order is NOT z-order — sheet Crush ImageViews often appear *before*
+    bottom-nav in the tree. Matching by label at the point is authoritative.
+    """
+    kws = keywords or _POINT_BLOCK_LABELS
+    for n in _all_nodes_at(tree, x, y):
+        if node_matches_keywords(n, kws):
+            return n
+    return None
+
+
+def resolve_topmost_clickable_at(
+    tree: str,
+    x: int,
+    y: int,
+    *,
+    include_invisible: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Best-effort clickable at (x,y). Prefer smallest bounds (leaf over parent).
+
+    Dump order is unreliable for z-order (sheet nodes may precede nav). Prefer
+    the smallest-area clickable hit; callers must also run find_blocking_label_at.
+    """
+    hits = _all_nodes_at(
+        tree, x, y, include_invisible=include_invisible, clickable_only=True
+    )
     if not hits:
         return None
-    # Highest window_index, then highest node_index within window
+
+    def _area(n: Dict[str, Any]) -> int:
+        x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
+        if None in (x1, y1, x2, y2):
+            return 10**9
+        return max(1, int(x2) - int(x1)) * max(1, int(y2) - int(y1))
+
     hits.sort(
         key=lambda n: (
-            int(n.get("window_index") or 0),
-            int(n.get("node_index") or 0),
+            _area(n),
+            -int(n.get("window_index") or 0),
+            -int(n.get("node_index") or 0),
         )
     )
-    return hits[-1]
+    return hits[0]
+
+
+def _looks_like_nav_tap(
+    action: Dict[str, Any], resolved: Optional[Dict[str, Any]]
+) -> bool:
+    bits = " ".join(
+        str(action.get(k) or "")
+        for k in ("label", "text", "element", "target", "reason", "intended_id")
+    ).lower()
+    if any(m in bits for m in _NAV_INTENT_MARKERS):
+        # "Open chats/messages tab" etc.
+        if any(
+            m in bits
+            for m in (
+                "tab",
+                "nav",
+                "bottom",
+                "open chats",
+                "open matches",
+                "open messages",
+                "open discover",
+                "open people",
+            )
+        ) or any(
+            m in bits for m in ("chats", "messages", "matches", "finder", "discover")
+        ):
+            return True
+    if resolved:
+        blob = _norm_blob(resolved)
+        rid = str(resolved.get("id") or "").lower()
+        if "bottomnav" in rid or "nav_bar" in rid or "tab_" in rid:
+            return True
+        if (
+            any(
+                m in blob
+                for m in (
+                    "chats",
+                    "messages",
+                    "matches",
+                    "discover",
+                    "people",
+                    "finder",
+                    "activity",
+                )
+            )
+            and int(resolved.get("y") or 0) > 2000
+        ):
+            return True
+    return False
 
 
 def intended_target_matches(
@@ -222,12 +354,22 @@ def tap_is_forbidden(
     return None
 
 
+def _detect_app_from_tree(tree: str) -> Optional[str]:
+    try:
+        from dm_heuristics import detect_dm_app
+    except ImportError:
+        from backend.dm_heuristics import detect_dm_app  # type: ignore
+
+    return detect_dm_app(tree) or None
+
+
 def guard_tap_action(
     action: Dict[str, Any],
     tree: str,
     *,
     dry_run: bool,
     vision_confirmed_label: Optional[str] = None,
+    app: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Validate a tap against a (fresh) tree. Returns action or fail action."""
     try:
@@ -284,7 +426,54 @@ def guard_tap_action(
             "needs_vision": True,
         }
 
+    # (1) ANY node at point with crush/like/paid labels — ignore dump order /
+    # clickable flag (real Crush is a non-clickable ImageView).
+    block_kws = _POINT_BLOCK_LABELS if dry_run else _LIVE_PAID_REFUSE
+    blocker = find_blocking_label_at(tree, x, y, block_kws)
+    if blocker:
+        kind = "dry-run mutating" if dry_run else "paid"
+        reason = (
+            f"tap firewall: refuse {kind} label at point "
+            f"{(blocker.get('label') or blocker.get('id') or '?')[:60]!r}"
+        )
+        logger.warning("%s at (%s,%s)", reason, x, y)
+        return {
+            "action": "fail",
+            "reason": reason,
+            "planner": action.get("planner") or "tap_firewall",
+            "llm_provider": None,
+            "dry_run": bool(dry_run),
+            "_resolved_label": blocker.get("label"),
+            "_resolved_id": blocker.get("id"),
+        }
+
     resolved = resolve_topmost_clickable_at(tree, x, y)
+
+    # (2) Overlay up → refuse nav / underneath taps (Chats under Crush sheet).
+    try:
+        from dm_heuristics import app_overlay_present
+    except ImportError:
+        from backend.dm_heuristics import app_overlay_present  # type: ignore
+
+    app_key = (app or action.get("app") or _detect_app_from_tree(tree) or "").lower()
+    overlay = app_overlay_present(app_key or None, tree)
+    if overlay and _looks_like_nav_tap(action, resolved):
+        reason = (
+            f"tap firewall: refuse nav tap while {overlay} covers screen "
+            f"(close overlay first)"
+        )
+        logger.warning("%s at (%s,%s)", reason, x, y)
+        return {
+            "action": "fail",
+            "reason": reason,
+            "planner": action.get("planner") or "tap_firewall",
+            "llm_provider": None,
+            "dry_run": bool(dry_run),
+            "_resolved_label": (resolved or {}).get("label"),
+            "_resolved_id": (resolved or {}).get("id"),
+            "_overlay": overlay,
+        }
+
     reason = tap_is_forbidden(resolved, dry_run=dry_run, action=action)
     if reason:
         logger.warning("%s at (%s,%s)", reason, x, y)
