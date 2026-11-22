@@ -103,6 +103,19 @@ def test_bank_entry_allowed():
     assert out["text"] == "what's cooking?"
 
 
+def test_quoted_text_excludes_bank():
+    job = {"message_bank": ["hey there", "what's up"], "selected_message": "hey there"}
+    allowed = allowed_message_texts('message "hello miss" to 3 new profiles', job=job)
+    assert allowed == ["hello miss"]
+    out = enforce_message_text(
+        {"action": "type", "text": "hey there", "reason": "Type message"},
+        'message "hello miss" to 3 new profiles on Hily',
+        job=job,
+    )
+    assert out["action"] == "type"
+    assert out["text"] == "hello miss"
+
+
 def test_plan_llm_type_is_sanitized(monkeypatch):
     tree = (
         '<hierarchy packages="com.whatsapp"><w p="com.whatsapp">'

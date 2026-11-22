@@ -55,6 +55,7 @@ try:
         hily_on_finder,
         hily_on_mbm,
         hily_on_photo_viewer,
+        hily_on_profile_sheet,
         hily_on_top_picks_grid,
         hily_pass_action,
         _is_system_chrome_package,
@@ -130,6 +131,7 @@ except ImportError:
         hily_on_finder,
         hily_on_mbm,
         hily_on_photo_viewer,
+        hily_on_profile_sheet,
         hily_on_top_picks_grid,
         hily_pass_action,
         _is_system_chrome_package,
@@ -444,10 +446,27 @@ def _visible_chat_list_rows(
             if low.startswith(pref):
                 name = label[len(pref) :].strip()
                 break
-        # Skip counters / chrome
+        # Skip counters / chrome / message bubbles (never tap bubbles as rows)
         if re.search(r"^\d+\s*(matches?|people|likes?)$", name, re.I):
             continue
         if "they liked you" in low or "liked you" == low:
+            continue
+        nid = str(n.get("id") or "").lower()
+        cls = str(n.get("cls") or "").lower()
+        if any(
+            tok in nid or tok in cls
+            for tok in (
+                "bubble",
+                "message_text",
+                "outgoing",
+                "incoming",
+                "chat_message",
+                "msg_text",
+            )
+        ):
+            continue
+        # Long preview snippets are bubbles / previews, not contact names
+        if len(name) > 28 and " " in name and not n.get("clickable"):
             continue
         key = name.lower()
         if key in skip or key in seen:
@@ -631,6 +650,61 @@ def _open_chats_tab_action(
                 c = (int(xy[0]), int(xy[1]))
     if not c:
         return None
+    # SAFETY: verify the chats tab is the topmost visible node at that point —
+    # a covering profile sheet (Hily Crush) must not receive the tap.
+    try:
+        from tap_firewall import resolve_topmost_clickable_at, node_matches_keywords
+    except ImportError:
+        from backend.tap_firewall import (  # type: ignore
+            resolve_topmost_clickable_at,
+            node_matches_keywords,
+        )
+    top = resolve_topmost_clickable_at(ui_tree, int(c[0]), int(c[1]))
+    if top and node_matches_keywords(
+        top,
+        (
+            "crush",
+            "major crush",
+            "like",
+            "super",
+            "rose",
+            "boost",
+            "send",
+            "heart",
+        ),
+    ):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (
+                    f"Back — chats tab covered by "
+                    f"{(top.get('label') or top.get('id') or 'sheet')[:40]} "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_chats_covered_back",
+        )
+    if top:
+        lab = (top.get("label") or top.get("text") or "").lower()
+        # Accept if resolved node looks like a chats/messages tab
+        if lab and not any(
+            t in lab for t in ("chat", "message", "match", "connection", "inbox")
+        ):
+            # Fixed-xy fallback may land on wrong chrome — refuse
+            if app_l == "hily" and "crush" in lab:
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": f"Back — Hily Crush covers chats tab ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_hily_crush_covers_chats",
+                )
     return _fp(
         {
             "action": "tap",
@@ -639,6 +713,7 @@ def _open_chats_tab_action(
             "reason": f"Open chats/messages tab ({planner})",
             "planner": planner,
             "llm_provider": None,
+            "label": "Chats",
         },
         "bulk_open_chats",
     )
@@ -729,6 +804,17 @@ def _recover_to_root_action(
         return bumble_back_from_photo_browser(planner=planner)
     if app_l == "hily" and hily_on_photo_viewer(ui_tree):
         return hily_back_from_photo_viewer(planner=planner)
+    if app_l == "hily" and hily_on_profile_sheet(ui_tree):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (f"Back out of Hily profile/Crush sheet → root ({planner})"),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_profile_sheet_back",
+        )
     # Hily MBM is handled in plan_bulk_message (skip contact) — not here
     if app_l == "hinge":
         play = hinge_dismiss_play_review(ui_tree, planner=planner)
@@ -1118,20 +1204,30 @@ def plan_bulk_swipe(
     # Bumble photo browser (SuperSwipe only) — back out before deck checks
     if app == "bumble" and bumble_on_photo_browser(ui_tree):
         return bumble_back_from_photo_browser(planner=planner)
-    # Hily photo viewer ('1 of 4' + app_top_bar_back) — back before swipe/HOME
+    # Hily photo viewer / profile sheet — back before swipe/HOME
     if app == "hily" and hily_on_photo_viewer(ui_tree):
         return hily_back_from_photo_viewer(planner=planner)
-    # Hily Discover grid: open first tile → profile once; never loop tile 3x
-    if app == "hily" and hily_on_top_picks_grid(ui_tree):
-        tile_taps = sum(
-            1
-            for h in history[-10:]
-            if "hily grid tile" in str(h).lower()
-            or "bulk_hily_open_grid_tile" in str(h).lower()
-            or "open grid tile" in str(h).lower()
+    if app == "hily" and hily_on_profile_sheet(ui_tree):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (
+                    f"Back out of Hily profile sheet (Crush) before swipe "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_profile_sheet_back",
         )
+    # Hily Discover grid: open first tile once per job; never tile→back→tile loop
+    if app == "hily" and hily_on_top_picks_grid(ui_tree):
+        tile_taps = int(bulk.get("hily_tile_taps") or 0)
         tile = hily_first_grid_tile_center(ui_tree)
         if tile and tile_taps < 1:
+            bulk["hily_tile_taps"] = tile_taps + 1
+            st["bulk_swipe"] = bulk
             return _fp(
                 {
                     "action": "tap",
@@ -1144,49 +1240,31 @@ def plan_bulk_swipe(
                 },
                 "bulk_hily_open_grid_tile",
             )
-        if tile_taps >= 1 or dry_run:
-            return _fp(
-                {
-                    "action": "fail",
-                    "reason": (
-                        f"dry_run — Hily Discover is a Top picks grid "
-                        f"(Crush tiles paid); refuse repeated tile taps "
-                        f"({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": bool(dry_run),
-                    "dry_run_verified": False,
-                },
-                "bulk_dry_run_hily_grid",
-            )
-    # People photo-grid ≠ swipe deck. Opening a tile lands in PhotoBrowser
-    # (Send SuperSwipe only — paid). Switch to Discover tab (card deck) once.
-    if app == "bumble" and bumble_on_photo_grid(ui_tree):
-        if "bumble_open_discover" not in hist and "open swipe deck" not in hist:
-            xy = DM_APP_PROFILES["bumble"].get("discover_tab_xy") or (324, 2197)
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": int(xy[0]),
-                    "y": int(xy[1]),
-                    "reason": (
-                        f"Bumble People grid → Discover card deck " f"({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": bool(dry_run),
-                },
-                "bumble_open_discover",
-            )
         return _fp(
             {
                 "action": "fail",
                 "reason": (
-                    f"Bumble People photo grid is not a swipe deck — "
-                    f"Discover card stack required (pass/like); "
-                    f"do not tap grid tiles (PhotoBrowser SuperSwipe is paid) "
-                    f"({planner})"
+                    f"Hily Discover is a Top picks grid (Crush tiles paid); "
+                    f"refuse tile loop (taps={tile_taps}) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "dry_run_verified": False,
+            },
+            "bulk_dry_run_hily_grid",
+        )
+    # People + Discover are photo grids on real S21 — neither is a free card
+    # stack. Never tap tiles (PhotoBrowser SuperSwipe is paid). Fail cleanly.
+    if app == "bumble" and (
+        bumble_on_photo_grid(ui_tree) or "same dating goals" in (ui_tree or "").lower()
+    ):
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Bumble People/Discover is a photo grid — not a swipe "
+                    f"card stack; refuse SuperSwipe / tile taps ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -1519,16 +1597,24 @@ def plan_bulk_swipe(
         )
 
     if not deck_visible:
-        # Bumble: People is a photo GRID — Discover (left tab) is the card deck.
-        # Badoo: Encounters (nav_bar_button_encounters), never People/Discover.
+        # Bumble: no reliable free card stack on S21 — fail rather than grid-tap
         if app == "bumble":
-            disc = _exact_label_center(ui_tree, "Discover") or _tree_node_center(
-                ui_tree, "Discover", "Open Discover"
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Bumble swipe deck not verified — People/Discover are "
+                        f"grids (never SuperSwipe) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                },
+                "bulk_bumble_no_deck",
             )
-            if not disc:
-                xy = DM_APP_PROFILES["bumble"].get("discover_tab_xy") or (324, 2197)
-                disc = (int(xy[0]), int(xy[1]))
-        elif app == "badoo":
+        # Badoo: Encounters (nav_bar_button_encounters), never People/Discover.
+        if app == "badoo":
             disc = (
                 _tree_id_center(
                     ui_tree,
@@ -1567,6 +1653,26 @@ def plan_bulk_swipe(
 
     # dry_run: verify ONE real card, then log would like/pass N once (no loop)
     if dry_run:
+        # Badoo skeleton while encounters_skeleton_profileInfoView loads — wait
+        if app == "badoo" and "encounters_skeleton" in (ui_tree or "").lower():
+            waits = int(bulk.get("badoo_skeleton_waits") or 0)
+            if waits < 3:
+                bulk["badoo_skeleton_waits"] = waits + 1
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 1.2,
+                        "reason": (
+                            f"Wait for Badoo Encounters skeleton to resolve "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "bulk_badoo_skeleton_wait",
+                )
         like_ok = bool(deck_visible or _fake_like_center(app, ui_tree))
         if not like_ok and not deck_visible:
             return _fp(
@@ -1585,6 +1691,22 @@ def plan_bulk_swipe(
             )
         card = deck_card_name(app, ui_tree)
         if not card:
+            if app == "badoo" and int(bulk.get("badoo_skeleton_waits") or 0) < 3:
+                bulk["badoo_skeleton_waits"] = (
+                    int(bulk.get("badoo_skeleton_waits") or 0) + 1
+                )
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 1.2,
+                        "reason": (f"Wait for Badoo card name (loading) ({planner})"),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "bulk_badoo_card_wait",
+                )
             return _fp(
                 {
                     "action": "fail",
@@ -1859,6 +1981,27 @@ def plan_bulk_message(
             "bulk_chats_tab_missing",
         )
 
+    # After Back from a thread: refuse row taps until the chat list is verified
+    if bulk.get("_await_list_after_back"):
+        if list_ok:
+            bulk["_await_list_after_back"] = False
+            bulk.pop("_pre_back_cleared", None)
+            st["bulk_message"] = bulk
+        else:
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Still in thread after send — Back until chat list "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_back_until_list",
+            )
+
     # Bumble: collapsed "Older chats · (N)" must be expanded before picking rows
     if (
         list_ok
@@ -1869,17 +2012,22 @@ def plan_bulk_message(
         rows_probe = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
         older = bumble_collapsed_older_chats_center(ui_tree)
         if older and not rows_probe:
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": older[0],
-                    "y": older[1],
-                    "reason": f"Expand Older chats section ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "bulk_expand_older_chats",
-            )
+            # Refuse off-screen / invisible expand targets (v=0 RecyclerView)
+            if int(older[0]) > 1080 or int(older[0]) < 0:
+                older = None
+            if older:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": older[0],
+                        "y": older[1],
+                        "reason": f"Expand Older chats section ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Older chats",
+                    },
+                    "bulk_expand_older_chats",
+                )
 
     next_name = str(bulk.get("current") or "").strip()
     if not next_name:
@@ -1928,9 +2076,35 @@ def plan_bulk_message(
                 bulk["done_names"] = done_names
                 bulk["current"] = None
                 st["bulk_message"] = bulk
+            # Badoo/etc: dismiss keyboard + clear composer BEFORE Back so we
+            # leave the thread cleanly (never Back with IME up → wrong focus).
+            if keyboard_likely_up(ui_tree) or any(
+                n.get("editable") and n.get("focused")
+                for n in _parse_compact_nodes(ui_tree)
+            ):
+                if not bulk.get("_pre_back_cleared"):
+                    bulk["_pre_back_cleared"] = True
+                    st["bulk_message"] = bulk
+                    return _fp(
+                        {
+                            "action": "press_button",
+                            "button": "back",
+                            "reason": (
+                                f"Dismiss keyboard before leaving thread "
+                                f"({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "bulk_dismiss_keyboard_before_back",
+                    )
+            # Verify we left the thread before picking the next row
+            bulk["_await_list_after_back"] = True
+            st["bulk_message"] = bulk
             return _fp(
                 {
-                    "action": "back",
+                    "action": "press_button",
+                    "button": "back",
                     "reason": f"Message sent to {next_name}; back to list ({planner})",
                     "planner": planner,
                     "llm_provider": None,
@@ -2450,15 +2624,41 @@ def plan_bulk_message_new(
     if app == "hily":
         if hily_on_photo_viewer(ui_tree):
             return hily_back_from_photo_viewer(planner=planner)
-        if hily_on_top_picks_grid(ui_tree):
-            tile_taps = sum(
-                1
-                for h in history[-8:]
-                if "grid tile" in str(h).lower()
-                or "bulk_hily_new_grid_tile" in str(h).lower()
+        if hily_on_profile_sheet(ui_tree):
+            # Never treat Crush as a composer — close sheet and fail dry-run
+            if dry_run:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"dry_run — Hily profile sheet shows Crush/Major "
+                            f"crush (paid); close sheet, no free composer "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": False,
+                        "_close_sheet": True,
+                    },
+                    "bulk_dry_run_hily_crush_sheet",
+                )
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Close Hily profile sheet before new-message ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_profile_sheet_back",
             )
+        if hily_on_top_picks_grid(ui_tree):
+            tile_taps = int(bulk.get("hily_tile_taps") or 0)
             tile = hily_first_grid_tile_center(ui_tree)
             if tile and tile_taps < 1:
+                bulk["hily_tile_taps"] = tile_taps + 1
+                st["bulk_message_new"] = bulk
                 return _fp(
                     {
                         "action": "tap",
@@ -2470,20 +2670,30 @@ def plan_bulk_message_new(
                     },
                     "bulk_hily_new_grid_tile",
                 )
-        # Dry-run must verify a real profile + message/like control — never bare done
-        card = hily_deck_card_name(ui_tree)
-        like_ctl = hily_like_action(ui_tree, planner=planner)
+        # Dry-run: ONLY a free message composer counts — never Crush/Like CTA
         compose = _tree_node_center(
-            ui_tree, "Type a message", "Message", "Say something"
-        ) or _tree_id_center(ui_tree, "messageInput", "id/messageInput")
+            ui_tree, "Type a message", "Say something", "Write a message"
+        ) or _tree_id_center(
+            ui_tree, "messageInput", "id/messageInput", "compose_edit_text"
+        )
+        # Editable compose field in thread
+        if not compose:
+            for n in _parse_compact_nodes(ui_tree):
+                if n.get("editable") and int(n.get("y") or 0) > 1600:
+                    lab = (n.get("label") or n.get("hint") or "").lower()
+                    if "search" in lab:
+                        continue
+                    compose = (int(n["x"]), int(n["y"]))
+                    break
         if dry_run:
-            if not card and not like_ctl and not compose:
+            if not compose:
                 return _fp(
                     {
                         "action": "fail",
                         "reason": (
-                            f"dry_run — Hily: no profile card / like / composer "
-                            f"verified for {target} new contacts ({planner})"
+                            f"dry_run — Hily: no free message composer for "
+                            f"{target} new contacts (Crush/Like ≠ composer) "
+                            f"({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
@@ -2492,6 +2702,19 @@ def plan_bulk_message_new(
                     },
                     "bulk_dry_run_hily_new_unverified",
                 )
+            # Close any leftover sheet before declaring done
+            if hily_on_profile_sheet(ui_tree) or hily_on_photo_viewer(ui_tree):
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": f"Close Hily sheet after composer verify ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "hily_new_close_after_verify",
+                )
             bulk["done"] = target
             st["bulk_message_new"] = bulk
             return _fp(
@@ -2499,8 +2722,8 @@ def plan_bulk_message_new(
                     "action": "done",
                     "reason": (
                         f"[DRY RUN] would first-message {target} new Hily "
-                        f"contacts (verified on {card or 'like/composer'}) "
-                        f"— skip MBM/paid ({planner})"
+                        f"contacts (composer verified) — skip MBM/paid "
+                        f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -2509,6 +2732,8 @@ def plan_bulk_message_new(
                 },
                 "bulk_dry_run_hily_new",
             )
+        # Live: never auto-Crush; only free like path if available
+        like_ctl = hily_like_action(ui_tree, planner=planner)
         if like_ctl:
             return like_ctl
 

@@ -26,6 +26,26 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
+def extract_quoted_message_text(instruction: str) -> Optional[str]:
+    """Message body from explicit quotes only (message "…" / say "…")."""
+    text = (instruction or "").strip()
+    if not text:
+        return None
+    patterns = (
+        # message "hello miss" to 3 new profiles / reply "hey" to 5 chats
+        r"(?:message|reply|auto[- ]?message|send)\s+[\"']([^\"']+)[\"']\s+to\b",
+        r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']",
+    )
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if not m:
+            continue
+        body = _norm(m.group(1))
+        if body and len(body) <= 2000:
+            return body
+    return None
+
+
 def extract_user_message_text(instruction: str) -> Optional[str]:
     """Exact message body from the task instruction, if present.
 
@@ -39,15 +59,15 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
     text = (instruction or "").strip()
     if not text:
         return None
+    quoted = extract_quoted_message_text(text)
+    if quoted:
+        return quoted
     patterns = (
-        # message "hello miss" to 3 new profiles / reply "hey" to 5 chats
-        r"(?:message|reply|auto[- ]?message|send)\s+[\"']([^\"']+)[\"']\s+to\b",
-        r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']\s*$",
         # Prefer "say …" / "tell her …" — never match "send a message to …"
         r"(?:and\s+)?(?:say|tell(?:\s+(?:her|him|them))?)\s+(.+)$",
-        # "send: hello" / "send hello" only when not "send a message"
+        # "send: hello" / "send hello" only when not "send a … message …"
         r"(?:and\s+)?send\s*[:\-]\s*(.+)$",
-        r"(?:and\s+)?send\s+(?!a\s+message\b)(.+)$",
+        r"(?:and\s+)?send\s+(?!a\s+(?:\w+\s+){0,3}message\b)(.+)$",
     )
     for pat in patterns:
         m = re.search(pat, text, re.I)
@@ -62,6 +82,10 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
             flags=re.I,
         ).strip()
         body = re.sub(r"\s+(please|now|for me)\s*$", "", body, flags=re.I).strip()
+        # Reject instruction-shaped captures ("a hinge message to Sam")
+        low = body.lower()
+        if "message to" in low or re.search(r"\bto\s+\d+\b", low):
+            continue
         if body and len(body) <= 2000:
             return body
     return None
@@ -158,9 +182,28 @@ def allowed_message_texts(
     job: Optional[Dict[str, Any]] = None,
     bank_paths: Optional[Sequence[str]] = None,
 ) -> List[str]:
-    """User task text first, then bank entries."""
+    """User quoted task text is exclusive when present — bank lines rejected.
+
+    Without a quoted/say user text, allow explicitly selected bank entry or
+    full bank (caller still fails empty planner text via enforce).
+    """
     allowed: List[str] = []
+    # Quoted task text is exclusive — bank lines rejected (incident D)
+    quoted = extract_quoted_message_text(instruction)
+    if quoted:
+        return [quoted]
     user = extract_user_message_text(instruction)
+    job = job or {}
+    # Explicitly chosen bank entry on the job
+    for key in (
+        "message_text",
+        "bank_text",
+        "selected_message",
+        "allowed_message_text",
+    ):
+        if job.get(key):
+            allowed.append(_norm(str(job[key])))
+            return allowed
     if user:
         allowed.append(user)
     for t in load_message_bank_texts(job=job, bank_paths=bank_paths):

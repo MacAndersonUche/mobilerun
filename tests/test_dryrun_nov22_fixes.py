@@ -281,7 +281,8 @@ def test_wa_skips_community_announcement_rows():
 # --- 12 Bumble Discover for deck ---
 
 
-def test_bumble_people_grid_opens_discover():
+def test_bumble_people_grid_fails_clean_no_superswipe():
+    """People/Discover grids are not a free card stack — fail, never SuperSwipe."""
     tree = _load("bumble_people_photo_grid.xml")
     act = plan_bulk_swipe(
         "bumble auto-swipe 5 profiles",
@@ -291,8 +292,6 @@ def test_bumble_people_grid_opens_discover():
         dry_run=True,
         state={},
     )
-    assert act and act["action"] == "tap"
-    assert abs(int(act["x"]) - 324) < 40
-    assert "discover" in act["reason"].lower() or act.get("fastpath_step") == (
-        "bumble_open_discover"
-    )
+    assert act and act["action"] == "fail"
+    assert "grid" in act["reason"].lower() or "superswipe" in act["reason"].lower()
+    assert act.get("dry_run_verified") is False

@@ -3568,6 +3568,19 @@ async def stop_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)
             if job:
                 job["status"] = "stopped"
                 put_job(job)
+                # Restore overlay bubble — cancel skips _end_job_cleanup otherwise
+                did = str(job.get("device_id") or "")
+                if did:
+                    try:
+                        from cloud_agent import _end_job_cleanup
+                        from device_rpc import call_device
+                    except ImportError:
+                        from backend.cloud_agent import (  # type: ignore
+                            _end_job_cleanup,
+                        )
+                        from backend.device_rpc import call_device  # type: ignore
+
+                    _end_job_cleanup(job, did, call_device)
         except Exception as e:
             logger.warning("Could not stop job: %s", e)
 

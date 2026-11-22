@@ -607,9 +607,36 @@ def _worker_owner(context: Any = None) -> str:
     return req
 
 
+def _cleanup_cancelled_job(job: Dict[str, Any]) -> None:
+    """Restore bubble / HOME when a job was cancelled mid-flight (Dynamo stop)."""
+    did = str(job.get("device_id") or "")
+    if not did:
+        return
+    try:
+        from cloud_agent import _end_job_cleanup
+        from device_rpc import call_device
+    except ImportError:
+        try:
+            from backend.cloud_agent import _end_job_cleanup  # type: ignore
+            from backend.device_rpc import call_device  # type: ignore
+        except ImportError:
+            return
+    try:
+        _end_job_cleanup(job, did, call_device)
+    except Exception as e:
+        logger.warning("cancelled-job cleanup failed: %s", e)
+
+
 def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
+        # Cancelled/stopped in Dynamo — still restore overlay bubble
+        if str(job.get("status") or "") in ("stopped", "cancelled", "failed"):
+            st = job.get("state") if isinstance(job.get("state"), dict) else {}
+            if st.get("job_busy_sent") and not st.get("job_cleanup_done"):
+                _cleanup_cancelled_job(job)
+                st["job_cleanup_done"] = True
+                job["state"] = st
         return
     job_id = str(job.get("job_id") or "")
     owner = owner or _worker_owner()
@@ -649,6 +676,8 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
                 "process_job progress not saved job=%s — status changed or lease lost",
                 job_id,
             )
+            # Likely cancelled mid-step — restore bubble
+            _cleanup_cancelled_job(updated if isinstance(updated, dict) else job)
     except Exception as e:
         # Persist the crash so Tasks/tick show a real error instead of idle-0.
         logger.exception("process_job crash job=%s: %s", job.get("job_id"), e)

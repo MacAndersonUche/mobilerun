@@ -1725,22 +1725,26 @@ class BackendClient(private val context: Context) {
 
     /**
      * Re-show Connected bubble only when the *job* is over.
-     * During jobSessionBusy (job_busy → job_idle) never restore — planning
-     * gaps of ~3 min between step bursts used to flash the bubble touchable.
+     * During jobSessionBusy keep hidden across planning gaps, but always arm
+     * a hard idle timeout so a Dynamo cancel (no job_idle) cannot leave the
+     * bubble stuck forever.
      */
     private fun scheduleBubbleIdle() {
-        if (jobSessionBusy.get()) {
-            // Keep hidden for the whole job; cloud sends job_idle on cleanup
-            OverlayBubbleService.setJobBusy(context.applicationContext, true)
-            return
-        }
         bubbleIdleJob?.cancel()
         bubbleIdleJob = scope.launch {
-            // Long quiet window for ad-hoc RPCs outside a leased job
-            delay(120_000)
-            if (!jobSessionBusy.get()) {
-                OverlayBubbleService.setJobBusy(context.applicationContext, false)
+            val waitMs = if (jobSessionBusy.get()) {
+                // Whole-job hide, but recover if cloud never sends job_idle
+                10 * 60_000L
+            } else {
+                120_000L
             }
+            delay(waitMs)
+            jobSessionBusy.set(false)
+            OverlayBubbleService.setJobBusy(context.applicationContext, false)
+            Log.i(tag, "overlay bubble idle timeout (${waitMs}ms) — restored")
+        }
+        if (jobSessionBusy.get()) {
+            OverlayBubbleService.setJobBusy(context.applicationContext, true)
         }
     }
 

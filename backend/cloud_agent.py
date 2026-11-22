@@ -539,6 +539,8 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "boost",
         "super like",
         "crush",
+        "major crush",
+        "message before match",
         "spotlight",
         "buy credits",
         "subscribe",
@@ -546,7 +548,6 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "blast",
         "yubucks",
         "instant chat",
-        "major crush",
         "send a super like",
         "rose",
         "send a rose",
@@ -560,7 +561,6 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "send superswipe",
         "superswipe",
         "tagged premium",
-        "major crush",
         "rewind",
     )
     return any(t in blob for t in paid_toks)
@@ -1990,12 +1990,47 @@ def _maybe_restore_ime(job: Dict[str, Any], device_id: str, call_device) -> None
         logger.warning("restore_ime failed: %s", e)
 
 
+def _back_to_root_before_home(
+    job: Dict[str, Any], device_id: str, call_device, *, max_backs: int = 3
+) -> None:
+    """Close sheets/viewers/modals before HOME so the next job starts clean."""
+    try:
+        for _ in range(max_backs):
+            info = _fetch_ui_tree_retry(device_id, call_device, attempts=1)
+            tree = str(info.get("tree") or "")
+            try:
+                from dm_heuristics import (
+                    hily_on_photo_viewer,
+                    hily_on_profile_sheet,
+                    keyboard_likely_up,
+                )
+            except ImportError:
+                from backend.dm_heuristics import (  # type: ignore
+                    hily_on_photo_viewer,
+                    hily_on_profile_sheet,
+                    keyboard_likely_up,
+                )
+            need_back = bool(
+                keyboard_likely_up(tree)
+                or hily_on_photo_viewer(tree)
+                or hily_on_profile_sheet(tree)
+                or "major crush" in tree.lower()
+                or "message before match" in tree.lower()
+            )
+            if not need_back:
+                break
+            call_device(device_id, "press_button", {"button": "back"}, timeout_s=8)
+    except Exception as e:
+        logger.warning("back-to-root before HOME failed: %s", e)
+
+
 def _press_home_end_job(job: Dict[str, Any], device_id: str, call_device) -> None:
     """Always return to HOME at the end of a job (dry-run or live)."""
     state = job.setdefault("state", {}) if isinstance(job.get("state"), dict) else {}
     if state.get("went_home"):
         return
     try:
+        _back_to_root_before_home(job, device_id, call_device)
         call_device(device_id, "press_button", {"button": "home"}, timeout_s=10)
         state["went_home"] = True
         hist = list(state.get("history") or [])
@@ -2021,6 +2056,9 @@ def _set_device_job_busy(device_id: str, call_device, busy: bool) -> None:
 
 def _end_job_cleanup(job: Dict[str, Any], device_id: str, call_device) -> None:
     """IME restore + bubble idle + HOME after every terminal job status."""
+    state = job.setdefault("state", {}) if isinstance(job.get("state"), dict) else {}
+    if state.get("job_cleanup_done"):
+        return
     try:
         _maybe_restore_ime(job, device_id, call_device)
     except Exception:
@@ -2033,6 +2071,8 @@ def _end_job_cleanup(job: Dict[str, Any], device_id: str, call_device) -> None:
         _press_home_end_job(job, device_id, call_device)
     except Exception:
         pass
+    state["job_cleanup_done"] = True
+    job["state"] = state
 
 
 def _dry_run_done_is_verified(
@@ -2108,6 +2148,41 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     kind = str(action.get("action") or "").lower()
     if kind == "tap":
         ox, oy = int(action["x"]), int(action["y"])
+        # Runner-level tap firewall: fresh tree → topmost node at point
+        dry_run = bool(action.get("dry_run") or action.get("_dry_run"))
+        try:
+            from tap_firewall import guard_tap_action
+        except ImportError:
+            from backend.tap_firewall import guard_tap_action  # type: ignore
+
+        fresh_tree = str(action.get("_fresh_tree") or "")
+        if not fresh_tree:
+            try:
+                info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                fresh_tree = str(info.get("tree") or "")
+                action["_fresh_tree_pkg"] = str(info.get("package") or "")
+            except Exception as e:
+                logger.warning("tap firewall tree fetch failed: %s", e)
+                fresh_tree = ""
+        guarded = guard_tap_action(
+            action,
+            fresh_tree,
+            dry_run=dry_run,
+            vision_confirmed_label=str(action.get("_vision_confirmed_label") or ""),
+        )
+        if str(guarded.get("action") or "").lower() == "fail":
+            raise RuntimeError(str(guarded.get("reason") or "tap firewall"))
+        action.update(
+            {
+                k: guarded[k]
+                for k in (
+                    "_resolved_label",
+                    "_resolved_id",
+                    "_tap_firewall",
+                )
+                if k in guarded
+            }
+        )
         bounds = action.get("bounds") or action.get("b")
         b_tuple = None
         if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
@@ -2528,6 +2603,17 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             state["job_busy_sent"] = True
         except Exception as e:
             logger.warning("job_busy at start failed: %s", e)
+
+    # Job-start back-to-root: close leftover Hily Crush sheets / photo viewers
+    if not state.get("job_start_root_done"):
+        try:
+            _back_to_root_before_home(job, device_id, call_device, max_backs=2)
+            state["job_start_root_done"] = True
+            history.append("job-start back-to-root")
+            state["history"] = history[-40:]
+        except Exception as e:
+            logger.warning("job-start back-to-root failed: %s", e)
+            state["job_start_root_done"] = True
 
     # Own keyboard: switch to Mobilerun IME once per messaging job (restore on done)
     try:
@@ -3429,6 +3515,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         # Stamp instruction/job for message-text guard inside execute_action
         action["_instruction"] = instruction
+        action["_dry_run"] = bool(job.get("dry_run") or state.get("dry_run"))
+        action["dry_run"] = bool(action.get("dry_run") or action["_dry_run"])
         action["_job"] = {
             k: job.get(k)
             for k in (
@@ -3444,7 +3532,32 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if job.get(k) is not None
         }
         action["_history"] = list(history[-16:])
-        summary = execute_action(device_id, action)
+        try:
+            summary = execute_action(device_id, action)
+        except RuntimeError as e:
+            # Tap firewall / message guard — fail the job safely (never mutate)
+            err = str(e)
+            if "tap firewall" in err.lower() or "message text guard" in err.lower():
+                logger.error("safety refuse: %s", err)
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"fail: {err}"
+                history.append(f"fail: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "failed"
+                job["error"] = err
+                job["result"] = err
+                job["completed_at"] = int(time.time())
+                try:
+                    _attach_failure_artifacts(
+                        job, device_id, ui_tree, call_device=call_device
+                    )
+                except Exception:
+                    pass
+                _end_job_cleanup(job, device_id, call_device)
+                return job
+            raise
         # Secure Folder (Samsung user 150): main-profile a11y often cannot see
         # Folder windows — force screenshot+vision on the next plan tick.
         if action.get("_secure_folder") or action.get("_a11y_cross_user_limited"):

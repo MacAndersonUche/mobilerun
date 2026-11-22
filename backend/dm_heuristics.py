@@ -1019,6 +1019,9 @@ def _parse_one_node(
     b = _attr(attrs, "b", "bounds")
     editable = _attr(attrs, "e") in ("1", "true", "True")
     clickable = _attr(attrs, "c") in ("1", "true", "True")
+    # v="0" marks isVisibleToUser=false (OEM invisible parents still dump children)
+    vis_attr = _attr(attrs, "v", "visible")
+    visible = vis_attr not in ("0", "false", "False")
     cx = cy = None
     x1 = y1 = x2 = y2 = None
     if b:
@@ -1034,6 +1037,20 @@ def _parse_one_node(
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
     if cx is None or cy is None:
         return None
+    # Off-screen: negative/huge coords or zero-area bounds
+    off_screen = bool(
+        cx < 0
+        or cy < 0
+        or cx > 2000
+        or cy > 2800
+        or (
+            x1 is not None
+            and y1 is not None
+            and x2 is not None
+            and y2 is not None
+            and (int(x2) <= int(x1) or int(y2) <= int(y1))
+        )
+    )
     label = " ".join(p for p in (text, desc, hint) if p).strip()
     view_id = _attr(attrs, "i", "resource-id", "viewIdResourceName")
     cls = _attr(attrs, "cls", "class", "className")
@@ -1054,6 +1071,8 @@ def _parse_one_node(
         "editable": editable,
         "clickable": clickable,
         "focused": focused,
+        "visible": visible,
+        "off_screen": off_screen,
         "package": package,
         "window_active": window_active,
     }
@@ -1082,6 +1101,8 @@ def _parse_compact_nodes(
     package_filter: Optional[str] = None,
     active_window_only: bool = False,
     include_systemui: bool = False,
+    include_invisible: bool = False,
+    with_window_order: bool = False,
 ) -> List[Dict[str, Any]]:
     """Parse compact a11y dump nodes into dicts with center/flags.
 
@@ -1091,12 +1112,17 @@ def _parse_compact_nodes(
 
     By default SystemUI / launcher / permissioncontroller windows are excluded
     so status-bar icons never look like chat threads or deck cards.
+
+    By default ``v="0"`` (invisible) and off-screen nodes are excluded from
+    detectors and tap targets (covered overlays must not leak through).
     """
     out: List[Dict[str, Any]] = []
     pkg_want = (package_filter or "").lower().strip()
     has_windows = bool(re.search(r"<w\b", tree or "", re.I))
     cur_pkg = ""
     cur_active = False
+    window_index = -1
+    node_index = 0
     # Prefer window-aware scan so multi-window dumps are scoped correctly
     for m in _WINDOW_OR_NODE_RE.finditer(tree or ""):
         wtag = m.group(1)
@@ -1115,6 +1141,8 @@ def _parse_compact_nodes(
             cur_pkg = _attr(attrs, "p", "package")
             wid = _attr(attrs, "id").lower()
             cur_active = wid == "active" or _attr(attrs, "f") in ("1", "true", "True")
+            window_index += 1
+            node_index = 0
             continue
         node_attrs = m.group(3) or ""
         if not include_systemui and _is_system_chrome_package(cur_pkg):
@@ -1130,14 +1158,27 @@ def _parse_compact_nodes(
             window_active=cur_active or not has_windows,
         )
         if node:
+            if not include_invisible and (
+                not node.get("visible", True) or node.get("off_screen")
+            ):
+                continue
+            if with_window_order:
+                node["window_index"] = window_index
+                node["node_index"] = node_index
+                node_index += 1
             out.append(node)
     if out:
         return out
     # Fallback: legacy flat parse (no <w> tags)
     for m in _NODE_TAG_RE.finditer(tree or ""):
         node = _parse_one_node(m.group(1))
-        if node:
-            out.append(node)
+        if not node:
+            continue
+        if not include_invisible and (
+            not node.get("visible", True) or node.get("off_screen")
+        ):
+            continue
+        out.append(node)
     return out
 
 
@@ -1956,10 +1997,13 @@ def yubo_deck_card_name(tree: str) -> Optional[str]:
             "direct",
             "blast",
             "send a message",
+            "conversations",
+            "new friends",
+            "reactions",
         ):
             continue
         return text
-    # Fallback: first non-badge mid-card title (not bottom nav)
+    # Fallback: first non-badge mid-card title (not bottom nav / section header)
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or "").strip()
         if not text or _is_badge_or_numeric_label(text) or len(text) > 40:
@@ -1968,7 +2012,16 @@ def yubo_deck_card_name(tree: str) -> Optional[str]:
         if y < 250 or y > 900:
             continue
         low = text.lower()
-        if low in ("chat", "likes", "friends", "more", "send a message"):
+        if low in (
+            "chat",
+            "likes",
+            "friends",
+            "more",
+            "send a message",
+            "conversations",
+            "new friends",
+            "reactions",
+        ):
             continue
         if int(n.get("x") or 0) > 700:  # skip right-side pills
             continue
@@ -2031,6 +2084,9 @@ def yubo_on_chat_list(tree: str, *, _log: bool = True) -> bool:
             row_hit = True
             break
     if has_section and row_hit:
+        return True
+    # After scroll the section header may leave the viewport — rows alone suffice
+    if row_hit and not yubo_on_deck(tree, _log=False):
         return True
     if has_section and "aa" not in blob and "send a message" not in blob:
         return True
@@ -2672,6 +2728,41 @@ def hily_on_photo_viewer(tree: str) -> bool:
     return has_pager and has_back and not has_like
 
 
+def hily_on_profile_sheet(tree: str) -> bool:
+    """Profile overlay with Crush / Major crush covering the deck or chats.
+
+    Must be closed (Back) before chats-tab taps — otherwise bottom-nav coords
+    hit Crush underneath (SAFETY: dry-run Crush incident).
+
+    Do NOT match the normal Finder deck Crush CTA (~y 1959 next to Like/Pass).
+    """
+    if hily_on_mbm(tree):
+        return False
+    blob = (tree or "").lower()
+    # Explicit Major crush / MBM-adjacent sheet chrome
+    if "major crush" in blob or "majorcrush" in blob.replace("_", "").replace("-", ""):
+        return True
+    # Finder deck has Skip/Pass + Crush mid-CTA row — not a covering sheet
+    if _tree_id_center(
+        tree,
+        "ActionButton_SKIP",
+        "id/ActionButton_SKIP",
+        "finderCardUser",
+    ):
+        return False
+    # Sheet Crush sits over the bottom-nav band (y≳2100), covering Chats taps
+    for n in _parse_compact_nodes(tree):
+        lab = (n.get("label") or "").lower()
+        nid = str(n.get("id") or "").lower()
+        if "crush" not in lab and "crush" not in nid:
+            continue
+        y = int(n.get("y") or 0)
+        y2 = int(n.get("y2") or 0)
+        if y >= 2100 or y2 >= 2180:
+            return True
+    return False
+
+
 def hily_back_from_photo_viewer(
     planner: str = "hily_heuristic",
 ) -> Dict[str, Any]:
@@ -3025,7 +3116,12 @@ def blk_dismiss_popup(
     if "introducing streaks" in blob or (
         "streaks" in blob and ("got it" in blob or "got it!" in blob)
     ):
-        got = _tree_node_center(tree, "Got it!", "Got it", "GOT IT")
+        # Tap the Got it! text node (e.g. 540,2049) — never screen centre guess
+        got = (
+            _exact_label_center(tree, "Got it!")
+            or _exact_label_center(tree, "Got it")
+            or _tree_node_center(tree, "Got it!", "Got it", "GOT IT")
+        )
         if got:
             return _fp(
                 {
@@ -3035,6 +3131,7 @@ def blk_dismiss_popup(
                     "reason": f"Dismiss BLK Introducing Streaks → Got it ({planner})",
                     "planner": planner,
                     "llm_provider": None,
+                    "label": "Got it!",
                 },
                 "blk_streaks_got_it",
             )
