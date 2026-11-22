@@ -1,4 +1,8 @@
-"""Generic stuck-recovery loop — escalate until screen changes or cap.
+"""Generic stuck-recovery loop — FALLBACK only when per-app rules fail / stuck.
+
+**Do not replace** working per-app maps (Badoo VoteYes, BLK Like, Hily Finder,
+thread back-out, popup Not now, tap firewall). Callers must invoke this only
+after heuristics return fail/no-progress, or FG is stuck on launcher/wrong app.
 
 Order (uiautomator2 / Appium-style):
   1. dismiss_safe — Allow / Don't allow / Not now / Close / X / Later / Skip

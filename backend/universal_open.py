@@ -1,4 +1,8 @@
-"""Universal app open — never stuck on home / wrong FG.
+"""Universal app open — FALLBACK when normal open leaves FG wrong / on home.
+
+**Do not replace** per-app open / deck-nav rules that already work. Prefer the
+default ``launch_intent`` open first; escalate drawer search / scroll only when
+FG is still launcher, SystemUI, Spay, selfhosted, or another non-target package.
 
 Escalation (droidrun / uiautomator2 style):
   1. launch_intent — PackageManager getLaunchIntentForPackage (APK open_app)

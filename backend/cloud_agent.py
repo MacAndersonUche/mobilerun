@@ -66,6 +66,37 @@ MAX_SWIPE_LOOPS = MAX_LAUNCHER_SWIPE_LOOPS
 MAX_NO_PROGRESS = 2
 # Same tap coords with unchanged tree → force strategy change
 MAX_SAME_TAP = 2
+# Intentional policy / safety fails — do NOT escalate stuck_recovery over them.
+# Per-app heuristics + tap firewall own these; generic recovery is fallback-only.
+_POLICY_FAIL_NO_STUCK = (
+    "refuse",
+    "refusing",
+    "tap firewall",
+    "paid",
+    "crush",
+    "super like",
+    "superswipe",
+    "rose",
+    "boost",
+    "gold",
+    "message-bank",
+    "no message text",
+    "coord guess",
+    "dry_run",
+    "wrong foreground app",
+    "never typed",
+    "firewall",
+)
+
+
+def _is_policy_fail_no_stuck(reason: str) -> bool:
+    """True when fail is intentional safety/policy — honor it, don't recover."""
+    low = (reason or "").lower()
+    if not low:
+        return False
+    return any(t in low for t in _POLICY_FAIL_NO_STUCK)
+
+
 # Known launcher package fragments (Samsung One UI, Pixel, AOSP, OEM)
 _LAUNCHER_PKG_MARKERS = (
     "launcher",
@@ -3128,25 +3159,39 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job["history"] = history
             job["state"] = state
         dating_paywall_act = None
-        # Dating paywall / Play billing / Spay / Wallet — dismiss then continue
-        # (never tap Subscribe / Buy / Super Like / Rose / credits CTAs).
+        # FALLBACK only: foreign billing FG (Play / Spay / Wallet). In-app
+        # upsells stay with per-app interrupt maps + bulk dating_deck path —
+        # do not preempt working Badoo/BLK/Hily popup handlers here.
         if prefer_pkg and not force_open_from_launcher:
-            try:
-                try:
-                    from dating_deck import dismiss_paywall_action as _pay_dismiss
-                except ImportError:
-                    from backend.dating_deck import (  # type: ignore
-                        dismiss_paywall_action as _pay_dismiss,
-                    )
-
-                dating_paywall_act = _pay_dismiss(
-                    ui_tree,
-                    package=str(tree_info.get("package") or ""),
-                    planner="dating_paywall",
+            fg_pay = str(tree_info.get("package") or "").lower()
+            foreign_billing = any(
+                x in fg_pay
+                for x in (
+                    "spay",
+                    "samsungpay",
+                    "vending",
+                    "android.gms",
+                    "billing",
+                    "samsung.android.spay",
                 )
-            except Exception as pay_err:
-                logger.warning("dating paywall check failed: %s", pay_err)
-                dating_paywall_act = None
+            )
+            if foreign_billing:
+                try:
+                    try:
+                        from dating_deck import dismiss_paywall_action as _pay_dismiss
+                    except ImportError:
+                        from backend.dating_deck import (  # type: ignore
+                            dismiss_paywall_action as _pay_dismiss,
+                        )
+
+                    dating_paywall_act = _pay_dismiss(
+                        ui_tree,
+                        package=fg_pay,
+                        planner="dating_paywall",
+                    )
+                except Exception as pay_err:
+                    logger.warning("dating paywall check failed: %s", pay_err)
+                    dating_paywall_act = None
         # If FG is still wrong after dismiss attempts, prefer vision — but do NOT
         # hard-fail; keep running so the next step can dismiss again.
         fg_now = str(tree_info.get("package") or "").lower()
@@ -3870,11 +3915,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             return job
         if kind == "fail":
             low_reason = (reason or "").lower()
+            # Intentional policy/safety fails from per-app rules / tap firewall —
+            # honor them. stuck_recovery must NOT replace working refuse paths.
+            if _is_policy_fail_no_stuck(reason):
+                pass  # fall through to hard-fail below
             # Planner often fails on transient/contact/no-send states — convert
             # to a real recovery action instead of spinning on empty returns.
             # Use a dedicated streak (not empty_tree_streak) so non-empty trees
             # do not reset the counter every tick.
-            if any(
+            elif any(
                 t in low_reason
                 for t in (
                     "ui tree is empty",

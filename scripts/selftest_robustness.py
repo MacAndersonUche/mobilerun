@@ -3,7 +3,8 @@
 
 Usage (repo root):
   python3 scripts/selftest_robustness.py
-  python3 -m pytest tests/test_robust_never_stuck.py tests/test_dating_deck.py -q
+  python3 -m pytest tests/test_robust_never_stuck.py tests/test_dating_deck.py \\
+    tests/test_fallback_preserves_per_app.py -q
 """
 
 from __future__ import annotations

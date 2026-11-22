@@ -1573,12 +1573,29 @@ def plan_bulk_swipe(
     hist = " | ".join(history[-12:]).lower()
     app = (goal.get("app") or "") or ""
 
+    # Foreign billing FG (Play / Spay) — dismiss BEFORE wrong-app reopen.
+    # In-app upsells stay with per-app interrupt maps; generic dating_deck
+    # paywall is a FALLBACK after those miss.
+    pkg_l = (package or "").lower()
+    if any(
+        x in pkg_l for x in ("spay", "samsungpay", "vending", "android.gms", "billing")
+    ):
+        try:
+            from dating_deck import dismiss_paywall_action as _pay_foreign
+        except ImportError:
+            from backend.dating_deck import (  # type: ignore
+                dismiss_paywall_action as _pay_foreign,
+            )
+
+        pay_f = _pay_foreign(ui_tree, package=package, planner=planner)
+        if pay_f:
+            return _fp(pay_f, "bulk_paywall_dismiss")
+
     # ALWAYS verify FG package matches the named app before any swipe/tap.
     # (Previously skipped open_app when any deck was visible — swiped Bumble for Yubo.)
     want_pkg = ""
     if app and app in DM_APP_PROFILES:
         want_pkg = str(DM_APP_PROFILES[app].get("package") or "").lower()
-    pkg_l = (package or "").lower()
     if want_pkg and want_pkg not in pkg_l:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
@@ -1595,17 +1612,6 @@ def plan_bulk_swipe(
             },
             "bulk_wrong_app",
         )
-
-    # Paywall / Play billing / Spay / Wallet first — dismiss then continue
-    # (never paid CTA). Runs before recover so billing sheets don't get stuck.
-    try:
-        from dating_deck import dismiss_paywall_action
-    except ImportError:
-        from backend.dating_deck import dismiss_paywall_action  # type: ignore
-
-    pay = dismiss_paywall_action(ui_tree, package=package, planner=planner)
-    if pay:
-        return _fp(pay, "bulk_paywall_dismiss")
 
     # Job start: leave leftover photo browser / thread / keyboard
     recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
@@ -2133,6 +2139,16 @@ def plan_bulk_swipe(
             "bulk_dismiss_back",
         )
 
+    # FALLBACK: generic paywall/billing dismiss after per-app interrupt maps miss
+    try:
+        from dating_deck import dismiss_paywall_action
+    except ImportError:
+        from backend.dating_deck import dismiss_paywall_action  # type: ignore
+
+    pay = dismiss_paywall_action(ui_tree, package=package, planner=planner)
+    if pay:
+        return _fp(pay, "bulk_paywall_dismiss")
+
     # After like/pass: poll until next profile loads (or end-of-deck / timeout)
     if bulk.get("awaiting_verify"):
         try:
@@ -2362,7 +2378,8 @@ def plan_bulk_swipe(
     card_name = deck_card_name(app, ui_tree)
     next_n = done + 1
 
-    # Free LIKE only (heart / thumbs / swipe-right) — never Super/Crush/Rose/paid
+    # Per-app mapped LIKE first (Badoo VoteYes, BLK heart, …). Generic
+    # dating_deck.plan_free_like is FALLBACK only when the map misses.
     try:
         from dating_deck import mark_like_issued, plan_free_like
     except ImportError:
@@ -2469,17 +2486,7 @@ def plan_bulk_message(
     if opened:
         return opened
 
-    # Paywall / billing / Spay while messaging — dismiss then continue
-    try:
-        from dating_deck import dismiss_paywall_action as _dismiss_pay
-    except ImportError:
-        from backend.dating_deck import dismiss_paywall_action as _dismiss_pay  # type: ignore
-
-    pay = _dismiss_pay(ui_tree, package=package, planner=planner)
-    if pay:
-        return _fp(pay, "bulk_msg_paywall_dismiss")
-
-    # Hily MBM BEFORE root recover — close + skip (list still underneath)
+    # Hily MBM BEFORE root recover / generic paywall — close + skip (per-app map)
     if app_key == "hily" and hily_on_mbm(ui_tree):
         skip_name = str(bulk.get("current") or "").strip()
         if skip_name:
@@ -2500,6 +2507,16 @@ def plan_bulk_message(
             },
             "bulk_hily_mbm_skip",
         )
+
+    # FALLBACK: foreign billing / clear paywall after per-app MBM handling
+    try:
+        from dating_deck import dismiss_paywall_action as _dismiss_pay
+    except ImportError:
+        from backend.dating_deck import dismiss_paywall_action as _dismiss_pay  # type: ignore
+
+    pay = _dismiss_pay(ui_tree, package=package, planner=planner)
+    if pay:
+        return _fp(pay, "bulk_msg_paywall_dismiss")
 
     # Once we intentionally opened / are targeting a thread, do NOT back out.
     # Back-to-root is for job start leftovers and non-target threads only.
@@ -3103,17 +3120,7 @@ def plan_bulk_message_new(
     if opened:
         return opened
 
-    try:
-        from dating_deck import dismiss_paywall_action as _dismiss_pay_new
-    except ImportError:
-        from backend.dating_deck import (  # type: ignore
-            dismiss_paywall_action as _dismiss_pay_new,
-        )
-
-    pay_new = _dismiss_pay_new(ui_tree, package=package, planner=planner)
-    if pay_new:
-        return _fp(pay_new, "bulk_msg_new_paywall_dismiss")
-
+    # Per-app Hily MBM first — generic paywall is FALLBACK only
     if app == "hily" and hily_on_mbm(ui_tree):
         return hily_close_mbm(ui_tree, planner=planner) or _fp(
             {
@@ -3125,6 +3132,17 @@ def plan_bulk_message_new(
             },
             "bulk_hily_mbm_skip_new",
         )
+
+    try:
+        from dating_deck import dismiss_paywall_action as _dismiss_pay_new
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            dismiss_paywall_action as _dismiss_pay_new,
+        )
+
+    pay_new = _dismiss_pay_new(ui_tree, package=package, planner=planner)
+    if pay_new:
+        return _fp(pay_new, "bulk_msg_new_paywall_dismiss")
 
     allow_thread = bool(str(bulk.get("current") or "").strip())
     recover = _recover_to_root_action(

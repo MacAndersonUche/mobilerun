@@ -207,6 +207,7 @@ def test_deck_fingerprint_changes_with_name():
 
 
 def test_bulk_paywall_dismiss_before_like():
+    # In-app upsell: dating_deck dismiss (per-app interrupt owns bulk path)
     tree = (
         '<h pkg="com.bumble.app">'
         '<n t="Get Boost" xy="540,1000"/>'
@@ -215,13 +216,24 @@ def test_bulk_paywall_dismiss_before_like():
         "</h>"
     )
     assert is_paywall_or_billing(tree, "com.bumble.app")
+    direct = dismiss_paywall_action(tree, package="com.bumble.app")
+    assert direct and direct.get("_paywall_dismiss") is True
+    assert "not now" in (direct.get("label") or "").lower()
+
+    # Foreign Play billing FG — early dismiss before recover
+    play = (
+        '<h pkg="com.android.vending">'
+        '<n t="Complete your purchase" xy="540,800"/>'
+        '<n t="Not now" xy="540,1900" clickable="true"/>'
+        "</h>"
+    )
     st: dict = {}
     act = plan_bulk_swipe(
         "bumble like 5 profiles",
-        tree,
+        play,
         ["Opened Bumble — launch"],
         state=st,
-        package="com.bumble.app",
+        package="com.android.vending",
     )
     assert act
     assert (
