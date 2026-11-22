@@ -58,20 +58,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # Runner image already has Android SDK; cache platforms/build-tools/NDK.
-      # (android-actions/setup-android fails: obsolete sdkmanager 'tools' package)
-      - name: Cache Android SDK packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/lib/android/sdk/platforms
-            /usr/local/lib/android/sdk/build-tools
-            /usr/local/lib/android/sdk/ndk
-            /usr/local/lib/android/sdk/licenses
-          key: android-sdk-${{ runner.os }}-api35-${{ hashFiles('android-app/build.gradle.kts') }}
-          restore-keys: |
-            android-sdk-${{ runner.os }}-api35-
-            android-sdk-${{ runner.os }}-
+      # Runner image already ships Android SDK — do NOT cache platforms/NDK here:
+      # first-write of those trees hangs/slows the job more than it helps.
+      # Speed comes from setup-gradle + build/configuration cache + preview (no R8).
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
