@@ -173,7 +173,9 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     return _from_dynamo(item) if item else None
 
 
-DEFAULT_JOB_LEASE_S = 45
+# Must exceed worst-case step wall time (screenshot retries ~3×15s ≈ 45s+;
+# observed 64.8s). Renew before slow RPCs; never rely on a single acquire.
+DEFAULT_JOB_LEASE_S = 120
 
 
 def acquire_job_lease(
@@ -338,7 +340,12 @@ def update_job_fields(
 
 
 def save_job_progress(job: Dict[str, Any], owner: Optional[str] = None) -> bool:
-    """Persist worker progress without clobbering a cancelled/stopped status."""
+    """Persist worker progress without clobbering a cancelled/stopped status.
+
+    Never writes ``lease_owner`` / ``lease_expires_at`` — those are owned by
+    ``acquire_job_lease``. Writing the values loaded at step start would restore
+    a stale lease and steal/expire the live holder.
+    """
     job_id = str(job.get("job_id") or "")
     if not job_id:
         return False
@@ -350,8 +357,6 @@ def save_job_progress(job: Dict[str, Any], owner: Optional[str] = None) -> bool:
         "error",
         "next_run_at",
         "completed_at",
-        "lease_owner",
-        "lease_expires_at",
         "dry_run",
         "kind",
         "device_id",

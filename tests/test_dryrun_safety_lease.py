@@ -270,7 +270,7 @@ def test_bumble_dry_run_requires_deck_not_silent_zero():
     )
     # Must not silently claim success without a visible deck / like control
     assert act is not None
-    assert act.get("action") in ("done", "fail", "tap")
+    assert act.get("action") in ("done", "fail", "tap", "wait")
     if act.get("action") == "done" and act.get("dry_run"):
         assert (
             act.get("dry_run_verified") is not True
@@ -280,3 +280,5 @@ def test_bumble_dry_run_requires_deck_not_silent_zero():
         raise AssertionError("dry_run must not complete bulk without deck verify")
     if act.get("fastpath_step") == "bulk_dry_run_sim_like":
         raise AssertionError("dry_run must not simulate likes without deck visible")
+    if act.get("fastpath_step") == "bulk_dry_run_skip_like":
+        raise AssertionError("dry_run must not skip-like without a visible card name")

@@ -874,6 +874,10 @@ def find_send_center(
 
 
 _NODE_TAG_RE = re.compile(r"<(?:n|node)\b([^>]*)/?>", re.I)
+_WINDOW_OR_NODE_RE = re.compile(
+    r"(</?w\b[^>]*/?>)|(<(?:n|node)\b([^>]*)/?>)",
+    re.I,
+)
 
 
 def _attr(blob: str, *names: str) -> str:
@@ -884,56 +888,112 @@ def _attr(blob: str, *names: str) -> str:
     return ""
 
 
-def _parse_compact_nodes(tree: str) -> List[Dict[str, Any]]:
-    """Parse compact a11y dump nodes into dicts with center/flags."""
+def _parse_one_node(
+    attrs: str, *, package: str = "", window_active: bool = False
+) -> Optional[Dict[str, Any]]:
+    text = _attr(attrs, "t", "text")
+    desc = _attr(attrs, "d", "content-desc", "contentDescription")
+    hint = _attr(attrs, "h", "hint")
+    xy = _attr(attrs, "xy")
+    b = _attr(attrs, "b", "bounds")
+    editable = _attr(attrs, "e") in ("1", "true", "True")
+    clickable = _attr(attrs, "c") in ("1", "true", "True")
+    cx = cy = None
+    x1 = y1 = x2 = y2 = None
+    if b:
+        nums = re.findall(r"\d+", b)
+        if len(nums) >= 4:
+            x1, y1, x2, y2 = (int(n) for n in nums[:4])
+    if xy and "," in xy:
+        try:
+            cx, cy = [int(p) for p in xy.split(",")[:2]]
+        except ValueError:
+            cx = cy = None
+    if (cx is None or cy is None) and x1 is not None and y1 is not None:
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    if cx is None or cy is None:
+        return None
+    label = " ".join(p for p in (text, desc, hint) if p).strip()
+    view_id = _attr(attrs, "i", "resource-id", "viewIdResourceName")
+    cls = _attr(attrs, "cls", "class", "className")
+    focused = _attr(attrs, "f") in ("1", "true", "True")
+    return {
+        "text": text,
+        "desc": desc,
+        "hint": hint,
+        "label": label,
+        "id": view_id,
+        "cls": cls,
+        "x": cx,
+        "y": cy,
+        "x1": x1,
+        "y1": y1,
+        "x2": x2,
+        "y2": y2,
+        "editable": editable,
+        "clickable": clickable,
+        "focused": focused,
+        "package": package,
+        "window_active": window_active,
+    }
+
+
+def _parse_compact_nodes(
+    tree: str,
+    *,
+    package_filter: Optional[str] = None,
+    active_window_only: bool = False,
+) -> List[Dict[str, Any]]:
+    """Parse compact a11y dump nodes into dicts with center/flags.
+
+    When ``package_filter`` is set (e.g. ``com.bumble.app``), only nodes inside
+    matching ``<w p="…">`` windows are returned — Samsung launcher overlays
+    like Edge panels must not count as Bumble deck content.
+    """
     out: List[Dict[str, Any]] = []
-    for m in _NODE_TAG_RE.finditer(tree or ""):
-        attrs = m.group(1)
-        text = _attr(attrs, "t", "text")
-        desc = _attr(attrs, "d", "content-desc", "contentDescription")
-        hint = _attr(attrs, "h", "hint")
-        xy = _attr(attrs, "xy")
-        b = _attr(attrs, "b", "bounds")
-        editable = _attr(attrs, "e") in ("1", "true", "True")
-        clickable = _attr(attrs, "c") in ("1", "true", "True")
-        cx = cy = None
-        x1 = y1 = x2 = y2 = None
-        if b:
-            nums = re.findall(r"\d+", b)
-            if len(nums) >= 4:
-                x1, y1, x2, y2 = (int(n) for n in nums[:4])
-        if xy and "," in xy:
-            try:
-                cx, cy = [int(p) for p in xy.split(",")[:2]]
-            except ValueError:
-                cx = cy = None
-        if (cx is None or cy is None) and x1 is not None and y1 is not None:
-            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        if cx is None or cy is None:
+    pkg_want = (package_filter or "").lower().strip()
+    has_windows = bool(re.search(r"<w\b", tree or "", re.I))
+    cur_pkg = ""
+    cur_active = False
+    # Prefer window-aware scan so multi-window dumps are scoped correctly
+    for m in _WINDOW_OR_NODE_RE.finditer(tree or ""):
+        wtag = m.group(1)
+        if wtag:
+            low = wtag.lower().lstrip()
+            if low.startswith("</w"):
+                cur_pkg = ""
+                cur_active = False
+                continue
+            # '<w id="active" p="com.bumble.app" f="1">' → attrs only
+            attrs = wtag[2:]  # drop '<w'
+            if attrs.endswith("/>"):
+                attrs = attrs[:-2]
+            elif attrs.endswith(">"):
+                attrs = attrs[:-1]
+            cur_pkg = _attr(attrs, "p", "package")
+            wid = _attr(attrs, "id").lower()
+            cur_active = wid == "active" or _attr(attrs, "f") in ("1", "true", "True")
             continue
-        label = " ".join(p for p in (text, desc, hint) if p).strip()
-        view_id = _attr(attrs, "i", "resource-id", "viewIdResourceName")
-        cls = _attr(attrs, "cls", "class", "className")
-        focused = _attr(attrs, "f") in ("1", "true", "True")
-        out.append(
-            {
-                "text": text,
-                "desc": desc,
-                "hint": hint,
-                "label": label,
-                "id": view_id,
-                "cls": cls,
-                "x": cx,
-                "y": cy,
-                "x1": x1,
-                "y1": y1,
-                "x2": x2,
-                "y2": y2,
-                "editable": editable,
-                "clickable": clickable,
-                "focused": focused,
-            }
+        node_attrs = m.group(3) or ""
+        if pkg_want:
+            if has_windows and pkg_want not in (cur_pkg or "").lower():
+                continue
+        if active_window_only and has_windows and not cur_active:
+            continue
+        node = _parse_one_node(
+            node_attrs,
+            package=cur_pkg,
+            window_active=cur_active or not has_windows,
         )
+        if node:
+            out.append(node)
+    if out:
+        return out
+    # Fallback: legacy flat parse (no <w> tags)
+    for m in _NODE_TAG_RE.finditer(tree or ""):
+        node = _parse_one_node(m.group(1))
+        if node:
+            out.append(node)
     return out
 
 
@@ -1238,9 +1298,91 @@ def _log_detector_false(name: str, tree: str, package: str = "") -> None:
         pass
 
 
+def _bumble_nodes(tree: str) -> List[Dict[str, Any]]:
+    """Nodes in the active com.bumble.app window only (ignore launcher overlays)."""
+    return _parse_compact_nodes(
+        tree, package_filter="com.bumble.app", active_window_only=True
+    )
+
+
+def bumble_on_photo_grid(tree: str) -> bool:
+    """True when People tab shows the photo-grid RecyclerView (not a swipe card)."""
+    for n in _bumble_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if "encountersgridprofile_list" in nid or "encountersgridprofilelist" in nid:
+            return True
+        if "encountersgrid" in nid and "list" in nid and "item" not in nid:
+            return True
+    return bool(
+        _tree_id_center(
+            tree,
+            "encountersGridProfile_list",
+            "com.bumble.app:id/encountersGridProfile_list",
+        )
+    )
+
+
+def bumble_first_grid_tile_center(tree: str) -> Optional[Tuple[int, int]]:
+    """Center of the first tappable tile in the People photo grid."""
+    tiles: List[Dict[str, Any]] = []
+    for n in _bumble_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if not n.get("clickable") and "grid" not in nid and "photo" not in nid:
+            continue
+        y = int(n.get("y") or 0)
+        if y < 250 or y > 2000:
+            continue
+        # Prefer grid cell / photo tiles over nav
+        if any(
+            t in nid
+            for t in (
+                "encountersgrid",
+                "griditem",
+                "profile_photo",
+                "photo",
+                "encounter",
+            )
+        ) or (
+            n.get("clickable")
+            and 300 < y < 1800
+            and "nav" not in nid
+            and "tab" not in nid
+        ):
+            lab = (n.get("label") or "").lower()
+            if lab in ("people", "chats", "discover", "profile", "liked you"):
+                continue
+            tiles.append(n)
+    if not tiles:
+        return None
+    tiles.sort(key=lambda n: (int(n.get("y") or 0), int(n.get("x") or 0)))
+    t0 = tiles[0]
+    return (int(t0["x"]), int(t0["y"]))
+
+
 def bumble_on_people_deck(tree: str, *, _log: bool = True) -> bool:
-    """True when Bumble People tab card stack is visible (S21 map signals)."""
-    # Strong: profile / encounters container ids
+    """True when Bumble People tab *card stack* is visible (not photo grid).
+
+    Only inspects the active ``com.bumble.app`` window — Samsung launcher
+    'Edge panels' handles must never count as a deck card.
+    """
+    if bumble_on_photo_grid(tree):
+        # Photo grid ≠ swipe deck
+        if _log:
+            _log_detector_false("bumble_on_people_deck_grid", tree, "com.bumble.app")
+        return False
+    nodes = _bumble_nodes(tree)
+    # Strong: profile / encounters container ids (in Bumble window)
+    for n in nodes:
+        nid = str(n.get("id") or "").lower()
+        if any(
+            t in nid
+            for t in (
+                "profile_root_container",
+                "encountersgriditem_summarycontainer",
+                "encountersgriditem_summary",
+            )
+        ):
+            return True
     if _tree_id_center(
         tree,
         "profile_root_container",
@@ -1248,11 +1390,22 @@ def bumble_on_people_deck(tree: str, *, _log: bool = True) -> bool:
         "com.bumble.app:id/profile_root_container",
         "com.bumble.app:id/encountersGridItem_summaryContainer",
     ):
-        return True
-    # Strong: main photo content-desc + Name, Age near bottom of card
+        # Confirm the id lives in the bumble window when windows exist
+        if not re.search(r"<w\b", tree or "", re.I) or nodes:
+            # If multi-window, require the id among bumble nodes
+            if re.search(r"<w\b", tree or "", re.I):
+                if any(
+                    "profile_root" in str(n.get("id") or "").lower()
+                    or "encountersgriditem_summary" in str(n.get("id") or "").lower()
+                    for n in nodes
+                ):
+                    return True
+            else:
+                return True
+    # Strong: main photo content-desc + Name, Age near bottom of card (bumble only)
     photo = False
     name_age = False
-    for n in _parse_compact_nodes(tree):
+    for n in nodes:
         lab = n.get("label") or ""
         low = lab.lower()
         if "main photo" in low and ("'s" in low or "\u2019s" in lab):
@@ -1261,24 +1414,19 @@ def bumble_on_people_deck(tree: str, *, _log: bool = True) -> bool:
             name_age = True
     if photo or name_age:
         return True
-    # Weak: People tab present and Connections list absent
-    people_tab = bool(
-        _exact_label_center(tree, "People") or _tree_node_center(tree, "People")
-    )
-    if people_tab and not _tree_id_center(
-        tree, "connections_root", "connections_connectionsList", "connectionItem"
-    ):
-        # Require at least one mid-screen card-ish node
-        for n in _parse_compact_nodes(tree):
-            if 400 < int(n.get("y") or 0) < 1900 and (n.get("text") or n.get("desc")):
-                return True
+    # Do NOT use a weak "any labelled mid-screen node" fallback — that matched
+    # launcher Edge panels and empty People shells.
     if _log:
         _log_detector_false("bumble_on_people_deck", tree, "com.bumble.app")
     return False
 
 
 def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
-    """True on Bumble Chats/Connections list (multi-signal S21 map)."""
+    """True on Bumble Chats/Connections list (multi-signal S21 map).
+
+    Never vetoed by the deck detector — Chats header / Your matches / Older chats
+    are enough even if a stale People signal remains in another window.
+    """
     # List roots
     if _tree_id_center(
         tree,
@@ -1299,19 +1447,70 @@ def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
         "connection_name",
     ):
         return True
-    # Header text + Chats tab (without People deck card)
-    has_header = bool(
-        re.search(r'\bt="(?:Chats|Connections|Older chats)"', tree or "", re.I)
-        or re.search(r">\s*(?:Chats|Connections|Older chats)\s*<", tree or "", re.I)
+    # Header / section signals (do not require !deck). Use text= (t=) headers —
+    # never bare content-desc "Chats" from the bottom nav on the People deck.
+    has_title = bool(
+        re.search(r'\bt="Chats"', tree or "", re.I)
+        or re.search(r'\bt="Connections"', tree or "", re.I)
     )
+    has_your_matches = bool(
+        re.search(r'\bt="Your matches"', tree or "", re.I)
+        or _exact_label_center(tree, "Your matches")
+    )
+    has_older = bool(re.search(r"older chats", tree or "", re.I))
     has_chats_tab = bool(
         _exact_label_center(tree, "Chats") or _tree_node_center(tree, "Chats")
     )
-    if has_header and has_chats_tab and not bumble_on_people_deck(tree, _log=False):
+    if has_your_matches or has_older:
+        return True
+    if has_title and has_chats_tab:
         return True
     if _log:
         _log_detector_false("bumble_on_connections", tree, "com.bumble.app")
     return False
+
+
+def bumble_collapsed_older_chats_center(tree: str) -> Optional[Tuple[int, int]]:
+    """Tap target for collapsed 'Older chats · (N)' row — expand before picking."""
+    for n in _bumble_nodes(tree) or _parse_compact_nodes(tree):
+        lab = (n.get("label") or n.get("text") or "").strip()
+        low = lab.lower()
+        if "older chats" not in low:
+            continue
+        # Collapsed form includes a count: Older chats · (12) / Older chats (12)
+        if not (
+            re.search(r"older chats\s*[·•.\-]?\s*\(\s*\d+\s*\)", low)
+            or re.search(r"older chats\s*[·•]", low)
+            or (n.get("clickable") and "(" in lab)
+        ):
+            # Still allow a lone clickable Older chats header with no visible rows
+            if not n.get("clickable"):
+                continue
+        y = int(n.get("y") or 0)
+        if y < 400 or y > 2200:
+            continue
+        return (int(n["x"]), int(n["y"]))
+    return None
+
+
+def bumble_deck_card_name(tree: str) -> Optional[str]:
+    """Real profile name from the Bumble card (never invent profile_N)."""
+    for n in _bumble_nodes(tree) or _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if not text:
+            continue
+        if re.search(r",\s*\d{2}\s*$", text) and int(n.get("y") or 0) > 1400:
+            name = text.split(",")[0].strip()
+            if name and not re.match(r"^profile[_\s]?\d+$", name, re.I):
+                return name
+    for n in _bumble_nodes(tree) or _parse_compact_nodes(tree):
+        desc = (n.get("desc") or "").strip()
+        m = re.match(r"(.+?)['\u2019]s main photo", desc, re.I)
+        if m:
+            name = m.group(1).strip()
+            if name and not re.match(r"^profile[_\s]?\d+$", name, re.I):
+                return name
+    return None
 
 
 def bumble_dismiss_popup(

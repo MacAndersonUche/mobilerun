@@ -175,13 +175,13 @@ def test_bulk_swipe_dry_run_skips_like():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act.get("action") in ("wait", "done")
+    assert act and act.get("action") == "done"
     assert act.get("dry_run") is True
     reason = (act.get("reason") or "").lower()
-    assert "dry run" in reason or act.get("dry_run") is True
-    assert "would like/pass" in reason or "would" in reason
+    assert "would like/pass 5 cards" in reason
+    assert "deck verified on alex" in reason
     # Never mutates the deck via like tap
-    assert not (act.get("action") == "tap" and "like" in reason)
+    assert act.get("action") != "tap"
 
 
 def test_bulk_message_dry_run_stops_before_send():

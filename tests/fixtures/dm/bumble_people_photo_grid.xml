@@ -1,0 +1,10 @@
+<hierarchy windows="1" nodes="16" partial="false" empty="false" mode="compact" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1">
+ <n i="com.bumble.app:id/encountersGridProfile_list" cls="RecyclerView" xy="540,1100" b="0,240,1080,2100"/>
+ <n i="com.bumble.app:id/encountersGridProfile_item" c="1" xy="270,600" b="40,300,500,900"/>
+ <n i="com.bumble.app:id/encountersGridProfile_item" c="1" xy="810,600" b="580,300,1040,900"/>
+ <n i="com.bumble.app:id/encountersGridProfile_item" c="1" xy="270,1200" b="40,960,500,1500"/>
+ <n d="People" c="1" xy="540,2197" b="432,2120,648,2274"/>
+ <n d="Chats" c="1" xy="972,2197" b="864,2120,1080,2274"/>
+</w>
+</hierarchy>

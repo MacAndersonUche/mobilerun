@@ -32,8 +32,12 @@ try:
         blk_like_action,
         blk_on_deck,
         blk_deck_card_name,
+        bumble_collapsed_older_chats_center,
+        bumble_deck_card_name,
+        bumble_first_grid_tile_center,
         bumble_like_swipe,
         bumble_on_people_deck,
+        bumble_on_photo_grid,
         bumble_pass_swipe,
         compose_center_in_thread,
         detect_dm_app,
@@ -74,8 +78,12 @@ except ImportError:
         blk_like_action,
         blk_on_deck,
         blk_deck_card_name,
+        bumble_collapsed_older_chats_center,
+        bumble_deck_card_name,
+        bumble_first_grid_tile_center,
         bumble_like_swipe,
         bumble_on_people_deck,
+        bumble_on_photo_grid,
         bumble_pass_swipe,
         compose_center_in_thread,
         detect_dm_app,
@@ -499,19 +507,7 @@ def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
     if app == "yubo":
         return yubo_deck_card_name(tree)
     if app == "bumble":
-        for n in _parse_compact_nodes(tree):
-            text = (n.get("text") or "").strip()
-            if not text:
-                continue
-            # "Name, Age" near bottom of card
-            if re.search(r",\s*\d{2}\s*$", text) and int(n.get("y") or 0) > 1500:
-                return text.split(",")[0].strip()
-        for n in _parse_compact_nodes(tree):
-            desc = (n.get("desc") or "").strip()
-            m = re.match(r"(.+?)['\u2019]s main photo", desc, re.I)
-            if m:
-                return m.group(1).strip()
-        return None
+        return bumble_deck_card_name(tree)
     if app == "badoo":
         for n in _parse_compact_nodes(tree):
             nid = str(n.get("id") or "").lower()
@@ -796,6 +792,37 @@ def plan_bulk_swipe(
         )
 
     deck_visible = _deck_visible(app, ui_tree)
+    # People photo-grid is not a card deck — open first tile before settle/like
+    if app == "bumble" and bumble_on_photo_grid(ui_tree):
+        tile = bumble_first_grid_tile_center(ui_tree)
+        if tile and "grid tile" not in hist and "open grid tile" not in hist:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": tile[0],
+                    "y": tile[1],
+                    "reason": f"Open first People grid tile → card ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                },
+                "bulk_open_grid_tile",
+            )
+        if dry_run and ("grid tile" in hist or "open grid tile" in hist):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — People photo grid still visible after tile tap; "
+                        f"card not verified ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                },
+                "bulk_dry_run_grid_not_card",
+            )
     if not deck_visible:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
@@ -1045,10 +1072,8 @@ def plan_bulk_swipe(
                 "bulk_open_deck",
             )
 
-    # dry_run: verify deck/like, then simulate N would like/pass logs (no taps)
+    # dry_run: verify ONE real card, then log would like/pass N once (no loop)
     if dry_run:
-        # Require a visible deck / like control — mapped gestures alone are not proof
-        # (e.g. Bumble like-swipe coords always exist even on the nav-only screen).
         like_ok = bool(deck_visible or _fake_like_center(app, ui_tree))
         if not like_ok and not deck_visible:
             return _fp(
@@ -1065,45 +1090,43 @@ def plan_bulk_swipe(
                 },
                 "bulk_dry_run_no_deck",
             )
-        card = deck_card_name(app, ui_tree) or f"profile_{done + 1}"
-        logs = list(bulk.get("dry_logs") or [])
-        logs.append(f"[DRY RUN] would like/pass {card}")
-        bulk["dry_logs"] = logs
-        bulk["done"] = done + 1
-        st["bulk_swipe"] = bulk
-        if bulk["done"] >= target:
+        card = deck_card_name(app, ui_tree)
+        if not card:
             return _fp(
                 {
-                    "action": "done",
+                    "action": "fail",
                     "reason": (
-                        f"{'; '.join(logs[-target:])} — deck verified, "
-                        f"no like/swipe ({planner})"
+                        f"dry_run — deck visible but no real card name for "
+                        f"{app or '?'}; refusing profile_N invent ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": True,
-                    "dry_run_verified": True,
-                    "bulk_swipe_done": bulk["done"],
-                    "bulk_swipe_target": target,
-                    "screenshot": True,
+                    "dry_run_verified": False,
                 },
-                "bulk_dry_run_skip_like",
+                "bulk_dry_run_no_card_name",
             )
-        # Continue the simulated loop without mutating the deck
+        bulk["done"] = target
+        bulk["dry_logs"] = [
+            f"[DRY RUN] would like/pass {target} cards (deck verified on {card})"
+        ]
+        st["bulk_swipe"] = bulk
         return _fp(
             {
-                "action": "wait",
-                "seconds": 0.05,
-                "reason": f"[DRY RUN] would like/pass {card} ({done + 1}/{target})",
+                "action": "done",
+                "reason": (
+                    f"[DRY RUN] would like/pass {target} cards "
+                    f"(deck verified on {card}) — no like/swipe ({planner})"
+                ),
                 "planner": planner,
                 "llm_provider": None,
                 "dry_run": True,
                 "dry_run_verified": True,
-                "bulk_swipe_done": bulk["done"],
+                "bulk_swipe_done": target,
                 "bulk_swipe_target": target,
                 "screenshot": True,
             },
-            "bulk_dry_run_sim_like",
+            "bulk_dry_run_skip_like",
         )
 
     card_name = deck_card_name(app, ui_tree)
@@ -1316,6 +1339,28 @@ def plan_bulk_message(
             },
             "bulk_chats_tab_missing",
         )
+
+    # Bumble: collapsed "Older chats · (N)" must be expanded before picking rows
+    if (
+        list_ok
+        and (app_key or "").lower() == "bumble"
+        and not bulk.get("current")
+        and "older chats" not in " ".join(history[-6:]).lower()
+    ):
+        rows_probe = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
+        older = bumble_collapsed_older_chats_center(ui_tree)
+        if older and not rows_probe:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": older[0],
+                    "y": older[1],
+                    "reason": f"Expand Older chats section ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_expand_older_chats",
+            )
 
     next_name = str(bulk.get("current") or "").strip()
     if not next_name:
