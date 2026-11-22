@@ -56,9 +56,15 @@ function record(
 async function loginViaUi(page: Page) {
   await page.goto('/');
   // Already logged in via storage?
-  if (await page.getByRole('heading', { name: /Your agents|MobileRun/i }).count()) {
-    const hasAgents = await page.getByRole('heading', { name: 'Your agents' }).count();
-    if (hasAgents) return;
+  if (
+    await page
+      .getByRole('heading', { name: /Your agents|MacMobileRun|MobileRun/i })
+      .count()
+  ) {
+    const hasHome = await page
+      .getByRole('heading', { name: /Your agents|MacMobileRun/i })
+      .count();
+    if (hasHome) return;
   }
   await page.getByLabel(/username|email/i).fill(USER).catch(async () => {
     await page.locator('input').first().fill(USER);
@@ -67,7 +73,9 @@ async function loginViaUi(page: Page) {
     await page.locator('input[type="password"]').fill(PASSWORD);
   });
   await page.getByRole('button', { name: /sign in|log in|continue/i }).click();
-  await expect(page.getByRole('heading', { name: /Your agents|Home|MobileRun/i }).first()).toBeVisible({
+  await expect(
+    page.getByRole('heading', { name: /Your agents|Home|MacMobileRun|MobileRun/i }).first()
+  ).toBeVisible({
     timeout: 30000,
   });
 }
@@ -194,7 +202,9 @@ test.describe('full button audit', () => {
     try {
     // ---------- Home ----------
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: /Your agents|MobileRun/i }).first()).toBeVisible({
+    await expect(
+      page.getByRole('heading', { name: /Your agents|MacMobileRun|MobileRun/i }).first()
+    ).toBeVisible({
       timeout: 30000,
     });
     record('home', 'load', 'render', true);

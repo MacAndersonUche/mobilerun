@@ -17,10 +17,14 @@ import {
 import { AuthProvider, useAuth } from './auth';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
+import AccountPage from './pages/AccountPage';
 import DevicesPage from './pages/DevicesPage';
+import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import DatingPage from './pages/DatingPage';
+import LiveViewPage from './pages/LiveViewPage';
+import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
 import NeedsYouPage from './pages/NeedsYouPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
@@ -104,12 +108,13 @@ function Shell() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/needs-you" element={<NeedsYouPage />} />
             <Route path="/social" element={<SocialPage />} />
-            {/* Removed from nav — keep redirects */}
+            {/* Kept for job-run / live-view / pairing deep links; not in primary nav */}
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/live" element={<LiveViewPage />} />
+            <Route path="/account" element={<AccountPage />} />
+            {/* Matches date-flow UI folded into Run */}
             <Route path="/matches" element={<Navigate to="/dating" replace />} />
-            <Route path="/tasks" element={<Navigate to="/history" replace />} />
-            <Route path="/live" element={<Navigate to="/devices" replace />} />
-            <Route path="/chat" element={<Navigate to="/dating" replace />} />
-            <Route path="/account" element={<Navigate to="/settings" replace />} />
             <Route path="/pair" element={<PairPage />} />
             <Route path="/p/:code" element={<PairPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
