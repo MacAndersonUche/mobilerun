@@ -90,16 +90,25 @@ def node_matches_keywords(node: Dict[str, Any], keywords: Sequence[str]) -> bool
         k = (kw or "").lower().strip()
         if not k:
             continue
-        # Whole-word for short ambiguous tokens like "like" / "send" / "pass"
+        # Whole-word for short ambiguous tokens like "like" / "send" / "pass".
+        # Do NOT treat "matches" / "dislike" / "password" as containing "like"/"pass".
         if k in ("like", "send", "pass", "skip", "heart", "rose"):
-            if re.search(rf"\b{re.escape(k)}\b", blob):
+            if re.search(rf"(?<![a-z]){re.escape(k)}(?![a-z])", blob):
                 return True
-            # resource-id forms
-            if k in blob.replace("_", "").replace("-", ""):
-                # likeBtn / ActionButton_LIKE
-                compact = blob.replace("_", "").replace("-", "").replace(" ", "")
-                if k in compact:
-                    return True
+            compact = blob.replace("_", "").replace("-", "").replace(" ", "")
+            # Known compound resource-id / camelCase forms only
+            compounds = (
+                f"{k}btn",
+                f"{k}button",
+                f"{k}icon",
+                f"actionbutton{k}",
+                f"btn{k}",
+                f"gamepad{k}",
+                f"voteyes" if k == "like" else "",
+                f"voteno" if k == "pass" else "",
+            )
+            if any(c and c in compact for c in compounds):
+                return True
             continue
         if k in blob:
             return True
@@ -209,6 +218,18 @@ def find_blocking_label_at(
     return None
 
 
+def _point_near_node(x: int, y: int, n: Dict[str, Any], pad: int = 28) -> bool:
+    """True if (x,y) is inside node bounds expanded by ``pad`` (nav tap jitter)."""
+    x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
+    if None not in (x1, y1, x2, y2):
+        return (
+            int(x1) - pad <= x <= int(x2) + pad
+            and int(y1) - pad <= y <= int(y2) + pad
+        )
+    cx, cy = int(n.get("x") or -9999), int(n.get("y") or -9999)
+    return abs(cx - x) <= 48 + pad and abs(cy - y) <= 48 + pad
+
+
 def resolve_topmost_clickable_at(
     tree: str,
     x: int,
@@ -220,10 +241,31 @@ def resolve_topmost_clickable_at(
 
     Dump order is unreliable for z-order (sheet nodes may precede nav). Prefer
     the smallest-area clickable hit; callers must also run find_blocking_label_at.
+    If nothing contains the exact point, snap to a nearby clickable (child-label
+    / bounds jitter — e.g. BLK Matches tab at 674,2223 just outside bounds).
     """
     hits = _all_nodes_at(
         tree, x, y, include_invisible=include_invisible, clickable_only=True
     )
+    if not hits:
+        try:
+            from dm_heuristics import _parse_compact_nodes
+        except ImportError:
+            from backend.dm_heuristics import _parse_compact_nodes  # type: ignore
+
+        near: List[Dict[str, Any]] = []
+        for n in _parse_compact_nodes(
+            tree, include_systemui=True, include_invisible=include_invisible
+        ):
+            if not (n.get("clickable") or n.get("editable")):
+                continue
+            if not include_invisible and not n.get("visible", True):
+                continue
+            if not include_invisible and n.get("off_screen"):
+                continue
+            if _point_near_node(x, y, n, pad=28):
+                near.append(n)
+        hits = near
     if not hits:
         return None
 
@@ -241,6 +283,24 @@ def resolve_topmost_clickable_at(
         )
     )
     return hits[0]
+
+
+def labels_at_point(tree: str, x: int, y: int) -> str:
+    """All visible labels covering (x,y) — includes child TextViews of a container."""
+    parts: List[str] = []
+    for n in _all_nodes_at(tree, x, y):
+        parts.append(_norm_blob(n))
+    # Also include nearby nodes (label-on-child + tap jitter)
+    if not parts:
+        try:
+            from dm_heuristics import _parse_compact_nodes
+        except ImportError:
+            from backend.dm_heuristics import _parse_compact_nodes  # type: ignore
+
+        for n in _parse_compact_nodes(tree, include_systemui=True):
+            if _point_near_node(x, y, n, pad=28):
+                parts.append(_norm_blob(n))
+    return " ".join(p for p in parts if p).strip()
 
 
 def _looks_like_nav_tap(
@@ -295,8 +355,10 @@ def _looks_like_nav_tap(
 def intended_target_matches(
     resolved: Dict[str, Any],
     action: Dict[str, Any],
+    *,
+    point_labels: str = "",
 ) -> bool:
-    """True when resolved node plausibly matches the planner's intended target."""
+    """True when resolved node (or child labels at the point) match intent."""
     want_bits = [
         str(action.get("label") or ""),
         str(action.get("text") or ""),
@@ -309,8 +371,8 @@ def intended_target_matches(
     if not want:
         # No declared intent — only paid/keyword checks apply
         return True
-    blob = _norm_blob(resolved)
-    # Any token from intent appearing in the resolved node
+    blob = f"{_norm_blob(resolved)} {point_labels or ''}".lower()
+    # Any token from intent appearing in the resolved node / children
     for tok in re.findall(r"[a-z0-9_]{3,}", want):
         if tok in ("tap", "open", "bulk", "heuristic", "planner"):
             continue
@@ -329,19 +391,29 @@ def tap_is_forbidden(
     *,
     dry_run: bool,
     action: Optional[Dict[str, Any]] = None,
+    point_labels: str = "",
 ) -> Optional[str]:
     """Return a refuse reason, or None if the tap may proceed."""
     if resolved is None:
         return "tap firewall: could not resolve topmost node at point"
     action = action or {}
     kws = _DRY_RUN_REFUSE if dry_run else _LIVE_PAID_REFUSE
-    if node_matches_keywords(resolved, kws):
+    # Check resolved + child labels at the point (container with TextView child)
+    probe = dict(resolved)
+    if point_labels:
+        probe = {
+            **resolved,
+            "label": f"{resolved.get('label') or ''} {point_labels}".strip(),
+        }
+    if node_matches_keywords(probe, kws):
         kind = "dry-run mutating" if dry_run else "paid"
         return (
             f"tap firewall: refuse {kind} target "
             f"{(resolved.get('label') or resolved.get('id') or '?')[:60]!r}"
         )
-    if dry_run and not intended_target_matches(resolved, action):
+    if dry_run and not intended_target_matches(
+        resolved, action, point_labels=point_labels
+    ):
         # Only enforce intent match when the planner named a target
         named = any(
             action.get(k) for k in ("label", "text", "element", "target", "intended_id")
@@ -352,6 +424,34 @@ def tap_is_forbidden(
                 f"(got {(resolved.get('label') or resolved.get('id') or '?')[:40]!r})"
             )
     return None
+
+# Free-nav / messaging targets vision may green-light on empty trees
+_VISION_ALLOW_TOKENS = (
+    "chat",
+    "chats",
+    "messages",
+    "matches",
+    "connections",
+    "discover",
+    "people",
+    "finder",
+    "like",
+    "pass",
+    "skip",
+    "send",
+    "composer",
+    "compose",
+    "type a message",
+    "aa",
+    "back",
+    "got it",
+    "don't allow",
+    "dont allow",
+    "not now",
+    "close",
+    "row",
+    "thread",
+)
 
 
 def _detect_app_from_tree(tree: str) -> Optional[str]:
@@ -393,6 +493,25 @@ def guard_tap_action(
             "dry_run": bool(dry_run),
         }
 
+    # Status bar / SystemUI clock band — never a planner target
+    if y < 90:
+        return {
+            "action": "fail",
+            "reason": f"tap firewall: refuse status-bar tap ({x},{y})",
+            "planner": action.get("planner") or "tap_firewall",
+            "llm_provider": None,
+            "dry_run": bool(dry_run),
+        }
+    point_labels = labels_at_point(tree, x, y) if (tree or "").strip() else ""
+    if "com.android.systemui" in point_labels and y < 200:
+        return {
+            "action": "fail",
+            "reason": f"tap firewall: refuse SystemUI/status-bar tap ({x},{y})",
+            "planner": action.get("planner") or "tap_firewall",
+            "llm_provider": None,
+            "dry_run": bool(dry_run),
+        }
+
     tree_l = (tree or "").strip()
     empty = (
         not tree_l
@@ -401,16 +520,36 @@ def guard_tap_action(
         or re.search(r'app_nodes="0"', tree_l)
     )
     if empty:
-        # Empty tree apps (Hinge Discover) — require vision confirmation
+        # Empty tree apps (Hinge Discover) — vision may green-light free nav
         want = str(
             action.get("label")
             or action.get("text")
             or action.get("element")
             or action.get("target")
+            or action.get("reason")
             or ""
         ).strip()
         confirmed = (vision_confirmed_label or "").strip().lower()
-        if want and confirmed and want.lower() in confirmed:
+        want_l = want.lower()
+        vision_ok = bool(confirmed) and (
+            (want_l and want_l in confirmed)
+            or any(tok in confirmed for tok in _VISION_ALLOW_TOKENS)
+        )
+        # Still refuse paid tokens even with vision
+        paid_hit = any(
+            p in confirmed or p in want_l
+            for p in (
+                "rose",
+                "crush",
+                "super like",
+                "superswipe",
+                "boost",
+                "gold",
+                "premium",
+                "spotlight",
+            )
+        )
+        if vision_ok and not paid_hit:
             out = dict(action)
             out["_tap_firewall"] = "vision_confirmed"
             return out
@@ -418,7 +557,8 @@ def guard_tap_action(
             "action": "fail",
             "reason": (
                 "tap firewall: empty/sparse tree — refuse tap without "
-                "screenshot-vision confirmation of target label"
+                "screenshot-vision confirmation of free nav/like/pass/"
+                "chat-row/composer/send (paid still blocked)"
             ),
             "planner": action.get("planner") or "tap_firewall",
             "llm_provider": None,
@@ -474,7 +614,9 @@ def guard_tap_action(
             "_overlay": overlay,
         }
 
-    reason = tap_is_forbidden(resolved, dry_run=dry_run, action=action)
+    reason = tap_is_forbidden(
+        resolved, dry_run=dry_run, action=action, point_labels=point_labels
+    )
     if reason:
         logger.warning("%s at (%s,%s)", reason, x, y)
         return {

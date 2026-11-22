@@ -282,16 +282,27 @@ def test_wa_skips_community_announcement_rows():
 
 
 def test_bumble_people_grid_fails_clean_no_superswipe():
-    """People/Discover grids are not a free card stack — fail, never SuperSwipe."""
+    """People grid → Discover nav once; still-grid → fail, never SuperSwipe."""
     tree = _load("bumble_people_photo_grid.xml")
+    st: dict = {}
     act = plan_bulk_swipe(
         "bumble auto-swipe 5 profiles",
         tree,
         ["Opened Bumble"],
         package="com.bumble.app",
         dry_run=True,
-        state={},
+        state=st,
     )
-    assert act and act["action"] == "fail"
-    assert "grid" in act["reason"].lower() or "superswipe" in act["reason"].lower()
-    assert act.get("dry_run_verified") is False
+    assert act and act["action"] == "tap"
+    assert "Discover" in act["reason"] or act.get("label") == "Discover"
+    act2 = plan_bulk_swipe(
+        "bumble auto-swipe 5 profiles",
+        tree,
+        ["Opened Bumble", act["reason"]],
+        package="com.bumble.app",
+        dry_run=True,
+        state=st,
+    )
+    assert act2 and act2["action"] == "fail"
+    assert "grid" in act2["reason"].lower() or "superswipe" in act2["reason"].lower()
+    assert act2.get("dry_run_verified") is False

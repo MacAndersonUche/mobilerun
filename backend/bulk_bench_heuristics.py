@@ -89,6 +89,7 @@ try:
         thread_header_verified,
         yubo_deck_card_name,
         yubo_like_swipe,
+        yubo_on_chat,
         yubo_on_deck,
         yubo_pass_swipe,
     )
@@ -165,6 +166,7 @@ except ImportError:
         thread_header_verified,
         yubo_deck_card_name,
         yubo_like_swipe,
+        yubo_on_chat,
         yubo_on_deck,
         yubo_pass_swipe,
     )
@@ -731,7 +733,17 @@ def _open_chats_tab_action(
 
 
 _ROOT_RECOVER_APPS = frozenset(
-    {"bumble", "yubo", "badoo", "hily", "hinge", "tagged", "blk", "taimi"}
+    {
+        "bumble",
+        "yubo",
+        "badoo",
+        "hily",
+        "hinge",
+        "tagged",
+        "blk",
+        "taimi",
+        "whatsapp",
+    }
 )
 
 
@@ -939,7 +951,9 @@ def _recover_to_root_action(
             },
             "bulk_recover_back",
         )
-    if relaunches < 3 and app_l in DM_APP_PROFILES:
+    # Taimi (and sparse Compose apps): at most one relaunch — avoid open↔open loop
+    max_relaunch = 1 if app_l in ("taimi", "hinge") else 3
+    if relaunches < max_relaunch and app_l in DM_APP_PROFILES:
         bucket["relaunches"] = relaunches + 1
         bucket["relaunched"] = True
         # Do NOT reset backs — keep the hard cap honest
@@ -1005,11 +1019,10 @@ def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
     return None
 
 
-def _deck_visible(app: Optional[str], tree: str) -> bool:
-    """True when the swipe/like deck is on screen (map like/pass ids first)."""
+def _deck_has_like_pass_controls(app: Optional[str], tree: str) -> bool:
+    """True when like/pass/skip controls (or mapped swipe deck ids) are present."""
     app = (app or "").lower()
     profile = DM_APP_PROFILES.get(app, {}) if app else {}
-    # Map like/pass resource-ids first (Hily ActionButton_*, Badoo VoteYes/No, …)
     like_ids = tuple(profile.get("like_ids") or ())
     pass_ids = tuple(profile.get("pass_ids") or ())
     if like_ids and _tree_id_center(tree, *like_ids):
@@ -1023,12 +1036,74 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
         tree, "id/gamepad_like", "gamepad_like", "id/btn_like", "encounter_like"
     ):
         return True
-    # Exact bottom-row Like/Pass (avoid matching "likely" etc. via substring)
     like = _exact_label_center(tree, "Like")
     pass_ = _exact_label_center(tree, "Pass")
     if like and int(like[1]) > 1700:
         return True
     if pass_ and int(pass_[1]) > 1700:
+        return True
+    # Gesture-only decks (Bumble/Yubo): card stack markers without buttons
+    if app == "bumble" and bumble_on_people_deck(tree) and not bumble_on_photo_grid(
+        tree
+    ):
+        return True
+    if app == "yubo" and yubo_on_deck(tree):
+        return True
+    return False
+
+
+def _deck_markers_ok(app: Optional[str], tree: str) -> bool:
+    """Require a real profile card (name±age) AND deck/like controls — no false passes."""
+    app = (app or "").lower()
+    if app == "hily" and hily_on_top_picks_grid(tree):
+        return False
+    if app == "yubo" and (
+        yubo_on_chat(tree)
+        or "conversations" in (tree or "").lower()
+        or ("reactions" in (tree or "").lower() and "send a message" not in (tree or "").lower())
+    ):
+        return False
+    name = deck_card_name(app, tree)
+    if not name:
+        # End-of-deck / exhausted still counts as "evaluated" for stop, not pass
+        if app == "blk" and blk_end_of_deck(tree):
+            return True
+        return False
+    low = name.lower().strip()
+    if low in (
+        "education",
+        "height",
+        "reactions",
+        "chat",
+        "likes",
+        "friends",
+        "discover",
+        "filters",
+        "verified",
+    ) or low.startswith("verified"):
+        return False
+    if not _deck_has_like_pass_controls(app, tree) and app not in (
+        "bumble",
+        "yubo",
+        "hinge",
+    ):
+        # Hinge heart is vision-only; Bumble/Yubo gesture decks OK with name alone
+        # if on_*_deck already true
+        if app == "hinge" and hinge_on_discover(tree):
+            return True
+        if app in ("bumble", "yubo") and _deck_visible(app, tree):
+            return True
+        return False
+    return True
+
+
+def _deck_visible(app: Optional[str], tree: str) -> bool:
+    """True when the swipe/like deck is on screen (map like/pass ids first)."""
+    app = (app or "").lower()
+    if app == "hily" and hily_on_top_picks_grid(tree):
+        # Grid is Discover — not a likeable deck
+        return False
+    if _deck_has_like_pass_controls(app, tree):
         return True
     if app == "bumble" and bumble_on_people_deck(tree):
         return True
@@ -1048,9 +1123,6 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
         return True
     if app == "tagged" and tagged_on_deck(tree):
         return True
-    if app == "hily" and hily_on_top_picks_grid(tree):
-        # Grid is Discover — not a likeable deck until a tile is opened
-        return False
     return False
 
 
@@ -1293,31 +1365,33 @@ def plan_bulk_swipe(
             },
             "hily_profile_sheet_back",
         )
-    # Hily Discover grid: open first tile once per job; never tile→back→tile loop
+    # Hily Top picks / Discover grid → go to Finder deck (never Crush tiles)
     if app == "hily" and hily_on_top_picks_grid(ui_tree):
-        tile_taps = int(bulk.get("hily_tile_taps") or 0)
-        tile = hily_first_grid_tile_center(ui_tree)
-        if tile and tile_taps < 1:
-            bulk["hily_tile_taps"] = tile_taps + 1
+        if not bulk.get("_hily_finder_nav"):
+            bulk["_hily_finder_nav"] = True
             st["bulk_swipe"] = bulk
+            xy = DM_APP_PROFILES.get("hily", {}).get("deck_tab_xy") or (142, 2190)
             return _fp(
                 {
                     "action": "tap",
-                    "x": tile[0],
-                    "y": tile[1],
-                    "reason": f"Open Hily Top picks grid tile → profile ({planner})",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Leave Hily Top picks → Finder deck tab ({planner})"
+                    ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
+                    "label": "Finder",
                 },
-                "bulk_hily_open_grid_tile",
+                "bulk_hily_open_finder",
             )
         return _fp(
             {
                 "action": "fail",
                 "reason": (
-                    f"Hily Discover is a Top picks grid (Crush tiles paid); "
-                    f"refuse tile loop (taps={tile_taps}) ({planner})"
+                    f"Hily still on Top picks grid after Finder nav — "
+                    f"refuse Crush tile loop ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -1326,11 +1400,31 @@ def plan_bulk_swipe(
             },
             "bulk_dry_run_hily_grid",
         )
-    # People + Discover are photo grids on real S21 — neither is a free card
-    # stack. Never tap tiles (PhotoBrowser SuperSwipe is paid). Fail cleanly.
+    # Bumble People photo grid — try Discover card stack once, never tile-tap
     if app == "bumble" and (
         bumble_on_photo_grid(ui_tree) or "same dating goals" in (ui_tree or "").lower()
     ):
+        if not bulk.get("_bumble_tried_discover"):
+            bulk["_bumble_tried_discover"] = True
+            st["bulk_swipe"] = bulk
+            xy = DM_APP_PROFILES.get("bumble", {}).get("discover_tab_xy") or (
+                DM_APP_PROFILES.get("bumble", {}).get("deck_tab_xy") or (324, 2197)
+            )
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Leave Bumble People grid → Discover/deck tab ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "label": "Discover",
+                },
+                "bulk_bumble_open_discover",
+            )
         return _fp(
             {
                 "action": "fail",
@@ -1388,7 +1482,19 @@ def plan_bulk_swipe(
                 "bulk_settle_deck",
             )
 
-    # App-specific popups (Hily Got it / Maybe later; BLK Send Like anyway)
+    # App-specific + harmless popups (Streaks Got it!, rate-us, tips)
+    # Prefer labeled dismiss; never paid upsells.
+    try:
+        from cloud_agent import permission_dialog_action
+    except ImportError:
+        try:
+            from backend.cloud_agent import permission_dialog_action  # type: ignore
+        except ImportError:
+            permission_dialog_action = None  # type: ignore
+    if permission_dialog_action:
+        perm = permission_dialog_action(ui_tree, package=package)
+        if perm:
+            return perm
     if app == "hily":
         popup = hily_dismiss_popup(ui_tree, planner=planner)
         if popup:
@@ -1413,6 +1519,61 @@ def plan_bulk_swipe(
         popup = blk_dismiss_popup(ui_tree, planner=planner)
         if popup:
             return popup
+    # Generic harmless dismiss only when a known interstitial is on screen
+    blob_l = (ui_tree or "").lower()
+    interstitial = any(
+        p in blob_l
+        for p in (
+            "introducing streaks",
+            "enjoying",
+            "rate us",
+            "rate this",
+            "how are we doing",
+            "turn on notifications",
+            "get messages notifications",
+            "enable notifications",
+            "allow notifications",
+            "tips for you",
+            "pro tip",
+        )
+    )
+    if interstitial and not any(
+        paid in blob_l
+        for paid in (
+            "buy credits",
+            "subscribe",
+            "super like",
+            "boost now",
+            "get gold",
+            "premium",
+            "crush",
+        )
+    ):
+        for lab in (
+            "Got it!",
+            "Got it",
+            "Not now",
+            "No thanks",
+            "Maybe later",
+            "Don't allow",
+            "Dont allow",
+            "Close",
+            "Dismiss",
+        ):
+            c = _exact_label_center(ui_tree, lab) or _tree_node_center(ui_tree, lab)
+            if c and 200 < int(c[1]) < 2300:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": c[0],
+                        "y": c[1],
+                        "reason": f"Dismiss popup → {lab} ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": lab,
+                    },
+                    "bulk_harmless_popup",
+                )
     if app == "taimi":
         if taimi_is_paywall(ui_tree):
             # Count as skipped — never Continue; do not increment likes
@@ -1760,6 +1921,22 @@ def plan_bulk_swipe(
                     "dry_run_verified": False,
                 },
                 "bulk_dry_run_no_deck",
+            )
+        if not _deck_markers_ok(app, ui_tree):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — no real profile card markers for {app or '?'} "
+                        f"(need name+age / like-pass; refuse Chat-tab / filter "
+                        f"false pass) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                },
+                "bulk_dry_run_no_deck_markers",
             )
         card = deck_card_name(app, ui_tree)
         if not card:
@@ -2726,22 +2903,40 @@ def plan_bulk_message_new(
                 "hily_profile_sheet_back",
             )
         if hily_on_top_picks_grid(ui_tree):
-            tile_taps = int(bulk.get("hily_tile_taps") or 0)
-            tile = hily_first_grid_tile_center(ui_tree)
-            if tile and tile_taps < 1:
-                bulk["hily_tile_taps"] = tile_taps + 1
+            # New-contact: message free matches/chats — never Top picks Crush tiles
+            if not bulk.get("_hily_new_to_chats"):
+                bulk["_hily_new_to_chats"] = True
                 st["bulk_message_new"] = bulk
+                xy = DM_APP_PROFILES.get("hily", {}).get("inbox_tab_xy") or (341, 2190)
                 return _fp(
                     {
                         "action": "tap",
-                        "x": tile[0],
-                        "y": tile[1],
-                        "reason": f"Open Hily grid tile for new message ({planner})",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Leave Hily Top picks → Chats for free matches "
+                            f"({planner})"
+                        ),
                         "planner": planner,
                         "llm_provider": None,
+                        "label": "Chats",
                     },
-                    "bulk_hily_new_grid_tile",
+                    "bulk_hily_new_open_chats",
                 )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hily new-contact still on Top picks — refuse Crush "
+                        f"tiles; use free chat/match starts ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                },
+                "bulk_hily_new_top_picks_refuse",
+            )
         # Dry-run: ONLY a free message composer counts — never Crush/Like CTA
         compose = _tree_node_center(
             ui_tree, "Type a message", "Say something", "Write a message"

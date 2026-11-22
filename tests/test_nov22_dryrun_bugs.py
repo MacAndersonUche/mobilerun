@@ -52,7 +52,7 @@ def test_bumble_photo_browser_backs_out():
 
 
 def test_bumble_photo_grid_fails_not_tile_loop():
-    """People grid tiles open PhotoBrowser — never tap tiles; fail cleanly."""
+    """People grid → try Discover once; never tile-tap / SuperSwipe."""
     from backend.dm_heuristics import bumble_on_photo_grid
 
     tree = """
@@ -65,19 +65,32 @@ def test_bumble_photo_grid_fails_not_tile_loop():
     """
     assert bumble_on_photo_grid(tree)
     assert not _deck_visible("bumble", tree)
+    st: dict = {}
     act = plan_bulk_swipe(
         "bumble like 5 profiles",
         tree,
         ["Opened Bumble"],
-        state={},
+        state=st,
         package="com.bumble.app",
         dry_run=True,
     )
     assert act is not None
-    assert act.get("action") == "fail"
-    assert "grid" in (act.get("reason") or "").lower()
-    assert "PhotoBrowser" in (act.get("reason") or "") or "SuperSwipe" in (
-        act.get("reason") or ""
+    assert act.get("action") == "tap"
+    assert "Discover" in (act.get("reason") or "") or act.get("label") == "Discover"
+    # Second pass still on grid → fail cleanly (no tile loop)
+    act2 = plan_bulk_swipe(
+        "bumble like 5 profiles",
+        tree,
+        ["Opened Bumble", act.get("reason") or ""],
+        state=st,
+        package="com.bumble.app",
+        dry_run=True,
+    )
+    assert act2 is not None
+    assert act2.get("action") == "fail"
+    assert "grid" in (act2.get("reason") or "").lower()
+    assert "PhotoBrowser" in (act2.get("reason") or "") or "SuperSwipe" in (
+        act2.get("reason") or ""
     )
 
 
@@ -94,11 +107,11 @@ def test_hily_top_picks_grid_not_deck():
         dry_run=True,
     )
     assert act is not None
-    # Opens a tile or fails safely — never Crush
+    # Navigate to Finder — never Crush tiles
     assert act.get("action") in ("tap", "fail")
     if act.get("action") == "tap":
         assert "Crush" not in (act.get("reason") or "")
-        assert "grid" in (act.get("reason") or "").lower()
+        assert "Finder" in (act.get("reason") or "") or act.get("label") == "Finder"
 
 
 def test_hily_mbm_closes_and_skips():

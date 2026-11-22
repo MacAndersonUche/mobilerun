@@ -141,12 +141,20 @@ def recovery_action(
 
     if name == "dismiss_dialogs":
         c = popup_center(ui_tree)
-        x, y = c if c else (540, 1395)
+        if c:
+            return {
+                "action": "tap",
+                "x": c[0],
+                "y": c[1],
+                "reason": f"Dismiss popup/ANR ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+                "_recovery": name,
+            }
+        # No popup center — Back instead of a blind mid-screen tap
         return {
-            "action": "tap",
-            "x": x,
-            "y": y,
-            "reason": f"Dismiss popup/ANR ({planner})",
+            "action": "back",
+            "reason": f"No popup center — Back ({planner})",
             "planner": planner,
             "llm_provider": None,
             "_recovery": name,

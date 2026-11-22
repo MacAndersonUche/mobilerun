@@ -1241,8 +1241,26 @@ def _looks_like_chat_list_row(
     node: Dict[str, Any], result_ids: Sequence[str] = ()
 ) -> bool:
     """Restrict contact taps to inbox/match row nodes — never deck cards / counters."""
+    # Never treat status-bar / toolbar headers as chat rows
+    y = int(node.get("y") or 0)
+    if y < 200:
+        return False
     nid = str(node.get("id") or "").lower()
     label = (node.get("label") or node.get("text") or "").lower()
+    # Common non-row chrome
+    if label in (
+        "chat",
+        "chats",
+        "messages",
+        "matches",
+        "connections",
+        "back",
+        "search",
+        "new friends",
+        "reactions",
+        "conversations",
+    ):
+        return False
     if result_ids and _node_id_matches(node, result_ids):
         return True
     row_id_toks = (
@@ -2030,10 +2048,38 @@ def yubo_deck_card_name(tree: str) -> Optional[str]:
 
 
 def yubo_on_deck(tree: str, *, _log: bool = True) -> bool:
-    if yubo_deck_card_name(tree):
-        return True
+    """True on the People/deck card — never Chat-list chrome (Reactions, etc.)."""
     blob = (tree or "").lower()
-    if "send a message" in blob and "conversations" not in blob:
+    # Chat / Conversations list is never the swipe deck
+    if yubo_on_chat(tree):
+        return False
+    if "conversations" in blob or (
+        "new friends" in blob and "reactions" in blob and "send a message" not in blob
+    ):
+        return False
+    name = yubo_deck_card_name(tree)
+    if name:
+        low = name.lower()
+        # Reject chat-list / filter chrome mistaken for a card
+        if any(
+            tok in low
+            for tok in (
+                "verified",
+                "reaction",
+                "conversation",
+                "friend",
+                "chat",
+                "like",
+                "more",
+            )
+        ):
+            if _log:
+                _log_detector_false("yubo_on_deck", tree, "co.yellw.yellowapp")
+            return False
+        # Prefer a real card: name plus Send a message CTA (not inbox)
+        if "send a message" in blob:
+            return True
+        # Name alone at left edge is enough when not on chat list
         return True
     if _log:
         _log_detector_false("yubo_on_deck", tree, "co.yellw.yellowapp")
@@ -3082,8 +3128,57 @@ def blk_end_of_deck(tree: str) -> bool:
     return "you reached the end" in blob or "reached the end" in blob
 
 
+_BLK_FILTER_CHIP_WORDS = frozenset(
+    {
+        "education",
+        "height",
+        "looking for",
+        "religion",
+        "ethnicity",
+        "politics",
+        "drinking",
+        "smoking",
+        "cannabis",
+        "kids",
+        "family plans",
+        "exercise",
+        "pets",
+        "zodiac",
+        "languages",
+        "filters",
+        "filter",
+        "discover",
+        "boost",
+        "pass",
+        "like icon",
+        "send a message",
+        "matches",
+        "likes",
+        "profile",
+    }
+)
+
+
+def _blk_looks_like_person_name(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or len(t) > 40:
+        return False
+    low = t.lower()
+    if low in _BLK_FILTER_CHIP_WORDS:
+        return False
+    if any(w in low for w in _BLK_FILTER_CHIP_WORDS if " " in w):
+        return False
+    # "Maya" / "Maya, 28" — not filter chips
+    if re.match(r"^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2}(?:,\s*\d{2})?$", t):
+        return True
+    return False
+
+
 def blk_deck_card_name(tree: str) -> Optional[str]:
-    """Name = TextView immediately before 'Send a message' on the card."""
+    """Name = TextView immediately before 'Send a message' on the card.
+
+    Rejects filter chips (Education, Height, …) that sit near the CTA.
+    """
     texts: List[Tuple[int, int, str]] = []
     for n in _parse_compact_nodes(tree):
         t = (n.get("text") or "").strip()
@@ -3095,15 +3190,12 @@ def blk_deck_card_name(tree: str) -> Optional[str]:
     texts.sort(key=lambda x: (x[0], x[1]))
     for i, (_y, _x, t) in enumerate(texts):
         if t.lower() == "send a message" and i > 0:
-            prev = texts[i - 1][2].strip()
-            if prev and prev.lower() not in (
-                "send a message",
-                "like icon",
-                "boost",
-                "pass",
-                "discover",
-            ):
-                return prev.split(",")[0].strip()
+            # Walk backward past filter chips to a person-like name
+            for j in range(i - 1, max(-1, i - 6), -1):
+                prev = texts[j][2].strip()
+                if _blk_looks_like_person_name(prev):
+                    return prev.split(",")[0].strip()
+            return None
     return None
 
 
@@ -3893,6 +3985,151 @@ def tagged_is_premium(tree: str) -> bool:
     return "tagged premium" in blob
 
 
+def open_chat_thread_present(
+    app: Optional[str], tree: str
+) -> bool:
+    """True when an open 1:1 chat thread is showing (composer / header), not root.
+
+    Detects leftover threads at job start: 'Type a message…', 'Aa', editable
+    compose in the bottom band, or back-arrow + contact name without a tab bar.
+    """
+    if not tree:
+        return False
+    app_l = (app or "").lower()
+    # Already on a known list/deck with tab bar → not a stuck thread
+    if tab_bar_verified(app_l, tree) and not keyboard_likely_up(tree):
+        # Tab bar + no focused compose → treat as root even if a hint says Aa
+        # (Bumble Connections can show search). Still catch focused thread.
+        if app_l == "yubo" and yubo_on_chat(tree):
+            return True
+        if app_l == "hily" and hily_on_thread(tree):
+            return True
+        if app_l == "blk" and blk_on_thread(tree):
+            return True
+        if app_l == "taimi" and taimi_on_thread(tree):
+            return True
+        if app_l == "bumble" and compose_field_present(
+            tree, ("Aa", "Message", "Type a message", "Say something")
+        ):
+            # Connections list has no Aa; thread does
+            if not bumble_on_connections(tree, _log=False) and not bumble_on_people_deck(
+                tree, _log=False
+            ):
+                return True
+        if app_l == "badoo" and compose_field_present(
+            tree, ("Aa", "Message", "Type a message")
+        ):
+            if not badoo_on_connections(tree, _log=False) and not badoo_on_encounters(
+                tree, _log=False
+            ):
+                return True
+        if app_l == "tagged" and compose_field_present(
+            tree, ("Type a message...", "Type a message", "Message", "Aa")
+        ):
+            if not tagged_on_chats(tree) and not tagged_on_deck(tree):
+                return True
+        # WhatsApp / generic: compose without chats list rows
+        return False
+
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
+    compose_labels = tuple(
+        profile.get("compose_labels")
+        or (
+            "Aa",
+            "Type a message",
+            "Type a message...",
+            "Message",
+            "Write a message",
+            "Say something",
+        )
+    )
+    if compose_field_present(tree, compose_labels):
+        # Compose without a verified tab bar → open thread
+        if not tab_bar_verified(app_l, tree):
+            return True
+    # App-specific thread detectors
+    if app_l == "yubo" and yubo_on_chat(tree):
+        return True
+    if app_l == "hily" and hily_on_thread(tree):
+        return True
+    if app_l == "blk" and blk_on_thread(tree):
+        return True
+    if app_l == "taimi" and taimi_on_thread(tree):
+        return True
+    if app_l == "bumble":
+        # Aa composer + toolbar title / Back = open thread
+        has_aa = compose_field_present(
+            tree, ("Aa", "Message", "Type a message", "Say something")
+        )
+        has_back = any(
+            (n.get("label") or n.get("desc") or "").strip().lower()
+            in ("back", "navigate up")
+            or str(n.get("id") or "").lower().endswith("/back")
+            for n in _parse_compact_nodes(tree)
+            if int(n.get("y") or 0) < 400
+        )
+        if has_aa and has_back and not bumble_on_connections(tree, _log=False):
+            return True
+    if app_l == "badoo":
+        if compose_field_present(tree, ("Aa", "Message", "Type a message")) and not (
+            badoo_on_encounters(tree, _log=False)
+            or badoo_on_connections(tree, _log=False)
+        ):
+            return True
+    if app_l == "tagged":
+        if compose_field_present(
+            tree, ("Type a message...", "Type a message", "Message", "Aa")
+        ) and not (tagged_on_chats(tree) or tagged_on_deck(tree)):
+            return True
+    if app_l in ("whatsapp", "wa") or (not app_l and "com.whatsapp" in (tree or "")):
+        if compose_field_present(
+            tree, ("Message", "Type a message", "Write a message")
+        ) and not _tree_id_center(
+            tree,
+            "com.whatsapp:id/conversations_row_contact_name",
+            "contact_row_container",
+        ):
+            return True
+    # Generic: Back + name header + bottom editable, no tab bar
+    nodes = _parse_compact_nodes(tree)
+    has_back = False
+    has_header_name = False
+    has_bottom_edit = False
+    for n in nodes:
+        lab = (n.get("label") or n.get("desc") or n.get("text") or "").strip().lower()
+        nid = str(n.get("id") or "").lower()
+        y = int(n.get("y") or 0)
+        if y < 400 and (
+            lab in ("back", "navigate up") or nid.endswith("/back") or "navigateup" in nid
+        ):
+            has_back = True
+        if (
+            y < 400
+            and not n.get("editable")
+            and lab
+            and len(lab) >= 2
+            and lab
+            not in (
+                "back",
+                "close",
+                "more",
+                "search",
+                "video call",
+                "audio call",
+                "call",
+            )
+            and re.match(r"^[a-z][a-z0-9 .'\-]{1,30}$", lab)
+        ):
+            has_header_name = True
+        if n.get("editable") and y > 1600 and "search" not in lab:
+            has_bottom_edit = True
+    if has_back and has_header_name and has_bottom_edit and not tab_bar_verified(
+        app_l, tree
+    ):
+        return True
+    return False
+
+
 def app_overlay_present(app: Optional[str], tree: str) -> Optional[str]:
     """Return overlay name when a sheet/modal/viewer covers the root UI.
 
@@ -3904,6 +4141,8 @@ def app_overlay_present(app: Optional[str], tree: str) -> Optional[str]:
         return None
     if keyboard_likely_up(tree):
         return "keyboard"
+    if open_chat_thread_present(app_l, tree):
+        return "open_chat_thread"
     if app_l == "bumble" and bumble_on_photo_browser(tree):
         return "bumble_photo_browser"
     if app_l == "hily":

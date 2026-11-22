@@ -1230,18 +1230,25 @@ class BackendClient(private val context: Context) {
         val params = message["params"] as? Map<String, Any?>
         val t0 = SystemClock.elapsedRealtime()
 
-        // Hide floating bubble for the job (or this step if no job_busy yet)
-        OverlayBubbleService.setJobBusy(context.applicationContext, true)
-        // Cancel any pending idle restore — keep hidden across step gaps
-        bubbleIdleJob?.cancel()
-
         // Whole-job overlay control from cloud (job start → job end)
         if (command == "job_busy" || command == "job_idle") {
             val busy = command == "job_busy"
             jobSessionBusy.set(busy)
             OverlayBubbleService.setJobBusy(context.applicationContext, busy)
+            bubbleIdleJob?.cancel()
+            if (!busy) {
+                // Job ended — show bubble immediately; short safety re-show
+                scheduleBubbleIdle(forceShort = true)
+            }
             sendCommandResponse(requestId, mapOf("ok" to true, "job_busy" to busy), null)
             return
+        }
+
+        // Only keep bubble hidden while a job session is active — never hide
+        // on housekeeping commands after job_idle (HOME/IME were re-hiding it).
+        if (jobSessionBusy.get()) {
+            OverlayBubbleService.setJobBusy(context.applicationContext, true)
+            bubbleIdleJob?.cancel()
         }
 
         // CRITICAL: ACK tap/swipe/press on the OkHttp reader thread BEFORE any
@@ -1727,23 +1734,22 @@ class BackendClient(private val context: Context) {
      * Re-show Connected bubble only when the *job* is over.
      * During jobSessionBusy keep hidden across planning gaps, but always arm
      * a hard idle timeout so a Dynamo cancel (no job_idle) cannot leave the
-     * bubble stuck forever.
+     * bubble stuck forever (≤3 min). After job_idle, restore within seconds.
      */
-    private fun scheduleBubbleIdle() {
+    private fun scheduleBubbleIdle(forceShort: Boolean = false) {
         bubbleIdleJob?.cancel()
         bubbleIdleJob = scope.launch {
-            val waitMs = if (jobSessionBusy.get()) {
-                // Whole-job hide, but recover if cloud never sends job_idle
-                10 * 60_000L
-            } else {
-                120_000L
+            val waitMs = when {
+                forceShort -> 5_000L
+                jobSessionBusy.get() -> 3 * 60_000L // hard cap while busy
+                else -> 15_000L
             }
             delay(waitMs)
             jobSessionBusy.set(false)
             OverlayBubbleService.setJobBusy(context.applicationContext, false)
             Log.i(tag, "overlay bubble idle timeout (${waitMs}ms) — restored")
         }
-        if (jobSessionBusy.get()) {
+        if (jobSessionBusy.get() && !forceShort) {
             OverlayBubbleService.setJobBusy(context.applicationContext, true)
         }
     }

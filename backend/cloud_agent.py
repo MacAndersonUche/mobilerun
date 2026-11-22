@@ -1993,25 +1993,58 @@ def _maybe_restore_ime(job: Dict[str, Any], device_id: str, call_device) -> None
 def _back_to_root_before_home(
     job: Dict[str, Any], device_id: str, call_device, *, max_backs: int = 3
 ) -> None:
-    """Close sheets/viewers/modals before HOME so the next job starts clean."""
+    """Close sheets/viewers/open chat threads before HOME / job start."""
     try:
         for _ in range(max_backs):
             info = _fetch_ui_tree_retry(device_id, call_device, attempts=1)
             tree = str(info.get("tree") or "")
+            pkg = str(info.get("package") or "").lower()
             try:
                 from dm_heuristics import (
+                    app_overlay_present,
+                    detect_dm_app,
                     hily_on_photo_viewer,
                     hily_on_profile_sheet,
                     keyboard_likely_up,
+                    open_chat_thread_present,
                 )
             except ImportError:
                 from backend.dm_heuristics import (  # type: ignore
+                    app_overlay_present,
+                    detect_dm_app,
                     hily_on_photo_viewer,
                     hily_on_profile_sheet,
                     keyboard_likely_up,
+                    open_chat_thread_present,
                 )
+            app = detect_dm_app(str(job.get("instruction") or ""))
+            if not app:
+                try:
+                    from dm_heuristics import DM_APP_PROFILES as _DAP
+                except ImportError:
+                    from backend.dm_heuristics import DM_APP_PROFILES as _DAP  # type: ignore
+
+                for key, prof in _DAP.items():
+                    p = str(prof.get("package") or "").lower()
+                    if p and p in pkg:
+                        app = key
+                        break
+            if not app:
+                app = detect_dm_app(tree)
+            overlay = app_overlay_present(app, tree)
             need_back = bool(
                 keyboard_likely_up(tree)
+                or open_chat_thread_present(app, tree)
+                or overlay
+                in (
+                    "open_chat_thread",
+                    "keyboard",
+                    "hily_photo_viewer",
+                    "hily_profile_sheet",
+                    "hily_mbm",
+                    "bumble_photo_browser",
+                    "blk_streaks_sheet",
+                )
                 or hily_on_photo_viewer(tree)
                 or hily_on_profile_sheet(tree)
                 or "major crush" in tree.lower()
@@ -2604,10 +2637,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("job_busy at start failed: %s", e)
 
-    # Job-start back-to-root: close leftover Hily Crush sheets / photo viewers
+    # Job-start back-to-root: close leftover threads / sheets / photo viewers
     if not state.get("job_start_root_done"):
         try:
-            _back_to_root_before_home(job, device_id, call_device, max_backs=2)
+            _back_to_root_before_home(job, device_id, call_device, max_backs=5)
             state["job_start_root_done"] = True
             history.append("job-start back-to-root")
             state["history"] = history[-40:]
@@ -2855,7 +2888,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     use_vision = False
             if kind == "_vision_retry":
-                # Re-plan with vision if possible; else dismiss/tap fallback
+                # Re-plan with vision if possible; else stop safely (no blind tap)
                 if use_vision:
                     try:
                         action = plan_next_action(
@@ -2875,26 +2908,39 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         reason = str(action.get("reason") or "")
                         planner = action.get("planner") or "llm"
                         llm_provider = action.get("llm_provider")
+                        # Propagate vision confirmation for empty-tree firewall
+                        if action.get("action") == "tap":
+                            action["_vision_confirmed_label"] = str(
+                                action.get("label")
+                                or action.get("text")
+                                or action.get("reason")
+                                or "vision"
+                            )
                     except Exception:
                         action = {
-                            "action": "tap",
-                            "x": 540,
-                            "y": 1395,
-                            "reason": "Vision unavailable — tap Wait/Allow",
+                            "action": "fail",
+                            "reason": (
+                                "Vision planner failed on empty tree — "
+                                "stop safely (no post-failure recovery tap)"
+                            ),
                             "planner": "recovery:vision",
+                            "llm_provider": None,
                         }
-                        kind = "tap"
+                        kind = "fail"
                         reason = action["reason"]
                         planner = "recovery:vision"
                 else:
                     action = {
-                        "action": "tap",
-                        "x": 540,
-                        "y": 1395,
-                        "reason": "No screenshot — tap Wait/Allow",
+                        "action": "fail",
+                        "reason": (
+                            "Empty/sparse tree and no screenshot — "
+                            "stop safely (no Wait/Allow mid-screen tap)"
+                        ),
                         "planner": "recovery:vision",
+                        "llm_provider": None,
+                        "needs_vision": True,
                     }
-                    kind = "tap"
+                    kind = "fail"
                     reason = action["reason"]
                     planner = "recovery:vision"
             # Skip normal planning — jump to action execution via flag
@@ -3358,16 +3404,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             "text message",
                         )
                     )
-                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
                     if sms_goal:
-                        # Rotate recovery actions so we actually move the UI forward.
-                        # If we left Messages (SystemUI/launcher), open_app first;
-                        # then focus compose, type marker, tap Send. Never Back.
+                        # SMS E2E: recover without blind mid-screen Wait/Allow taps.
                         pkg_l = str(tree_info.get("package") or "").lower()
                         off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
                         recoveries = (
                             (
-                                anr_wait,
                                 {"action": "open_app", "app": "messages"},
                                 {"action": "tap", "x": 845, "y": 2200},
                                 {"action": "tap", "x": 540, "y": 400},
@@ -3390,58 +3432,42 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                                     "text": "hello from macai uitree recovery test",
                                 },
                                 {"action": "tap", "x": 1000, "y": 2280},
-                                anr_wait,
                                 {"action": "open_app", "app": "messages"},
                                 {"action": "tap", "x": 540, "y": 2100},
                             )
                         )
                         action = recoveries[(fail_n - 1) % len(recoveries)]
+                        kind = str(action.get("action") or "").lower()
+                        history.append(
+                            f"hint: planner fail ({reason[:60]}) → recovery {kind} "
+                            f"(streak={fail_n})"
+                        )
+                        state["history"] = history[-40:]
+                        state["last_action"] = f"recovery:{kind}"
+                        job["state"] = state
+                        job["result"] = (
+                            f"Recovering after planner fail ({fail_n}): {kind}"
+                        )
+                        # Fall through to execute_action below
                     else:
-                        # Dating / fake-chats / generic: dismiss ANR, back, re-open
-                        # the instruction's app — never hijack into SMS Messages.
-                        dm_app = None
-                        open_label = None
-                        try:
-                            from dm_heuristics import (
-                                DM_APP_PROFILES as _DAP,
-                                detect_dm_app as _dda,
-                            )
-                        except ImportError:
-                            from backend.dm_heuristics import (  # type: ignore
-                                DM_APP_PROFILES as _DAP,
-                                detect_dm_app as _dda,
-                            )
-                        try:
-                            dm_app = _dda(instruction)
-                        except Exception:
-                            dm_app = None
-                        if dm_app:
-                            open_label = str(
-                                (_DAP.get(dm_app) or {}).get("open_label") or dm_app
-                            )
-                        reopen = (
-                            {"action": "open_app", "app": open_label}
-                            if open_label
-                            else anr_wait
+                        # Dating / social: stop safely — never blind (540,1395).
+                        state["steps"] = step + 1
+                        state["last_progress_at"] = int(time.time())
+                        state["last_action"] = f"fail: {reason}"
+                        history.append(f"fail (no recovery tap): {reason}")
+                        state["history"] = history
+                        _record_step(
+                            f"fail: {reason}", ok=False, screenshot_key=shot_key
                         )
-                        recoveries = (
-                            anr_wait,
-                            {"action": "back"},
-                            reopen,
-                            {"action": "tap", "x": 950, "y": 2200},
-                            {"action": "tap", "x": 540, "y": 1500},
+                        job["state"] = state
+                        job["status"] = "failed"
+                        job["error"] = reason or "Agent could not complete the goal"
+                        job["completed_at"] = int(time.time())
+                        _attach_failure_artifacts(
+                            job, device_id, ui_tree, call_device=call_device
                         )
-                        action = recoveries[(fail_n - 1) % len(recoveries)]
-                    kind = str(action.get("action") or "").lower()
-                    history.append(
-                        f"hint: planner fail ({reason[:60]}) → recovery {kind} "
-                        f"(streak={fail_n})"
-                    )
-                    state["history"] = history[-40:]
-                    state["last_action"] = f"recovery:{kind}"
-                    job["state"] = state
-                    job["result"] = f"Recovering after planner fail ({fail_n}): {kind}"
-                    # Fall through to execute_action below
+                        _end_job_cleanup(job, device_id, call_device)
+                        return job
                 else:
                     state["steps"] = step + 1
                     state["last_progress_at"] = int(time.time())
