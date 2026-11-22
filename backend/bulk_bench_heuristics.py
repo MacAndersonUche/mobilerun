@@ -90,6 +90,7 @@ try:
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_chat,
+        yubo_on_chat_list,
         yubo_on_deck,
         yubo_pass_swipe,
     )
@@ -167,6 +168,7 @@ except ImportError:
         yubo_deck_card_name,
         yubo_like_swipe,
         yubo_on_chat,
+        yubo_on_chat_list,
         yubo_on_deck,
         yubo_pass_swipe,
     )
@@ -464,6 +466,10 @@ def _visible_chat_list_rows(
                 "incoming",
                 "chat_message",
                 "msg_text",
+                "conversations_row_message",
+                "row_message",
+                "last_message",
+                "preview",
             )
         ):
             continue
@@ -474,6 +480,26 @@ def _visible_chat_list_rows(
         if key in skip or key in seen:
             continue
         if len(name) < 2 or len(name) > 40:
+            continue
+        # WhatsApp Community / Announcements / Channels are not 1:1 DMs
+        if any(
+            tok in key
+            for tok in (
+                "community",
+                "communities",
+                "announcement",
+                "announcements",
+                "channel",
+                "channels",
+                "broadcast",
+                "newsletter",
+            )
+        ):
+            continue
+        # Header chrome (Chat / Chats / Matches title) — never a row
+        if key in ("chat", "chats", "matches", "messages", "inbox", "connections"):
+            continue
+        if int(n.get("y") or 0) < 200:
             continue
         seen.add(key)
         rows.append(
@@ -718,15 +744,16 @@ def _open_chats_tab_action(
                     },
                     "bulk_hily_crush_covers_chats",
                 )
+    tab_label = str(labels[0]) if labels else "Chats"
     return _fp(
         {
             "action": "tap",
             "x": int(c[0]),
             "y": int(c[1]),
-            "reason": f"Open chats/messages tab ({planner})",
+            "reason": f"Open {tab_label} tab ({planner})",
             "planner": planner,
             "llm_provider": None,
-            "label": "Chats",
+            "label": tab_label,
         },
         "bulk_open_chats",
     )
@@ -748,23 +775,32 @@ _ROOT_RECOVER_APPS = frozenset(
 
 
 def _app_tree_empty(ui_tree: str, app: Optional[str] = None) -> bool:
-    """True when the dump has no useful app-window nodes (SystemUI-only / blank)."""
+    """True when the dump has no useful *target-app* window nodes.
+
+    SystemUI-only dumps and MacMobileRun's own overlay window
+    (``ai.mobilerun.selfhosted``) count as empty for dating jobs so vision /
+    re-open can run.
+    """
     nodes = _parse_compact_nodes(ui_tree)
     if not nodes:
         return True
     app_l = (app or "").lower()
     pkg = ""
     if app_l and app_l in DM_APP_PROFILES:
-        pkg = str(DM_APP_PROFILES[app_l].get("package") or "")
+        pkg = str(DM_APP_PROFILES[app_l].get("package") or "").lower()
     useful = 0
+    target_useful = 0
     for n in nodes:
-        p = str(n.get("package") or "")
+        p = str(n.get("package") or "").lower()
         if _is_system_chrome_package(p):
             continue
-        if pkg and pkg.lower() not in p.lower() and p:
-            # Other apps OK if we have interactive content
-            pass
+        if "mobilerun.selfhosted" in p or p.endswith(".selfhosted"):
+            continue
         useful += 1
+        if pkg and pkg in p:
+            target_useful += 1
+    if pkg:
+        return target_useful < 3
     return useful < 3
 
 
@@ -775,6 +811,7 @@ def _recover_to_root_action(
     planner: str,
     *,
     state: Optional[Dict[str, Any]] = None,
+    allow_open_thread: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Back out / relaunch until deck, chat list, or tab bar is visible.
 
@@ -783,6 +820,10 @@ def _recover_to_root_action(
 
     Sheets/modals/viewers are checked BEFORE known_root_screen — Discover
     grid / bottom-nav under a covering sheet must not short-circuit recover.
+
+    When ``allow_open_thread`` is True (message planner already opened / is
+    targeting a thread), do NOT treat an open 1:1 chat as an overlay to Back
+    out of — proceed to composer / dry-run send instead.
     """
     app_l = (app or "").lower()
     if app_l not in _ROOT_RECOVER_APPS:
@@ -795,6 +836,11 @@ def _recover_to_root_action(
 
     # Overlay first — even when Discover/nav underneath looks like a root
     overlay = app_overlay_present(app_l, ui_tree)
+    # Message/reply planner already opened / is targeting a thread — do not
+    # Back to root (that caused the open→back→open "No UI progress" loop).
+    # Keyboard on a target thread is fine for compose; still clear real sheets.
+    if allow_open_thread and overlay in (None, "open_chat_thread", "keyboard"):
+        return None
     if overlay:
         if app_l == "bumble" and overlay == "bumble_photo_browser":
             return bumble_back_from_photo_browser(planner=planner)
@@ -873,8 +919,45 @@ def _recover_to_root_action(
     relaunches = int(bucket.get("relaunches") or 0)
     backs = int(bucket.get("backs") or 0)
 
-    # Empty app tree → fail fast (don't thrash Back/Home)
+    # Empty / wrong-FG tree → request vision + relaunch once (don't hard-fail
+    # before the vision path can run — Hinge/Taimi/Hily empty Finder cases).
     if _app_tree_empty(ui_tree, app_l):
+        vision_asks = int(bucket.get("vision_asks") or 0)
+        if vision_asks < 2 and app_l in DM_APP_PROFILES:
+            bucket["vision_asks"] = vision_asks + 1
+            st[key] = bucket
+            label = str(DM_APP_PROFILES[app_l].get("open_label") or app_l)
+            if vision_asks == 0:
+                return _fp(
+                    {
+                        "action": "open_app",
+                        "app": label,
+                        "reason": (
+                            f"Empty/wrong FG tree for {app_l} — "
+                            f"re-open + vision ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    },
+                    "bulk_recover_empty_reopen",
+                )
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 1.2,
+                    "reason": (
+                        f"Empty app a11y tree for {app_l} — "
+                        f"vision settle ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_recover_empty_vision",
+            )
         return _fp(
             {
                 "action": "fail",
@@ -1091,14 +1174,17 @@ def _deck_markers_ok(app: Optional[str], tree: str) -> bool:
         "bumble",
         "yubo",
         "hinge",
+        "taimi",
     ):
-        # Hinge heart is vision-only; Bumble/Yubo gesture decks OK with name alone
-        # if on_*_deck already true
+        # Hinge heart is vision-only; Bumble/Yubo/Taimi gesture decks OK with
+        # name alone if on_*_deck already true (Taimi like/pass are unlabeled).
         if app == "hinge" and hinge_on_discover(tree):
             return True
-        if app in ("bumble", "yubo") and _deck_visible(app, tree):
+        if app in ("bumble", "yubo", "taimi") and _deck_visible(app, tree):
             return True
         return False
+    if app == "taimi" and _deck_visible(app, tree):
+        return True
     return True
 
 
@@ -1403,37 +1489,90 @@ def plan_bulk_swipe(
             },
             "bulk_dry_run_hily_grid",
         )
-    # Bumble People photo grid — try Discover card stack once, never tile-tap
+    # Yubo: Chat/Conversations list → leave for the deck tab (swipe jobs)
+    if app == "yubo" and yubo_on_chat_list(ui_tree) and not yubo_on_deck(ui_tree):
+        if not bulk.get("_yubo_tried_deck"):
+            bulk["_yubo_tried_deck"] = True
+            st["bulk_swipe"] = bulk
+            xy = DM_APP_PROFILES.get("yubo", {}).get("deck_tab_xy") or (140, 2194)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": f"Leave Yubo Chat list → deck tab ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "label": "Deck",
+                },
+                "bulk_yubo_open_deck",
+            )
+    # Bumble People photo grid — navigate to Discover card stack (never tile-tap)
     if app == "bumble" and (
         bumble_on_photo_grid(ui_tree) or "same dating goals" in (ui_tree or "").lower()
     ):
-        if not bulk.get("_bumble_tried_discover"):
+        # Prefer labeled Discover tab in the bottom nav (real swipe screen)
+        disc = _nav_tab_center(
+            ui_tree,
+            "Discover",
+            ids=("com.bumble.app:id/mainApp_navigationTabBar",),
+        ) or _exact_label_center(ui_tree, "Discover")
+        tries = int(bulk.get("_bumble_discover_tries") or 0)
+        if tries < 2:
+            bulk["_bumble_discover_tries"] = tries + 1
             bulk["_bumble_tried_discover"] = True
             st["bulk_swipe"] = bulk
-            xy = DM_APP_PROFILES.get("bumble", {}).get("discover_tab_xy") or (
-                DM_APP_PROFILES.get("bumble", {}).get("deck_tab_xy") or (324, 2197)
-            )
+            if disc and int(disc[1]) >= 1800:
+                xy = (int(disc[0]), int(disc[1]))
+            else:
+                xy = DM_APP_PROFILES.get("bumble", {}).get("discover_tab_xy") or (
+                    DM_APP_PROFILES.get("bumble", {}).get("deck_tab_xy") or (324, 2197)
+                )
             return _fp(
                 {
                     "action": "tap",
                     "x": int(xy[0]),
                     "y": int(xy[1]),
                     "reason": (
-                        f"Leave Bumble People grid → Discover/deck tab ({planner})"
+                        f"Leave Bumble People grid → Discover card stack "
+                        f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
                     "label": "Discover",
+                    "needs_vision": tries >= 1,
                 },
                 "bulk_bumble_open_discover",
+            )
+        # After Discover taps still on grid — ask vision once before failing
+        if not bulk.get("_bumble_vision_asked"):
+            bulk["_bumble_vision_asked"] = True
+            st["bulk_swipe"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "reason": (
+                        f"Bumble Discover not yet a card stack — "
+                        f"vision/settle retry ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_bumble_need_vision",
             )
         return _fp(
             {
                 "action": "fail",
                 "reason": (
-                    f"Bumble People/Discover is a photo grid — not a swipe "
-                    f"card stack; refuse SuperSwipe / tile taps ({planner})"
+                    f"Bumble swipe deck not found after Discover nav — "
+                    f"People/Discover still grids; refuse SuperSwipe "
+                    f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -1611,22 +1750,24 @@ def plan_bulk_swipe(
             # Like sheet is a11y — Send Like only (never Rose)
             if dry_run:
                 card = deck_card_name(app, ui_tree) or "like sheet"
-                bulk["done"] = target
+                evaluated = 1
+                bulk["done"] = evaluated
                 st["bulk_swipe"] = bulk
                 return _fp(
                     {
                         "action": "done",
                         "reason": (
-                            f"[DRY RUN] would like/pass {target} cards "
-                            f"(deck verified on {card}) — no Send Like/Rose "
+                            f"[DRY RUN] evaluated {evaluated} card ({card}); "
+                            f"would like/pass {target} — no Send Like/Rose "
                             f"({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                         "dry_run": True,
                         "dry_run_verified": True,
-                        "bulk_swipe_done": target,
+                        "bulk_swipe_done": evaluated,
                         "bulk_swipe_target": target,
+                        "bulk_swipe_evaluated": evaluated,
                         "screenshot": True,
                     },
                     "bulk_dry_run_skip_like",
@@ -1664,26 +1805,28 @@ def plan_bulk_swipe(
                     "bulk_dry_run_hinge_unverified",
                 )
             label = card or "Discover card"
-            bulk["done"] = target
+            evaluated = 1
+            bulk["done"] = evaluated
             bulk["dry_logs"] = [
-                f"[DRY RUN] would like/pass {target} cards "
-                f"(deck verified on {label})"
+                f"[DRY RUN] evaluated {evaluated} card ({label}); "
+                f"would like/pass {target}"
             ]
             st["bulk_swipe"] = bulk
             return _fp(
                 {
                     "action": "done",
                     "reason": (
-                        f"[DRY RUN] would like/pass {target} cards "
-                        f"(deck verified on {label}) — no Rose/Send "
+                        f"[DRY RUN] evaluated {evaluated} card ({label}); "
+                        f"would like/pass {target} — no Rose/Send "
                         f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": True,
-                    "bulk_swipe_done": target,
+                    "bulk_swipe_done": evaluated,
                     "bulk_swipe_target": target,
+                    "bulk_swipe_evaluated": evaluated,
                     "screenshot": True,
                 },
                 "bulk_dry_run_skip_like",
@@ -1833,8 +1976,31 @@ def plan_bulk_swipe(
         )
 
     if not deck_visible:
-        # Bumble: no reliable free card stack on S21 — fail rather than grid-tap
+        # Bumble: try Discover nav before failing — real swipe screen is Discover
         if app == "bumble":
+            tries = int(bulk.get("_bumble_discover_tries") or 0)
+            if tries < 2 and "bulk_bumble_open_discover" not in hist:
+                bulk["_bumble_discover_tries"] = tries + 1
+                st["bulk_swipe"] = bulk
+                disc = _nav_tab_center(ui_tree, "Discover") or (
+                    DM_APP_PROFILES.get("bumble", {}).get("discover_tab_xy")
+                    or (324, 2197)
+                )
+                if isinstance(disc, (tuple, list)) and len(disc) >= 2:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(disc[0]),
+                            "y": int(disc[1]),
+                            "reason": (f"Open Bumble Discover swipe deck ({planner})"),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": bool(dry_run),
+                            "label": "Discover",
+                            "needs_vision": True,
+                        },
+                        "bulk_bumble_open_discover",
+                    )
             return _fp(
                 {
                     "action": "fail",
@@ -1846,6 +2012,7 @@ def plan_bulk_swipe(
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
                     "dry_run_verified": False,
+                    "needs_vision": True,
                 },
                 "bulk_bumble_no_deck",
             )
@@ -1973,24 +2140,28 @@ def plan_bulk_swipe(
                 },
                 "bulk_dry_run_no_card_name",
             )
-        bulk["done"] = target
+        # Report cards actually evaluated (1), not the instruction target count
+        evaluated = 1
+        bulk["done"] = evaluated
         bulk["dry_logs"] = [
-            f"[DRY RUN] would like/pass {target} cards (deck verified on {card})"
+            f"[DRY RUN] evaluated {evaluated} card ({card}); "
+            f"would like/pass {target}"
         ]
         st["bulk_swipe"] = bulk
         return _fp(
             {
                 "action": "done",
                 "reason": (
-                    f"[DRY RUN] would like/pass {target} cards "
-                    f"(deck verified on {card}) — no like/swipe ({planner})"
+                    f"[DRY RUN] evaluated {evaluated} card ({card}); "
+                    f"would like/pass {target} — no like/swipe ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
                 "dry_run": True,
                 "dry_run_verified": True,
-                "bulk_swipe_done": target,
+                "bulk_swipe_done": evaluated,
                 "bulk_swipe_target": target,
+                "bulk_swipe_evaluated": evaluated,
                 "screenshot": True,
             },
             "bulk_dry_run_skip_like",
@@ -2133,7 +2304,17 @@ def plan_bulk_message(
             "bulk_hily_mbm_skip",
         )
 
-    recover = _recover_to_root_action(app_key, ui_tree, history, planner, state=st)
+    # Once we intentionally opened / are targeting a thread, do NOT back out.
+    # Back-to-root is for job start leftovers and non-target threads only.
+    allow_thread = bool(str(bulk.get("current") or "").strip())
+    recover = _recover_to_root_action(
+        app_key,
+        ui_tree,
+        history,
+        planner,
+        state=st,
+        allow_open_thread=allow_thread,
+    )
     if recover:
         return recover
 
@@ -2158,15 +2339,26 @@ def plan_bulk_message(
 
     # Ensure we're on the Chats/Messages list before inventing targets
     if not list_ok and not bulk.get("current"):
-        open_tab = _open_chats_tab_action(app_key, ui_tree, history, planner)
+        # Yubo: if already on Chat list (Conversations), never tap header 'Chat'
+        if (app_key or "").lower() == "yubo" and yubo_on_chat_list(ui_tree):
+            list_ok = True
+            bulk["chat_list_verified"] = True
+            st["bulk_message"] = bulk
+        open_tab = (
+            None
+            if list_ok
+            else _open_chats_tab_action(app_key, ui_tree, history, planner)
+        )
         if open_tab:
             bulk.pop("_chats_settle_done", None)
             st["bulk_message"] = bulk
             return open_tab
         opened_hist = any(
             "open chats" in str(h).lower()
+            or "open matches" in str(h).lower()
             or "bulk_open_chats" in str(h).lower()
             or "chats/messages tab" in str(h).lower()
+            or "matches tab" in str(h).lower()
             for h in history[-8:]
         )
         # Retry once after a short settle — real apps animate the list in.
@@ -2294,6 +2486,37 @@ def plan_bulk_message(
         else:
             next_name = ""
             bulk.pop("_next_row", None)
+
+    # Dry-run: verify list + row targets WITHOUT opening threads (opening marks
+    # WhatsApp/Tagged unread as read). Count visible unread-safe rows.
+    if dry_run and list_ok and not bulk.get("current") and not fake_bench:
+        rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
+        if rows:
+            take = rows[: max(0, target - done)]
+            names = [str(r["name"]) for r in take]
+            bulk["done"] = done + len(names)
+            bulk["done_names"] = list(done_names) + names
+            bulk["current"] = None
+            st["bulk_message"] = bulk
+            shown = ", ".join(names[:5]) + ("…" if len(names) > 5 else "")
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] verified chat list + {len(names)} row(s) "
+                        f"({shown}) — did not open threads / mark read "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "screenshot": True,
+                    "bulk_message_done": bulk["done"],
+                    "bulk_message_target": target,
+                },
+                "bulk_dry_run_list_only",
+            )
 
     # On conversation with current match — require verified thread header
     header_hit = bool(next_name) and thread_header_verified(app_key, ui_tree, next_name)
@@ -2717,7 +2940,15 @@ def plan_bulk_message_new(
             "bulk_hily_mbm_skip_new",
         )
 
-    recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
+    allow_thread = bool(str(bulk.get("current") or "").strip())
+    recover = _recover_to_root_action(
+        app,
+        ui_tree,
+        history,
+        planner,
+        state=st,
+        allow_open_thread=allow_thread,
+    )
     if recover:
         return recover
 

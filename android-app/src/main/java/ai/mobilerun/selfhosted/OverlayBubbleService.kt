@@ -250,7 +250,9 @@ class OverlayBubbleService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved) openMainActivity()
+                    // Never steal FG during a job — automation must keep the
+                    // target dating app in front.
+                    if (!moved && !jobBusy) openMainActivity()
                     true
                 }
                 else -> false

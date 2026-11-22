@@ -107,17 +107,24 @@ def test_real_card_deck_still_detected():
 
 
 def test_photo_grid_is_not_deck_fails_cleanly():
-    """Grid tiles open PhotoBrowser (SuperSwipe) — never tap; fail cleanly."""
+    """Grid tiles open PhotoBrowser (SuperSwipe) — never tile-tap; fail cleanly."""
     grid = _load("bumble_people_photo_grid.xml")
     assert bumble_on_photo_grid(grid)
     assert not bumble_on_people_deck(grid)
     tile = bumble_first_grid_tile_center(grid)
     assert tile == (270, 600)
-    st: dict = {}
+    # After Discover nav + vision settle already tried → fail (never SuperSwipe)
+    st: dict = {
+        "bulk_swipe": {
+            "_bumble_discover_tries": 2,
+            "_bumble_tried_discover": True,
+            "_bumble_vision_asked": True,
+        }
+    }
     act = plan_bulk_swipe(
         "bumble like 3 profiles",
         grid,
-        ["Opened Bumble — launch", "tap — Open swipe deck"],
+        ["Opened Bumble — launch", "Leave Bumble People grid → Discover"],
         state=st,
         package="com.bumble.app",
         dry_run=True,
@@ -166,13 +173,14 @@ def test_dry_run_swipe_logs_n_once_with_real_name():
     )
     assert act and act["action"] == "done"
     reason = (act.get("reason") or "").lower()
-    assert "would like/pass 5 cards" in reason
-    assert "deck verified on alex" in reason
+    assert "evaluated 1 card" in reason
+    assert "would like/pass 5" in reason
+    assert "alex" in reason
     assert "profile_1" not in reason
     assert "profile_2" not in reason
-    # Single completion — not 5 identical would-like waits
-    assert act.get("bulk_swipe_done") == 5
-    assert st["bulk_swipe"]["done"] == 5
+    # Cards actually evaluated (1), not instruction target
+    assert act.get("bulk_swipe_done") == 1
+    assert st["bulk_swipe"]["done"] == 1
 
 
 def test_dry_run_refuses_profile_n_without_real_name():
@@ -192,7 +200,9 @@ def test_dry_run_refuses_profile_n_without_real_name():
         dry_run=True,
     )
     assert act and act["action"] == "fail"
+    reason = (act.get("reason") or "").lower()
     assert (
-        "profile_n" in (act.get("reason") or "").lower()
-        or "no real card" in (act.get("reason") or "").lower()
+        "profile_n" in reason
+        or "no real card" in reason
+        or "no real profile card markers" in reason
     )

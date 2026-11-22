@@ -150,9 +150,12 @@ def test_bulk_message_uses_visible_rows_not_match_pct():
         package="com.hily.app",
         dry_run=True,
     )
-    assert act and act["action"] == "tap"
+    # Dry-run verifies list + rows without opening (avoids marking unread)
+    assert act and act["action"] == "done"
+    assert act.get("dry_run_verified") is True
     assert "Nancy" in (act.get("reason") or "")
     assert "Match01" not in (act.get("reason") or "")
+    assert "did not open" in (act.get("reason") or "").lower()
 
 
 # --- 4. Paid-tap false positive ---
@@ -206,7 +209,10 @@ def test_dry_run_swipe_taps_nav_then_simulates_likes():
         dry_run=True,
     )
     assert act and act["action"] == "tap"
-    assert act.get("fastpath_step") == "bulk_open_deck"
+    assert act.get("fastpath_step") in (
+        "bulk_open_deck",
+        "bulk_bumble_open_discover",
+    )
     assert act.get("action") != "done"
 
 
@@ -223,9 +229,10 @@ def test_dry_run_swipe_logs_n_would_like_pass():
     )
     assert act and act["action"] == "done"
     reason = (act.get("reason") or "").lower()
-    assert "would like/pass 2 cards" in reason
-    assert "deck verified on alex" in reason
-    assert st["bulk_swipe"]["done"] == 2
+    assert "evaluated 1 card" in reason
+    assert "would like/pass 2" in reason
+    assert "alex" in reason
+    assert st["bulk_swipe"]["done"] == 1
     assert act.get("dry_run_verified") is True
 
 

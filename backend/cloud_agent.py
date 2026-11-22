@@ -725,6 +725,11 @@ def permission_dialog_action(
     )
 
 
+def _is_selfhosted_package(fg_package: str) -> bool:
+    fg = (fg_package or "").lower().strip()
+    return "mobilerun.selfhosted" in fg or fg.endswith(".selfhosted")
+
+
 def _fg_matches_open_target(app_name: str, fg_package: str) -> bool:
     """True when the foreground package is the app we meant to open."""
     fg = (fg_package or "").lower().strip()
@@ -732,6 +737,13 @@ def _fg_matches_open_target(app_name: str, fg_package: str) -> bool:
     if not fg or not app_l:
         return False
     if _is_lock_screen_package(fg):
+        return False
+    # Our overlay/app stealing FG is never a successful open of a dating app
+    if (
+        _is_selfhosted_package(fg)
+        and "mobilerun" not in app_l
+        and "selfhosted" not in app_l
+    ):
         return False
     if app_l.startswith("com.") or app_l.startswith("ai."):
         if app_l == fg or app_l in fg:
@@ -2987,29 +2999,34 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             except ImportError:
                 from backend.dm_heuristics import tree_is_sparse  # type: ignore
 
-            sparse_tree = tree_info.get("empty") or tree_is_sparse(
-                ui_tree, tree_info.get("nodes")
+            fg_pkg = str(tree_info.get("package") or "").lower()
+            wrong_fg = _is_selfhosted_package(fg_pkg)
+            sparse_tree = (
+                tree_info.get("empty")
+                or tree_is_sparse(ui_tree, tree_info.get("nodes"))
+                or wrong_fg
             )
             force_vision = bool(state.get("force_vision_once"))
             if force_vision:
                 state["force_vision_once"] = False
             try:
-                if sparse_tree or force_vision or np_streak >= 2:
+                if sparse_tree or force_vision or np_streak >= 2 or wrong_fg:
                     image_b64 = _fetch_screenshot_b64(device_id, job=job)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
             use_vision = bool(image_b64) and (
-                sparse_tree or force_vision or np_streak >= 2
+                sparse_tree or force_vision or np_streak >= 2 or wrong_fg
             )
             if use_vision:
                 state["vision_fallback"] = True
                 state["tree_sparse"] = bool(sparse_tree)
                 logger.info(
-                    "vision fallback job=%s nodes=%s empty=%s",
+                    "vision fallback job=%s nodes=%s empty=%s fg=%s",
                     job.get("job_id"),
                     tree_info.get("nodes"),
                     tree_info.get("empty"),
+                    fg_pkg or "?",
                 )
 
             try:
@@ -3051,6 +3068,52 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     _kick_self(job.get("job_id"), job=job)
                     return job
                 logger.warning("planner failed → recovery: %s", plan_err)
+            # Heuristic asked for vision (empty/sparse target tree) but we planned
+            # without a screenshot — fetch + replan once so vision actually runs.
+            if (
+                isinstance(action, dict)
+                and (
+                    action.get("_force_vision")
+                    or action.get("needs_vision")
+                    or wrong_fg
+                )
+                and not use_vision
+            ):
+                try:
+                    image_b64 = _fetch_screenshot_b64(device_id, job=job)
+                except Exception as shot_err:
+                    logger.warning("needs_vision screenshot skipped: %s", shot_err)
+                    image_b64 = None
+                if image_b64:
+                    use_vision = True
+                    state["vision_fallback"] = True
+                    state["force_vision_once"] = False
+                    logger.info(
+                        "vision fallback (needs_vision) job=%s fg=%s",
+                        job.get("job_id"),
+                        fg_pkg or "?",
+                    )
+                    try:
+                        action = plan_next_action(
+                            instruction,
+                            ui_tree,
+                            history,
+                            image_b64=image_b64,
+                            no_progress_streak=np_streak,
+                            last_tap_key=state.get("last_tap_key"),
+                            package=str(tree_info.get("package") or ""),
+                            dry_run=job_dry_run,
+                            agent_state=state,
+                        )
+                    except Exception as replan_err:
+                        logger.warning("vision replan failed: %s", replan_err)
+                        state["force_vision_once"] = True
+                else:
+                    state["force_vision_once"] = True
+            elif isinstance(action, dict) and (
+                action.get("_force_vision") or action.get("needs_vision")
+            ):
+                state["force_vision_once"] = True
             kind = str(action.get("action") or "").lower()
             reason = str(action.get("reason") or "")
             planner = action.get("planner") or "llm"

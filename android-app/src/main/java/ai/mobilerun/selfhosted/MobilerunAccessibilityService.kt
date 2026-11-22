@@ -281,10 +281,26 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     private fun activePackageNameOnMain(): String? {
-        rootInActiveWindow?.packageName?.toString()?.let { return it }
-        windows?.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            ?.root?.packageName?.toString()?.let { return it }
-        return null
+        val self = packageName
+        val active = rootInActiveWindow?.packageName?.toString()
+        if (!active.isNullOrBlank() && active != self) return active
+        // Prefer a non-self APPLICATION window when our overlay/app is active
+        windows
+            ?.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            ?.sortedByDescending { (if (it.isFocused) 2 else 0) + (if (it.isActive) 1 else 0) }
+            ?.forEach { w ->
+                val pkg = try {
+                    w.root?.packageName?.toString()
+                } catch (_: Exception) {
+                    null
+                }
+                if (!pkg.isNullOrBlank() && pkg != self && !isSystemChromePackage(pkg)) {
+                    return pkg
+                }
+            }
+        if (!active.isNullOrBlank()) return active
+        return windows?.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            ?.root?.packageName?.toString()
     }
 
     /**
@@ -758,19 +774,68 @@ class MobilerunAccessibilityService : AccessibilityService() {
             sb.append("</w>\n")
         }
 
-        // Prefer active root first
+        // Prefer a non-self APPLICATION window as "active" when MacMobileRun
+        // stole focus — dating jobs must read the target app's tree.
+        val selfPkg = packageName
         var activeEmitted = false
-        val active = try {
+        var preferredActiveRoot: AccessibilityNodeInfo? = null
+        var preferredActiveFromWindows = false
+        val rawActive = try {
             rootInActiveWindow
         } catch (e: Exception) {
             Log.w(TAG, "rootInActiveWindow failed: ${e.message}")
             null
         }
-        if (active != null && !pastDeadline()) {
-            emitWindow("active", "active", 1, active)
+        val rawActivePkg = rawActive?.packageName?.toString().orEmpty()
+        if (rawActive != null && rawActivePkg.isNotBlank() && rawActivePkg != selfPkg) {
+            preferredActiveRoot = rawActive
+        } else {
+            // Self (or null) owns rootInActiveWindow — pick richest other app window
+            val winListProbe = try {
+                windows?.toList()
+            } catch (_: Exception) {
+                null
+            }
+            if (!winListProbe.isNullOrEmpty()) {
+                val candidates = winListProbe.filter {
+                    it.type == AccessibilityWindowInfo.TYPE_APPLICATION
+                }.sortedByDescending { w ->
+                    (if (w.isFocused) 2 else 0) + (if (w.isActive) 1 else 0)
+                }
+                for (w in candidates) {
+                    val root = try {
+                        w.root
+                    } catch (_: Exception) {
+                        null
+                    } ?: continue
+                    val pkg = root.packageName?.toString().orEmpty()
+                    if (pkg.isBlank() || pkg == selfPkg || isSystemChromePackage(pkg)) {
+                        try {
+                            root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        continue
+                    }
+                    preferredActiveRoot = root
+                    preferredActiveFromWindows = true
+                    break
+                }
+            }
+            // Still emit self as a non-active window later if needed
+            if (preferredActiveRoot == null && rawActive != null) {
+                preferredActiveRoot = rawActive
+            } else if (rawActive != null && preferredActiveRoot !== rawActive) {
+                try {
+                    rawActive.recycle()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        if (preferredActiveRoot != null && !pastDeadline()) {
+            emitWindow("active", "active", 1, preferredActiveRoot)
             activeEmitted = true
             try {
-                active.recycle()
+                preferredActiveRoot.recycle()
             } catch (_: Exception) {
             }
         }
@@ -796,7 +861,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 for (window in ordered) {
                     if (pastDeadline() || counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
                     // Skip the active window we already emitted as "active"
-                    if (window.isActive && activeEmitted) continue
+                    if (window.isActive && activeEmitted && !preferredActiveFromWindows) continue
                     // Prefer application + IME; skip pure wallpaper/split décor
                     if (
                         window.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
@@ -810,6 +875,21 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     } catch (_: Exception) {
                         null
                     } ?: continue
+                    val pkg = root.packageName?.toString().orEmpty()
+                    // Skip duplicate of preferred active when we stole from windows
+                    if (
+                        preferredActiveFromWindows &&
+                        activeEmitted &&
+                        pkg.isNotBlank() &&
+                        pkgs.firstOrNull() == pkg &&
+                        window.isActive
+                    ) {
+                        try {
+                            root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        continue
+                    }
                     val title = try {
                         window.title?.toString().orEmpty()
                     } catch (_: Exception) {
@@ -853,7 +933,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } else {
             body
         }
-        val primaryPkg = pkgs.firstOrNull().orEmpty()
+        // Prefer non-selfhosted package as primary (target dating app)
+        val primaryPkg = pkgs.firstOrNull { it != selfPkg && !isSystemChromePackage(it) }
+            ?: pkgs.firstOrNull().orEmpty()
         val nodeCount = counter[0]
         val appNodeCount = appCounter[0]
         // Empty for the FG app when only SystemUI chrome was dumped

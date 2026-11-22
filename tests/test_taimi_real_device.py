@@ -273,5 +273,6 @@ def test_taimi_bulk_dry_run_skips_like():
     assert act and act.get("action") == "done"
     assert act.get("dry_run") is True
     reason = (act.get("reason") or "").lower()
-    assert "would like/pass 5 cards" in reason
-    assert "deck verified on alex" in reason
+    assert "evaluated 1 card" in reason
+    assert "would like/pass 5" in reason
+    assert "alex" in reason

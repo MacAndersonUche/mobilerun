@@ -887,12 +887,23 @@ def _tree_node_center(tree: str, *needles: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def _exact_label_center(tree: str, label: str) -> Optional[Tuple[int, int]]:
+def _exact_label_center(
+    tree: str,
+    label: str,
+    *,
+    y_min: Optional[int] = None,
+    y_max: Optional[int] = None,
+) -> Optional[Tuple[int, int]]:
     """Exact text/content-desc match (case-insensitive) — never substring."""
     want = (label or "").strip().lower()
     if not want:
         return None
     for n in _parse_compact_nodes(tree):
+        y = int(n.get("y") or 0)
+        if y_min is not None and y < y_min:
+            continue
+        if y_max is not None and y > y_max:
+            continue
         for field in ("text", "desc", "label"):
             val = str(n.get(field) or "").strip().lower()
             if val == want:
@@ -904,23 +915,34 @@ def _nav_tab_center(
     tree: str,
     *labels: str,
     ids: Sequence[str] = (),
+    bottom_y_min: int = 2000,
 ) -> Optional[Tuple[int, int]]:
-    """Bottom-nav tab by resource-id or exact content-desc/text (never guessed xy)."""
+    """Bottom-nav tab by resource-id or exact content-desc/text (never guessed xy).
+
+    Prefer nodes in the bottom band so screen titles like Yubo 'Chat' / Hily
+    'Chats' at y≈160 are never mistaken for the tab.
+    """
     if ids:
         c = _tree_id_center(tree, *tuple(ids))
-        if c:
+        if c and int(c[1]) >= bottom_y_min - 200:
             return c
+        # Id hit above the nav band is still OK for genuine tab ids
+        if c and ids:
+            return c
+    # 1) Exact label in bottom nav band
     for lab in labels:
-        c = _exact_label_center(tree, lab)
+        c = _exact_label_center(tree, lab, y_min=bottom_y_min)
         if c:
             return c
         c = _tree_node_center(tree, lab)
-        if c and int(c[1]) >= 2000:  # prefer bottom-nav hits
+        if c and int(c[1]) >= bottom_y_min:
             return c
+    # 2) Soften band to y>=1800 for shorter phones
     for lab in labels:
-        c = _tree_node_center(tree, lab)
+        c = _exact_label_center(tree, lab, y_min=1800)
         if c:
             return c
+    # 3) Never fall back to header-height titles for Chat/Chats/Matches/etc.
     return None
 
 
@@ -945,6 +967,33 @@ def _tree_editable_center(tree: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _resource_id_matches(vid: str, needle: str) -> bool:
+    """True when ``vid`` is exactly ``needle`` or ends with ``/needle`` / ``:id/needle``.
+
+    Never use bare substring — ``likeBtn`` must not match ``dislikeBtn``.
+    """
+    want = (needle or "").lower().strip()
+    have = (vid or "").lower().strip()
+    if not want or not have:
+        return False
+    if have == want:
+        return True
+    # Strip leading id/ or :id/ from needle for suffix checks
+    want_tail = want
+    for pref in ("id/", ":id/"):
+        if want_tail.startswith(pref):
+            want_tail = want_tail[len(pref) :]
+    if not want_tail:
+        return False
+    if have.endswith("/" + want_tail) or have.endswith(":id/" + want_tail):
+        return True
+    # Final path segment equality (com.app:id/likeBtn ↔ likeBtn)
+    seg = have.rsplit("/", 1)[-1]
+    if ":" in seg:
+        seg = seg.rsplit(":", 1)[-1]
+    return seg == want_tail
+
+
 def _tree_id_center(tree: str, *id_needles: str) -> Optional[Tuple[int, int]]:
     """Locate a node by resource-id suffix (e.g. com.whatsapp:id/entry)."""
     for n in _parse_compact_nodes(tree):
@@ -952,10 +1001,7 @@ def _tree_id_center(tree: str, *id_needles: str) -> Optional[Tuple[int, int]]:
         if not vid:
             continue
         for needle in id_needles:
-            want = (needle or "").lower().strip()
-            if not want:
-                continue
-            if vid == want or vid.endswith(want) or want in vid:
+            if _resource_id_matches(vid, needle):
                 return (int(n["x"]), int(n["y"]))
     return None
 
@@ -1322,10 +1368,7 @@ def _node_id_matches(node: Dict[str, Any], needles: Sequence[str]) -> bool:
     if not nid:
         return False
     for n in needles:
-        nl = (n or "").lower().strip()
-        if not nl:
-            continue
-        if nl in nid or nid.endswith(nl.lstrip(":")):
+        if _resource_id_matches(nid, n):
             return True
     return False
 
@@ -2620,7 +2663,11 @@ def hily_on_finder(tree: str, *, _log: bool = True) -> bool:
 def hily_close_mbm(
     tree: str, planner: str = "hily_heuristic"
 ) -> Optional[Dict[str, Any]]:
-    """Close Message Before Match sheet via closeButton — never Major Crush / credits."""
+    """Close Message Before Match sheet via closeButton — never Major Crush / credits.
+
+    Never blind-tap map xy (74,160) — that lands on the non-clickable Chats title
+    when no sheet is present / close control is missing. Prefer Back instead.
+    """
     if not hily_on_mbm(tree):
         return None
     close = _tree_id_center(
@@ -2638,17 +2685,15 @@ def hily_close_mbm(
             },
             "hily_mbm_close",
         )
-    # Verified map: close X ≈ (74, 160)
     return _fp(
         {
-            "action": "tap",
-            "x": 74,
-            "y": 160,
-            "reason": f"Close Hily MBM sheet (map xy) ({planner})",
+            "action": "press_button",
+            "button": "back",
+            "reason": f"Back out of Hily MBM (no close control) ({planner})",
             "planner": planner,
             "llm_provider": None,
         },
-        "hily_mbm_close",
+        "hily_mbm_back",
     )
 
 
@@ -3125,7 +3170,13 @@ def blk_end_of_deck(tree: str) -> bool:
     blob = " ".join(
         (n.get("text") or n.get("label") or "") for n in _parse_compact_nodes(tree)
     ).lower()
-    return "you reached the end" in blob or "reached the end" in blob
+    return (
+        "you reached the end" in blob
+        or "reached the end of the deck" in blob
+        or "oh no! you reached the end" in blob
+        or ("oh no" in blob and "end of the deck" in blob)
+        or "reached the end" in blob
+    )
 
 
 _BLK_FILTER_CHIP_WORDS = frozenset(
@@ -3929,11 +3980,16 @@ def tagged_chat_action(
     """Match-card chatBtn — start free chat with a new contact (not Premium)."""
     if tagged_is_premium(tree):
         return None
-    c = _tree_id_center(tree, "chatBtn", "id/chatBtn")
+    c = _tree_id_center(tree, "chatBtn", "id/chatBtn", "id/tagged_chat")
     if not c:
         if not tagged_on_deck(tree):
             return None
-        xy = DM_APP_PROFILES["tagged"].get("chat_xy") or (540, 1911)
+        # Prefer chat_btn_xy (map); fall back to legacy chat_xy key
+        xy = (
+            DM_APP_PROFILES["tagged"].get("chat_btn_xy")
+            or DM_APP_PROFILES["tagged"].get("chat_xy")
+            or (540, 1911)
+        )
         c = (int(xy[0]), int(xy[1]))
     return _fp(
         {
@@ -3996,6 +4052,10 @@ def open_chat_thread_present(app: Optional[str], tree: str) -> bool:
     if not tree:
         return False
     app_l = (app or "").lower()
+    # Hinge Discover "Send a message" + Type a message is the deck card CTA —
+    # never treat it as a leftover open thread (swipe recover must not Back).
+    if app_l == "hinge" and hinge_on_discover(tree) and not hinge_on_thread(tree):
+        return False
     # Already on a known list/deck with tab bar → not a stuck thread
     if tab_bar_verified(app_l, tree) and not keyboard_likely_up(tree):
         # Tab bar + no focused compose → treat as root even if a hint says Aa

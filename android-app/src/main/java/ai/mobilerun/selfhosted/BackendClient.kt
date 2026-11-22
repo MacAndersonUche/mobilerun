@@ -1834,11 +1834,21 @@ class BackendClient(private val context: Context) {
      */
     private fun startUiActivity(intent: Intent): Boolean {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        // Prefer move-to-front + PendingIntent BAL allow — we no longer request overlay
-        try {
-            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-            am.appTasks.firstOrNull()?.moveToFront()
-        } catch (_: Exception) {
+        // Prefer move-to-front + PendingIntent BAL allow — we no longer request overlay.
+        // CRITICAL: never bring MacMobileRun's own task to front when launching
+        // another package — that steals FG and makes a11y dump our empty window
+        // (open_unconfirmed package=ai.mobilerun.selfhosted).
+        val targetPkg = intent.`package`
+            ?: intent.component?.packageName
+            ?: ""
+        val selfPkg = context.packageName
+        val launchingOther = targetPkg.isNotBlank() && targetPkg != selfPkg
+        if (!launchingOther) {
+            try {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                am.appTasks.firstOrNull()?.moveToFront()
+            } catch (_: Exception) {
+            }
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= 34) {
