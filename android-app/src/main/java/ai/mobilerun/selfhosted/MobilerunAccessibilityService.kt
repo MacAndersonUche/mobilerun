@@ -356,6 +356,17 @@ class MobilerunAccessibilityService : AccessibilityService() {
             } ?: continue
             if (!isIgnoredOverlayPackage(pkg) && pkg != self) return pkg
         }
+        // a11y stuck on launcher — UsageStats may still see the target FG
+        // (Taimi/Hinge FLAG_SECURE / delayed window attach).
+        val usage = ForegroundResolver.usageForegroundPackage(
+            this,
+            preferHint = hint,
+            selfPkg = self,
+        )
+        if (!usage.isNullOrBlank() && !ForegroundResolver.isLauncherOrChrome(usage)) {
+            Log.i(TAG, "activePackageName UsageStats fallback=$usage")
+            return usage
+        }
         return null
     }
 

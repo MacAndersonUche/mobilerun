@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger("mobilerun.stuck_recovery")
@@ -225,6 +226,51 @@ def _prefer_nav_for_instruction(instruction: str) -> List[str]:
     return []
 
 
+def _recent_open_may_be_fg(
+    state: Dict[str, Any], package: str, prefer_pkg: str
+) -> bool:
+    """True when the last successful-ish action was open_app and target may be FG.
+
+    a11y often still reports launcher after Taimi/Hinge open (FLAG_SECURE /
+    Compose). NEVER Back in that window — it closes the just-opened app.
+    """
+    last = str(state.get("last_action") or "").lower()
+    hist = " ".join(str(h).lower() for h in list(state.get("history") or [])[-6:])
+    opened_recently = (
+        "open_app" in last
+        or "opened " in last
+        or "open_ok" in last
+        or "universal_open" in last
+        or "open_app(" in hist
+        or "open_ok" in hist
+        or bool(state.get("last_open_at"))
+    )
+    if not opened_recently:
+        return False
+    # Fresh open within ~45s of last_open_at
+    try:
+        age = int(time.time()) - int(state.get("last_open_at") or 0)
+        if state.get("last_open_at") and age > 45:
+            return False
+    except (TypeError, ValueError):
+        pass
+    try:
+        from overlay_dismiss import is_launcher_package
+    except ImportError:
+        from backend.overlay_dismiss import is_launcher_package  # type: ignore
+
+    # Launcher FG after open, or inferred FG, or prefer matches — treat as may-be-fg
+    if is_launcher_package(package):
+        return True
+    if prefer_pkg and package:
+        pl, pref = package.lower(), prefer_pkg.lower()
+        if pref in pl or pl in pref:
+            return True
+    if state.get("fg_inferred") or state.get("needs_vision"):
+        return True
+    return opened_recently
+
+
 def next_stuck_action(
     state: Dict[str, Any],
     *,
@@ -242,6 +288,15 @@ def next_stuck_action(
     # After a full cycle, prefer reopen + vision
     if step > len(STUCK_STAGES):
         stage = "reopen_app" if step % 2 == 0 else "vision"
+    # NEVER Back right after open-app when target may already be FG
+    # (Taimi/Hinge: a11y stuck on launcher → dismiss miss → Back closes app).
+    post_open_guard = _recent_open_may_be_fg(state, package, prefer_pkg)
+    if post_open_guard and stage in ("dismiss_safe", "press_back"):
+        stage = "vision"
+        _log_stuck(
+            state,
+            f"step={step} skip Back after open (fg={package or '?'} prefer={prefer_pkg or '?'})",
+        )
     state["stuck_stage"] = stage
     planner = f"stuck:{stage}"
 
@@ -260,6 +315,20 @@ def next_stuck_action(
                 "llm_provider": None,
                 "_stuck": stage,
             }
+        if post_open_guard:
+            _log_stuck(state, f"step={step} dismiss miss → vision (post-open)")
+            return {
+                "action": "wait",
+                "seconds": 1.0,
+                "reason": (
+                    f"Stuck dismiss miss after open — vision not Back ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "_stuck": "vision",
+                "needs_vision": True,
+                "_force_vision": True,
+            }
         _log_stuck(state, f"step={step} dismiss miss → Back")
         return {
             "action": "back",
@@ -276,8 +345,20 @@ def next_stuck_action(
         except ImportError:
             from backend.overlay_dismiss import is_launcher_package  # type: ignore
 
-        if is_launcher_package(package):
-            stage = "reopen_app"
+        if is_launcher_package(package) or post_open_guard:
+            stage = "vision" if post_open_guard else "reopen_app"
+            if post_open_guard:
+                _log_stuck(state, f"step={step} skip Back → vision (post-open)")
+                return {
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "reason": (f"Stuck skip Back after open — vision ({planner})"),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "_stuck": "vision",
+                    "needs_vision": True,
+                    "_force_vision": True,
+                }
         else:
             _log_stuck(state, f"step={step} Back")
             return {
@@ -367,13 +448,29 @@ def next_stuck_action(
 
     if stage == "reopen_app":
         try:
-            from universal_open import advance_open_stage, plan_universal_open
+            from universal_open import (
+                advance_open_stage,
+                open_cycles_exhausted,
+                open_exhausted_fail_action,
+                plan_universal_open,
+            )
         except ImportError:
             from backend.universal_open import (  # type: ignore
                 advance_open_stage,
+                open_cycles_exhausted,
+                open_exhausted_fail_action,
                 plan_universal_open,
             )
 
+        if open_cycles_exhausted(state):
+            act = open_exhausted_fail_action(
+                prefer_pkg or package or instruction,
+                fg_package=package,
+                state=state,
+            )
+            act["_stuck"] = "reopen_exhausted"
+            _log_stuck(state, f"step={step} open cycles exhausted → fail")
+            return act
         advance_open_stage(state)
         target = prefer_pkg or package or instruction
         act = plan_universal_open(

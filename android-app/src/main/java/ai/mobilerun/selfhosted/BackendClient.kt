@@ -135,6 +135,7 @@ class BackendClient(private val context: Context) {
     @Volatile private var lastOpenAtMs: Long = 0L
     /** Last successfully launched app package — a11y prefers this window. */
     @Volatile private var lastOpenedPackage: String? = null
+    @Volatile private var lastOpenedAtMs: Long = 0L
 
     private val _statusFlow = MutableStateFlow("Disconnected")
     val statusFlow: StateFlow<String> = _statusFlow
@@ -1244,6 +1245,7 @@ class BackendClient(private val context: Context) {
                 MobilerunAccessibilityService.instance
                     ?.clearPreferredPackageHint("job_idle")
                 lastOpenedPackage = null
+                lastOpenedAtMs = 0L
                 // Job ended — show bubble immediately; short safety re-show
                 scheduleBubbleIdle(forceShort = true)
             }
@@ -1643,32 +1645,59 @@ class BackendClient(private val context: Context) {
                             )
                         }
                         lastOpenedPackage = launched
+                        lastOpenedAtMs = System.currentTimeMillis()
                         a11yService?.setPreferredPackageHint(launched)
-                        // Brief settle — keep agent steps under the 3–5s budget
-                        val settle = 280L + kotlin.random.Random.nextLong(0, 180)
+                        // Longer settle for Compose/FLAG_SECURE (Taimi/Hinge) —
+                        // rootInActiveWindow lags behind the real FG window.
+                        val slowFg = launched.contains("takimi", ignoreCase = true) ||
+                            launched.contains("hinge", ignoreCase = true) ||
+                            launched.contains("tinder", ignoreCase = true)
+                        val settle = if (slowFg) {
+                            900L + kotlin.random.Random.nextLong(0, 400)
+                        } else {
+                            280L + kotlin.random.Random.nextLong(0, 180)
+                        }
                         Thread.sleep(settle)
                         val activePkg = a11yService?.activePackageName().orEmpty()
-                        // FG verify — if still launcher, try drawer once more
-                        val stillHome = activePkg.contains("launcher", ignoreCase = true) ||
-                            activePkg.contains("systemui", ignoreCase = true) ||
-                            activePkg.contains("mobilerun", ignoreCase = true)
+                        val (resolvedFg, fgSource) = ForegroundResolver.resolveReportedPackage(
+                            context,
+                            a11yPackage = activePkg,
+                            preferHint = launched,
+                            lastOpened = launched,
+                            lastOpenedAtMs = lastOpenedAtMs,
+                            selfPkg = context.packageName,
+                        )
+                        // FG verify — if still launcher (a11y+usage), try drawer once
+                        val stillHome = ForegroundResolver.isLauncherOrChrome(resolvedFg) &&
+                            fgSource != "last_opened"
                         if (stillHome && openPath == "intent") {
-                            Log.w(tag, "open_app FG still $activePkg — drawer fallback")
+                            Log.w(tag, "open_app FG still $activePkg/$resolvedFg — drawer fallback")
                             val drawer2 = openAppViaDrawer(app, pkg, scrollPages = true)
                             if (drawer2 != null) {
                                 launched = drawer2
                                 openPath = "drawer_after_fg_miss"
                                 lastOpenedPackage = launched
+                                lastOpenedAtMs = System.currentTimeMillis()
                                 a11yService?.setPreferredPackageHint(launched)
-                                Thread.sleep(350)
+                                Thread.sleep(500)
                             }
                         }
                         val active2 = a11yService?.activePackageName().orEmpty()
+                        val (fgFinal, fgSrc2) = ForegroundResolver.resolveReportedPackage(
+                            context,
+                            a11yPackage = active2.ifBlank { activePkg },
+                            preferHint = launched,
+                            lastOpened = launched,
+                            lastOpenedAtMs = lastOpenedAtMs,
+                            selfPkg = context.packageName,
+                        )
                         mapOf(
                             "ok" to true,
                             "requested" to app,
                             "package" to launched,
-                            "active_package" to active2.ifBlank { activePkg },
+                            "active_package" to fgFinal.ifBlank { active2.ifBlank { activePkg } },
+                            "active_package_source" to fgSrc2,
+                            "a11y_package" to active2.ifBlank { activePkg },
                             "launched" to true,
                             "open_path" to openPath,
                             "open_mode" to openMode.ifBlank { "launch_intent" },
@@ -1724,18 +1753,35 @@ class BackendClient(private val context: Context) {
                                 )
                             }
                             val tree = detailed.tree
-                            val reportedPkg = detailed.packageName.ifBlank {
+                            val a11yPkg = detailed.packageName.ifBlank {
                                 a11yService.activePackageName().orEmpty()
                             }
+                            // When a11y still reports launcher after open, infer FG
+                            // via UsageStats / lastOpened (Taimi/Hinge FLAG_SECURE).
+                            val (reportedPkg, pkgSource) = ForegroundResolver.resolveReportedPackage(
+                                context,
+                                a11yPackage = a11yPkg,
+                                preferHint = prefer,
+                                lastOpened = lastOpenedPackage,
+                                lastOpenedAtMs = lastOpenedAtMs,
+                                selfPkg = context.packageName,
+                            )
+                            val inferredFg = pkgSource == "usage_stats" ||
+                                pkgSource == "last_opened"
                             // empty = no nodes only. Wrong FG with nodes is still
                             // a usable tree (overlay dismiss / vision / recover).
+                            // Inferred FG with empty tree → force vision, not Back.
                             val emptyForTarget = detailed.empty || detailed.nodes == 0
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
-                                "package" to reportedPkg,
+                                "package" to reportedPkg.ifBlank { a11yPkg },
+                                "a11y_package" to a11yPkg,
+                                "package_source" to pkgSource,
+                                "fg_inferred" to inferredFg,
                                 "preferred_package" to prefer,
-                                "wrong_fg" to wrongFg,
+                                "wrong_fg" to (wrongFg && !inferredFg),
                                 "empty" to emptyForTarget,
+                                "needs_vision" to (emptyForTarget || inferredFg),
                                 "chars" to detailed.chars,
                                 "nodes" to detailed.nodes,
                                 "a11y" to true,

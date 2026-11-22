@@ -430,6 +430,19 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _wa_strip_preview(name: str) -> str:
+    """Strip WhatsApp 'Name · last message' / 'Name — preview' to the contact."""
+    raw = (name or "").strip()
+    if not raw:
+        return raw
+    for sep in (" · ", " • ", " — ", " - ", " | "):
+        if sep in raw:
+            left = raw.split(sep, 1)[0].strip()
+            if len(left) >= 2:
+                return left
+    return raw
+
+
 def _visible_chat_list_rows(
     ui_tree: str,
     app: Optional[str],
@@ -458,6 +471,14 @@ def _visible_chat_list_rows(
     result_ids = tuple(profile.get("result_ids") or ())
     # BLK Compose Matches list has no row resource-ids — fall back to names
     blk_name_fallback = app_l == "blk" and (not result_ids or blk_on_matches(ui_tree))
+    # WhatsApp home: many rows only have text (no resource-id). Accept mid-list
+    # Title Case / short names when chats chrome is present.
+    wa_home = app_l in ("whatsapp", "wa") and (
+        "conversations_row_contact_name" in (ui_tree or "").lower()
+        or "contact_row_container" in (ui_tree or "").lower()
+        or 'p="com.whatsapp"' in (ui_tree or "").lower()
+        or "com.whatsapp" in (ui_tree or "").lower()
+    )
     rows: List[Dict[str, Any]] = []
     seen: set = set()
     # BLK: never open Hidden-section rows
@@ -469,10 +490,42 @@ def _visible_chat_list_rows(
                 hidden_y = int(n0.get("y") or 0)
                 break
     for n in _parse_compact_nodes(ui_tree):
-        label = (n.get("text") or n.get("label") or "").strip()
+        label = (n.get("text") or n.get("label") or n.get("desc") or "").strip()
         if not label:
             continue
+        # Drop photo content-desc noise ("Precious Achalugo picture")
+        if (
+            label.lower().endswith(" picture")
+            and "photo" in str(n.get("id") or "").lower()
+        ):
+            continue
         row_ok = _looks_like_chat_list_row(n, result_ids)
+        if not row_ok and wa_home:
+            nid = str(n.get("id") or "").lower()
+            y = int(n.get("y") or 0)
+            # Explicit WA row ids always win
+            if "conversations_row_contact_name" in nid or (
+                "contact_row" in nid and "message" not in nid
+            ):
+                row_ok = True
+            elif (
+                not nid
+                and 450 <= y <= 2100
+                and 2 <= len(label) <= 40
+                and not _looks_like_message_preview(label)
+                and label.lower()
+                not in (
+                    "chats",
+                    "updates",
+                    "calls",
+                    "status",
+                    "communities",
+                    "calls tab",
+                    "new chat",
+                )
+            ):
+                # Plain text row on chats list (Mom / Alex / Work Group)
+                row_ok = True
         if not row_ok and blk_name_fallback:
             # Person name mid-list (Your turn / Their turn) — Title Case person
             # names only so message previews like "hey" / "Good and you" never
@@ -502,6 +555,9 @@ def _visible_chat_list_rows(
             if low.startswith(pref):
                 name = label[len(pref) :].strip()
                 break
+        if app_l in ("whatsapp", "wa"):
+            name = _wa_strip_preview(name)
+            low = name.lower()
         # Skip counters / chrome / message bubbles (never tap bubbles as rows)
         if re.search(r"^\d+\s*(matches?|people|likes?)$", name, re.I):
             continue
@@ -536,7 +592,9 @@ def _visible_chat_list_rows(
             continue
         # Long preview snippets are bubbles / previews, not contact names
         if len(name) > 28 and " " in name and not n.get("clickable"):
-            continue
+            # WhatsApp name+preview concatenated on contact_name still OK after strip
+            if app_l not in ("whatsapp", "wa"):
+                continue
         key = name.lower()
         if key in skip or key in seen:
             continue
@@ -571,6 +629,13 @@ def _visible_chat_list_rows(
             "new friends",
             "conversations",
             "reactions",
+            "updates",
+            "calls",
+            "status",
+            "communities",
+            "calls tab",
+            "new chat",
+            "archived",
         ):
             continue
         if any(
@@ -587,8 +652,10 @@ def _visible_chat_list_rows(
         ):
             continue
         # Phone numbers are not contact display names for dating DMs
+        # (WhatsApp may show numbers — allow for WA only when row id matches)
         if re.fullmatch(r"[\d\s\-()+]{7,}", name):
-            continue
+            if app_l not in ("whatsapp", "wa") or "contact_name" not in nid:
+                continue
         if int(n.get("y") or 0) < 200:
             continue
         unread = bool(
@@ -948,6 +1015,23 @@ def _recover_to_root_action(
     # Keyboard on a target thread is fine for compose; still clear real sheets.
     if allow_open_thread and overlay in (None, "open_chat_thread", "keyboard"):
         return None
+    # Tagged landing with bottom nav is a safe root — NEVER Back out of the app.
+    # Navigate to Meet Me / Nearby via deck tab instead of "Back toward known root"
+    # / "Back out of open_chat_thread" (closes app → End Tagged? loop).
+    if app_l == "tagged":
+        try:
+            from dm_heuristics import tab_bar_verified as _tab_ok
+        except ImportError:
+            from backend.dm_heuristics import tab_bar_verified as _tab_ok  # type: ignore
+
+        if _tab_ok(app_l, ui_tree) and overlay in (
+            None,
+            "open_chat_thread",
+            "keyboard",
+        ):
+            return None
+        if overlay == "open_chat_thread" and tagged_on_deck(ui_tree):
+            return None
     if overlay:
         if app_l == "bumble" and overlay == "bumble_photo_browser":
             return bumble_back_from_photo_browser(planner=planner)
@@ -1128,22 +1212,44 @@ def _recover_to_root_action(
     recent_backs = sum(
         1 for h in history[-12:] if "bulk_recover_back" in str(h).lower()
     )
-    # Tagged: avoid Back at ambiguous root — triggers "End Tagged?" exit dialog
-    if app_l == "tagged" and backs >= 1:
+    # Tagged: never Back at landing — open Meet Me / Nearby deck instead
+    if app_l == "tagged":
+        meet = _nav_tab_center(
+            ui_tree, "Meet", "Meet Me", "Browse", "Nearby", "Discover"
+        ) or _tree_id_center(
+            ui_tree, "tab_nearby", "id/tab_nearby", "tab_meet", "id/tab_meet"
+        )
+        if meet and int(meet[1]) >= 1700:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(meet[0]),
+                    "y": int(meet[1]),
+                    "reason": (
+                        f"Tagged → Meet Me / Nearby (no Back from landing) "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "Meet Me",
+                },
+                "bulk_tagged_meet_me",
+            )
+        xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (108, 2200)
         return _fp(
             {
-                "action": "wait",
-                "seconds": 1.0,
+                "action": "tap",
+                "x": int(xy[0]),
+                "y": int(xy[1]),
                 "reason": (
-                    f"Tagged: refuse further Back (End Tagged? risk); "
-                    f"settle/vision ({planner})"
+                    f"Tagged → Meet Me tab xy (refuse Back/End Tagged?) " f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
+                "label": "Meet Me",
                 "needs_vision": True,
-                "_force_vision": True,
             },
-            "bulk_tagged_avoid_exit_back",
+            "bulk_tagged_meet_me",
         )
     if backs < 4 and recent_backs < 3:
         bucket["backs"] = backs + 1
@@ -2349,6 +2455,54 @@ def plan_bulk_swipe(
                 },
                 "bulk_open_deck",
             )
+        # Tagged: Meet Me / Nearby bottom nav — never Back out of landing
+        if app == "tagged":
+            tries = int(bulk.get("_tagged_meet_tries") or 0)
+            if tries < 3 and "bulk_tagged_meet" not in hist:
+                bulk["_tagged_meet_tries"] = tries + 1
+                st["bulk_swipe"] = bulk
+                meet = _nav_tab_center(
+                    ui_tree, "Meet", "Meet Me", "Browse", "Nearby"
+                ) or _tree_id_center(
+                    ui_tree, "tab_nearby", "id/tab_nearby", "tab_meet", "id/tab_meet"
+                )
+                if meet and int(meet[1]) >= 1700:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(meet[0]),
+                            "y": int(meet[1]),
+                            "reason": (
+                                f"Open Tagged Meet Me / Nearby deck ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": bool(dry_run),
+                            "label": "Meet Me",
+                        },
+                        "bulk_tagged_meet",
+                    )
+                xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (
+                    108,
+                    2200,
+                )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Open Tagged Meet Me tab (try {tries + 1}/3) "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Meet Me",
+                        "needs_vision": True,
+                    },
+                    "bulk_tagged_meet",
+                )
 
     # dry_run: verify ONE real card, then log would like/pass N once (no loop)
     if dry_run:
@@ -2376,6 +2530,7 @@ def plan_bulk_swipe(
             deck_visible
             or _fake_like_center(app, ui_tree)
             or (app == "blk" and blk_like_action(ui_tree, planner=planner))
+            or (app == "tagged" and tagged_like_action(ui_tree, planner=planner))
         )
         if not like_ok and not deck_visible:
             # One more Discover/Finder nav before hard fail
@@ -2397,6 +2552,30 @@ def plan_bulk_swipe(
                         "label": "Discover",
                     },
                     "bulk_open_deck",
+                )
+            if app == "tagged" and not bulk.get("_tagged_deck_nav_fail"):
+                bulk["_tagged_deck_nav_fail"] = True
+                st["bulk_swipe"] = bulk
+                xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (
+                    108,
+                    2200,
+                )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"dry_run — Tagged like miss; re-open Meet Me "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "label": "Meet Me",
+                        "needs_vision": True,
+                    },
+                    "bulk_tagged_meet",
                 )
             return _fp(
                 {

@@ -1414,6 +1414,8 @@ def _looks_like_chat_list_row(
         "match_name",
         "like_name",
         "contact_name",
+        "conversations_row_contact_name",  # WhatsApp home chat list
+        "conversation_contact_name",
         "tvusername",
         "dialogmessageitem",  # Hily name row
         "center_name",

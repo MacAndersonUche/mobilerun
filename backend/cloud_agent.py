@@ -1838,6 +1838,10 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
             "partial": bool(raw.get("partial") or raw.get("truncated")),
             "anr_dismissed": bool(raw.get("anr_dismissed")),
             "timing": timing,
+            "package_source": str(raw.get("package_source") or ""),
+            "a11y_package": str(raw.get("a11y_package") or ""),
+            "fg_inferred": bool(raw.get("fg_inferred")),
+            "needs_vision": bool(raw.get("needs_vision")),
         }
     tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
     pkg = _tree_reported_package(tree, "")
@@ -1894,15 +1898,45 @@ def _launcher_open_target_action(
         return None
     if _fg_matches_open_target(want, fg):
         return None
-    try:
-        from universal_open import plan_universal_open
-    except ImportError:
-        from backend.universal_open import plan_universal_open  # type: ignore
+    st = state if isinstance(state, dict) else {}
+    # a11y still on launcher after open, but UsageStats/lastOpened inferred
+    # the target — do NOT re-open (restarts the app). Prefer vision.
+    if st.get("fg_inferred") or (
+        st.get("last_open_at")
+        and (int(time.time()) - int(st.get("last_open_at") or 0)) < 25
+    ):
+        try:
+            from universal_open import open_cycles_exhausted, open_exhausted_fail_action
+        except ImportError:
+            from backend.universal_open import (  # type: ignore
+                open_cycles_exhausted,
+                open_exhausted_fail_action,
+            )
 
+        if open_cycles_exhausted(st):
+            return open_exhausted_fail_action(want, fg_package=fg, state=st)
+        st["force_vision_once"] = True
+        st["needs_vision"] = True
+        return None
+    try:
+        from universal_open import (
+            open_cycles_exhausted,
+            open_exhausted_fail_action,
+            plan_universal_open,
+        )
+    except ImportError:
+        from backend.universal_open import (  # type: ignore
+            open_cycles_exhausted,
+            open_exhausted_fail_action,
+            plan_universal_open,
+        )
+
+    if open_cycles_exhausted(st):
+        return open_exhausted_fail_action(want, fg_package=fg, state=st)
     act = plan_universal_open(
         want,
         instruction=instruction,
-        state=state if isinstance(state, dict) else {},
+        state=st,
         fg_package=fg,
         reason_prefix=f"Home/launcher FG ({fg})",
     )
@@ -3437,24 +3471,36 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
             fg_pkg = str(tree_info.get("package") or "").lower()
             wrong_fg = _is_selfhosted_package(fg_pkg)
+            fg_inferred = bool(tree_info.get("fg_inferred") or state.get("fg_inferred"))
+            needs_vision_hint = bool(
+                tree_info.get("needs_vision") or state.get("needs_vision")
+            )
             sparse_tree = (
                 tree_info.get("empty")
                 or tree_is_sparse(ui_tree, tree_info.get("nodes"))
                 or wrong_fg
+                or (fg_inferred and int(tree_info.get("nodes") or 0) < 8)
             )
-            force_vision = bool(state.get("force_vision_once"))
+            force_vision = bool(state.get("force_vision_once")) or needs_vision_hint
             if force_vision:
                 state["force_vision_once"] = False
+                state.pop("needs_vision", None)
             try:
-                if sparse_tree or force_vision or np_streak >= 2 or wrong_fg:
+                if (
+                    sparse_tree
+                    or force_vision
+                    or np_streak >= 2
+                    or wrong_fg
+                    or fg_inferred
+                ):
                     image_b64 = _fetch_screenshot_b64(device_id, job=job)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
             use_vision = bool(image_b64) and (
-                sparse_tree or force_vision or np_streak >= 2 or wrong_fg
+                sparse_tree or force_vision or np_streak >= 2 or wrong_fg or fg_inferred
             )
-            if sparse_tree or force_vision or wrong_fg:
+            if sparse_tree or force_vision or wrong_fg or fg_inferred:
                 if image_b64:
                     state["vision_fallback"] = True
                     state["tree_sparse"] = bool(sparse_tree)
@@ -4207,12 +4253,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or "they liked you" in err_l
                 or "find out who" in err_l
                 or "dialogtag_liked" in err_l
+                or "not the intended target" in err_l
+                or "near you" in err_l
                 or bool(action.get("_soft_recover"))
             )
             if soft_recover and (
                 "tap firewall" in err_l
                 or "tap target unresolved" in err_l
                 or "could not resolve" in err_l
+                or "not the intended target" in err_l
             ):
                 # Soft: skip this tap, record, re-plan — do NOT kill the job
                 logger.warning("tap soft-recover (no job fail): %s", err)
@@ -4306,16 +4355,40 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 state["lock_screen_open_retries"] = int(ov.get("lock_retries") or 0)
                 verify_msg = str(ov.get("verify_msg") or verify_msg or "")
+                # Track open timestamp so stuck_recovery never Backs after open
+                state["last_open_at"] = int(time.time())
+                # Prefer inferred FG (UsageStats / lastOpened) over stale launcher
+                if after.get("fg_inferred") and after_pkg:
+                    ov_opened = bool(ov.get("opened"))
+                    if not ov_opened and prefer_pkg:
+                        # Trust APK-inferred FG when it matches the target
+                        pl = after_pkg.lower()
+                        pref = prefer_pkg.lower()
+                        if pref in pl or pl in pref or app_name.lower() in pl:
+                            ov["opened"] = True
+                            ov["verify_msg"] = (
+                                f"open_ok inferred package={after_pkg} "
+                                f"src={after.get('package_source') or '?'}"
+                            )
+                            verify_msg = str(ov["verify_msg"])
+                if after.get("needs_vision") or after.get("fg_inferred"):
+                    state["force_vision_once"] = True
+                    state["fg_inferred"] = bool(after.get("fg_inferred"))
+                    state["needs_vision"] = True
                 # Advance universal-open stage when FG still wrong
                 if not ov.get("opened"):
                     try:
                         from universal_open import (
                             advance_open_stage,
+                            open_cycles_exhausted,
+                            open_exhausted_fail_action,
                             should_escalate_open,
                         )
                     except ImportError:
                         from backend.universal_open import (  # type: ignore
                             advance_open_stage,
+                            open_cycles_exhausted,
+                            open_exhausted_fail_action,
                             should_escalate_open,
                         )
 
@@ -4326,9 +4399,32 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         state=state,
                         open_ok=bool(ov.get("opened")),
                     ):
+                        if open_cycles_exhausted(state):
+                            fail_act = open_exhausted_fail_action(
+                                want or app_name,
+                                fg_package=after_pkg,
+                                state=state,
+                            )
+                            state["steps"] = step + 1
+                            state["last_action"] = fail_act["reason"]
+                            history.append(fail_act["reason"])
+                            state["history"] = history[-40:]
+                            job["state"] = state
+                            job["status"] = "failed"
+                            job["error"] = fail_act["reason"]
+                            job["result"] = fail_act["reason"]
+                            job["completed_at"] = int(time.time())
+                            _attach_failure_artifacts(
+                                job,
+                                device_id,
+                                str(after.get("tree") or ui_tree),
+                                call_device=call_device,
+                            )
+                            return job
                         advance_open_stage(state)
                         history.append(
                             f"universal_open escalate → {state.get('open_stage')} "
+                            f"cycle={state.get('open_cycle') or 0} "
                             f"(fg={after_pkg or '?'})"
                         )
                         state["history"] = history[-40:]

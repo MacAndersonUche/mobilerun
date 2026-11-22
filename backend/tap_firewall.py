@@ -461,9 +461,12 @@ def tap_is_forbidden(
             action.get(k) for k in ("label", "text", "element", "target", "intended_id")
         )
         if named:
+            # Soft: callers retarget to resolved label / nearest node instead of
+            # hard-failing (Tagged "Near you" under Meet Me / browse taps).
+            got = (resolved.get("label") or resolved.get("id") or "?")[:40]
             return (
                 "tap firewall: resolved node is not the intended target "
-                f"(got {(resolved.get('label') or resolved.get('id') or '?')[:40]!r})"
+                f"(got {got!r})"
             )
     return None
 
@@ -774,6 +777,41 @@ def guard_tap_action(
                 "dialogtag_liked",
             )
         )
+        # Intended-target miss (e.g. Tagged "Near you") → retarget to resolved
+        # label/nearest node instead of failing the job.
+        intended_miss = "not the intended target" in reason.lower()
+        if (
+            intended_miss
+            and resolved
+            and not _paid_tokens_in(f"{resolved.get('label') or ''} {point_labels}")
+        ):
+            out = dict(action)
+            # Snap tap to resolved node center when available
+            if resolved.get("x") is not None and resolved.get("y") is not None:
+                out["x"] = int(resolved["x"])
+                out["y"] = int(resolved["y"])
+            got_lab = str(
+                resolved.get("label")
+                or resolved.get("text")
+                or resolved.get("id")
+                or ""
+            ).strip()
+            if got_lab:
+                out["label"] = got_lab[:60]
+            out["_resolved_label"] = resolved.get("label")
+            out["_resolved_id"] = resolved.get("id")
+            out["_tap_firewall"] = "retarget_resolved"
+            out["reason"] = (
+                f"{action.get('reason') or 'tap'} — retarget to resolved "
+                f"{got_lab[:40]!r} (was intended-target miss)"
+            )
+            logger.info(
+                "tap firewall: retarget intended-miss at (%s,%s) → %r",
+                out.get("x"),
+                out.get("y"),
+                got_lab[:48],
+            )
+            return out
         return {
             "action": "fail",
             "reason": reason,
@@ -782,7 +820,7 @@ def guard_tap_action(
             "dry_run": bool(dry_run),
             "_resolved_label": (resolved or {}).get("label"),
             "_resolved_id": (resolved or {}).get("id"),
-            "_soft_recover": soft_upsell,
+            "_soft_recover": soft_upsell or intended_miss,
         }
     out = dict(action)
     if resolved:

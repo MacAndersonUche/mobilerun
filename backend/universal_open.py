@@ -29,6 +29,10 @@ OPEN_STAGES: Tuple[str, ...] = (
     "reopen_intent",
 )
 
+# After this many full ladders (intent→drawer→scroll→reopen), fail fast
+# instead of hanging ~7 min on Taimi/Hinge a11y-launcher loops.
+MAX_OPEN_CYCLES = 2
+
 # Dating + social open labels (instruction / package → friendly name)
 _APP_ALIASES: Dict[str, Tuple[str, ...]] = {
     "Bumble": ("bumble", "com.bumble.app"),
@@ -102,10 +106,22 @@ def current_open_stage(state: Dict[str, Any]) -> str:
 
 
 def advance_open_stage(state: Dict[str, Any]) -> str:
-    """Bump to next open stage; clamp at last."""
+    """Bump to next open stage; wrap to a new cycle or clamp at last.
+
+    Completing ``reopen_intent`` while FG is still wrong starts a new cycle
+    (back to ``launch_intent``) and increments ``open_cycle``. Callers should
+    hard-fail via :func:`open_cycles_exhausted` after ``MAX_OPEN_CYCLES``.
+    """
     cur = current_open_stage(state)
     idx = OPEN_STAGES.index(cur)
-    nxt = OPEN_STAGES[min(idx + 1, len(OPEN_STAGES) - 1)]
+    if idx >= len(OPEN_STAGES) - 1:
+        # Finished one full ladder — start next cycle at launch_intent
+        cycles = int(state.get("open_cycle") or 0) + 1
+        state["open_cycle"] = cycles
+        nxt = OPEN_STAGES[0]
+        logger.info("universal_open cycle %s complete → restart %s", cycles, nxt)
+    else:
+        nxt = OPEN_STAGES[idx + 1]
     state["open_stage"] = nxt
     attempts = dict(state.get("open_stage_counts") or {})
     attempts[nxt] = int(attempts.get(nxt) or 0) + 1
@@ -114,9 +130,39 @@ def advance_open_stage(state: Dict[str, Any]) -> str:
     return nxt
 
 
+def open_cycles_exhausted(state: Dict[str, Any]) -> bool:
+    """True after ``MAX_OPEN_CYCLES`` full open ladders failed."""
+    return int(state.get("open_cycle") or 0) >= MAX_OPEN_CYCLES
+
+
+def open_exhausted_fail_action(
+    app_or_pkg: str,
+    *,
+    fg_package: str = "",
+    state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Fail action when open escalation has looped too long."""
+    st = state if isinstance(state, dict) else {}
+    label = resolve_open_label(app_or_pkg)
+    cycles = int(st.get("open_cycle") or 0)
+    stage = current_open_stage(st)
+    return {
+        "action": "fail",
+        "reason": (
+            f"Open escalation exhausted after {cycles} full cycles "
+            f"(last stage={stage}, fg={fg_package or '?'}) for {label} — "
+            f"a11y/FG never confirmed target (refuse hung open loop)"
+        ),
+        "planner": "universal_open:exhausted",
+        "llm_provider": None,
+        "dry_run_verified": False,
+    }
+
+
 def reset_open_stage(state: Dict[str, Any]) -> None:
     if isinstance(state, dict):
         state["open_stage"] = OPEN_STAGES[0]
+        state["open_cycle"] = 0
 
 
 def plan_universal_open(
