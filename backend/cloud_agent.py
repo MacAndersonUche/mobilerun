@@ -1844,12 +1844,16 @@ def _open_label_for_package(pkg: str) -> str:
 
 
 def _launcher_open_target_action(
-    prefer_pkg: str, fg_package: str
+    prefer_pkg: str,
+    fg_package: str,
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    instruction: str = "",
 ) -> Optional[Dict[str, Any]]:
     """If FG is home/launcher and prefer_pkg is a dating target, open it now.
 
     Backend-only fix for APK 540: do not plan (or Back) on the launcher —
-    emit open_app for the job target immediately.
+    emit open_app for the job target immediately (universal_open ladder).
     """
     want = (prefer_pkg or "").strip()
     fg = (fg_package or "").strip()
@@ -1859,15 +1863,20 @@ def _launcher_open_target_action(
         return None
     if _fg_matches_open_target(want, fg):
         return None
-    open_label = _open_label_for_package(want) or want
-    return {
-        "action": "open_app",
-        "app": open_label,
-        "package": want,
-        "reason": (f"Home/launcher FG ({fg}) — open target " f"{open_label} ({want})"),
-        "planner": "launcher_open_target",
-        "llm_provider": None,
-    }
+    try:
+        from universal_open import plan_universal_open
+    except ImportError:
+        from backend.universal_open import plan_universal_open  # type: ignore
+
+    act = plan_universal_open(
+        want,
+        instruction=instruction,
+        state=state if isinstance(state, dict) else {},
+        fg_package=fg,
+        reason_prefix=f"Home/launcher FG ({fg})",
+    )
+    act["planner"] = "launcher_open_target"
+    return act
 
 
 def _instruction_target_package(
@@ -2705,10 +2714,20 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         return str(action.get("reason") or "Waited")
     if kind in ("open_app", "start_app"):
         app = str(action.get("app") or action.get("package") or "")
+        open_params: Dict[str, Any] = {
+            "app": app,
+            "package": action.get("package"),
+        }
+        # Universal open ladder (APK drawer search / icon scroll fallbacks)
+        mode = action.get("open_mode") or action.get("_universal_open")
+        if mode:
+            open_params["open_mode"] = str(mode)
+        if action.get("fallback"):
+            open_params["fallback"] = True
         raw = call_device(
             device_id,
             "open_app",
-            {"app": app, "package": action.get("package")},
+            open_params,
             # Secure Folder fingerprint wait can take ~75s on device
             timeout_s=90,
             wait_reconnect_s=90,
@@ -3059,7 +3078,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Home/launcher + dating target → open_app immediately (APK 540:
         # empty-flag + Back-on-launcher left jobs stuck with 0 open_app).
         fg_home = str(tree_info.get("package") or "")
-        launcher_open_act = _launcher_open_target_action(prefer_pkg, fg_home)
+        launcher_open_act = _launcher_open_target_action(
+            prefer_pkg,
+            fg_home,
+            state=state,
+            instruction=instruction,
+        )
         if launcher_open_act:
             force_open_from_launcher = True
             state["_force_open_from_launcher"] = True
@@ -3156,7 +3180,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Launcher home + dating target: open_app immediately (skip empty/plan)
         if force_open_from_launcher and prefer_pkg:
             action = launcher_open_act or _launcher_open_target_action(
-                prefer_pkg, fg_home
+                prefer_pkg,
+                fg_home,
+                state=state,
+                instruction=instruction,
             )
             assert action is not None
             kind = "open_app"
@@ -3614,8 +3641,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     fg or "?",
                 )
 
-        # Hard-stop after too many no-progress steps (same tree forever)
-        if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
+        # No-progress → escalate stuck recovery (never die stuck on one screen)
+        if np_streak >= MAX_NO_PROGRESS and kind not in ("done", "fail"):
             sat = _goal_satisfied_from_tree(
                 instruction,
                 ui_tree,
@@ -3628,12 +3655,47 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = sat
                 action = {"action": "done", "reason": reason}
             else:
-                kind = "fail"
-                reason = (
-                    f"No UI progress after {np_streak} actions "
-                    "(same screen/tree hash) — changing strategy failed"
-                )
-                action = {"action": "fail", "reason": reason}
+                try:
+                    from stuck_recovery import (
+                        next_stuck_action,
+                        should_hard_fail_stuck,
+                    )
+                except ImportError:
+                    from backend.stuck_recovery import (  # type: ignore
+                        next_stuck_action,
+                        should_hard_fail_stuck,
+                    )
+
+                if should_hard_fail_stuck(state):
+                    kind = "fail"
+                    reason = (
+                        f"No UI progress after {np_streak} actions "
+                        f"+ {state.get('stuck_step')} stuck recoveries"
+                    )
+                    action = {"action": "fail", "reason": reason}
+                else:
+                    action = next_stuck_action(
+                        state,
+                        instruction=instruction,
+                        ui_tree=ui_tree,
+                        package=str(tree_info.get("package") or ""),
+                        prefer_pkg=prefer_pkg or "",
+                    )
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or "")
+                    planner = action.get("planner") or "stuck"
+                    if action.get("_force_vision"):
+                        state["force_vision_once"] = True
+                    history.append(f"stuck:{state.get('stuck_stage')} → {kind}")
+                    state["history"] = history[-40:]
+                    state["no_progress_streak"] = 0
+                    state["last_tree_fp"] = None
+                    job["state"] = state
+                    logger.info(
+                        "no-progress → stuck recovery %s job=%s",
+                        kind,
+                        job.get("job_id"),
+                    )
 
         # Block swipe when tree empty — force open_app or fail
         if kind == "swipe" and tree_info["empty"]:
@@ -3861,24 +3923,59 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         )
                         # Fall through to execute_action below
                     else:
-                        # Dating / social: stop safely — never blind (540,1395).
-                        state["steps"] = step + 1
-                        state["last_progress_at"] = int(time.time())
-                        state["last_action"] = f"fail: {reason}"
-                        history.append(f"fail (no recovery tap): {reason}")
-                        state["history"] = history
-                        _record_step(
-                            f"fail: {reason}", ok=False, screenshot_key=shot_key
+                        # Dating / social: escalate stuck recovery (never die
+                        # stuck on home / one page). Never blind mid-screen taps.
+                        try:
+                            from stuck_recovery import (
+                                next_stuck_action,
+                                should_hard_fail_stuck,
+                            )
+                        except ImportError:
+                            from backend.stuck_recovery import (  # type: ignore
+                                next_stuck_action,
+                                should_hard_fail_stuck,
+                            )
+
+                        if should_hard_fail_stuck(state):
+                            state["steps"] = step + 1
+                            state["last_progress_at"] = int(time.time())
+                            state["last_action"] = f"fail: {reason}"
+                            history.append(f"fail after stuck cap: {reason}")
+                            state["history"] = history
+                            _record_step(
+                                f"fail: {reason}", ok=False, screenshot_key=shot_key
+                            )
+                            job["state"] = state
+                            job["status"] = "failed"
+                            job["error"] = reason or "Agent could not complete the goal"
+                            job["completed_at"] = int(time.time())
+                            _attach_failure_artifacts(
+                                job, device_id, ui_tree, call_device=call_device
+                            )
+                            _end_job_cleanup(job, device_id, call_device)
+                            return job
+                        action = next_stuck_action(
+                            state,
+                            instruction=instruction,
+                            ui_tree=ui_tree,
+                            package=str(tree_info.get("package") or ""),
+                            prefer_pkg=prefer_pkg or "",
                         )
+                        kind = str(action.get("action") or "").lower()
+                        reason = str(action.get("reason") or reason)
+                        if action.get("_force_vision"):
+                            state["force_vision_once"] = True
+                        history.append(
+                            f"hint: planner fail → stuck:{state.get('stuck_stage')} "
+                            f"{kind} (streak={fail_n})"
+                        )
+                        state["history"] = history[-40:]
+                        state["last_action"] = f"stuck:{kind}"
                         job["state"] = state
-                        job["status"] = "failed"
-                        job["error"] = reason or "Agent could not complete the goal"
-                        job["completed_at"] = int(time.time())
-                        _attach_failure_artifacts(
-                            job, device_id, ui_tree, call_device=call_device
+                        job["result"] = (
+                            f"Stuck recovery ({state.get('stuck_step')}): {kind}"
                         )
-                        _end_job_cleanup(job, device_id, call_device)
-                        return job
+                        # Fall through to execute_action below
                 else:
                     state["steps"] = step + 1
                     state["last_progress_at"] = int(time.time())
@@ -4038,6 +4135,41 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 state["lock_screen_open_retries"] = int(ov.get("lock_retries") or 0)
                 verify_msg = str(ov.get("verify_msg") or verify_msg or "")
+                # Advance universal-open stage when FG still wrong
+                if not ov.get("opened"):
+                    try:
+                        from universal_open import (
+                            advance_open_stage,
+                            should_escalate_open,
+                        )
+                    except ImportError:
+                        from backend.universal_open import (  # type: ignore
+                            advance_open_stage,
+                            should_escalate_open,
+                        )
+
+                    want = str(action.get("package") or prefer_pkg or app_name or "")
+                    if should_escalate_open(
+                        want_package=want,
+                        fg_package=after_pkg,
+                        state=state,
+                        open_ok=bool(ov.get("opened")),
+                    ):
+                        advance_open_stage(state)
+                        history.append(
+                            f"universal_open escalate → {state.get('open_stage')} "
+                            f"(fg={after_pkg or '?'})"
+                        )
+                        state["history"] = history[-40:]
+                else:
+                    try:
+                        from universal_open import reset_open_stage
+                    except ImportError:
+                        from backend.universal_open import (  # type: ignore
+                            reset_open_stage,
+                        )
+
+                    reset_open_stage(state)
                 if ov.get("fail_locked"):
                     # Fail fast after open + 1 retry still on lock screen
                     state["steps"] = step + 1
@@ -4127,6 +4259,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 verify_msg = (verify_msg + " · no_progress").strip(" ·")
             else:
                 state["no_progress_streak"] = 0
+                try:
+                    from stuck_recovery import reset_stuck
+                except ImportError:
+                    from backend.stuck_recovery import reset_stuck  # type: ignore
+
+                reset_stuck(state)
             state["last_tree_fp"] = fp
             # Launcher swipe loop: only abort after ≥3 unchanged launcher swipes
             if _launcher_swipe_abort(

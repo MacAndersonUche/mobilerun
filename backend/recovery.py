@@ -13,7 +13,7 @@ Distinct strategies (rotated before hard-fail):
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Must try this many *distinct* strategies before a hard fail
 MIN_DISTINCT_STRATEGIES = 5
@@ -25,10 +25,31 @@ STRATEGIES: List[str] = [
     "redump_tree",
     "vision",
     "back",
+    "scroll",
+    "bottom_nav",
     "home_then_open",
     "reconnect_wait",
     "alt_path",
 ]
+
+# Dating + social labels for home_then_open / reopen
+_OPEN_APP_KEYS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("WhatsApp", ("whatsapp",)),
+    ("Instagram", ("instagram",)),
+    ("Messenger", ("messenger",)),
+    ("Telegram", ("telegram",)),
+    ("Tinder", ("tinder",)),
+    ("Bumble", ("bumble",)),
+    ("Hinge", ("hinge",)),
+    ("Badoo", ("badoo",)),
+    ("Hily", ("hily",)),
+    ("BLK", ("blk",)),
+    ("Yubo", ("yubo",)),
+    ("Tagged", ("tagged",)),
+    ("Taimi", ("taimi", "takimi")),
+    ("Messages", ("message", "sms", "macai")),
+    ("Settings", ("settings",)),
+)
 
 _POPUP_LABELS = (
     "while using the app",
@@ -189,33 +210,73 @@ def recovery_action(
             "_recovery": name,
         }
 
-    if name == "home_then_open":
-        # Prefer open_app for known targets; else Home
-        app = None
-        low = (instruction or "").lower()
-        for label, keys in (
-            ("WhatsApp", ("whatsapp",)),
-            ("Instagram", ("instagram",)),
-            ("Messenger", ("messenger",)),
-            ("Telegram", ("telegram",)),
-            ("Tinder", ("tinder",)),
-            ("Bumble", ("bumble",)),
-            ("Hinge", ("hinge",)),
-            ("Messages", ("message", "sms", "macai")),
-            ("Settings", ("settings",)),
-        ):
-            if any(k in low for k in keys):
-                app = label
-                break
-        if app:
+    if name == "scroll":
+        return {
+            "action": "swipe",
+            "x1": 540,
+            "y1": 1700,
+            "x2": 540,
+            "y2": 700,
+            "reason": f"Scroll to find content ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+            "_recovery": name,
+        }
+
+    if name == "bottom_nav":
+        try:
+            from stuck_recovery import find_bottom_nav_target
+        except ImportError:
+            from backend.stuck_recovery import find_bottom_nav_target  # type: ignore
+
+        hit = find_bottom_nav_target(ui_tree)
+        if hit:
+            x, y, lab = hit
             return {
-                "action": "open_app",
-                "app": app,
-                "reason": f"Re-open {app} after stuck ({planner})",
+                "action": "tap",
+                "x": x,
+                "y": y,
+                "label": lab,
+                "reason": f"Bottom nav '{lab}' ({planner})",
                 "planner": planner,
                 "llm_provider": None,
                 "_recovery": name,
             }
+        return {
+            "action": "tap",
+            "x": 340,
+            "y": 2200,
+            "reason": f"Bottom nav band (vision) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+            "_recovery": name,
+            "needs_vision": True,
+            "_force_vision": True,
+        }
+
+    if name == "home_then_open":
+        # Home + open via universal_open (drawer fallback on APK)
+        app = None
+        low = (instruction or "").lower()
+        for label, keys in _OPEN_APP_KEYS:
+            if any(k in low for k in keys):
+                app = label
+                break
+        if app:
+            try:
+                from universal_open import plan_universal_open
+            except ImportError:
+                from backend.universal_open import plan_universal_open  # type: ignore
+
+            act = plan_universal_open(
+                app,
+                instruction=instruction,
+                state=state,
+                fg_package=package,
+                reason_prefix=f"Re-open after stuck ({planner})",
+            )
+            act["_recovery"] = name
+            return act
         return {
             "action": "home",
             "reason": f"Home then resume ({planner})",

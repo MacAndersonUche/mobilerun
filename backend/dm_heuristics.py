@@ -3025,15 +3025,52 @@ def hily_back_from_photo_viewer(
 
 
 def hily_deck_card_name(tree: str) -> Optional[str]:
+    """Best-effort Finder card name — id first, then name±age mid-screen text."""
     for n in _parse_compact_nodes(tree):
         nid = str(n.get("id") or "").lower()
-        if "usernameagefield" not in nid:
+        if "usernameagefield" not in nid and "username" not in nid:
             continue
         text = (n.get("text") or "").strip()
         if text and "," in text:
             return text.split(",")[0].strip()
         if text:
             return text
+    # Sparse Finder: Like/Pass present but name id missing — scrape mid card
+    skip = {
+        "like",
+        "pass",
+        "crush",
+        "skip",
+        "boost",
+        "finder",
+        "chats",
+        "profile",
+        "hily",
+        "message before match",
+        "got it",
+        "not now",
+    }
+    has_actions = bool(
+        _tree_id_center(
+            tree,
+            "ActionButton_LIKE",
+            "ActionButton_SKIP",
+            "ActionButton_PASS",
+            "id/ActionButton_LIKE",
+        )
+    )
+    if not has_actions and not hily_on_finder(tree, _log=False):
+        return None
+    for n in _parse_compact_nodes(tree, package_filter="com.hily.app"):
+        text = (n.get("text") or "").strip()
+        y = int(n.get("y") or 0)
+        if y < 200 or y > 1600:
+            continue
+        if text.lower() in skip or len(text) < 2:
+            continue
+        # "Sam, 24" or plain name
+        if re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,28}(?:,\s*\d{2})?$", text):
+            return text.split(",")[0].strip()
     return None
 
 

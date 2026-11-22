@@ -3156,13 +3156,20 @@ def plan_bulk_message_new(
             chat = tagged_chat_action(ui_tree, planner=planner)
             if chat:
                 return chat
-        # Not on deck yet — open Meet/Browse once before failing
-        if not bulk.get("_tagged_tried_deck"):
-            bulk["_tagged_tried_deck"] = True
+        # Not on deck yet — open Meet/Browse up to 2× before failing
+        tried = int(bulk.get("_tagged_tried_deck") or 0)
+        if tried < 2:
+            bulk["_tagged_tried_deck"] = tried + 1
             st["bulk_message_new"] = bulk
+            # Exit dialog first (End Tagged?)
+            exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+            if exit_dlg:
+                return exit_dlg
             meet = _nav_tab_center(
-                ui_tree, "Meet", "Browse", "Discover"
-            ) or _tree_id_center(ui_tree, "tab_meet", "id/tab_meet", "nav_meet")
+                ui_tree, "Meet", "Browse", "Discover", "Nearby"
+            ) or _tree_id_center(
+                ui_tree, "tab_meet", "id/tab_meet", "nav_meet", "tab_nearby"
+            )
             if meet and int(meet[1]) >= 1800:
                 return _fp(
                     {
@@ -3176,14 +3183,16 @@ def plan_bulk_message_new(
                     },
                     "bulk_tagged_open_deck",
                 )
-            xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (540, 2190)
+            # Prefer profile deck_tab_xy (tab_nearby ≈108,2200) over mid-screen guess
+            xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (108, 2200)
             return _fp(
                 {
                     "action": "tap",
                     "x": int(xy[0]),
                     "y": int(xy[1]),
                     "reason": (
-                        f"Tagged → deck tab index for chatBtn " f"(vision) ({planner})"
+                        f"Tagged → deck tab for chatBtn "
+                        f"(try {tried + 1}/2, vision) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -3199,6 +3208,7 @@ def plan_bulk_message_new(
                 "reason": f"Tagged Match card / chatBtn not found ({planner})",
                 "planner": planner,
                 "llm_provider": None,
+                "needs_vision": True,
             },
             "bulk_tagged_new_missing",
         )

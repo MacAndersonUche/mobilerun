@@ -1571,14 +1571,32 @@ class BackendClient(private val context: Context) {
                             ?: (params?.get("package") as? String)
                             ?: ""
                         val pkg = params?.get("package") as? String
-                        var launched = openAppByNameOrPackage(app, pkg)
+                        val openMode = (params?.get("open_mode") as? String)
+                            ?.trim()
+                            ?.lowercase()
+                            .orEmpty()
+                        val forceFallback = params?.get("fallback") == true ||
+                            openMode in setOf(
+                                "home_drawer_search",
+                                "drawer_scroll_icon",
+                                "reopen_intent",
+                            )
+                        var launched: String? = null
+                        var openPath = "intent"
+                        // Stage 1: launch intent (unless drawer-only modes)
+                        if (openMode != "home_drawer_search" && openMode != "drawer_scroll_icon") {
+                            launched = openAppByNameOrPackage(app, pkg)
+                        }
                         var viaSecureFolder = false
                         var secureFolderWaitMs = 0L
-                        if (launched == null) {
+                        if (launched == null && openMode != "home_drawer_search" &&
+                            openMode != "drawer_scroll_icon"
+                        ) {
                             val sf = openAppViaSecureFolder(app, pkg)
                             launched = sf.packageName
                             viaSecureFolder = sf.openedSecureFolder
                             secureFolderWaitMs = sf.waitMs
+                            if (viaSecureFolder) openPath = "secure_folder"
                             if (sf.needsFingerprint) {
                                 sendAgentEvent(
                                     null,
@@ -1588,14 +1606,39 @@ class BackendClient(private val context: Context) {
                                 )
                             }
                         }
-                        sendAgentEvent(null, null, "open_app", "open_app($app)")
+                        // Stage 2/3: Home → drawer search / scroll icon (never stuck)
+                        if (launched == null || forceFallback) {
+                            val drawer = openAppViaDrawer(
+                                app,
+                                pkg,
+                                scrollPages = openMode == "drawer_scroll_icon" ||
+                                    (launched == null && forceFallback),
+                            )
+                            if (drawer != null) {
+                                launched = drawer
+                                openPath = if (openMode == "drawer_scroll_icon") {
+                                    "drawer_scroll"
+                                } else {
+                                    "drawer_search"
+                                }
+                                viaSecureFolder = false
+                            }
+                        }
+                        // Stage 4: final intent retry after Home
+                        if (launched == null) {
+                            a11yService?.pressHome()
+                            Thread.sleep(400)
+                            launched = openAppByNameOrPackage(app, pkg)
+                            if (launched != null) openPath = "reopen_intent"
+                        }
+                        sendAgentEvent(null, null, "open_app", "open_app($app) via=$openPath")
                         if (launched == null) {
                             throw Exception(
                                 "Could not open app: $app" +
                                     if (secureFolderInstalled()) {
                                         " (not in main profile; Secure Folder unlock failed or timed out)"
                                     } else {
-                                        ""
+                                        " (intent+drawer failed)"
                                     },
                             )
                         }
@@ -1605,12 +1648,30 @@ class BackendClient(private val context: Context) {
                         val settle = 280L + kotlin.random.Random.nextLong(0, 180)
                         Thread.sleep(settle)
                         val activePkg = a11yService?.activePackageName().orEmpty()
+                        // FG verify — if still launcher, try drawer once more
+                        val stillHome = activePkg.contains("launcher", ignoreCase = true) ||
+                            activePkg.contains("systemui", ignoreCase = true) ||
+                            activePkg.contains("mobilerun", ignoreCase = true)
+                        if (stillHome && openPath == "intent") {
+                            Log.w(tag, "open_app FG still $activePkg — drawer fallback")
+                            val drawer2 = openAppViaDrawer(app, pkg, scrollPages = true)
+                            if (drawer2 != null) {
+                                launched = drawer2
+                                openPath = "drawer_after_fg_miss"
+                                lastOpenedPackage = launched
+                                a11yService?.setPreferredPackageHint(launched)
+                                Thread.sleep(350)
+                            }
+                        }
+                        val active2 = a11yService?.activePackageName().orEmpty()
                         mapOf(
                             "ok" to true,
                             "requested" to app,
                             "package" to launched,
-                            "active_package" to activePkg,
+                            "active_package" to active2.ifBlank { activePkg },
                             "launched" to true,
+                            "open_path" to openPath,
+                            "open_mode" to openMode.ifBlank { "launch_intent" },
                             "secure_folder" to viaSecureFolder,
                             "secure_folder_wait_ms" to secureFolderWaitMs,
                             "a11y" to (a11yService != null),
@@ -2050,8 +2111,98 @@ class BackendClient(private val context: Context) {
     }
 
     /**
-     * Launch via PackageManager.getLaunchIntentForPackage — never by hunting
-     * launcher icons. Returns the package that was launched, or null.
+     * Home → app drawer → search/type → tap result (or scroll pages for icon).
+     * Used when launch intent fails or FG stays on launcher (never stuck).
+     */
+    private fun openAppViaDrawer(
+        app: String,
+        pkg: String?,
+        scrollPages: Boolean = false,
+    ): String? {
+        val a11y = MobilerunAccessibilityService.instance ?: return null
+        val label = app.trim()
+            .removePrefix("open ")
+            .removePrefix("Open ")
+            .trim()
+            .ifBlank { pkg?.substringAfterLast('.') ?: return null }
+        val dm = context.resources.displayMetrics
+        val w = dm.widthPixels.coerceAtLeast(720)
+        val h = dm.heightPixels.coerceAtLeast(1280)
+        Log.i(tag, "openAppViaDrawer label=$label scroll=$scrollPages ${w}x$h")
+        try {
+            a11y.pressHome()
+            Thread.sleep(450)
+            // Swipe up to open app drawer (One UI / Pixel / AOSP)
+            a11y.swipeFireAndForget(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.22).toInt(), 380)
+            Thread.sleep(700)
+            // Tap drawer search if present
+            val searchLabels = listOf(
+                "Search", "Search apps", "Search for apps", "Find apps", "Apps",
+            )
+            var focusedSearch = false
+            for (s in searchLabels) {
+                if (a11y.tapByVisibleText(s, fuzzy = true)) {
+                    focusedSearch = true
+                    Thread.sleep(350)
+                    break
+                }
+            }
+            // Fallback: tap top search band
+            if (!focusedSearch) {
+                GestureController.tap(w / 2, (h * 0.12).toInt(), humanize = false)
+                Thread.sleep(350)
+            }
+            // Type app name into focused field
+            val typed = try {
+                a11y.inputText(label, clear = true, humanize = false)
+            } catch (_: Exception) {
+                false
+            }
+            if (typed) {
+                Thread.sleep(500)
+                if (a11y.tapByVisibleText(label, fuzzy = true)) {
+                    Thread.sleep(700)
+                    val resolved = resolvePackageName(label.lowercase(), pkg)
+                        ?: pkg?.takeIf { it.contains('.') }
+                    Log.i(tag, "drawer search tapped '$label' pkg=$resolved")
+                    return resolved
+                }
+            }
+            // Scroll drawer pages hunting the icon
+            if (scrollPages || !typed) {
+                // Clear search: Home + drawer again without typing
+                a11y.pressHome()
+                Thread.sleep(350)
+                a11y.swipeFireAndForget(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.22).toInt(), 380)
+                Thread.sleep(600)
+                repeat(4) { page ->
+                    if (a11y.tapByVisibleText(label, fuzzy = true)) {
+                        Thread.sleep(700)
+                        val resolved = resolvePackageName(label.lowercase(), pkg)
+                            ?: pkg?.takeIf { it.contains('.') }
+                        Log.i(tag, "drawer scroll page=$page tapped '$label'")
+                        return resolved
+                    }
+                    // Swipe drawer to next page (left ←)
+                    a11y.swipeFireAndForget(
+                        (w * 0.85).toInt(),
+                        (h * 0.55).toInt(),
+                        (w * 0.15).toInt(),
+                        (h * 0.55).toInt(),
+                        320,
+                    )
+                    Thread.sleep(450)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "openAppViaDrawer failed: ${e.message}")
+        }
+        return null
+    }
+
+    /**
+     * Launch via PackageManager.getLaunchIntentForPackage, with drawer
+     * search/scroll fallbacks when intent fails or FG stays on launcher.
      */
     private data class SecureFolderLaunch(
         val packageName: String?,
@@ -2241,6 +2392,13 @@ class BackendClient(private val context: Context) {
             "tinder" to "com.tinder",
             "bumble" to "com.bumble.app",
             "hinge" to "co.hinge.app",
+            "badoo" to "com.badoo.mobile",
+            "hily" to "com.hily.app",
+            "blk" to "com.affinityapps.blk",
+            "yubo" to "co.yellw.yellowapp",
+            "tagged" to "com.taggedapp",
+            "taimi" to "com.takimi.android",
+            "takimi" to "com.takimi.android",
             "phone" to "com.samsung.android.dialer",
             "messages" to "com.google.android.apps.messaging",
             "photos" to "com.google.android.apps.photos",
