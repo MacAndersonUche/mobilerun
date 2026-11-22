@@ -75,6 +75,7 @@ try:
         tagged_chat_action,
         tagged_deck_card_name,
         tagged_like_action,
+        tagged_dismiss_exit_dialog,
         tagged_location_overlay_continue,
         tagged_on_deck,
         yubo_chat_tab_xy,
@@ -153,6 +154,7 @@ except ImportError:
         tagged_chat_action,
         tagged_deck_card_name,
         tagged_like_action,
+        tagged_dismiss_exit_dialog,
         tagged_location_overlay_continue,
         tagged_on_deck,
         yubo_chat_tab_xy,
@@ -431,12 +433,14 @@ def _visible_chat_list_rows(
         from dm_heuristics import (
             _blk_looks_like_person_name,
             _looks_like_chat_list_row,
+            _looks_like_message_preview,
             blk_on_matches,
         )
     except ImportError:
         from backend.dm_heuristics import (  # type: ignore
             _blk_looks_like_person_name,
             _looks_like_chat_list_row,
+            _looks_like_message_preview,
             blk_on_matches,
         )
 
@@ -462,15 +466,21 @@ def _visible_chat_list_rows(
             continue
         row_ok = _looks_like_chat_list_row(n, result_ids)
         if not row_ok and blk_name_fallback:
-            # Person name mid-list (Your turn / Their turn) — Title Case only so
-            # message previews like "hey" / "ok" are never treated as rows.
+            # Person name mid-list (Your turn / Their turn) — Title Case person
+            # names only so message previews like "hey" / "Good and you" never
+            # become rows. Allow "First" or "First Last".
             y = int(n.get("y") or 0)
+            words = label.split()
+            title_case = bool(words) and all(
+                w[:1].isupper() and (len(w) == 1 or w[1:].islower() or "'" in w)
+                for w in words
+            )
             if (
                 250 <= y <= 2000
-                and label[:1].isupper()
+                and title_case
                 and _blk_looks_like_person_name(label)
                 and not label.lower().startswith(("your turn", "their turn", "hidden"))
-                and " " not in label  # single given name, not preview sentence
+                and not _looks_like_message_preview(label)
             ):
                 row_ok = True
         if not row_ok:
@@ -908,6 +918,12 @@ def _recover_to_root_action(
     except ImportError:
         from backend.dm_heuristics import app_overlay_present  # type: ignore
 
+    # Tagged "End Tagged?" after accidental Back at root — Cancel, never exit
+    if app_l == "tagged":
+        exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+        if exit_dlg:
+            return exit_dlg
+
     # Overlay first — even when Discover/nav underneath looks like a root
     overlay = app_overlay_present(app_l, ui_tree)
     # Message/reply planner already opened / is targeting a thread — do not
@@ -1095,6 +1111,23 @@ def _recover_to_root_action(
     recent_backs = sum(
         1 for h in history[-12:] if "bulk_recover_back" in str(h).lower()
     )
+    # Tagged: avoid Back at ambiguous root — triggers "End Tagged?" exit dialog
+    if app_l == "tagged" and backs >= 1:
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 1.0,
+                "reason": (
+                    f"Tagged: refuse further Back (End Tagged? risk); "
+                    f"settle/vision ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+            },
+            "bulk_tagged_avoid_exit_back",
+        )
     if backs < 4 and recent_backs < 3:
         bucket["backs"] = backs + 1
         st[key] = bucket
@@ -1592,7 +1625,7 @@ def plan_bulk_swipe(
         if not bulk.get("_yubo_tried_deck"):
             bulk["_yubo_tried_deck"] = True
             st["bulk_swipe"] = bulk
-            # Prefer a labeled bottom-nav hit; unlabeled index xy needs vision
+            # Prefer a labeled bottom-nav hit; else resource-id / x-band map
             labeled = _nav_tab_center(ui_tree, "For you", "Discover", "People", "Swipe")
             if labeled and int(labeled[1]) >= 1800:
                 return _fp(
@@ -1608,7 +1641,32 @@ def plan_bulk_swipe(
                     },
                     "bulk_yubo_open_deck",
                 )
-            xy = DM_APP_PROFILES.get("yubo", {}).get("deck_tab_xy") or (140, 2194)
+            try:
+                from dm_heuristics import yubo_bottom_tab_center, yubo_deck_tab_xy
+            except ImportError:
+                from backend.dm_heuristics import (  # type: ignore
+                    yubo_bottom_tab_center,
+                    yubo_deck_tab_xy,
+                )
+            mapped = yubo_bottom_tab_center(ui_tree, which="deck")
+            if mapped:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(mapped[0]),
+                        "y": int(mapped[1]),
+                        "reason": (
+                            f"Leave Yubo Chat list → deck tab by "
+                            f"id/position ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Deck",
+                    },
+                    "bulk_yubo_open_deck",
+                )
+            xy = yubo_deck_tab_xy()
             return _fp(
                 {
                     "action": "tap",
@@ -1624,6 +1682,8 @@ def plan_bulk_swipe(
                     "label": "Deck",
                     "needs_vision": True,
                     "_force_vision": True,
+                    # Firewall: empty-tree refuse needs this confirmed label
+                    "_vision_confirmed_label": "Deck",
                 },
                 "bulk_yubo_open_deck",
             )
@@ -1756,6 +1816,10 @@ def plan_bulk_swipe(
         perm = permission_dialog_action(ui_tree, package=package)
         if perm:
             return perm
+    if app == "tagged":
+        exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+        if exit_dlg:
+            return exit_dlg
     if app == "hily":
         popup = hily_dismiss_popup(ui_tree, planner=planner)
         if popup:
@@ -2709,50 +2773,37 @@ def plan_bulk_message(
                 },
                 "bulk_focus_compose",
             )
-        if not bulk.get("typed"):
-            bulk["typed"] = True
-            bulk["cleared"] = False
-            st["bulk_message"] = bulk
-            return _fp(
-                {
-                    "action": "type",
-                    "text": message,
-                    "clear": True,
-                    "reason": f"Type bank text to {next_name} ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                    "delay_s": sample_human_delay(random.Random(f"type:{done}")),
-                },
-                "bulk_type",
-            )
-        # dry_run: verify compose, CLEAR draft, go back, continue until target
+        # dry_run: NEVER type into a real thread (shows "typing…" to the other
+        # person). Open thread → verify composer → log bank text → back out.
         if dry_run:
-            if not bulk.get("cleared"):
+            if not bulk.get("dry_verified"):
+                bulk["dry_verified"] = True
+                bulk["typed"] = True  # skip live type path
                 bulk["cleared"] = True
                 st["bulk_message"] = bulk
                 return _fp(
                     {
-                        "action": "type",
-                        "text": "",
-                        "clear": True,
+                        "action": "wait",
+                        "seconds": 0.4,
                         "reason": (
-                            f"[DRY RUN] clear composer after verify "
-                            f"('{message}' for {next_name})"
+                            f"[DRY RUN] composer verified for {next_name}; "
+                            f"would send '{message}' — never typed ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                         "dry_run": True,
                         "dry_run_verified": True,
                         "screenshot": True,
+                        "would_send_text": message,
                     },
-                    "bulk_dry_run_clear_composer",
+                    "bulk_dry_run_verify_composer",
                 )
-            # Count this dry-run reply and return to list
             if not bulk.get("counted_current"):
                 bulk["done"] = done + 1
                 bulk["counted_current"] = True
                 bulk["typed"] = False
                 bulk["cleared"] = False
+                bulk["dry_verified"] = False
                 if next_name and next_name.lower() not in {
                     str(x).lower() for x in done_names
                 }:
@@ -2765,7 +2816,7 @@ def plan_bulk_message(
                     {
                         "action": "done",
                         "reason": (
-                            f"dry_run — replied (typed+cleared) to "
+                            f"dry_run — verified composer (never typed) for "
                             f"{bulk['done']}/{target} chats; send skipped ({planner})"
                         ),
                         "planner": planner,
@@ -2782,8 +2833,8 @@ def plan_bulk_message(
                 {
                     "action": "back",
                     "reason": (
-                        f"[DRY RUN] cleared composer for {next_name}; "
-                        f"back to list ({planner})"
+                        f"[DRY RUN] back out after composer verify for "
+                        f"{next_name} (never typed) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -2791,6 +2842,22 @@ def plan_bulk_message(
                     "dry_run_verified": True,
                 },
                 "bulk_dry_run_back",
+            )
+        if not bulk.get("typed"):
+            bulk["typed"] = True
+            bulk["cleared"] = False
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "type",
+                    "text": message,
+                    "clear": True,
+                    "reason": f"Type bank text to {next_name} ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "delay_s": sample_human_delay(random.Random(f"type:{done}")),
+                },
+                "bulk_type",
             )
         send = find_send_center_safe(
             ui_tree,
@@ -3061,6 +3128,9 @@ def plan_bulk_message_new(
         )
 
     if app == "tagged":
+        exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+        if exit_dlg:
+            return exit_dlg
         loc = tagged_location_overlay_continue(ui_tree, planner=planner)
         if loc:
             return loc
@@ -3086,6 +3156,43 @@ def plan_bulk_message_new(
             chat = tagged_chat_action(ui_tree, planner=planner)
             if chat:
                 return chat
+        # Not on deck yet — open Meet/Browse once before failing
+        if not bulk.get("_tagged_tried_deck"):
+            bulk["_tagged_tried_deck"] = True
+            st["bulk_message_new"] = bulk
+            meet = _nav_tab_center(
+                ui_tree, "Meet", "Browse", "Discover"
+            ) or _tree_id_center(ui_tree, "tab_meet", "id/tab_meet", "nav_meet")
+            if meet and int(meet[1]) >= 1800:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(meet[0]),
+                        "y": int(meet[1]),
+                        "reason": f"Tagged → Meet/Browse deck for chatBtn ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Meet",
+                    },
+                    "bulk_tagged_open_deck",
+                )
+            xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (540, 2190)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Tagged → deck tab index for chatBtn " f"(vision) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "Meet",
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_tagged_open_deck",
+            )
         return _fp(
             {
                 "action": "fail",
@@ -3107,6 +3214,24 @@ def plan_bulk_message_new(
             compose = hinge_find_compose(ui_tree)
             if compose and not bulk.get("typed"):
                 if "tap" in hist and "comment" in hist:
+                    if dry_run:
+                        bulk["typed"] = True
+                        st["bulk_message_new"] = bulk
+                        return _fp(
+                            {
+                                "action": "done",
+                                "reason": (
+                                    f"[DRY RUN] Hinge like-sheet composer verified; "
+                                    f"would type '{message}' — never typed ({planner})"
+                                ),
+                                "planner": planner,
+                                "llm_provider": None,
+                                "dry_run": True,
+                                "dry_run_verified": True,
+                                "would_send_text": message,
+                            },
+                            "bulk_hinge_new_dry_no_type",
+                        )
                     bulk["typed"] = True
                     st["bulk_message_new"] = bulk
                     return _fp(
@@ -3119,7 +3244,6 @@ def plan_bulk_message_new(
                             ),
                             "planner": planner,
                             "llm_provider": None,
-                            "dry_run": bool(dry_run),
                         },
                         "bulk_hinge_new_type",
                     )

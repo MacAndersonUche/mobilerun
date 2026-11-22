@@ -279,12 +279,13 @@ def test_dry_run_allows_chat_list_scroll_blocks_deck_swipe():
     assert "swipe" in reason2.lower()
 
 
-def test_dry_run_reply_clears_composer():
+def test_dry_run_reply_never_types_composer():
+    """Dry-run must not type into a real thread (shows typing… to peer)."""
     thread = _load("hily_thread.xml")
     hist = [
         "Opened Hily — launch",
         "Tapped — Tap Hily chat 'Evie'",
-        "Typed \"hi\" — Type message 'hi'",
+        "Tapped — Focus compose Message/entry field",
     ]
     a = heuristic_dm_send(
         "hily message Evie and say hi",
@@ -293,20 +294,12 @@ def test_dry_run_reply_clears_composer():
         package="com.hily.app",
         dry_run=True,
     )
-    assert a and a["action"] == "type"
-    assert a.get("clear") is True
-    assert a.get("text") == ""
-    assert "clear composer" in (a.get("reason") or "").lower()
-    hist2 = hist + [f'type("") — {a["reason"]}']
-    a2 = heuristic_dm_send(
-        "hily message Evie and say hi",
-        thread,
-        hist2,
-        package="com.hily.app",
-        dry_run=True,
-    )
-    assert a2 and a2["action"] == "done"
-    assert a2.get("dry_run_verified") is True
+    assert a and a["action"] != "type"
+    assert a.get("dry_run_verified") is True
+    reason = (a.get("reason") or "").lower()
+    assert "never typed" in reason or a.get("action") == "done"
+    if a.get("action") == "done":
+        assert "send skipped" in reason or "would send" in reason
 
 
 # --- 7. False completed ---

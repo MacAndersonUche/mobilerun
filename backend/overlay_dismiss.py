@@ -306,13 +306,24 @@ def dismiss_foreign_overlays_before_plan(
     info = dict(tree_info or {})
     target = (target_package or str(st.get("target_package") or "")).strip()
     if not target:
+        logger.info("overlay_dismiss skip — no target_package")
         return tree, info, hist
 
     for attempt in range(max(1, max_attempts)):
+        active = active_window_package(tree, str(info.get("package") or ""))
         overlay = detect_foreign_overlay(
             tree,
             target,
             reported_package=str(info.get("package") or ""),
+        )
+        # Always log so Mac can verify the hook runs (0 dismissals ≠ skipped)
+        logger.info(
+            "overlay_dismiss check attempt=%s/%s target=%s active=%s foreign=%s",
+            attempt + 1,
+            max_attempts,
+            target,
+            active or "-",
+            overlay or "none",
         )
         if not overlay:
             break

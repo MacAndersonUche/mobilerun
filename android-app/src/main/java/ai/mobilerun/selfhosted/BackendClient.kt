@@ -1239,6 +1239,11 @@ class BackendClient(private val context: Context) {
             OverlayBubbleService.setJobBusy(context.applicationContext, busy)
             bubbleIdleJob?.cancel()
             if (!busy) {
+                // Job ended — clear sticky preferredPackageHint so the next
+                // home-screen dump is never filtered empty (APK 532 regression).
+                MobilerunAccessibilityService.instance
+                    ?.clearPreferredPackageHint("job_idle")
+                lastOpenedPackage = null
                 // Job ended — show bubble immediately; short safety re-show
                 scheduleBubbleIdle(forceShort = true)
             }
@@ -1357,16 +1362,26 @@ class BackendClient(private val context: Context) {
             fastCommandExecutor.execute {
                 try {
                     val a11y = MobilerunAccessibilityService.instance
-                    val b64 = a11y?.takeScreenshotJpegBase64(maxWidth = 720, quality = 42)
-                        ?: ScreenCaptureService.lastJpegBase64()
+                    val detailed = a11y?.takeScreenshotJpegBase64Detailed(
+                        maxWidth = 720,
+                        quality = 42,
+                    )
+                    val b64 = detailed?.get("data") as? String
                     if (b64.isNullOrBlank()) {
                         sendCommandResponse(
                             requestId,
                             mapOf(
                                 "ok" to false,
-                                "error" to "screenshot unavailable",
+                                "error" to (
+                                    detailed?.get("error")
+                                        ?: "screenshot unavailable"
+                                    ),
+                                "error_code" to detailed?.get("error_code"),
                                 "a11y" to (a11y != null),
                                 "media_projection" to ScreenCaptureService.isStreaming(),
+                                "timing" to mapOf(
+                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
+                                ),
                             ),
                             null,
                         )
@@ -1378,6 +1393,8 @@ class BackendClient(private val context: Context) {
                                 "mime" to "image/jpeg",
                                 "encoding" to "base64",
                                 "data" to b64,
+                                "source" to (detailed?.get("source") ?: "a11y"),
+                                "a11y_error" to detailed?.get("a11y_error"),
                                 "timing" to mapOf(
                                     "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
                                 ),
@@ -1620,7 +1637,7 @@ class BackendClient(private val context: Context) {
                             )
                         }
                         lastOpenedPackage = launched
-                        a11yService?.preferredPackageHint = launched
+                        a11yService?.setPreferredPackageHint(launched)
                         // Brief settle — keep agent steps under the 3–5s budget
                         val settle = 280L + kotlin.random.Random.nextLong(0, 180)
                         Thread.sleep(settle)
@@ -1667,14 +1684,15 @@ class BackendClient(private val context: Context) {
                                 allowCache = true,
                                 preferredPackage = prefer,
                             )
-                            // Wrong FG package (spay/selfhosted) counts as empty for target
+                            // Wrong FG: rebuild once, but NEVER mark a non-empty
+                            // dump as empty (launcher-only with sticky hint was
+                            // the APK 532 home-screen empty-tree loop).
                             val pkgNow = detailed.packageName
                             val wrongFg = !prefer.isNullOrBlank() &&
                                 pkgNow.isNotBlank() &&
                                 !pkgNow.contains(prefer, ignoreCase = true) &&
                                 !prefer.contains(pkgNow, ignoreCase = true)
-                            // One forced rebuild if empty — covers post-reconnect a11y blips
-                            if (detailed.empty || wrongFg) {
+                            if (detailed.empty || (wrongFg && detailed.nodes == 0)) {
                                 Thread.sleep(120)
                                 detailed = a11yService.getUITreeDetailed(
                                     allowCache = false,
@@ -1685,16 +1703,14 @@ class BackendClient(private val context: Context) {
                             val reportedPkg = detailed.packageName.ifBlank {
                                 a11yService.activePackageName().orEmpty()
                             }
-                            val emptyForTarget = detailed.empty || (
-                                !prefer.isNullOrBlank() &&
-                                    reportedPkg.isNotBlank() &&
-                                    !reportedPkg.contains(prefer, ignoreCase = true) &&
-                                    !prefer.contains(reportedPkg, ignoreCase = true)
-                                )
+                            // empty = no nodes only. Wrong FG with nodes is still
+                            // a usable tree (overlay dismiss / vision / recover).
+                            val emptyForTarget = detailed.empty || detailed.nodes == 0
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
                                 "package" to reportedPkg,
                                 "preferred_package" to prefer,
+                                "wrong_fg" to wrongFg,
                                 "empty" to emptyForTarget,
                                 "chars" to detailed.chars,
                                 "nodes" to detailed.nodes,
@@ -1720,16 +1736,24 @@ class BackendClient(private val context: Context) {
                     }
                     "screenshot" -> {
                         // Prefer a11y takeScreenshot; fall back to MediaProjection frame
-                        val b64 = a11yService?.takeScreenshotJpegBase64(
+                        val detailed = a11yService?.takeScreenshotJpegBase64Detailed(
                             maxWidth = 720,
                             quality = 42,
-                        ) ?: ScreenCaptureService.lastJpegBase64()
+                        )
+                        val b64 = detailed?.get("data") as? String
                         if (b64.isNullOrBlank()) {
                             mapOf(
                                 "ok" to false,
-                                "error" to "screenshot unavailable",
+                                "error" to (
+                                    detailed?.get("error")
+                                        ?: "screenshot unavailable"
+                                    ),
+                                "error_code" to detailed?.get("error_code"),
                                 "a11y" to (a11yService != null),
                                 "media_projection" to ScreenCaptureService.isStreaming(),
+                                "timing" to mapOf(
+                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
+                                ),
                             )
                         } else {
                             mapOf(
@@ -1737,6 +1761,8 @@ class BackendClient(private val context: Context) {
                                 "mime" to "image/jpeg",
                                 "encoding" to "base64",
                                 "data" to b64,
+                                "source" to (detailed?.get("source") ?: "a11y"),
+                                "a11y_error" to detailed?.get("a11y_error"),
                                 "timing" to mapOf(
                                     "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
                                 ),

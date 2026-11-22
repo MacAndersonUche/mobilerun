@@ -1291,18 +1291,89 @@ def _name_exact_or_whole_word(contact: str, label: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(c)}(?!\w)", lab))
 
 
+def _looks_like_message_preview(label: str) -> bool:
+    """True for last-message preview text — never a contact name / row key.
+
+    Examples: 'Good and you' (Badoo), 'Hola' (Tagged), 'hey what's up'.
+    """
+    name = (label or "").strip()
+    if not name:
+        return True
+    low = name.lower()
+    # Short all-lowercase greetings / snippets
+    greetings = (
+        "hola",
+        "hey",
+        "hi",
+        "hello",
+        "sup",
+        "yo",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "thanks",
+        "thank you",
+        "good and you",
+        "how are you",
+        "what's up",
+        "whats up",
+        "wyd",
+        "hii",
+        "heyy",
+        "good morning",
+        "good night",
+        "lol",
+        "haha",
+        "hahaha",
+    )
+    if low in greetings:
+        return True
+    # Multi-word sentence that is not Title Case person name ("Ada Love")
+    words = name.split()
+    if len(words) >= 2:
+        # All lowercase / sentence case → preview
+        if name == low or (
+            words[0][:1].isupper() and all(w == w.lower() for w in words[1:])
+        ):
+            # Allow "First Last" Title Case names
+            if not all(
+                w[:1].isupper() and (len(w) == 1 or w[1:].islower()) for w in words
+            ):
+                return True
+        # Ends with punctuation / question → preview
+        if name[-1] in ".!?…" or "?" in name:
+            return True
+    # Preview-ish verbs / pronouns
+    if any(
+        tok in low
+        for tok in (
+            " and you",
+            "how are",
+            "what's",
+            "whats ",
+            "miss you",
+            "see you",
+            "message before match",
+        )
+    ):
+        return True
+    return False
+
+
 def _looks_like_chat_list_row(
     node: Dict[str, Any], result_ids: Sequence[str] = ()
 ) -> bool:
-    """Restrict contact taps to inbox/match row nodes — never deck cards / counters."""
+    """Restrict contact taps to inbox/match row *name* nodes — never previews."""
     # Never treat status-bar / toolbar headers as chat rows
     y = int(node.get("y") or 0)
     if y < 200:
         return False
     nid = str(node.get("id") or "").lower()
-    label = (node.get("label") or node.get("text") or "").lower()
+    label = (node.get("label") or node.get("text") or "").strip()
+    low = label.lower()
     # Common non-row chrome
-    if label in (
+    if low in (
         "chat",
         "chats",
         "messages",
@@ -1315,31 +1386,75 @@ def _looks_like_chat_list_row(
         "conversations",
     ):
         return False
+    # Message preview text must never be the row key
+    if _looks_like_message_preview(label):
+        return False
+    # Preview / last-message resource ids — never rows
+    preview_id_toks = (
+        "messagefield",
+        "message_field",
+        "last_message",
+        "row_message",
+        "conversations_row_message",
+        "preview",
+        "msg_text",
+        "message_text",
+        "chat_message",
+        "subtitle",
+        "secondary_text",
+    )
+    if any(t in nid for t in preview_id_toks):
+        return False
+    # Name-specific ids preferred over list containers
+    name_id_toks = (
+        "usernamefield",
+        "profileinfo_name",
+        "personname",
+        "person_name",
+        "match_name",
+        "like_name",
+        "contact_name",
+        "tvusername",
+        "dialogmessageitem",  # Hily name row
+        "center_name",
+        "connectionsitem_personname",
+    )
+    if any(t in nid for t in name_id_toks):
+        return True
     if result_ids and _node_id_matches(node, result_ids):
+        # Container ids (connection_container / clConversationContainer) may
+        # carry concatenated name+preview — require non-preview label.
+        containerish = any(
+            t in nid
+            for t in (
+                "container",
+                "conversationlist",
+                "connection_container",
+            )
+        )
+        if containerish and (" " in label and _looks_like_message_preview(label)):
+            return False
+        # Prefer name-looking labels on containers
+        if containerish and _looks_like_message_preview(label):
+            return False
         return True
     row_id_toks = (
-        "dialogmessageitem",
-        "usernamefield",
-        "messagefield",
         "match_row",
-        "match_name",
         "connection_row",
         "like_row",
-        "like_name",
         "dating_match_row",
         "dating_inbox_row",
         "contact_row",
         "conversations_row",
         "row_inbox",
         "thread_list_item",
-        "center_name",
     )
     if any(t in nid for t in row_id_toks):
         return True
     # Fake-chats / bench rows: "Chat with X" / "Match X" / "Match01"
-    if label.startswith("chat with ") or label.startswith("match "):
+    if low.startswith("chat with ") or low.startswith("match "):
         return True
-    if re.match(r"^match\d{1,3}$", label.replace(" ", "")):
+    if re.match(r"^match\d{1,3}$", low.replace(" ", "")):
         return True
     return False
 
@@ -2862,8 +2977,12 @@ def hily_on_profile_sheet(tree: str) -> bool:
     hit Crush underneath (SAFETY: dry-run Crush incident).
 
     Do NOT match the normal Finder deck Crush CTA (~y 1959 next to Like/Pass).
+    Do NOT match the chats inbox (APK 534: reply Back-loop hung 7 min).
     """
     if hily_on_mbm(tree):
+        return False
+    # Chat list is never a Crush sheet — reply must open rows, not Back
+    if hily_on_chats_list(tree):
         return False
     blob = (tree or "").lower()
     # Explicit Major crush / MBM-adjacent sheet chrome
@@ -3979,6 +4098,55 @@ def hinge_is_paid_label(text: str) -> bool:
     )
 
 
+def yubo_bottom_tab_center(
+    tree: str,
+    *,
+    which: str = "chat",
+) -> Optional[Tuple[int, int]]:
+    """Map Yubo unlabeled bottom tabs by resource-id or x-position band.
+
+    which: 'deck' | 'chat' | 'likes' | 'friends' | 'more'
+    Prefer resource-ids when present; else leftmost→rightmost clickable band
+    at y≳2000 (never the header Chat title ~y 159).
+    """
+    which_l = (which or "chat").lower()
+    id_hints = {
+        "deck": ("tab_home", "tab_people", "tab_discover", "nav_home", "for_you"),
+        "chat": ("tab_chat", "tab_chats", "tab_messages", "nav_chat", "inbox"),
+        "likes": ("tab_likes", "tab_crush", "nav_likes"),
+        "friends": ("tab_friends", "nav_friends"),
+        "more": ("tab_more", "tab_profile", "nav_more", "nav_menu"),
+    }
+    for tok in id_hints.get(which_l, ()):
+        c = _tree_id_center(tree, tok, f"id/{tok}")
+        if c and int(c[1]) >= 1800:
+            return c
+    # Position bands on 1080-wide S21+ (deck left of chat)
+    bands = {
+        "deck": (0, 240),
+        "chat": (240, 440),
+        "likes": (440, 640),
+        "friends": (640, 840),
+        "more": (840, 1080),
+    }
+    x0, x1 = bands.get(which_l, (240, 440))
+    best = None
+    best_y = -1
+    for n in _parse_compact_nodes(tree):
+        y = int(n.get("y") or 0)
+        if y < 2000:
+            continue
+        x = int(n.get("x") or 0)
+        if not (x0 <= x < x1):
+            continue
+        if not (n.get("clickable") or n.get("id")):
+            continue
+        if y > best_y:
+            best_y = y
+            best = (x, y)
+    return best
+
+
 def yubo_chat_tab_xy() -> Tuple[int, int]:
     """Unlabeled bottom-nav Chat tab — map by index (22 Nov)."""
     p = DM_APP_PROFILES.get("yubo") or {}
@@ -3988,6 +4156,12 @@ def yubo_chat_tab_xy() -> Tuple[int, int]:
         xy = tabs[idx]
         return (int(xy[0]), int(xy[1]))
     xy = p.get("inbox_tab_xy") or (341, 2194)
+    return (int(xy[0]), int(xy[1]))
+
+
+def yubo_deck_tab_xy() -> Tuple[int, int]:
+    p = DM_APP_PROFILES.get("yubo") or {}
+    xy = p.get("deck_tab_xy") or (140, 2194)
     return (int(xy[0]), int(xy[1]))
 
 
@@ -4107,6 +4281,59 @@ def tagged_location_overlay_continue(
             "llm_provider": None,
         },
         "tagged_location_continue",
+    )
+
+
+def tagged_exit_dialog_present(tree: str) -> bool:
+    """System 'End Tagged?' / leave-app confirm after Back at root."""
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('label') or ''} {n.get('desc') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "end tagged" in blob:
+        return True
+    if "close tagged" in blob or "leave tagged" in blob:
+        return True
+    if "tagged?" in blob and ("end" in blob or "close" in blob or "exit" in blob):
+        return True
+    return False
+
+
+def tagged_dismiss_exit_dialog(
+    tree: str, planner: str = "tagged_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Dismiss 'End Tagged?' with Cancel — never confirm exit."""
+    if not tagged_exit_dialog_present(tree):
+        return None
+    c = _exact_label_center(tree, "Cancel") or _tree_node_center(
+        tree, "Cancel", "Stay", "No", "Keep using Tagged"
+    )
+    if c:
+        return _fp(
+            {
+                "action": "tap",
+                "x": c[0],
+                "y": c[1],
+                "reason": f"Dismiss End Tagged? → Cancel ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+                "label": "Cancel",
+            },
+            "tagged_exit_cancel",
+        )
+    # No Cancel visible — do nothing (never tap End / Yes)
+    return _fp(
+        {
+            "action": "wait",
+            "seconds": 0.8,
+            "reason": (
+                f"End Tagged? dialog — wait for Cancel; "
+                f"refusing confirm exit ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "tagged_exit_wait",
     )
 
 
@@ -5382,7 +5609,7 @@ def heuristic_dm_send(
             and not yubo_on_chat_list(ui_tree, _log=False)
             and not yubo_on_chat(ui_tree)
         ):
-            # Prefer content-desc / label from the map — NEVER fixed xy (no_progress).
+            # Prefer bottom-nav Chat (never header title ~y 159).
             chats = _nav_tab_center(
                 ui_tree,
                 "Chat",
@@ -5390,6 +5617,10 @@ def heuristic_dm_send(
                 "Conversations",
                 ids=tuple(profile.get("inbox_tab_ids") or ()),
             )
+            if chats and int(chats[1]) < 1800:
+                chats = None  # header Chat — refuse
+            if not chats:
+                chats = yubo_bottom_tab_center(ui_tree, which="chat")
             if not chats:
                 # Real device: unlabeled tabs — use index map (341,2194)
                 chats = yubo_chat_tab_xy()
@@ -5404,6 +5635,8 @@ def heuristic_dm_send(
                         ),
                         "planner": planner,
                         "llm_provider": None,
+                        "label": "Chat",
+                        "needs_vision": True,
                     },
                     "yubo_open_chat_tab",
                 )
@@ -5415,6 +5648,7 @@ def heuristic_dm_send(
                     "reason": f"Open Chat tab from Yubo deck ({planner})",
                     "planner": planner,
                     "llm_provider": None,
+                    "label": "Chat",
                 },
                 "yubo_open_chat_tab",
             )
@@ -6339,6 +6573,24 @@ def heuristic_dm_send(
                     "refuse_type_search",
                 )
             return None
+        # dry_run: NEVER type into a real thread (shows "typing…" to peer).
+        if dry_run:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] composer verified for '{contact}'; "
+                        f"would send '{message}' — never typed; send skipped"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "screenshot": True,
+                    "would_send_text": message,
+                },
+                "dry_run_verify_composer_no_type",
+            )
         return _fp(
             {
                 "action": "type",
@@ -6352,48 +6604,15 @@ def heuristic_dm_send(
         )
 
     # 6) Send — prefer visible Send ImageButton (appears after text).
-    # Dry-run: verify compose, CLEAR typed text (never leave a draft), then stop.
+    # Dry-run: composer already verified above without typing — stop.
     # WA: never IME Enter in search (Meta AI); prefer tap Send in chat too.
     if typed_message and not tapped_send:
         if dry_run:
-            cleared = any(
-                "clear composer" in str(h).lower()
-                or "dry_run clear" in str(h).lower()
-                or (
-                    "typed" in str(h).lower()
-                    and '""' in str(h)
-                    and "clear" in str(h).lower()
-                )
-                for h in history[-16:]
-            )
-            # Verify the body landed before clearing
-            verified = bool(message) and (
-                message.lower()[: max(4, min(12, len(message)))] in tl
-                or message.lower() in hist
-            )
-            if not cleared:
-                return _fp(
-                    {
-                        "action": "type",
-                        "text": "",
-                        "clear": True,
-                        "reason": (
-                            f"[DRY RUN] clear composer after verify "
-                            f"('{message}' for {contact})"
-                        ),
-                        "planner": planner,
-                        "llm_provider": None,
-                        "dry_run": True,
-                        "dry_run_verified": bool(verified),
-                        "screenshot": True,
-                    },
-                    "dry_run_clear_composer",
-                )
             return _fp(
                 {
                     "action": "done",
                     "reason": (
-                        f"dry_run — compose verified then cleared for "
+                        f"dry_run — compose verified (never typed) for "
                         f"'{contact}'; send skipped"
                     ),
                     "planner": planner,

@@ -120,6 +120,40 @@ class MobilerunAccessibilityService : AccessibilityService() {
     @Volatile private var lastNonEmptyAtMs: Long = 0
     /** Hint from open_app / get_ui_tree params — prefer this package's window. */
     @Volatile var preferredPackageHint: String? = null
+    @Volatile private var preferredPackageHintSetAtMs: Long = 0L
+    @Volatile private var lastScreenshotAtMs: Long = 0L
+
+    /** Clear sticky hint (job end / timeout / explicit). Prefer is never a hard filter. */
+    fun clearPreferredPackageHint(reason: String = "clear") {
+        if (preferredPackageHint != null) {
+            Log.i(TAG, "clear preferredPackageHint was=$preferredPackageHint reason=$reason")
+        }
+        preferredPackageHint = null
+        preferredPackageHintSetAtMs = 0L
+    }
+
+    fun setPreferredPackageHint(pkg: String?) {
+        val trimmed = pkg?.trim()?.takeIf { it.isNotEmpty() }
+        preferredPackageHint = trimmed
+        preferredPackageHintSetAtMs =
+            if (trimmed != null) SystemClock.elapsedRealtime() else 0L
+        if (trimmed != null) {
+            Log.i(TAG, "set preferredPackageHint=$trimmed")
+        }
+    }
+
+    private fun refreshPreferredPackageHint() {
+        val hint = preferredPackageHint
+        if (hint.isNullOrBlank()) return
+        if (
+            PreferredPackagePolicy.hintExpired(
+                SystemClock.elapsedRealtime(),
+                preferredPackageHintSetAtMs,
+            )
+        ) {
+            clearPreferredPackageHint("ttl_expired")
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -589,8 +623,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
         allowCache: Boolean = true,
         preferredPackage: String? = null,
     ): TreeResult {
+        refreshPreferredPackageHint()
         if (!preferredPackage.isNullOrBlank()) {
-            preferredPackageHint = preferredPackage.trim()
+            setPreferredPackageHint(preferredPackage.trim())
         }
         val hint = preferredPackageHint
         val gen = contentGeneration.get()
@@ -601,11 +636,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     hit != null &&
                     cachedGeneration == gen &&
                     SystemClock.elapsedRealtime() - cachedAtMs < CACHE_TTL_MS &&
-                    // Don't serve a cached tree from the wrong package
+                    // Prefer matching cache; never require empty when hint mismatches
                     (
                         hint.isNullOrBlank() ||
                             packageMatchesHint(hit.packageName, hint) ||
-                            hit.empty
+                            !hit.empty
                         )
                 ) {
                     return hit.copy(cached = true, buildMs = 0)
@@ -807,13 +842,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
             p.contains("com.google.android.apps.accessibility")
     }
 
-    private fun packageMatchesHint(pkg: String, hint: String?): Boolean {
-        val p = pkg.lowercase()
-        val h = (hint ?: "").lowercase().trim()
-        if (h.isEmpty() || p.isEmpty()) return false
-        return p == h || p.contains(h) || h.contains(p) ||
-            h.split('.').lastOrNull()?.let { it.isNotEmpty() && p.contains(it) } == true
-    }
+    private fun packageMatchesHint(pkg: String, hint: String?): Boolean =
+        PreferredPackagePolicy.packageMatchesHint(pkg, hint)
 
     private fun dumpUITreeCompact(deadlineMs: Long): TreeResult {
         // First pass: compact (interactive / text / desc). If too thin for the
@@ -875,8 +905,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
 
         // Prefer TYPE_APPLICATION window whose package == target (hint from
-        // open_app / get_ui_tree). Never treat Samsung Pay / SystemUI / our
-        // overlay as the dating FG tree (spay quick-access stole dumps on S21).
+        // open_app / get_ui_tree). Hint is a SCORE BOOST only — never refuse a
+        // live window (sticky hint + launcher → empty tree was the APK 532 bug).
         val selfPkg = packageName
         val hint = preferredPackageHint
         var activeEmitted = false
@@ -890,23 +920,26 @@ class MobilerunAccessibilityService : AccessibilityService() {
             val root: AccessibilityNodeInfo,
             val pkg: String,
             val score: Int,
+            val isIgnoredOverlay: Boolean = false,
         )
 
         fun scoreWindow(
             w: AccessibilityWindowInfo?,
             pkg: String,
             fromRootInActive: Boolean,
-        ): Int {
-            var s = 0
-            if (packageMatchesHint(pkg, hint)) s += 1000
-            if (fromRootInActive) s += 50
-            if (w?.isFocused == true) s += 20
-            if (w?.isActive == true) s += 10
-            if (w?.type == AccessibilityWindowInfo.TYPE_APPLICATION) s += 5
-            return s
-        }
+        ): Int = PreferredPackagePolicy.scoreWindow(
+            pkg = pkg,
+            hint = hint,
+            fromRootInActive = fromRootInActive,
+            focused = w?.isFocused == true,
+            active = w?.isActive == true,
+            isApplication = w == null || w.type == AccessibilityWindowInfo.TYPE_APPLICATION,
+        )
 
         val candidates = mutableListOf<WinCand>()
+        // Keep launcher/system root aside for empty-tree fallback only
+        var fallbackRoot: AccessibilityNodeInfo? = null
+        var fallbackPkg = ""
         val rawActive = try {
             rootInActiveWindow
         } catch (e: Exception) {
@@ -925,10 +958,22 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     ),
                 )
             } else {
-                Log.i(TAG, "skip rootInActiveWindow pkg=$pkg (overlay/system)")
-                try {
-                    rawActive.recycle()
-                } catch (_: Exception) {
+                // Spay/SystemUI: never preferred. Launcher: keep as last-resort
+                // fallback so home dumps are never windows=0.
+                val isSpayOrUi = pkg.lowercase().let {
+                    it.contains("spay") || it.contains("systemui") ||
+                        it.contains("mobilerun.selfhosted") || it == selfPkg
+                }
+                if (!isSpayOrUi && PreferredPackagePolicy.fallbackRoot(pkg, true)) {
+                    fallbackRoot = rawActive
+                    fallbackPkg = pkg
+                    Log.i(TAG, "keep rootInActiveWindow pkg=$pkg as empty-tree fallback")
+                } else {
+                    Log.i(TAG, "skip rootInActiveWindow pkg=$pkg (overlay/system)")
+                    try {
+                        rawActive.recycle()
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }
@@ -972,37 +1017,56 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 )
             }
         }
-        val best = candidates.maxByOrNull { it.score }
-        // If we have a hint, refuse non-matching best (empty target tree beats spay)
+        // Prefer hint via score; NEVER filter away a non-matching best.
+        val policyCands = candidates.map {
+            PreferredPackagePolicy.Cand(
+                pkg = it.pkg,
+                score = it.score,
+                fromRootInActive = it.window == null,
+                isIgnoredOverlay = it.isIgnoredOverlay,
+            )
+        }
+        val selectedPkg = PreferredPackagePolicy.selectPreferred(policyCands, hint)?.pkg
+        val best = candidates.firstOrNull { it.pkg == selectedPkg }
+            ?: candidates.maxByOrNull { it.score }
         if (best != null) {
-            val hintOk = hint.isNullOrBlank() || packageMatchesHint(best.pkg, hint)
-            if (hintOk || hint.isNullOrBlank()) {
-                preferredActiveRoot = best.root
-                preferredActivePkg = best.pkg
-                preferredActiveFromWindows = best.window != null
-                // Recycle non-chosen candidates
-                for (c in candidates) {
-                    if (c.root !== best.root) {
-                        try {
-                            c.root.recycle()
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-            } else {
-                Log.w(
+            preferredActiveRoot = best.root
+            preferredActivePkg = best.pkg
+            preferredActiveFromWindows = best.window != null
+            if (!hint.isNullOrBlank() && !packageMatchesHint(best.pkg, hint)) {
+                Log.i(
                     TAG,
-                    "no TYPE_APPLICATION window for hint=$hint " +
-                        "(best was ${best.pkg}) — emitting empty target",
+                    "hint=$hint unmatched; emitting live window pkg=${best.pkg} " +
+                        "(prefer-not-filter)",
                 )
-                for (c in candidates) {
+            }
+            for (c in candidates) {
+                if (c.root !== best.root) {
                     try {
                         c.root.recycle()
                     } catch (_: Exception) {
                     }
                 }
-                preferredActiveRoot = null
             }
+            // Drop unused fallback
+            if (fallbackRoot != null && fallbackRoot !== best.root) {
+                try {
+                    fallbackRoot.recycle()
+                } catch (_: Exception) {
+                }
+                fallbackRoot = null
+            }
+        } else if (fallbackRoot != null) {
+            // Launcher-only / chrome-only: still emit so tree is never empty
+            preferredActiveRoot = fallbackRoot
+            preferredActivePkg = fallbackPkg
+            preferredActiveFromWindows = false
+            Log.i(
+                TAG,
+                "no app window for hint=${hint ?: "-"}; " +
+                    "fallback rootInActiveWindow pkg=$fallbackPkg",
+            )
+            fallbackRoot = null
         }
         if (preferredActiveRoot != null && !pastDeadline()) {
             Log.i(
@@ -1358,66 +1422,151 @@ class MobilerunAccessibilityService : AccessibilityService() {
             .replace("\n", " ")
             .take(120)
 
+    /**
+     * Capture JPEG base64 via AccessibilityService.takeScreenshot (API 30+).
+     * Requires android:canTakeScreenshot="true" in accessibility_service_config.xml
+     * and a rebound service after install. Never hangs past the latch; returns
+     * null with logged error codes (incl. INTERVAL_TIME_SHORT / FLAG_SECURE black).
+     */
     fun takeScreenshotJpegBase64(maxWidth: Int = 720, quality: Int = 45): String? {
+        val detail = takeScreenshotJpegBase64Detailed(maxWidth, quality)
+        return detail["data"] as? String
+    }
+
+    fun takeScreenshotJpegBase64Detailed(
+        maxWidth: Int = 720,
+        quality: Int = 45,
+    ): Map<String, Any?> {
         // 1) AccessibilityService.takeScreenshot (API 30+) — short latch so the
         //    RPC never sits past the cloud timeout when Samsung stalls.
         if (Build.VERSION.SDK_INT >= 30) {
-            val latch = CountDownLatch(1)
-            val result = AtomicReference<String?>(null)
-            val err = AtomicReference<String?>(null)
-            try {
-                takeScreenshot(
-                    Display.DEFAULT_DISPLAY,
-                    screenshotExecutor,
-                    object : TakeScreenshotCallback {
-                        override fun onSuccess(screenshot: ScreenshotResult) {
-                            try {
-                                val hw = screenshot.hardwareBuffer
-                                val colorSpace = screenshot.colorSpace
-                                val bitmap = Bitmap.wrapHardwareBuffer(hw, colorSpace)
-                                hw.close()
-                                if (bitmap == null) {
-                                    err.set("wrapHardwareBuffer_null")
-                                    return
+            // Respect Android's ~1/sec rate limit before calling again
+            val since = SystemClock.elapsedRealtime() - lastScreenshotAtMs
+            if (lastScreenshotAtMs > 0L && since < 1100L) {
+                try {
+                    Thread.sleep(1100L - since)
+                } catch (_: InterruptedException) {
+                }
+            }
+            var attempt = 0
+            while (attempt < 2) {
+                attempt++
+                val latch = CountDownLatch(1)
+                val result = AtomicReference<String?>(null)
+                val err = AtomicReference<String?>(null)
+                val errCode = AtomicReference<Int?>(null)
+                try {
+                    // Callback must run on a live executor — never block the main
+                    // looper; screenshotExecutor is a dedicated daemon thread.
+                    takeScreenshot(
+                        Display.DEFAULT_DISPLAY,
+                        screenshotExecutor,
+                        object : TakeScreenshotCallback {
+                            override fun onSuccess(screenshot: ScreenshotResult) {
+                                try {
+                                    val hw = screenshot.hardwareBuffer
+                                    val colorSpace = screenshot.colorSpace
+                                    val bitmap = Bitmap.wrapHardwareBuffer(hw, colorSpace)
+                                    hw.close()
+                                    if (bitmap == null) {
+                                        err.set("wrapHardwareBuffer_null")
+                                        return
+                                    }
+                                    val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                    bitmap.recycle()
+                                    if (software == null) {
+                                        err.set("copy_software_null")
+                                        return
+                                    }
+                                    // FLAG_SECURE (Badoo chat etc.) → mostly black
+                                    if (isMostlyBlackBitmap(software)) {
+                                        err.set("secure_window_or_black")
+                                        software.recycle()
+                                        Log.w(
+                                            TAG,
+                                            "takeScreenshot black/FLAG_SECURE frame — skip",
+                                        )
+                                        return
+                                    }
+                                    val scaled = scaleBitmap(software, maxWidth)
+                                    if (scaled !== software) software.recycle()
+                                    val baos = ByteArrayOutputStream()
+                                    scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                                    scaled.recycle()
+                                    result.set(
+                                        Base64.encodeToString(
+                                            baos.toByteArray(),
+                                            Base64.NO_WRAP,
+                                        ),
+                                    )
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "screenshot encode failed", e)
+                                    err.set(e.message)
+                                } finally {
+                                    latch.countDown()
                                 }
-                                val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                                bitmap.recycle()
-                                if (software == null) {
-                                    err.set("copy_software_null")
-                                    return
-                                }
-                                val scaled = scaleBitmap(software, maxWidth)
-                                if (scaled !== software) software.recycle()
-                                val baos = ByteArrayOutputStream()
-                                scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
-                                scaled.recycle()
-                                result.set(
-                                    Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP),
+                            }
+
+                            override fun onFailure(errorCode: Int) {
+                                val name = screenshotErrorName(errorCode)
+                                Log.w(
+                                    TAG,
+                                    "takeScreenshot failed code=$errorCode ($name)",
                                 )
-                            } catch (e: Exception) {
-                                Log.e(TAG, "screenshot encode failed", e)
-                                err.set(e.message)
-                            } finally {
+                                errCode.set(errorCode)
+                                err.set("code_${errorCode}_$name")
                                 latch.countDown()
                             }
+                        },
+                    )
+                    lastScreenshotAtMs = SystemClock.elapsedRealtime()
+                    val ok = latch.await(3, TimeUnit.SECONDS)
+                    if (!ok) {
+                        Log.w(TAG, "takeScreenshot latch timeout 3s — returning error")
+                        err.set(err.get() ?: "latch_timeout_3s")
+                    }
+                    val b64 = result.get()
+                    if (!b64.isNullOrBlank()) {
+                        return mapOf(
+                            "ok" to true,
+                            "data" to b64,
+                            "source" to "a11y",
+                        )
+                    }
+                    val code = errCode.get()
+                    // ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT = 3 — wait + retry
+                    if (code == 3 && attempt < 2) {
+                        Log.i(TAG, "takeScreenshot rate-limited; sleep 1100ms + retry")
+                        try {
+                            Thread.sleep(1100L)
+                        } catch (_: InterruptedException) {
                         }
-
-                        override fun onFailure(errorCode: Int) {
-                            Log.w(TAG, "takeScreenshot failed code=$errorCode")
-                            err.set("code_$errorCode")
-                            latch.countDown()
-                        }
-                    },
-                )
-                val ok = latch.await(4, TimeUnit.SECONDS)
-                if (!ok) {
-                    Log.w(TAG, "takeScreenshot latch timeout 4s")
+                        continue
+                    }
+                    Log.w(TAG, "takeScreenshot empty err=${err.get()}")
+                    // Fall through to MediaProjection; keep error for response
+                    val a11yErr = err.get()
+                    val mp = ScreenCaptureService.lastJpegBase64()
+                    if (!mp.isNullOrBlank()) {
+                        Log.i(TAG, "screenshot fallback MediaProjection last frame")
+                        return mapOf(
+                            "ok" to true,
+                            "data" to mp,
+                            "source" to "media_projection",
+                            "a11y_error" to a11yErr,
+                        )
+                    }
+                    return mapOf(
+                        "ok" to false,
+                        "error" to (a11yErr ?: "screenshot unavailable"),
+                        "error_code" to code,
+                        "a11y" to true,
+                        "media_projection" to ScreenCaptureService.isStreaming(),
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "takeScreenshot threw", e)
+                    err.set(e.message)
                 }
-                val b64 = result.get()
-                if (!b64.isNullOrBlank()) return b64
-                Log.w(TAG, "takeScreenshot empty err=${err.get()}")
-            } catch (e: Exception) {
-                Log.e(TAG, "takeScreenshot threw", e)
             }
         } else {
             Log.w(TAG, "takeScreenshot requires API 30+")
@@ -1426,10 +1575,54 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val mp = ScreenCaptureService.lastJpegBase64()
         if (!mp.isNullOrBlank()) {
             Log.i(TAG, "screenshot fallback MediaProjection last frame")
-            return mp
+            return mapOf(
+                "ok" to true,
+                "data" to mp,
+                "source" to "media_projection",
+            )
         }
         Log.w(TAG, "screenshot unavailable (a11y+MediaProjection)")
-        return null
+        return mapOf(
+            "ok" to false,
+            "error" to "screenshot unavailable",
+            "a11y" to (Build.VERSION.SDK_INT >= 30),
+            "media_projection" to ScreenCaptureService.isStreaming(),
+        )
+    }
+
+    private fun screenshotErrorName(code: Int): String = when (code) {
+        1 -> "INTERNAL_ERROR"
+        2 -> "NO_ACCESSIBILITY_ACCESS"
+        3 -> "INTERVAL_TIME_SHORT"
+        4 -> "INVALID_DISPLAY"
+        5 -> "INVALID_WINDOW"
+        else -> "UNKNOWN"
+    }
+
+    /** FLAG_SECURE / black frames — sample grid; >92% near-black → treat as unusable. */
+    private fun isMostlyBlackBitmap(bmp: Bitmap): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        if (w < 2 || h < 2) return true
+        var dark = 0
+        var total = 0
+        val stepX = (w / 8).coerceAtLeast(1)
+        val stepY = (h / 8).coerceAtLeast(1)
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                val c = bmp.getPixel(x, y)
+                val r = (c shr 16) and 0xff
+                val g = (c shr 8) and 0xff
+                val b = c and 0xff
+                if (r < 18 && g < 18 && b < 18) dark++
+                total++
+                x += stepX
+            }
+            y += stepY
+        }
+        return total > 0 && dark * 100 / total >= 92
     }
 
     private fun scaleBitmap(src: Bitmap, maxWidth: Int): Bitmap {

@@ -59,8 +59,13 @@ def test_reply_loop_skips_recover_when_target_thread_open():
     )
     assert msg is not None
     assert msg.get("action") != "press_button" or msg.get("button") != "back"
-    assert msg.get("action") in ("type", "tap", "done")
-    assert "Yuly" in (msg.get("reason") or "") or msg.get("action") == "type"
+    # Dry-run verifies composer without typing (wait/done) or focuses compose (tap)
+    assert msg.get("action") in ("type", "tap", "done", "wait")
+    assert "Yuly" in (msg.get("reason") or "") or msg.get("action") in (
+        "type",
+        "wait",
+        "done",
+    )
 
 
 def test_tagged_like_not_dislikebtn_substring():

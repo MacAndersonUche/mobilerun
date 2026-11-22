@@ -210,4 +210,13 @@ def test_bumble_thread_still_opens_for_dry_run_compose():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act.get("action") == "type"
+    # Dry-run must verify composer without typing (no "typing…" to peer)
+    assert act and act.get("action") != "type"
+    assert (
+        act.get("dry_run_verified") is True
+        or "never typed" in (act.get("reason") or "").lower()
+    )
+    assert (
+        act.get("would_send_text") == "hi"
+        or "would send" in (act.get("reason") or "").lower()
+    )

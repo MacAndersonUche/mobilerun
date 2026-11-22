@@ -632,6 +632,16 @@ def apply_dry_run_send_guard(
     elif _action_looks_like_paid(action, kind):
         blocked = True
         would = "paid tap"
+    elif k in ("type", "input_text", "set_text"):
+        # Never type into a real thread in dry_run (shows "typing…" to peer).
+        # Empty clear-only was previously used; now we refuse all composer type.
+        text = str((action or {}).get("text") or "")
+        # Allow contact-search typing only when explicitly marked
+        if (action or {}).get("search") or (action or {}).get("type_contact"):
+            return kind, reason, action
+        if text.strip() or bool((action or {}).get("clear")):
+            blocked = True
+            would = f"type '{text[:40]}'" if text.strip() else "type/clear composer"
     elif k == "swipe" and _is_chat_list_scroll_swipe(action, kind):
         # Non-mutating chat-list scrolls are allowed in dry_run; deck swipes are not.
         return kind, reason, action
@@ -3122,7 +3132,32 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             use_vision = bool(image_b64) and (
                 sparse_tree or force_vision or np_streak >= 2 or wrong_fg
             )
-            if use_vision:
+            if sparse_tree or force_vision or wrong_fg:
+                if image_b64:
+                    state["vision_fallback"] = True
+                    state["tree_sparse"] = bool(sparse_tree)
+                    logger.info(
+                        "vision fallback job=%s nodes=%s empty=%s fg=%s",
+                        job.get("job_id"),
+                        tree_info.get("nodes"),
+                        tree_info.get("empty"),
+                        fg_pkg or "?",
+                    )
+                else:
+                    # Sparse tree MUST attempt vision — log failure so Mac sees
+                    # it (APK 532/534: 52 screenshot timeouts, 0 vision lines).
+                    state["force_vision_once"] = True
+                    state["tree_sparse"] = bool(sparse_tree)
+                    logger.warning(
+                        "vision required but screenshot unavailable "
+                        "job=%s nodes=%s empty=%s fg=%s sparse=%s",
+                        job.get("job_id"),
+                        tree_info.get("nodes"),
+                        tree_info.get("empty"),
+                        fg_pkg or "?",
+                        sparse_tree,
+                    )
+            elif use_vision:
                 state["vision_fallback"] = True
                 state["tree_sparse"] = bool(sparse_tree)
                 logger.info(
