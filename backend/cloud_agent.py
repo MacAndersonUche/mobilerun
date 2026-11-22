@@ -1947,6 +1947,42 @@ def _dry_run_done_is_verified(
     return bool(action.get("dry_run_verified"))
 
 
+# Every planner-emitted action kind the step runner can execute (keep in sync
+# with execute_action branches). Internal markers like _vision_retry excluded.
+RUNNER_EXECUTABLE_ACTIONS = frozenset(
+    {
+        "tap",
+        "swipe",
+        "type",
+        "type_text",
+        "input_text",
+        "ime_send",
+        "ime_action",
+        "ensure_ime",
+        "switch_ime",
+        "restore_ime",
+        "back",
+        "home",
+        "press_button",
+        "wait",
+        "noop",
+        "open_app",
+        "start_app",
+        "done",
+        "fail",
+    }
+)
+
+
+def runner_can_execute(action_or_kind: Any) -> bool:
+    """True if execute_action knows this planner action kind."""
+    if isinstance(action_or_kind, dict):
+        kind = str(action_or_kind.get("action") or "").lower()
+    else:
+        kind = str(action_or_kind or "").lower()
+    return kind in RUNNER_EXECUTABLE_ACTIONS
+
+
 def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     try:
         from device_rpc import call_device
@@ -2176,6 +2212,19 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     if kind == "home":
         call_device(device_id, "press_button", {"button": "home"})
         return "Went home"
+    if kind == "press_button":
+        # Planners emit press_button{button}; device RPC is the same command.
+        button = str(action.get("button") or "").lower().strip()
+        if button not in ("back", "home", "enter"):
+            raise RuntimeError(
+                f"press_button only allows back/home/enter, got {button!r}"
+            )
+        call_device(device_id, "press_button", {"button": button}, timeout_s=10)
+        if button == "back":
+            return "Went back (GLOBAL_ACTION_BACK)"
+        if button == "home":
+            return "Went home"
+        return "Pressed enter"
     if kind in ("wait", "noop"):
         delay = float(action.get("seconds") or action.get("delay_s") or 0.05)
         if delay > 0:

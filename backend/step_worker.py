@@ -219,8 +219,23 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     swipe_cap = int(caps.get("swipe_cap", 50))
     reply_cap = int(caps.get("reply_cap", 50))
 
+    scope = str(
+        job.get("contact_scope") or state.get("contact_scope") or "both"
+    ).lower()
     total_msgs = openers + replies
-    if total_msgs >= global_max or (openers >= opener_target and replies >= reply_cap):
+    if total_msgs >= global_max:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
+    if scope == "new" and openers >= opener_target and swipes >= swipe_cap:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
+    if scope == "existing" and replies >= reply_cap:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
+    if scope == "both" and openers >= opener_target and replies >= reply_cap:
         job["status"] = "completed"
         job["completed_at"] = int(time.time())
         return job
@@ -228,9 +243,26 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     humanizer = _humanizer_for_job(job)
 
     # Prefer openers until target, then replies — always sequential (one per tick)
-    # Randomise action choice slightly when both swipe and reply are eligible
+    # contact_scope: new → openers/likes only; existing → replies only; both → mix
     dry = bool(job.get("dry_run", False))
-    if openers < opener_target:
+    if scope == "existing":
+        action = "reply"
+        state["replies_sent"] = replies + 1
+        gap = humanizer.sample_message_gap_seconds()
+    elif scope == "new":
+        if openers < opener_target:
+            action = "opener"
+            state["openers_sent"] = openers + 1
+            gap = humanizer.sample_message_gap_seconds()
+        elif swipes < swipe_cap:
+            action = "swipe"
+            state["swipes_done"] = swipes + 1
+            gap = humanizer.sample_swipe_step_gap_seconds()
+        else:
+            job["status"] = "completed"
+            job["completed_at"] = int(time.time())
+            return job
+    elif openers < opener_target:
         action = "opener"
         state["openers_sent"] = openers + 1
         gap = humanizer.sample_message_gap_seconds()

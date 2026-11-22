@@ -3408,6 +3408,8 @@ class ModeStartBody(BaseModel):
     dry_run: bool = True
     stand_in_package: Optional[str] = None
     max_steps: Optional[int] = None
+    # new = openers/first contact only; existing = replies only; both = default mix
+    contact_scope: Optional[str] = "both"
 
 
 def _kick_job(job_id: str) -> None:
@@ -3470,13 +3472,18 @@ async def start_dating_mode(
     dating_mode_state["running"] = False
     dating_mode_state.pop("job_id", None)
 
+    contact_scope = "both"
     if body:
         device_id = body.device_id or device_id
         dry_run = body.dry_run if body.dry_run is not None else dry_run
         stand_in_package = body.stand_in_package or stand_in_package
+        raw_scope = str(body.contact_scope or "both").lower().strip()
+        if raw_scope in ("new", "existing", "both"):
+            contact_scope = raw_scope
 
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
+    dating_mode_state["contact_scope"] = contact_scope
 
     job_id = f"dating_{secrets.token_hex(8)}"
     dating_mode_state["job_id"] = job_id
@@ -3487,6 +3494,11 @@ async def start_dating_mode(
         "swipe_cap": 2 if dry_run else 50,
         "reply_cap": 2 if dry_run else 50,
     }
+    if contact_scope == "new":
+        caps["reply_cap"] = 0
+    elif contact_scope == "existing":
+        caps["opener_target"] = 0
+        caps["swipe_cap"] = 0
     stand_in = stand_in_package or "ai.mobilerun.mockdating"
     job = {
         "job_id": job_id,
@@ -3494,6 +3506,7 @@ async def start_dating_mode(
         "status": "running",
         "device_id": device_id,
         "dry_run": dry_run,
+        "contact_scope": contact_scope,
         "stand_in_package": stand_in,
         "created_at": int(datetime.now().timestamp()),
         "next_run_at": int(datetime.now().timestamp()),
@@ -3508,6 +3521,7 @@ async def start_dating_mode(
             "steps_detail": [],
             "stand_in_package": stand_in,
             "current_app": stand_in,
+            "contact_scope": contact_scope,
         },
         "ttl": int(datetime.now().timestamp()) + 7 * 86400,
     }

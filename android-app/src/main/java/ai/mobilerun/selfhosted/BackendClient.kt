@@ -1226,6 +1226,9 @@ class BackendClient(private val context: Context) {
         val params = message["params"] as? Map<String, Any?>
         val t0 = SystemClock.elapsedRealtime()
 
+        // Hide floating bubble while steps run so it never eats automation taps
+        OverlayBubbleService.setJobBusy(context.applicationContext, true)
+
         // CRITICAL: ACK tap/swipe/press on the OkHttp reader thread BEFORE any
         // executor queue. Fresh heartbeats + timed-out taps meant hung get_ui_tree
         // starved the single command pool while Dynamo still looked online.
@@ -1237,6 +1240,7 @@ class BackendClient(private val context: Context) {
                 val a11y = MobilerunAccessibilityService.instance
                 if (a11y == null) {
                     sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    scheduleBubbleIdle()
                     return
                 }
                 sendCommandResponse(
@@ -1257,6 +1261,8 @@ class BackendClient(private val context: Context) {
                         sendAgentEvent(null, null, "tap", "tap($x,$y)")
                     } catch (e: Exception) {
                         Log.w(tag, "tap gesture after ACK failed: ${e.message}")
+                    } finally {
+                        scheduleBubbleIdle()
                     }
                 }
                 return
@@ -1270,6 +1276,7 @@ class BackendClient(private val context: Context) {
                 val a11y = MobilerunAccessibilityService.instance
                 if (a11y == null) {
                     sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    scheduleBubbleIdle()
                     return
                 }
                 sendCommandResponse(
@@ -1287,6 +1294,8 @@ class BackendClient(private val context: Context) {
                         sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
                     } catch (e: Exception) {
                         Log.w(tag, "swipe gesture after ACK failed: ${e.message}")
+                    } finally {
+                        scheduleBubbleIdle()
                     }
                 }
                 return
@@ -1296,12 +1305,14 @@ class BackendClient(private val context: Context) {
                 val a11y = MobilerunAccessibilityService.instance
                 if (a11y == null) {
                     sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    scheduleBubbleIdle()
                     return
                 }
                 val ok = when (button) {
                     "back" -> a11y.pressBack()
                     "home" -> a11y.pressHome()
                     "recents" -> a11y.pressRecents()
+                    "enter" -> a11y.pressEnter()
                     else -> false
                 }
                 sendCommandResponse(
@@ -1312,6 +1323,7 @@ class BackendClient(private val context: Context) {
                     ),
                     null,
                 )
+                scheduleBubbleIdle()
                 return
             }
         }
@@ -1690,7 +1702,17 @@ class BackendClient(private val context: Context) {
                     watchdog.cancel()
                     sendCommandResponse(requestId, null, e.message ?: "Unknown error")
                 }
+            } finally {
+                scheduleBubbleIdle()
             }
+        }
+    }
+
+    /** Re-show Connected bubble shortly after the last step (idle). */
+    private fun scheduleBubbleIdle() {
+        scope.launch {
+            delay(600)
+            OverlayBubbleService.setJobBusy(context.applicationContext, false)
         }
     }
 

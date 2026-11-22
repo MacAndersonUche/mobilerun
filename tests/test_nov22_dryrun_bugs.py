@@ -51,6 +51,36 @@ def test_bumble_photo_browser_backs_out():
     assert "SuperSwipe" in (act.get("reason") or "")
 
 
+def test_bumble_photo_grid_fails_not_tile_loop():
+    """People grid tiles open PhotoBrowser — never tap tiles; fail cleanly."""
+    from backend.dm_heuristics import bumble_on_photo_grid
+
+    tree = """
+    <hierarchy>
+      <w p="com.bumble.app" a="1">
+        <n i="com.bumble.app:id/encountersGridProfile_list" xy="540,1000" b="[0,200][1080,2000]" />
+        <n i="com.bumble.app:id/encountersGridItem_photo" xy="547,1172" b="[40,400][520,1400]" c="1" />
+      </w>
+    </hierarchy>
+    """
+    assert bumble_on_photo_grid(tree)
+    assert not _deck_visible("bumble", tree)
+    act = plan_bulk_swipe(
+        "bumble like 5 profiles",
+        tree,
+        ["Opened Bumble"],
+        state={},
+        package="com.bumble.app",
+        dry_run=True,
+    )
+    assert act is not None
+    assert act.get("action") == "fail"
+    assert "grid" in (act.get("reason") or "").lower()
+    assert "PhotoBrowser" in (act.get("reason") or "") or "SuperSwipe" in (
+        act.get("reason") or ""
+    )
+
+
 def test_hily_top_picks_grid_not_deck():
     tree = _load("hily_top_picks_grid.xml")
     assert hily_on_top_picks_grid(tree)

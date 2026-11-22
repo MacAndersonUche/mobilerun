@@ -237,6 +237,26 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     fun pressRecents(): Boolean = performGlobalAction(GLOBAL_ACTION_RECENTS)
 
+    /** IME Enter / editor action on the focused input (API 30+). */
+    fun pressEnter(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val focused =
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        if (focused != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val ok = focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER)
+            focused.recycle()
+            if (ok) return true
+        }
+        focused?.recycle()
+        // Fallback: KEYCODE_ENTER via shell (best-effort)
+        return try {
+            Runtime.getRuntime().exec(arrayOf("input", "keyevent", "66")).waitFor() == 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun activePackageName(): String? {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return activePackageNameOnMain()

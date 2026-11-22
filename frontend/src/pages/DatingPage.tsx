@@ -144,6 +144,9 @@ export default function DatingPage() {
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
+  const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
+    'both'
+  );
   const [deviceId, setDeviceId] = useState('');
   const [devices, setDevices] = useState<
     Array<{ device_id: string; name?: string; connected?: boolean }>
@@ -324,6 +327,7 @@ export default function DatingPage() {
           ? {
               device_id: deviceId || undefined,
               dry_run: dryRun,
+              contact_scope: contactScope,
               stand_in_package: 'ai.mobilerun.mockdating',
             }
           : {};
@@ -597,6 +601,22 @@ export default function DatingPage() {
             data-testid="dating-dry-run"
           />
           Dry-run (no real likes/messages)
+        </label>
+        <label className="flex items-center gap-2 text-sm text-mute">
+          Contacts
+          <select
+            className="mr-input text-sm"
+            value={contactScope}
+            onChange={(e) =>
+              setContactScope(e.target.value as 'new' | 'existing' | 'both')
+            }
+            data-testid="dating-contact-scope"
+            aria-label="Contact scope"
+          >
+            <option value="new">New (openers / first message)</option>
+            <option value="existing">Existing chats</option>
+            <option value="both">Both</option>
+          </select>
         </label>
         {devices.length > 0 && (
           <select

@@ -68,6 +68,7 @@ try:
         keyboard_likely_up,
         known_root_screen,
         tab_bar_verified,
+        tagged_chat_action,
         tagged_deck_card_name,
         tagged_like_action,
         tagged_location_overlay_continue,
@@ -139,6 +140,7 @@ except ImportError:
         keyboard_likely_up,
         known_root_screen,
         tab_bar_verified,
+        tagged_chat_action,
         tagged_deck_card_name,
         tagged_like_action,
         tagged_location_overlay_continue,
@@ -282,6 +284,50 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     if "swipe 50" in low or "auto-swipe" in low:
         return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
+    # New-contact messaging: message "hello miss" to 5 new profiles on Hinge
+    qm_new_quoted = re.search(
+        r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
+        r"to\s+(\d+)\s+new\s+(?:profiles?|matches|contacts|people)",
+        text,
+        re.I,
+    )
+    if qm_new_quoted:
+        return {
+            "kind": "message_new",
+            "count": int(qm_new_quoted.group(2)),
+            "message": qm_new_quoted.group(1).strip(),
+            "app": app,
+            "contact_scope": "new",
+        }
+    qm_new_n = re.search(
+        r"(?:message|auto[- ]?message)\s+(\d+)\s+new\s+"
+        r"(?:profiles?|matches|contacts|people)",
+        low,
+    )
+    if qm_new_n:
+        n_new = int(qm_new_n.group(1))
+        qm_body = re.search(r"[\"']([^\"']+)[\"']", text)
+        msg_new = qm_body.group(1).strip() if qm_body else None
+        if not msg_new:
+            return {
+                "kind": "message_new",
+                "count": n_new,
+                "message": None,
+                "app": app,
+                "contact_scope": "new",
+                "error": (
+                    "No message text in instruction — provide quoted text "
+                    "for new-contact messaging"
+                ),
+            }
+        return {
+            "kind": "message_new",
+            "count": n_new,
+            "message": msg_new,
+            "app": app,
+            "contact_scope": "new",
+        }
+
     # Quoted message BEFORE "to N": reply "hey" to 5 existing chats on Hily
     qm_first = re.search(
         r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
@@ -295,6 +341,7 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
             "count": int(qm_first.group(2)),
             "message": qm_first.group(1).strip(),
             "app": app,
+            "contact_scope": "existing",
         }
 
     m = re.search(
@@ -1029,37 +1076,26 @@ def plan_bulk_swipe(
                 },
                 "bulk_dry_run_hily_grid",
             )
-    # People photo-grid is not a card deck — open first tile before settle/like
+    # People photo-grid ≠ swipe deck. Opening a tile lands in PhotoBrowser
+    # (Send SuperSwipe only — paid). Never tile→viewer→back loop; require the
+    # real Discover/People card stack (pass/like), else fail cleanly.
     if app == "bumble" and bumble_on_photo_grid(ui_tree):
-        tile = bumble_first_grid_tile_center(ui_tree)
-        if tile and "grid tile" not in hist and "open grid tile" not in hist:
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": tile[0],
-                    "y": tile[1],
-                    "reason": f"Open first People grid tile → card ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": bool(dry_run),
-                },
-                "bulk_open_grid_tile",
-            )
-        if dry_run and ("grid tile" in hist or "open grid tile" in hist):
-            return _fp(
-                {
-                    "action": "fail",
-                    "reason": (
-                        f"dry_run — People photo grid still visible after tile tap; "
-                        f"card not verified ({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": True,
-                    "dry_run_verified": False,
-                },
-                "bulk_dry_run_grid_not_card",
-            )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Bumble People photo grid is not a swipe deck — "
+                    f"open the Discover/People card stack (pass/like), "
+                    f"do not tap grid tiles (PhotoBrowser SuperSwipe is paid) "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "dry_run_verified": False,
+            },
+            "bulk_bumble_grid_not_deck",
+        )
     if not deck_visible:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
@@ -2058,6 +2094,293 @@ def plan_secure_folder(
     return None
 
 
+def plan_bulk_message_new(
+    instruction: str,
+    ui_tree: str,
+    history: List[str],
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    package: str = "",
+    dry_run: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Message NEW contacts (not existing chats).
+
+    Hinge: heart → like-sheet comment → Send Like / Send Like anyway (never Rose).
+    Tagged: chatBtn on Match card.
+    Hily: first free message; skip Message Before Match / paid.
+    Other swipe apps: like-only (delegate to swipe planner).
+    """
+    goal = parse_bulk_goal(instruction)
+    if not goal or goal.get("kind") != "message_new":
+        return None
+    if goal.get("error") or not (goal.get("message") or "").strip():
+        return _fp(
+            {
+                "action": "fail",
+                "reason": str(
+                    goal.get("error") or "No message text for new-contact messaging"
+                ),
+                "planner": "bulk_message_new_heuristic",
+                "llm_provider": None,
+            },
+            "bulk_message_new_missing_text",
+        )
+    app = (goal.get("app") or "").lower()
+    planner = "bulk_message_new_heuristic"
+    message = str(goal["message"]).strip()
+    target = int(goal.get("count") or 1)
+    st = state if isinstance(state, dict) else {}
+    bulk = st.setdefault(
+        "bulk_message_new",
+        {"done": 0, "typed": False, "awaiting_send": False},
+    )
+    done = int(bulk.get("done") or 0)
+    hist = " ".join(history[-16:]).lower()
+
+    # Swipe-only apps: new-contact "message" = like only
+    like_only = {
+        "bumble",
+        "yubo",
+        "badoo",
+        "blk",
+        "taimi",
+        "tinder",
+        "facebook",
+    }
+    if app in like_only:
+        # Rewrite as swipe so dry-run/like path runs
+        fake = f"{app} like {target} profiles"
+        return plan_bulk_swipe(
+            fake,
+            ui_tree,
+            history,
+            state=state,
+            package=package,
+            dry_run=dry_run,
+        )
+
+    opened = _ensure_app_open(app, package, history, planner)
+    if opened:
+        return opened
+
+    if app == "hily" and hily_on_mbm(ui_tree):
+        return hily_close_mbm(ui_tree, planner=planner) or _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Close Hily MBM — skip paid new contact ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_hily_mbm_skip_new",
+        )
+
+    recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
+    if recover:
+        return recover
+
+    if done >= target:
+        return _fp(
+            {
+                "action": "done",
+                "reason": (
+                    f"New-contact messaging complete: {done}/{target} ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+            },
+            "bulk_message_new_done",
+        )
+
+    if app == "tagged":
+        loc = tagged_location_overlay_continue(ui_tree, planner=planner)
+        if loc:
+            return loc
+        if tagged_on_deck(ui_tree):
+            if dry_run:
+                bulk["done"] = target
+                st["bulk_message_new"] = bulk
+                name = tagged_deck_card_name(ui_tree) or "match card"
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] would chatBtn → message {target} new "
+                            f"contacts (verified on {name}) — no send ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                    },
+                    "bulk_dry_run_tagged_new",
+                )
+            chat = tagged_chat_action(ui_tree, planner=planner)
+            if chat:
+                return chat
+        return _fp(
+            {
+                "action": "fail",
+                "reason": f"Tagged Match card / chatBtn not found ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_tagged_new_missing",
+        )
+
+    if app == "hinge":
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
+        popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if hinge_on_like_sheet(ui_tree):
+            compose = hinge_find_compose(ui_tree)
+            if compose and not bulk.get("typed"):
+                if "tap" in hist and "comment" in hist:
+                    bulk["typed"] = True
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "type",
+                            "text": message,
+                            "reason": (
+                                f"Type like-sheet comment for new contact "
+                                f"({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": bool(dry_run),
+                        },
+                        "bulk_hinge_new_type",
+                    )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": compose[0],
+                        "y": compose[1],
+                        "reason": f"Focus Add a comment field ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_hinge_new_focus_comment",
+                )
+            if dry_run:
+                bulk["done"] = target
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] would Send Like with comment to "
+                            f"{target} new profiles — never Rose ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                    },
+                    "bulk_dry_run_hinge_new",
+                )
+            send = hinge_like_sheet_action(ui_tree, planner=planner)
+            if send:
+                bulk["done"] = done + 1
+                bulk["typed"] = False
+                st["bulk_message_new"] = bulk
+                return send
+        if not hinge_on_discover(ui_tree):
+            act = hinge_open_discover_tab(planner=planner)
+            act["dry_run"] = bool(dry_run)
+            return act
+        if dry_run and hinge_on_discover(ui_tree):
+            card = hinge_deck_card_name(ui_tree) or "Discover"
+            bulk["done"] = target
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] would heart → like sheet → Send Like to "
+                        f"{target} new profiles (verified on {card}) "
+                        f"— never Rose ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "needs_vision": True,
+                },
+                "bulk_dry_run_hinge_new_discover",
+            )
+        # Live: heart is vision-only on Discover — mark for vision path
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 0.5,
+                "reason": (
+                    f"Hinge Discover heart requires vision tap "
+                    f"(x≈937) then like sheet ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "vision_hint": "hinge_heart",
+            },
+            "bulk_hinge_new_need_vision",
+        )
+
+    if app == "hily":
+        if hily_on_top_picks_grid(ui_tree):
+            tile = hily_first_grid_tile_center(ui_tree)
+            if tile and "grid tile" not in hist:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": tile[0],
+                        "y": tile[1],
+                        "reason": f"Open Hily grid tile for new message ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_hily_new_grid_tile",
+                )
+        if dry_run:
+            bulk["done"] = target
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] would first-message {target} new Hily "
+                        f"contacts when free — skip MBM/paid ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                },
+                "bulk_dry_run_hily_new",
+            )
+        like = hily_like_action(ui_tree, planner=planner)
+        if like:
+            return like
+
+    return _fp(
+        {
+            "action": "fail",
+            "reason": (
+                f"New-contact messaging not supported / screen unknown "
+                f"for {app or 'app'} ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bulk_message_new_unsupported",
+    )
+
+
 def plan_bulk_bench(
     instruction: str,
     ui_tree: str,
@@ -2094,6 +2417,15 @@ def plan_bulk_bench(
                 "bulk_swipe_skip",
             )
         return plan_bulk_swipe(
+            instruction,
+            ui_tree,
+            history,
+            state=state,
+            package=package,
+            dry_run=dry_run,
+        )
+    if goal["kind"] == "message_new":
+        return plan_bulk_message_new(
             instruction,
             ui_tree,
             history,

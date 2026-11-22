@@ -23,14 +23,23 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Small TYPE_APPLICATION_OVERLAY bubble shown only while the executor is Connected.
- * Tap → bring [MainActivity] to the front.
+ * Small TYPE_APPLICATION_OVERLAY dot while Connected.
+ * Docked left mid-screen (~96px), semi-transparent, draggable.
+ * Hidden / FLAG_NOT_TOUCHABLE while a job executes steps so it never
+ * intercepts automation taps.
  */
 class OverlayBubbleService : Service() {
     companion object {
         const val ACTION_START = "ai.mobilerun.selfhosted.OVERLAY_START"
         const val ACTION_STOP = "ai.mobilerun.selfhosted.OVERLAY_STOP"
+        const val ACTION_JOB_BUSY = "ai.mobilerun.selfhosted.OVERLAY_JOB_BUSY"
+        const val ACTION_JOB_IDLE = "ai.mobilerun.selfhosted.OVERLAY_JOB_IDLE"
         private const val TAG = "OverlayBubble"
+        private const val SIZE_PX = 96
+        private const val COLOR_ARGB = 0x663B82F6 // semi-transparent blue
+
+        @Volatile
+        private var jobBusy: Boolean = false
 
         fun isConnectedStatus(status: String): Boolean =
             status.contains("connected", ignoreCase = true)
@@ -70,6 +79,19 @@ class OverlayBubbleService : Service() {
                 }
             }
         }
+
+        /** Hide / make non-touchable while automation steps run. */
+        fun setJobBusy(context: Context, busy: Boolean) {
+            jobBusy = busy
+            val action = if (busy) ACTION_JOB_BUSY else ACTION_JOB_IDLE
+            try {
+                context.startService(
+                    Intent(context, OverlayBubbleService::class.java).setAction(action),
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "setJobBusy($busy) failed: ${e.message}")
+            }
+        }
     }
 
     private var windowManager: WindowManager? = null
@@ -87,6 +109,20 @@ class OverlayBubbleService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_JOB_BUSY -> {
+                jobBusy = true
+                applyBusyState()
+                return START_STICKY
+            }
+            ACTION_JOB_IDLE -> {
+                jobBusy = false
+                val status = MobilerunApp.client()?.statusFlow?.value.orEmpty()
+                if (isConnectedStatus(status) && Settings.canDrawOverlays(this)) {
+                    showBubble()
+                    applyBusyState()
+                }
+                return START_STICKY
+            }
             else -> {
                 if (!Settings.canDrawOverlays(this)) {
                     stopSelf()
@@ -99,6 +135,7 @@ class OverlayBubbleService : Service() {
                     return START_NOT_STICKY
                 }
                 showBubble()
+                applyBusyState()
                 observeStatus()
             }
         }
@@ -122,6 +159,7 @@ class OverlayBubbleService : Service() {
                     stopSelf()
                 } else if (Settings.canDrawOverlays(this@OverlayBubbleService)) {
                     showBubble()
+                    applyBusyState()
                 } else {
                     removeBubble()
                     stopSelf()
@@ -131,21 +169,20 @@ class OverlayBubbleService : Service() {
     }
 
     private fun showBubble() {
-        if (bubbleView != null) return
+        if (bubbleView != null) {
+            applyBusyState()
+            return
+        }
         if (!Settings.canDrawOverlays(this)) return
 
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         windowManager = wm
 
-        val sizePx = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            56f,
-            resources.displayMetrics,
-        ).toInt()
+        val sizePx = SIZE_PX
 
         val circle = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(0xFF3B82F6.toInt())
+            setColor(COLOR_ARGB)
         }
 
         val view = FrameLayout(this).apply {
@@ -155,11 +192,12 @@ class OverlayBubbleService : Service() {
             isFocusable = true
             elevation = TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP,
-                6f,
+                4f,
                 resources.displayMetrics,
             )
         }
 
+        val midY = (resources.displayMetrics.heightPixels / 2) - (sizePx / 2)
         val params = WindowManager.LayoutParams(
             sizePx,
             sizePx,
@@ -174,17 +212,13 @@ class OverlayBubbleService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
+            gravity = Gravity.TOP or Gravity.START
             x = TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP,
-                12f,
+                4f,
                 resources.displayMetrics,
             ).toInt()
-            y = TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP,
-                120f,
-                resources.displayMetrics,
-            ).toInt()
+            y = midY.coerceAtLeast(0)
         }
 
         var downX = 0f
@@ -206,8 +240,8 @@ class OverlayBubbleService : Service() {
                     val dx = (event.rawX - downX).toInt()
                     val dy = (event.rawY - downY).toInt()
                     if (kotlin.math.abs(dx) > 8 || kotlin.math.abs(dy) > 8) moved = true
-                    // gravity END → x increases toward the left
-                    params.x = (startX - dx).coerceAtLeast(0)
+                    // gravity START → x increases toward the right
+                    params.x = (startX + dx).coerceAtLeast(0)
                     params.y = (startY + dy).coerceAtLeast(0)
                     try {
                         wm.updateViewLayout(view, params)
@@ -227,11 +261,32 @@ class OverlayBubbleService : Service() {
             wm.addView(view, params)
             bubbleView = view
             layoutParams = params
-            Log.i(TAG, "overlay bubble shown")
+            Log.i(TAG, "overlay bubble shown (left mid, ${sizePx}px)")
+            applyBusyState()
         } catch (e: Exception) {
             Log.w(TAG, "addView failed: ${e.message}")
             bubbleView = null
             layoutParams = null
+        }
+    }
+
+    private fun applyBusyState() {
+        val view = bubbleView ?: return
+        val params = layoutParams ?: return
+        val wm = windowManager ?: return
+        if (jobBusy) {
+            // Invisible + not touchable — never intercept automation taps
+            view.visibility = View.GONE
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            Log.i(TAG, "overlay bubble hidden (job busy)")
+        } else {
+            view.visibility = View.VISIBLE
+            params.flags = params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            Log.i(TAG, "overlay bubble visible (idle)")
+        }
+        try {
+            wm.updateViewLayout(view, params)
+        } catch (_: Exception) {
         }
     }
 

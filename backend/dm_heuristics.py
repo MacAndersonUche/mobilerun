@@ -3583,6 +3583,31 @@ def tagged_like_action(
     )
 
 
+def tagged_chat_action(
+    tree: str, planner: str = "tagged_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Match-card chatBtn — start free chat with a new contact (not Premium)."""
+    if tagged_is_premium(tree):
+        return None
+    c = _tree_id_center(tree, "chatBtn", "id/chatBtn")
+    if not c:
+        if not tagged_on_deck(tree):
+            return None
+        xy = DM_APP_PROFILES["tagged"].get("chat_xy") or (540, 1911)
+        c = (int(xy[0]), int(xy[1]))
+    return _fp(
+        {
+            "action": "tap",
+            "x": c[0],
+            "y": c[1],
+            "reason": f"Tagged chatBtn (new contact) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "tagged_chat",
+    )
+
+
 def tagged_deck_card_name(tree: str) -> Optional[str]:
     for n in _parse_compact_nodes(tree):
         nid = str(n.get("id") or "").lower()

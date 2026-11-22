@@ -106,7 +106,8 @@ def test_real_card_deck_still_detected():
     assert deck_card_name("bumble", deck) == "Alex"
 
 
-def test_photo_grid_is_not_deck_and_opens_tile():
+def test_photo_grid_is_not_deck_fails_cleanly():
+    """Grid tiles open PhotoBrowser (SuperSwipe) — never tap; fail cleanly."""
     grid = _load("bumble_people_photo_grid.xml")
     assert bumble_on_photo_grid(grid)
     assert not bumble_on_people_deck(grid)
@@ -121,9 +122,9 @@ def test_photo_grid_is_not_deck_and_opens_tile():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act["action"] == "tap"
-    assert act.get("fastpath_step") == "bulk_open_grid_tile"
-    assert (act["x"], act["y"]) == (270, 600)
+    assert act and act["action"] == "fail"
+    assert act.get("fastpath_step") == "bulk_bumble_grid_not_deck"
+    assert "grid" in (act.get("reason") or "").lower()
 
 
 # --- Connections / Older chats ---
