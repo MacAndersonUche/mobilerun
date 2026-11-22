@@ -13,9 +13,11 @@ android {
         minSdk = 26
         targetSdk = 35
         
-        // Version from GitHub Actions (CI overrides with run_number); local default for assembleRelease
-        versionCode = (project.findProperty("VERSION_CODE") as String?)?.toIntOrNull() ?: 400
-        versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.400"
+        // Version from GitHub Actions (CI overrides with run_number ≥500).
+        // Default must stay > phone's installed 489 so accidental local/CI
+        // builds without -PVERSION_CODE still upgrade in place.
+        versionCode = (project.findProperty("VERSION_CODE") as String?)?.toIntOrNull() ?: 500
+        versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.500"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

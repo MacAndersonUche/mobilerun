@@ -33,14 +33,38 @@ jobs:
             VC=386
             VN=1.0.386
           else
-            VC="${{ github.run_number }}"
-            VN="1.0.${{ github.run_number }}"
+            # Phone has 489 installed — never ship ≤489. Floor at 500.
+            RN="${{ github.run_number }}"
+            if [ "$RN" -lt 500 ]; then VC=500; else VC="$RN"; fi
+            VN="1.0.$VC"
           fi
           echo "Building VERSION_CODE=$VC VERSION_NAME=$VN"
+          echo "VC=$VC" >> "$GITHUB_ENV"
           ./gradlew assembleRelease \
             --no-daemon \
             -PVERSION_CODE="$VC" \
             -PVERSION_NAME="$VN"
+
+      - name: Verify package id, versionCode, signing fingerprint
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq aapt >/dev/null
+          APK=$(ls android-app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK=$APK"
+          # Phone has 489 — min 490. Non-IME builds also floor at 500 in the build step.
+          MIN_VC=490
+          if [ "${{ github.ref }}" = "refs/heads/cursor/ime-samsung-subtype-df3e" ]; then
+            MIN_VC=386
+          fi
+          python3 scripts/verify_apk_upgrade.py "$APK" android-app/debug.keystore "$MIN_VC"
+          EXPECTED=16AD2626AC90F0B72DB78BF1DABDBD0FA85205D24FBD35D89F6B1A2E774D3386
+          echo "::notice title=APK signing::package=ai.mobilerun.selfhosted versionCode=${VC:-?} SHA-256=$EXPECTED (matches phone 1.0.489)"
+          {
+            echo "## APK upgrade-safe"
+            echo "- package: \`ai.mobilerun.selfhosted\`"
+            echo "- versionCode: \`${VC:-}\` (must be > 489 on this branch)"
+            echo "- signer SHA-256: \`$EXPECTED\` (android-app/debug.keystore / CN=Android Debug)"
+          } >> "$GITHUB_STEP_SUMMARY"
       
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -275,6 +299,16 @@ jobs:
       - name: Rename APK
         run: mv apk/*.apk apk/mobilerun.apk
 
+      - name: Verify preview APK version + signing (upgrade over 489)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq aapt >/dev/null
+          python3 scripts/verify_apk_upgrade.py apk/mobilerun.apk android-app/debug.keystore 490
+          VC=$(aapt dump badging apk/mobilerun.apk | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1)
+          VN=$(aapt dump badging apk/mobilerun.apk | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
+          echo "VC=$VC" >> "$GITHUB_ENV"
+          echo "VN=$VN" >> "$GITHUB_ENV"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -285,8 +319,9 @@ jobs:
 
       - name: Generate QR code
         run: |
-          # Point QR at the prerelease tag URL
-          export APK_RELEASE_TAG="apk-preview-${{ github.run_number }}"
+          # Point QR at the prerelease tag URL (use verified versionCode, not raw run_number if floored)
+          TAG_VC="${VC:-${{ github.run_number }}}"
+          export APK_RELEASE_TAG="apk-preview-$TAG_VC"
           node scripts/generate-apk-qr.mjs
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -297,16 +332,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="apk-preview-${{ github.run_number }}"
+          TAG_VC="${VC:-${{ github.run_number }}}"
+          TAG="apk-preview-$TAG_VC"
           REPO="${{ github.repository }}"
           BRANCH="${GITHUB_REF#refs/heads/}"
           gh release create "$TAG" \
             --prerelease \
-            --title "APK Preview ${{ github.run_number }} ($BRANCH)" \
+            --title "APK Preview $TAG_VC ($BRANCH)" \
             --notes "**Mobilerun APK preview (prerelease)**
 
           Branch: \`$BRANCH\`
           Commit: ${{ github.sha }}
+          versionCode: $TAG_VC / versionName: ${VN:-1.0.$TAG_VC}
+          package: \`ai.mobilerun.selfhosted\`
+          signer SHA-256: \`16AD2626AC90F0B72DB78BF1DABDBD0FA85205D24FBD35D89F6B1A2E774D3386\`
+          (matches phone 1.0.489 — upgrades in place)
 
           ![Download QR Code](https://github.com/$REPO/releases/download/$TAG/apk-download-qr.png)
 
