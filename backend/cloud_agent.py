@@ -2867,14 +2867,46 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             device_id, call_device, preferred_package=prefer_pkg
         )
         ui_tree = tree_info["tree"]
-        # Wrong FG (Samsung Pay / selfhosted) → force vision + re-open path
+        # Mac's rule: auto-dismiss any non-target overlay/window (spay, SystemUI,
+        # edge panels, …) via Back / Close / tap-outside — never fail for overlays.
+        if prefer_pkg:
+            try:
+                from overlay_dismiss import dismiss_foreign_overlays_before_plan
+            except ImportError:
+                from backend.overlay_dismiss import (  # type: ignore
+                    dismiss_foreign_overlays_before_plan,
+                )
+
+            def _refetch_tree():
+                return _fetch_ui_tree_retry(
+                    device_id,
+                    call_device,
+                    attempts=2,
+                    preferred_package=prefer_pkg,
+                )
+
+            ui_tree, tree_info, history = dismiss_foreign_overlays_before_plan(
+                device_id=device_id,
+                call_device=call_device,
+                execute_action=execute_action,
+                fetch_tree=_refetch_tree,
+                ui_tree=ui_tree,
+                tree_info=tree_info,
+                target_package=prefer_pkg,
+                history=history,
+                state=state,
+                max_attempts=3,
+            )
+            job["history"] = history
+            job["state"] = state
+        # If FG is still wrong after dismiss attempts, prefer vision — but do NOT
+        # hard-fail; keep running so the next step can dismiss again.
         fg_now = str(tree_info.get("package") or "").lower()
         if prefer_pkg and fg_now and prefer_pkg.lower() not in fg_now:
             if "spay" in fg_now or "selfhosted" in fg_now or "systemui" in fg_now:
-                tree_info["empty"] = True
                 state["force_vision_once"] = True
                 logger.warning(
-                    "wrong FG package=%s want=%s — mark empty + vision",
+                    "wrong FG package=%s want=%s after overlay dismiss — vision retry",
                     fg_now,
                     prefer_pkg,
                 )

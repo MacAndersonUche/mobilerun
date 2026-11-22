@@ -355,7 +355,45 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 }
             }
             if (anrOnly) return false
+            // Foreign overlay (Samsung Pay / SystemUI / Edge) while a dating
+            // job has a preferred package — Back / Close, never payment CTAs.
+            val hint = preferredPackageHint
+            if (!hint.isNullOrBlank() && isIgnoredOverlayPackage(pkg) &&
+                !packageMatchesHint(pkg, hint)
+            ) {
+                val safeClose = findNodeByText(
+                    root,
+                    listOf(
+                        "Close", "Not now", "No thanks", "Maybe later",
+                        "Dismiss", "Cancel", "Got it", "Got it!", "OK", "Okay",
+                    ),
+                )
+                if (safeClose != null) {
+                    val label = safeClose.text?.toString()
+                        ?: safeClose.contentDescription?.toString()
+                    val low = (label ?: "").lowercase()
+                    val payment = listOf(
+                        "pay", "boost", "buy", "purchase", "card", "premium",
+                    ).any { it in low }
+                    if (!payment) {
+                        val tapped = safeClose.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Log.i(
+                            TAG,
+                            "foreign overlay dismiss: tapped '$label' ok=$tapped " +
+                                "pkg=$pkg hint=$hint",
+                        )
+                        return tapped
+                    }
+                }
+                val backed = performGlobalAction(GLOBAL_ACTION_BACK)
+                Log.i(
+                    TAG,
+                    "foreign overlay dismiss: BACK ok=$backed pkg=$pkg hint=$hint",
+                )
+                return backed
+            }
             // Permission / consent popups — prefer the least-restrictive positive action
+            // Never "Allow payment" / Pay / Boost / Buy.
             val positives = listOf(
                 "While using the app",
                 "Only this time",
@@ -373,6 +411,14 @@ class MobilerunAccessibilityService : AccessibilityService() {
             val node = findNodeByText(root, positives)
             if (node != null) {
                 val label = node.text?.toString() ?: node.contentDescription?.toString()
+                val low = (label ?: "").lowercase()
+                if (
+                    "payment" in low || "pay " in low || low == "pay" ||
+                    "boost" in low || "buy" in low || "purchase" in low
+                ) {
+                    Log.w(TAG, "popup dismiss: refusing payment/paid label='$label'")
+                    return false
+                }
                 val tapped = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 Log.i(TAG, "popup dismiss: tapped '$label' ok=$tapped pkg=$pkg")
                 return tapped
