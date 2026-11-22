@@ -118,23 +118,29 @@ class MobilerunAccessibilityService : AccessibilityService() {
     @Volatile private var cachedResult: TreeResult? = null
     @Volatile private var lastNonEmptyResult: TreeResult? = null
     @Volatile private var lastNonEmptyAtMs: Long = 0
-    /** Hint from open_app / get_ui_tree params — prefer this package's window. */
-    @Volatile var preferredPackageHint: String? = null
+    /**
+     * Hint from open_app / get_ui_tree — prefer this package's window.
+     * Private field + explicit setters avoid JVM clash with setPreferredPackageHint().
+     */
+    @Volatile private var preferredPkgHint: String? = null
     @Volatile private var preferredPackageHintSetAtMs: Long = 0L
     @Volatile private var lastScreenshotAtMs: Long = 0L
 
+    /** Read-only view of the current preferred-package hint. */
+    fun preferredPackageHint(): String? = preferredPkgHint
+
     /** Clear sticky hint (job end / timeout / explicit). Prefer is never a hard filter. */
     fun clearPreferredPackageHint(reason: String = "clear") {
-        if (preferredPackageHint != null) {
-            Log.i(TAG, "clear preferredPackageHint was=$preferredPackageHint reason=$reason")
+        if (preferredPkgHint != null) {
+            Log.i(TAG, "clear preferredPackageHint was=$preferredPkgHint reason=$reason")
         }
-        preferredPackageHint = null
+        preferredPkgHint = null
         preferredPackageHintSetAtMs = 0L
     }
 
     fun setPreferredPackageHint(pkg: String?) {
         val trimmed = pkg?.trim()?.takeIf { it.isNotEmpty() }
-        preferredPackageHint = trimmed
+        preferredPkgHint = trimmed
         preferredPackageHintSetAtMs =
             if (trimmed != null) SystemClock.elapsedRealtime() else 0L
         if (trimmed != null) {
@@ -143,7 +149,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     private fun refreshPreferredPackageHint() {
-        val hint = preferredPackageHint
+        val hint = preferredPkgHint
         if (hint.isNullOrBlank()) return
         if (
             PreferredPackagePolicy.hintExpired(
@@ -318,7 +324,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     private fun activePackageNameOnMain(): String? {
         val self = packageName
-        val hint = preferredPackageHint
+        val hint = preferredPkgHint
         val active = rootInActiveWindow?.packageName?.toString()
         if (!active.isNullOrBlank() && !isIgnoredOverlayPackage(active)) {
             if (hint.isNullOrBlank() || packageMatchesHint(active, hint)) return active
@@ -391,7 +397,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             if (anrOnly) return false
             // Foreign overlay (Samsung Pay / SystemUI / Edge) while a dating
             // job has a preferred package — Back / Close, never payment CTAs.
-            val hint = preferredPackageHint
+            val hint = preferredPkgHint
             if (!hint.isNullOrBlank() && isIgnoredOverlayPackage(pkg) &&
                 !packageMatchesHint(pkg, hint)
             ) {
@@ -627,7 +633,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (!preferredPackage.isNullOrBlank()) {
             setPreferredPackageHint(preferredPackage.trim())
         }
-        val hint = preferredPackageHint
+        val hint = preferredPkgHint
         val gen = contentGeneration.get()
         if (allowCache) {
             synchronized(cacheLock) {
@@ -908,7 +914,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         // open_app / get_ui_tree). Hint is a SCORE BOOST only — never refuse a
         // live window (sticky hint + launcher → empty tree was the APK 532 bug).
         val selfPkg = packageName
-        val hint = preferredPackageHint
+        val hint = preferredPkgHint
         var activeEmitted = false
         var preferredActiveRoot: AccessibilityNodeInfo? = null
         var preferredActivePkg = ""
@@ -1176,7 +1182,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             body
         }
         // Prefer target hint, else first non-overlay app package
-        val hintPkg = preferredPackageHint
+        val hintPkg = preferredPkgHint
         val primaryPkg = pkgs.firstOrNull { packageMatchesHint(it, hintPkg) }
             ?: pkgs.firstOrNull { !isIgnoredOverlayPackage(it) }
             ?: pkgs.firstOrNull().orEmpty()
