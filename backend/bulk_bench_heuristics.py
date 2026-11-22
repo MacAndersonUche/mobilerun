@@ -505,10 +505,19 @@ def _visible_chat_list_rows(
         # Skip counters / chrome / message bubbles (never tap bubbles as rows)
         if re.search(r"^\d+\s*(matches?|people|likes?)$", name, re.I):
             continue
-        if "they liked you" in low or "liked you" == low:
+        # Hily upsell: "They liked you!" / "Find out who they are…" / Matches promo
+        if (
+            "they liked you" in low
+            or "liked you" == low
+            or "find out who" in low
+            or "liked you!" in low
+        ):
             continue
         nid = str(n.get("id") or "").lower()
         cls = str(n.get("cls") or "").lower()
+        # Never tap the premium liked-you badge / promo tile as a chat row
+        if "dialogtag_liked" in nid or "tag_liked" in nid:
+            continue
         if any(
             tok in nid or tok in cls
             for tok in (
@@ -1647,16 +1656,28 @@ def plan_bulk_swipe(
         )
     # Hily Top picks / Discover grid → go to Finder deck (never Crush tiles)
     if app == "hily" and hily_on_top_picks_grid(ui_tree):
-        if not bulk.get("_hily_finder_nav"):
+        tries = int(bulk.get("_hily_finder_nav_n") or 0)
+        if tries < 3:
             bulk["_hily_finder_nav"] = True
+            bulk["_hily_finder_nav_n"] = tries + 1
+            bulk.pop("_deck_settle_done", None)  # allow settle after each try
             st["bulk_swipe"] = bulk
-            xy = DM_APP_PROFILES.get("hily", {}).get("deck_tab_xy") or (142, 2190)
+            labeled = _nav_tab_center(ui_tree, "Finder") or _exact_label_center(
+                ui_tree, "Finder", y_min=1800
+            )
+            if labeled:
+                xy = (int(labeled[0]), int(labeled[1]))
+            else:
+                xy = DM_APP_PROFILES.get("hily", {}).get("deck_tab_xy") or (142, 2190)
             return _fp(
                 {
                     "action": "tap",
                     "x": int(xy[0]),
                     "y": int(xy[1]),
-                    "reason": (f"Leave Hily Top picks → Finder deck tab ({planner})"),
+                    "reason": (
+                        f"Leave Hily Top picks → Finder deck tab "
+                        f"({tries + 1}/3) ({planner})"
+                    ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
@@ -1831,6 +1852,7 @@ def plan_bulk_swipe(
                 "bulk_open_deck",
                 "open finder",
                 "open people",
+                "finder deck tab",
             )
         ) and not bulk.get("_deck_settle_done"):
             bulk["_deck_settle_done"] = True
@@ -1860,6 +1882,46 @@ def plan_bulk_swipe(
                 },
                 "bulk_settle_deck",
             )
+        # Hily: after settle still no Finder — retry Finder tab / Back before idle
+        if app == "hily" and bulk.get("_deck_settle_done"):
+            retries = int(bulk.get("_hily_post_settle_n") or 0)
+            if retries < 2:
+                bulk["_hily_post_settle_n"] = retries + 1
+                bulk["_deck_settle_done"] = False
+                st["bulk_swipe"] = bulk
+                if retries == 0:
+                    return _fp(
+                        {
+                            "action": "press_button",
+                            "button": "back",
+                            "reason": (
+                                f"Hily deck miss after settle — Back then "
+                                f"Finder ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": bool(dry_run),
+                        },
+                        "bulk_hily_deck_miss_back",
+                    )
+                xy = DM_APP_PROFILES.get("hily", {}).get("deck_tab_xy") or (142, 2190)
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Hily deck miss — re-tap Finder after settle "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Finder",
+                        "needs_vision": True,
+                    },
+                    "bulk_hily_open_finder",
+                )
 
     # App-specific + harmless popups (Streaks Got it!, rate-us, tips)
     # Prefer labeled dismiss; never paid upsells.
@@ -2267,6 +2329,22 @@ def plan_bulk_swipe(
                 },
                 "bulk_open_deck",
             )
+        # BLK: Discover tab before failing dry-run (Like Icon often only there)
+        if app == "blk" and "open swipe deck" not in hist and "blk discover" not in hist:
+            xy = DM_APP_PROFILES.get("blk", {}).get("deck_tab_xy") or (135, 2170)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": f"Open BLK Discover swipe deck ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "label": "Discover",
+                },
+                "bulk_open_deck",
+            )
 
     # dry_run: verify ONE real card, then log would like/pass N once (no loop)
     if dry_run:
@@ -2290,8 +2368,33 @@ def plan_bulk_swipe(
                     },
                     "bulk_badoo_skeleton_wait",
                 )
-        like_ok = bool(deck_visible or _fake_like_center(app, ui_tree))
+        like_ok = bool(
+            deck_visible
+            or _fake_like_center(app, ui_tree)
+            or (app == "blk" and blk_like_action(ui_tree, planner=planner))
+        )
         if not like_ok and not deck_visible:
+            # One more Discover/Finder nav before hard fail
+            if app == "blk" and not bulk.get("_blk_deck_nav_fail"):
+                bulk["_blk_deck_nav_fail"] = True
+                st["bulk_swipe"] = bulk
+                xy = DM_APP_PROFILES.get("blk", {}).get("deck_tab_xy") or (135, 2170)
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"dry_run — BLK like miss; re-open Discover "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "label": "Discover",
+                    },
+                    "bulk_open_deck",
+                )
             return _fp(
                 {
                     "action": "fail",
@@ -2552,8 +2655,28 @@ def plan_bulk_message(
         )
 
     done_names = list(bulk.get("done_names") or [])
+    # Soft-recover skips (upsell rows refused by firewall) — never re-tap
+    for sk in list(st.get("skipped_tap_labels") or []):
+        if sk and str(sk).strip().lower() not in {d.lower() for d in done_names}:
+            done_names.append(str(sk).strip())
     fake_bench = _is_fake_chats_bench(ui_tree, package, instruction)
     list_ok = _chat_list_screen_verified(app_key, ui_tree)
+    # Bumble on Discover/People deck must open Chats first — never scroll deck
+    if (app_key or "").lower() == "bumble" and not list_ok:
+        try:
+            from dm_heuristics import bumble_on_people_deck as _bumble_deck
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                bumble_on_people_deck as _bumble_deck,
+            )
+        if _bumble_deck(ui_tree):
+            # Clear one-shot hist gate so we can open Chats from the deck
+            history = [
+                h
+                for h in history
+                if "open chats" not in str(h).lower()
+                and "bulk_open_chats" not in str(h).lower()
+            ]
     bulk["chat_list_verified"] = bool(list_ok)
     st["bulk_message"] = bulk
 
@@ -3471,20 +3594,48 @@ def plan_bulk_message_new(
                     break
         if dry_run:
             if not compose:
+                # No free composer on profile — go to Chats/Matches for free
+                # messaging instead of hard-failing the job.
+                if not bulk.get("_hily_new_to_chats_after_miss"):
+                    bulk["_hily_new_to_chats_after_miss"] = True
+                    st["bulk_message_new"] = bulk
+                    xy = DM_APP_PROFILES.get("hily", {}).get("inbox_tab_xy") or (
+                        341,
+                        2190,
+                    )
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(xy[0]),
+                            "y": int(xy[1]),
+                            "reason": (
+                                f"Hily: no free composer on profile — open "
+                                f"Chats for free matches ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "label": "Chats",
+                        },
+                        "bulk_hily_new_open_chats",
+                    )
+                # Already on chats path — fall through to reply planner via done
+                # that hands off: mark verified skip for this path
                 return _fp(
                     {
-                        "action": "fail",
+                        "action": "done",
                         "reason": (
-                            f"dry_run — Hily: no free message composer for "
-                            f"{target} new contacts (Crush/Like ≠ composer) "
-                            f"({planner})"
+                            f"[DRY RUN] Hily: no free new-profile composer "
+                            f"(Crush/Like ≠ composer) — would message free "
+                            f"matches/chats instead ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                         "dry_run": True,
-                        "dry_run_verified": False,
+                        "dry_run_verified": True,
+                        "_handoff_bulk_message": True,
                     },
-                    "bulk_dry_run_hily_new_unverified",
+                    "bulk_dry_run_hily_new_chats_handoff",
                 )
             # Close any leftover sheet before declaring done
             if hily_on_profile_sheet(ui_tree) or hily_on_photo_viewer(ui_tree):

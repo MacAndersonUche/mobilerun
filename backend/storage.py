@@ -174,8 +174,9 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 # Must exceed worst-case step wall time (screenshot retries ~3×15s ≈ 45s+;
-# observed 64.8s). Renew before slow RPCs; never rely on a single acquire.
-DEFAULT_JOB_LEASE_S = 120
+# observed 64.8s; chain of 6 steps can exceed 120s). Renew before slow RPCs.
+# r19: bump so EventBridge tick cannot steal a mid-chain lease (overlap).
+DEFAULT_JOB_LEASE_S = 180
 
 
 def acquire_job_lease(
@@ -382,7 +383,16 @@ def list_due_jobs(
 ) -> List[Dict[str, Any]]:
     table = _table("JOBS_TABLE")
     if table is None:
-        return []
+        store = globals().get("_LOCAL_JOBS") or {}
+        now_ts = now_ts or int(time.time())
+        due = [
+            dict(j)
+            for j in store.values()
+            if str(j.get("status") or "") == "running"
+            and int(j.get("next_run_at") or 0) <= now_ts
+        ]
+        due.sort(key=lambda j: int(j.get("next_run_at") or 0))
+        return due[:limit]
     now_ts = now_ts or int(time.time())
     # Query running jobs due for next step
     resp = table.query(
@@ -393,6 +403,58 @@ def list_due_jobs(
         Limit=limit,
     )
     return resp.get("Items", [])
+
+
+def other_running_job_on_device(
+    device_id: str,
+    *,
+    except_job_id: str = "",
+    now: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return another running job on the same device with a live lease.
+
+    Prevents two agent jobs overlapping on one phone (r19 bumble_swipe5 overlap).
+    """
+    did = (device_id or "").strip()
+    if not did:
+        return None
+    now = int(now if now is not None else time.time())
+    except_id = (except_job_id or "").strip()
+    table = _table("JOBS_TABLE")
+    candidates: List[Dict[str, Any]] = []
+    if table is None:
+        store = globals().get("_LOCAL_JOBS") or {}
+        candidates = [dict(j) for j in store.values()]
+    else:
+        try:
+            resp = table.query(
+                IndexName="status-index",
+                KeyConditionExpression="#s = :running",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":running": "running"},
+                Limit=40,
+            )
+            candidates = list(resp.get("Items") or [])
+        except Exception:
+            return None
+    for j in candidates:
+        jid = str(j.get("job_id") or "")
+        if not jid or jid == except_id:
+            continue
+        if str(j.get("status") or "") != "running":
+            continue
+        if str(j.get("device_id") or "").strip() != did:
+            continue
+        holder = str(j.get("lease_owner") or "")
+        exp = int(j.get("lease_expires_at") or 0)
+        # Live lease on another job → device busy
+        if holder and exp > now:
+            return j
+        # Recently updated running job without expired lease clock
+        updated = int(j.get("updated_at") or 0)
+        if updated and (now - updated) < 90:
+            return j
+    return None
 
 
 def list_recent_jobs(limit: int = 50) -> List[Dict[str, Any]]:

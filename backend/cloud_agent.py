@@ -2497,6 +2497,11 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
             vision_confirmed_label=str(action.get("_vision_confirmed_label") or ""),
         )
         if str(guarded.get("action") or "").lower() == "fail":
+            # Propagate soft-recover flag for upsell/unresolved (don't kill job)
+            if guarded.get("_soft_recover"):
+                action["_soft_recover"] = True
+            if guarded.get("_resolved_label"):
+                action["_resolved_label"] = guarded.get("_resolved_label")
             raise RuntimeError(str(guarded.get("reason") or "tap firewall"))
         action.update(
             {
@@ -3629,17 +3634,62 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "no-progress: goal visible, forcing done job=%s", job.get("job_id")
                 )
             elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
-                kind = "fail"
-                reason = (
-                    "same action repeated with no screen change — aborting "
-                    "(heuristic loop guard)"
+                # Alternate recovery instead of hard-fail (BLK reply Swiped loop)
+                alt_n = int(state.get("same_tap_alt_n") or 0)
+                state["same_tap_alt_n"] = alt_n + 1
+                state["same_tap_streak"] = 0
+                state["last_tap_key"] = None
+                state["last_tree_fp"] = None
+                alts = (
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": (
+                            "Loop guard — Back (same action, no screen change)"
+                        ),
+                    },
+                    {
+                        "action": "wait",
+                        "seconds": 1.0,
+                        "reason": (
+                            "Loop guard — settle + vision before retry"
+                        ),
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    },
+                    {
+                        "action": "swipe",
+                        "x1": 540,
+                        "y1": 1600,
+                        "x2": 540,
+                        "y2": 900,
+                        "reason": (
+                            "Loop guard — scroll for alternate surface"
+                        ),
+                    },
                 )
-                action = {"action": "fail", "reason": reason}
-                logger.info(
-                    "no-progress: failing after repeated %s job=%s",
-                    kind,
-                    job.get("job_id"),
-                )
+                if alt_n < 6:
+                    action = dict(alts[alt_n % len(alts)])
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or "")
+                    logger.info(
+                        "no-progress: alternate recovery #%s job=%s → %s",
+                        alt_n + 1,
+                        job.get("job_id"),
+                        kind,
+                    )
+                else:
+                    kind = "fail"
+                    reason = (
+                        "same action repeated with no screen change — aborting "
+                        "(heuristic loop guard after alternate recovery)"
+                    )
+                    action = {"action": "fail", "reason": reason}
+                    logger.info(
+                        "no-progress: failing after repeated %s job=%s",
+                        kind,
+                        job.get("job_id"),
+                    )
 
         # Do not re-open once open_ok / Opened already in history or FG matches
         if kind in ("open_app", "start_app"):
@@ -4154,9 +4204,51 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         try:
             summary = execute_action(device_id, action)
         except RuntimeError as e:
-            # Tap firewall / message guard — fail the job safely (never mutate)
+            # Tap firewall / message guard
             err = str(e)
-            if "tap firewall" in err.lower() or "message text guard" in err.lower():
+            err_l = err.lower()
+            soft_recover = (
+                "tap target unresolved" in err_l
+                or "could not resolve topmost" in err_l
+                or "they liked you" in err_l
+                or "find out who" in err_l
+                or "dialogtag_liked" in err_l
+                or bool(action.get("_soft_recover"))
+            )
+            if soft_recover and (
+                "tap firewall" in err_l
+                or "tap target unresolved" in err_l
+                or "could not resolve" in err_l
+            ):
+                # Soft: skip this tap, record, re-plan — do NOT kill the job
+                logger.warning("tap soft-recover (no job fail): %s", err)
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"tap_soft_recover: {err}"
+                state["same_tap_streak"] = 0
+                state["last_tap_key"] = None
+                state["last_tree_fp"] = None
+                state["force_vision_once"] = True
+                # Remember skipped upsell so planners pick next chat row
+                skipped = list(state.get("skipped_tap_labels") or [])
+                lab = str(
+                    action.get("_resolved_label")
+                    or action.get("label")
+                    or action.get("text")
+                    or ""
+                ).strip()
+                if lab and lab.lower() not in {s.lower() for s in skipped}:
+                    skipped.append(lab[:80])
+                    state["skipped_tap_labels"] = skipped[-20:]
+                history.append(f"tap_soft_recover: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "running"
+                job["next_run_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                _kick_self(job.get("job_id"), job=job)
+                return job
+            if "tap firewall" in err_l or "message text guard" in err_l:
                 logger.error("safety refuse: %s", err)
                 state["steps"] = step + 1
                 state["last_progress_at"] = int(time.time())

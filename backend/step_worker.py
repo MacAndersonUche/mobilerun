@@ -27,6 +27,7 @@ try:
         get_device_connections,
         get_job,
         list_due_jobs,
+        other_running_job_on_device,
         put_job,
         save_job_progress,
     )
@@ -36,6 +37,7 @@ except ImportError:
         get_device_connections,
         get_job,
         list_due_jobs,
+        other_running_job_on_device,
         put_job,
         save_job_progress,
     )
@@ -640,6 +642,28 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
         return
     job_id = str(job.get("job_id") or "")
     owner = owner or _worker_owner()
+    # Device mutex: another live job on same phone → defer (r19 overlap)
+    did = str(job.get("device_id") or "").strip()
+    if did and job_id:
+        other = other_running_job_on_device(did, except_job_id=job_id)
+        if other:
+            other_id = str(other.get("job_id") or "?")
+            logger.info(
+                "process_job defer job=%s — device %s busy with %s "
+                "(lease_owner=%s)",
+                job_id,
+                did,
+                other_id,
+                other.get("lease_owner"),
+            )
+            # Push next_run slightly so we don't hot-spin
+            try:
+                job["next_run_at"] = int(time.time()) + 15
+                job["updated_at"] = int(time.time())
+                put_job(_to_plain(job))
+            except Exception:
+                pass
+            return
     # Lease: second concurrent worker skips — prevents parallel swipes
     if job_id and not acquire_job_lease(job_id, owner):
         holder = "?"

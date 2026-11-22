@@ -1848,8 +1848,9 @@ def bumble_on_people_deck(tree: str, *, _log: bool = True) -> bool:
 def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
     """True on Bumble Chats/Connections list (multi-signal S21 map).
 
-    Never vetoed by the deck detector — Chats header / Your matches / Older chats
-    are enough even if a stale People signal remains in another window.
+    Strong list roots / row ids win. Weak name+Chats signals must NOT fire on
+    the Discover/People deck (card name + bottom-nav Chats → false positive →
+    'No chat-list rows after 3 scrolls' while still on the deck).
     """
     # List roots
     if _tree_id_center(
@@ -1878,6 +1879,16 @@ def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
         or _exact_label_center(tree, "Your matches")
     )
     has_older = bool(re.search(r"older chats", tree or "", re.I))
+    # Mid-screen Chats/Connections header (not bottom-nav y≳2100)
+    has_mid_chats_header = False
+    for n in _bumble_nodes(tree) or _parse_compact_nodes(
+        tree, package_filter="com.bumble.app"
+    ):
+        t = (n.get("text") or "").strip().lower()
+        y = int(n.get("y") or 0)
+        if t in ("chats", "connections") and 120 < y < 500:
+            has_mid_chats_header = True
+            break
     row_hit = False
     for n in _bumble_nodes(tree) or _parse_compact_nodes(
         tree, package_filter="com.bumble.app"
@@ -1897,11 +1908,16 @@ def bumble_on_connections(tree: str, *, _log: bool = True) -> bool:
             break
     if (has_your_matches or has_older) and row_hit:
         return True
-    if row_hit and (
-        re.search(r'\bt="Chats"', tree or "", re.I)
-        or re.search(r'\bt="Connections"', tree or "", re.I)
-    ):
+    # Mid header + rows — never bottom-nav "Chats" alone (deck false positive)
+    if row_hit and has_mid_chats_header:
         return True
+    # On People/Discover deck without list chrome → not connections
+    if bumble_on_people_deck(tree, _log=False) and not (
+        has_your_matches or has_older or has_mid_chats_header
+    ):
+        if _log:
+            _log_detector_false("bumble_on_connections_deck", tree, "com.bumble.app")
+        return False
     if _log:
         _log_detector_false("bumble_on_connections", tree, "com.bumble.app")
     return False
@@ -3242,12 +3258,22 @@ def hily_mbm_allowance(tree: str) -> Optional[int]:
 
 
 def hily_find_chat_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
-    """Tap dialogMessageItem / userNameField matching contact."""
+    """Tap dialogMessageItem / userNameField matching contact.
+
+    Never returns the 'They liked you!' / 'Find out who…' upsell tile.
+    """
     best: Optional[Tuple[float, int, int]] = None
     for n in _parse_compact_nodes(tree):
         nid = str(n.get("id") or "").lower()
         text = (n.get("text") or n.get("label") or "").strip()
         if not text:
+            continue
+        low = text.lower()
+        if (
+            "they liked you" in low
+            or "find out who" in low
+            or "dialogtag_liked" in nid
+        ):
             continue
         if "usernamefield" not in nid and "dialogmessageitem" not in nid:
             # Also allow plain name match in chats list

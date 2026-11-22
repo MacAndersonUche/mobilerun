@@ -119,14 +119,20 @@ def main() -> int:
     card_b = '<h><n t="Jordan" xy="540,900"/><n t="Like" xy="800,2000"/></h>'
     st3: dict = {"bulk_swipe": {"done": 0, "target": 2}}
     mark_like_issued(st3, app="bumble", tree=card_a)
+    assert st3["bulk_swipe"].get("awaiting_verify") is True
     wait = plan_wait_for_next_card(st3, app="bumble", tree=card_a, planner="selftest")
-    ok_w = bool(wait and wait.get("action") == "wait")
+    ok_w = bool(wait and wait.get("action") == "wait" and wait.get("_card_wait"))
+    # Same card again → still waiting (dry-run must exercise poll, not skip)
+    wait2 = plan_wait_for_next_card(st3, app="bumble", tree=card_a, planner="selftest")
+    ok_w2 = bool(wait2 and wait2.get("action") == "wait")
     plan_wait_for_next_card(st3, app="bumble", tree=card_b, planner="selftest")
     ok_c = int(st3["bulk_swipe"].get("done") or 0) == 1
+    ok_cleared = st3["bulk_swipe"].get("awaiting_verify") is False
     print(
-        f"  {'OK' if ok_w and ok_c else 'FAIL'} wait-for-next-card done={st3['bulk_swipe'].get('done')}"
+        f"  {'OK' if ok_w and ok_w2 and ok_c and ok_cleared else 'FAIL'} "
+        f"wait-for-next-card poll→advance done={st3['bulk_swipe'].get('done')}"
     )
-    fails += 0 if (ok_w and ok_c) else 1
+    fails += 0 if (ok_w and ok_w2 and ok_c and ok_cleared) else 1
 
     print(f"\n{'PASS' if fails == 0 else 'FAIL'} — {fails} failure(s)")
     return 1 if fails else 0

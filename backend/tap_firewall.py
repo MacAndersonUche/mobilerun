@@ -385,6 +385,44 @@ def intended_target_matches(
     return False
 
 
+def resolve_nearest_node_at(
+    tree: str,
+    x: int,
+    y: int,
+    *,
+    pad: int = 64,
+) -> Optional[Dict[str, Any]]:
+    """Nearest visible node by bounds/center when clickable topmost misses.
+
+    Unlabeled / vision coordinate taps often land just outside clickable
+    bounds — snap to the closest node so we can check paid vs free.
+    """
+    try:
+        from dm_heuristics import _parse_compact_nodes
+    except ImportError:
+        from backend.dm_heuristics import _parse_compact_nodes  # type: ignore
+
+    best: Optional[Tuple[int, Dict[str, Any]]] = None
+    for n in _parse_compact_nodes(tree, include_systemui=True):
+        if not n.get("visible", True) or n.get("off_screen"):
+            continue
+        if _point_near_node(x, y, n, pad=pad):
+            # Prefer smaller area (leaf) then closer center
+            x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
+            if None not in (x1, y1, x2, y2):
+                area = max(1, int(x2) - int(x1)) * max(1, int(y2) - int(y1))
+                dist = abs(int(n.get("x") or x) - x) + abs(int(n.get("y") or y) - y)
+            else:
+                area = 10**9
+                dist = abs(int(n.get("x") or -9999) - x) + abs(
+                    int(n.get("y") or -9999) - y
+                )
+            score = dist * 1000 + min(area, 10**8)
+            if best is None or score < best[0]:
+                best = (score, n)
+    return best[1] if best else None
+
+
 def tap_is_forbidden(
     resolved: Optional[Dict[str, Any]],
     *,
@@ -392,9 +430,14 @@ def tap_is_forbidden(
     action: Optional[Dict[str, Any]] = None,
     point_labels: str = "",
 ) -> Optional[str]:
-    """Return a refuse reason, or None if the tap may proceed."""
+    """Return a refuse reason, or None if the tap may proceed.
+
+    ``resolved is None`` is NOT an automatic refuse — callers must try nearest
+    node / vision first. Only paid/mutating keywords refuse hard.
+    """
     if resolved is None:
-        return "tap firewall: could not resolve topmost node at point"
+        # Soft: caller handles unresolved (vision / recovery) — not a hard refuse
+        return None
     action = action or {}
     kws = _DRY_RUN_REFUSE if dry_run else _LIVE_PAID_REFUSE
     # Check resolved + child labels at the point (container with TextView child)
@@ -423,6 +466,30 @@ def tap_is_forbidden(
                 f"(got {(resolved.get('label') or resolved.get('id') or '?')[:40]!r})"
             )
     return None
+
+
+def _paid_tokens_in(text: str) -> bool:
+    low = (text or "").lower()
+    return any(
+        p in low
+        for p in (
+            "crush",
+            "super like",
+            "superswipe",
+            "rose",
+            "boost",
+            "gold",
+            "premium",
+            "spotlight",
+            "yubucks",
+            "buy credits",
+            "subscribe",
+            "they liked you",
+            "find out who",
+            "message before match",
+            "major crush",
+        )
+    )
 
 
 # Free-nav / messaging targets vision may green-light on empty trees
@@ -588,6 +655,16 @@ def guard_tap_action(
         }
 
     resolved = resolve_topmost_clickable_at(tree, x, y)
+    # Unlabeled / vision coords: snap to nearest node bounds when clickable miss
+    if resolved is None:
+        resolved = resolve_nearest_node_at(tree, x, y, pad=64)
+        if resolved:
+            logger.info(
+                "tap firewall: nearest-node fallback at (%s,%s) → %r",
+                x,
+                y,
+                (resolved.get("label") or resolved.get("id") or "?")[:48],
+            )
 
     # (2) Overlay up → refuse nav / underneath taps (Chats under Crush sheet).
     try:
@@ -614,11 +691,89 @@ def guard_tap_action(
             "_overlay": overlay,
         }
 
+    # Still unresolved after nearest — allow when vision confirms free; else soft
+    if resolved is None:
+        confirmed = (vision_confirmed_label or "").strip()
+        want = str(
+            action.get("label")
+            or action.get("text")
+            or action.get("element")
+            or action.get("target")
+            or action.get("reason")
+            or ""
+        ).strip()
+        blob = f"{confirmed} {want} {point_labels}".lower()
+        if _paid_tokens_in(blob):
+            reason = (
+                f"tap firewall: refuse paid/upsell at unresolved point "
+                f"{(confirmed or want or point_labels or '?')[:60]!r}"
+            )
+            logger.warning("%s at (%s,%s)", reason, x, y)
+            return {
+                "action": "fail",
+                "reason": reason,
+                "planner": action.get("planner") or "tap_firewall",
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+            }
+        vision_ok = bool(confirmed) and (
+            any(tok in confirmed.lower() for tok in _VISION_ALLOW_TOKENS)
+            or (want and want.lower() in confirmed.lower())
+        )
+        # Free-nav point labels (Chats/Matches tab) without paid tokens
+        free_point = bool(point_labels) and any(
+            tok in point_labels.lower()
+            for tok in (
+                "chat",
+                "chats",
+                "messages",
+                "matches",
+                "connections",
+                "discover",
+                "people",
+                "finder",
+                "back",
+                "not now",
+                "got it",
+            )
+        )
+        if vision_ok or free_point:
+            out = dict(action)
+            out["_tap_firewall"] = (
+                "vision_confirmed" if vision_ok else "point_labels_free"
+            )
+            return out
+        # Soft recover — do NOT hard-fail the job (cloud_agent soft path)
+        reason = (
+            "tap target unresolved at point — recover with vision/nearest "
+            f"(not a hard refuse) ({x},{y})"
+        )
+        logger.warning("%s", reason)
+        return {
+            "action": "fail",
+            "reason": reason,
+            "planner": action.get("planner") or "tap_firewall",
+            "llm_provider": None,
+            "dry_run": bool(dry_run),
+            "needs_vision": True,
+            "_soft_recover": True,
+        }
+
     reason = tap_is_forbidden(
         resolved, dry_run=dry_run, action=action, point_labels=point_labels
     )
     if reason:
         logger.warning("%s at (%s,%s)", reason, x, y)
+        # Upsell/premium chat-list rows → soft recover (skip + next), not job kill
+        soft_upsell = any(
+            t in reason.lower()
+            for t in (
+                "they liked you",
+                "find out who",
+                "liked you",
+                "dialogtag_liked",
+            )
+        )
         return {
             "action": "fail",
             "reason": reason,
@@ -627,6 +782,7 @@ def guard_tap_action(
             "dry_run": bool(dry_run),
             "_resolved_label": (resolved or {}).get("label"),
             "_resolved_id": (resolved or {}).get("id"),
+            "_soft_recover": soft_upsell,
         }
     out = dict(action)
     if resolved:

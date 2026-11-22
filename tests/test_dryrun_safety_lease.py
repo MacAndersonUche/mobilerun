@@ -231,7 +231,8 @@ def test_bulk_message_no_default_hi_baby():
 # --- Bumble People vs Discover + dry_run deck check ---
 
 
-def test_bumble_prefers_people_not_discover():
+def test_bumble_prefers_discover_swipe_deck():
+    """Swipe jobs open Discover (card stack), not People photo grid."""
     tree = """
     <hierarchy packages="com.bumble.app"><w p="com.bumble.app">
      <n d="Discover" c="1" xy="200,2197" b="120,2140,280,2250"/>
@@ -248,7 +249,7 @@ def test_bumble_prefers_people_not_discover():
         package="com.bumble.app",
     )
     assert act and act.get("action") == "tap"
-    assert (act["x"], act["y"]) == (540, 2197)  # People, not Discover
+    assert (act["x"], act["y"]) == (200, 2197)  # Discover card stack
 
 
 def test_bumble_dry_run_requires_deck_not_silent_zero():
