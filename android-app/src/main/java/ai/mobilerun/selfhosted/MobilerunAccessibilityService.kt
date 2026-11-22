@@ -752,8 +752,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
             sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\">\n")
             buildCompactNodes(
                 root, " ", sb, counter, 0, deadlineMs, fullMode,
+                markPartial = { partial = true },
                 appCounter = if (countApp) appCounter else null,
-            ) { partial = true }
+            )
             sb.append("</w>\n")
         }
 

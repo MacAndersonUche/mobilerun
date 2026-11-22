@@ -64,9 +64,7 @@ def test_plan_routes_new_profiles_to_bulk_not_ai(monkeypatch):
             "planner": "bulk_message_new_heuristic",
         }
 
-    monkeypatch.setattr(
-        "backend.bulk_bench_heuristics.plan_bulk_bench", fake_bulk
-    )
+    monkeypatch.setattr("backend.bulk_bench_heuristics.plan_bulk_bench", fake_bulk)
     # Also patch the import path used inside plan_next_action
     import backend.cloud_agent as ca
 
@@ -77,7 +75,7 @@ def test_plan_routes_new_profiles_to_bulk_not_ai(monkeypatch):
     )
     act = plan_next_action(
         'message "hello miss" to 3 new profiles on Hinge',
-        "<hierarchy empty=\"true\"/>",
+        '<hierarchy empty="true"/>',
         [],
         package="",
         dry_run=True,
@@ -107,14 +105,18 @@ def test_message_guard_no_bank_default_fallback():
         job=job,
     )
     assert out["action"] == "fail"
-    assert "bank_default" in out["reason"].lower() or "no allowed" in out["reason"].lower()
+    assert (
+        "bank_default" in out["reason"].lower() or "no allowed" in out["reason"].lower()
+    )
 
 
 # --- 3/4 recover + empty tree ---
 
 
 def test_recover_hard_cap_and_empty_tree():
-    empty = '<hierarchy windows="1" nodes="2" empty="false"><w p="com.android.systemui">'
+    empty = (
+        '<hierarchy windows="1" nodes="2" empty="false"><w p="com.android.systemui">'
+    )
     empty += '<n d="Clock" xy="100,50"/></w></hierarchy>'
     st: dict = {}
     act = _recover_to_root_action("bumble", empty, [], "test", state=st)
@@ -137,10 +139,7 @@ def test_recover_relaunches_capped():
         "bumble", tree, ["bulk_recover_back"] * 5, "test", state=st
     )
     assert act and act["action"] == "fail"
-    assert (
-        "exhaust" in act["reason"].lower()
-        or "could not" in act["reason"].lower()
-    )
+    assert "exhaust" in act["reason"].lower() or "could not" in act["reason"].lower()
 
 
 # --- 5 chat-list detectors ---
@@ -172,7 +171,9 @@ def test_badoo_swipe_opens_encounters_not_people():
     assert act and act["action"] == "tap"
     # Encounters tab xy ≈ (324, 2210)
     assert abs(int(act["x"]) - 324) < 80
-    assert "encounters" in act["reason"].lower() or "swipe deck" in act["reason"].lower()
+    assert (
+        "encounters" in act["reason"].lower() or "swipe deck" in act["reason"].lower()
+    )
 
 
 # --- 7 Hily photo viewer ---

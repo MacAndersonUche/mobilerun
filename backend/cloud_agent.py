@@ -707,10 +707,9 @@ def permission_dialog_action(
     except ImportError:
         from backend.dm_heuristics import _tree_node_center, _fp  # type: ignore
 
-    deny = (
-        _tree_node_center(tree, "Don't allow", "Dont allow", "Don't Allow")
-        or _tree_node_center(tree, "Deny", "No thanks", "No Thanks")
-    )
+    deny = _tree_node_center(
+        tree, "Don't allow", "Dont allow", "Don't Allow"
+    ) or _tree_node_center(tree, "Deny", "No thanks", "No Thanks")
     if not deny:
         return None
     return _fp(
@@ -1086,39 +1085,43 @@ def plan_next_action(
     # Lazy: only parse bulk when the instruction looks like a bench goal so
     # prod Lambda (no catalog.json) never pays the import cost on normal DMs.
     instr_l = (instruction or "").lower()
-    maybe_bulk = any(
-        tok in instr_l
-        for tok in (
-            "swipe ",
-            "auto-swipe",
-            "bulk ",
-            "50 profiles",
-            "message 50",
-            "fake-chats",
-            "fake chats",
-            "auto-message",
-            "auto message",
-            "existing chats",
-            "existing matches",
-            "existing chat",
-            "new profiles",
-            "new people",
-            "new matches",
-            "new contacts",
+    maybe_bulk = (
+        any(
+            tok in instr_l
+            for tok in (
+                "swipe ",
+                "auto-swipe",
+                "bulk ",
+                "50 profiles",
+                "message 50",
+                "fake-chats",
+                "fake chats",
+                "auto-message",
+                "auto message",
+                "existing chats",
+                "existing matches",
+                "existing chat",
+                "new profiles",
+                "new people",
+                "new matches",
+                "new contacts",
+            )
         )
-    ) or bool(
-        re.search(
-            r"(?:message|reply(?:\s+to)?|send|auto[- ]?message)\s+"
-            r"(?:\d+|[\"'][^\"']+[\"'])\s+"
-            r"(?:to\s+\d+\s+)?(?:existing\s+|new\s+)?"
-            r"(?:profiles?|matches?|people|contacts?|chats?)",
-            instr_l,
+        or bool(
+            re.search(
+                r"(?:message|reply(?:\s+to)?|send|auto[- ]?message)\s+"
+                r"(?:\d+|[\"'][^\"']+[\"'])\s+"
+                r"(?:to\s+\d+\s+)?(?:existing\s+|new\s+)?"
+                r"(?:profiles?|matches?|people|contacts?|chats?)",
+                instr_l,
+            )
         )
-    ) or bool(
-        re.search(
-            r"(?:message|send|auto[- ]?message)\s+[\"'][^\"']+[\"']\s+"
-            r"to\s+\d+\s+new\s+(?:profiles?|people|matches?|contacts?)",
-            instr_l,
+        or bool(
+            re.search(
+                r"(?:message|send|auto[- ]?message)\s+[\"'][^\"']+[\"']\s+"
+                r"to\s+\d+\s+new\s+(?:profiles?|people|matches?|contacts?)",
+                instr_l,
+            )
         )
     )
     bulk_goal = None

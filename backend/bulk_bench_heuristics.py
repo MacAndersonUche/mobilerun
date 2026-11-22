@@ -690,9 +690,7 @@ def _recover_to_root_action(
         return None
     st = state if isinstance(state, dict) else {}
     key = f"_root_recover_{app_l}"
-    bucket = st.setdefault(
-        key, {"backs": 0, "relaunches": 0, "relaunched": False}
-    )
+    bucket = st.setdefault(key, {"backs": 0, "relaunches": 0, "relaunched": False})
     hist = " ".join(history[-16:]).lower()
     relaunches = int(bucket.get("relaunches") or 0)
     backs = int(bucket.get("backs") or 0)
@@ -802,9 +800,7 @@ def _recover_to_root_action(
     return _fp(
         {
             "action": "fail",
-            "reason": (
-                f"Could not reach known root for {app_l} ({planner})"
-            ),
+            "reason": (f"Could not reach known root for {app_l} ({planner})"),
             "planner": planner,
             "llm_provider": None,
         },
@@ -1175,8 +1171,7 @@ def plan_bulk_swipe(
                     "x": int(xy[0]),
                     "y": int(xy[1]),
                     "reason": (
-                        f"Bumble People grid → Discover card deck "
-                        f"({planner})"
+                        f"Bumble People grid → Discover card deck " f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -1527,9 +1522,8 @@ def plan_bulk_swipe(
         # Bumble: People is a photo GRID — Discover (left tab) is the card deck.
         # Badoo: Encounters (nav_bar_button_encounters), never People/Discover.
         if app == "bumble":
-            disc = (
-                _exact_label_center(ui_tree, "Discover")
-                or _tree_node_center(ui_tree, "Discover", "Open Discover")
+            disc = _exact_label_center(ui_tree, "Discover") or _tree_node_center(
+                ui_tree, "Discover", "Open Discover"
             )
             if not disc:
                 xy = DM_APP_PROFILES["bumble"].get("discover_tab_xy") or (324, 2197)

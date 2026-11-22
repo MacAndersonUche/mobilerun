@@ -2064,10 +2064,7 @@ def yubo_on_chat(tree: str) -> bool:
     # Compose-only fallback inside Yubo window
     return bool(
         find_compose_center(tree, ("Aa", "Message"), ())
-        and any(
-            (n.get("label") or "").strip().lower() == "back"
-            for n in nodes
-        )
+        and any((n.get("label") or "").strip().lower() == "back" for n in nodes)
     )
 
 
@@ -2682,9 +2679,7 @@ def hily_back_from_photo_viewer(
         {
             "action": "press_button",
             "button": "back",
-            "reason": (
-                f"Back out of Hily photo viewer before swipe/chats ({planner})"
-            ),
+            "reason": (f"Back out of Hily photo viewer before swipe/chats ({planner})"),
             "planner": planner,
             "llm_provider": None,
         },
