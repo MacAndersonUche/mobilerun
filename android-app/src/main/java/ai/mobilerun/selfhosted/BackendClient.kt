@@ -1113,7 +1113,7 @@ class BackendClient(private val context: Context) {
                                 )
                             val notif =
                                 android.app.Notification.Builder(context, channelId)
-                                    .setContentTitle("Mobilerun update ${release.tag}")
+                                    .setContentTitle("MacMobileRun update ${release.tag}")
                                     .setContentText("Tap to install v${release.versionName}")
                                     .setSmallIcon(R.drawable.ic_stat_mobilerun)
                                     .setContentIntent(pi)
@@ -1828,7 +1828,7 @@ class BackendClient(private val context: Context) {
                     )
                 }
                 val notif = android.app.Notification.Builder(context, channelId)
-                    .setContentTitle("MobileRun")
+                    .setContentTitle("MacMobileRun")
                     .setContentText("Opening requested screen…")
                     .setSmallIcon(R.drawable.ic_stat_mobilerun)
                     .setContentIntent(pi)

@@ -146,7 +146,7 @@ export default function AccountSheet({
           Log out
         </Button>
 
-        <p className="pt-1 text-center text-xs text-mute">MobileRun by MacAI</p>
+        <p className="pt-1 text-center text-xs text-mute">MacMobileRun</p>
       </div>
     </Sheet>
   );

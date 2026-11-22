@@ -21,7 +21,7 @@ export default function SocialPage() {
   const [apps, setApps] = useState<AppRow[]>([]);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [sigOn, setSigOn] = useState(true);
-  const [sigText, setSigText] = useState('— from MacAI');
+  const [sigText, setSigText] = useState('— from MacMobileRun');
   const [askNew, setAskNew] = useState(true);
   const [emailNotify, setEmailNotify] = useState(false);
   const [running, setRunning] = useState(false);
@@ -48,7 +48,7 @@ export default function SocialPage() {
       setApps(cfg.data.apps || []);
       setSpeed(cfg.data.speed_preset || 'balanced');
       setSigOn(cfg.data.signature?.enabled_global ?? true);
-      setSigText(cfg.data.signature?.text || '— from MacAI');
+      setSigText(cfg.data.signature?.text || '— from MacMobileRun');
       setAskNew(cfg.data.escalation?.always_ask_new_contacts ?? true);
       setEmailNotify(!!cfg.data.email_notify);
       setRunning(!!status.data.running);
@@ -176,11 +176,15 @@ export default function SocialPage() {
     <div className="mr-page space-y-6">
       <div>
         <h2 className="text-2xl font-semibold flex items-center gap-2">
-          <MessageCircle className="text-emerald-400" /> Social Mode
+          <MessageCircle className="text-emerald-400" /> Social
         </h2>
         <p className="text-mute mt-1 text-sm">
-          WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + replies in
-          Mac&apos;s tone with humanizer pacing. Sensitive drafts go to{' '}
+          Secondary to{' '}
+          <Link to="/dating" className="text-accent underline underline-offset-2">
+            Run
+          </Link>
+          . WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + replies
+          with humanizer pacing. Sensitive drafts go to{' '}
           <Link to="/needs-you" className="text-amber-300 underline">
             Needs you
           </Link>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Heart, Play, Pause, Square, RefreshCw } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
@@ -510,16 +511,23 @@ export default function DatingPage() {
 
   return (
     <div className="mr-page space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-semibold flex items-center gap-2">
-            <Heart className="text-rose-400" /> Dating Mode
-          </h2>
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
+            <Heart className="text-rose-400" /> Run
+          </h1>
           <p className="text-mute mt-1">
-            Sequential messaging · human-like pacing · per-app caps
+            MacMobileRun · app selection, dry-run, openers, start/stop, activity
+          </p>
+          <p className="text-mute mt-1 text-sm">
+            Covers new contacts, existing chats, or both — dating here,{' '}
+            <Link to="/social" className="text-accent underline underline-offset-2">
+              Social
+            </Link>{' '}
+            for unread chat follow-ups.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <span
             className={`px-3 py-1 rounded text-sm ${
               status?.running && !status.paused

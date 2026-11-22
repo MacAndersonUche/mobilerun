@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">Mobilerun</string>
-    <string name="accessibility_service_description">Allows Mobilerun to control your device for automation tasks</string>
+    <string name="app_name">MacMobileRun</string>
+    <string name="accessibility_service_description">Allows MacMobileRun to control your device for automation tasks</string>
     <string name="keyboard_name">MacAuto Keyboard</string>
     <string name="keyboard_on">MacAuto Keyboard</string>
     <string name="switch_keyboard">Switch</string>

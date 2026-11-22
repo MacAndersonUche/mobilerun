@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hinge Matches: Your turn / Their turn / Hidden — skip Hidden -->
+<hierarchy>
+  <w p="co.hinge.app" a="1">
+    <n t="Matches" xy="540,120" b="[0,80][1080,160]" />
+    <n t="Your turn" xy="200,280" b="[40,240][400,320]" />
+    <n t="Sam" xy="300,420" b="[120,380][600,460]" c="1" />
+    <n t="Hey there" xy="300,480" b="[120,460][700,520]" />
+    <n t="Their turn" xy="200,620" b="[40,580][400,660]" />
+    <n t="Jordan" xy="300,760" b="[120,720][600,800]" c="1" />
+    <n t="Hidden" xy="200,980" b="[40,940][400,1020]" />
+    <n t="Riley" xy="300,1120" b="[120,1080][600,1160]" c="1" />
+  </w>
+</hierarchy>

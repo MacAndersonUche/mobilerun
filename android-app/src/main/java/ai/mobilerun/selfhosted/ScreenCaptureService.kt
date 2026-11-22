@@ -242,7 +242,7 @@ class ScreenCaptureService : Service() {
 
     private fun buildNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Mobilerun live view")
+            .setContentTitle("MacMobileRun live view")
             .setContentText("Streaming screen to control UI")
             .setSmallIcon(R.drawable.ic_stat_mobilerun)
             .setOngoing(true)

@@ -17,8 +17,8 @@
     <!-- Optional: adb `pm grant` / device-owner for Accessibility Binding recover -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
-    <!-- SYSTEM_ALERT_WINDOW / USE_FULL_SCREEN_INTENT dropped: not required for agent
-         work; BAL uses move-to-front + PendingIntent. Live screenshots use a11y API 30+. -->
+    <!-- Floating Connected bubble (OverlayBubbleService) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
     <!-- In-app self-update → system PackageInstaller prompt -->
@@ -134,6 +134,11 @@
             android:name=".ConnectionService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Floating bubble while Connected (SYSTEM_ALERT_WINDOW) -->
+        <service
+            android:name=".OverlayBubbleService"
+            android:exported="false" />
 
         <!-- Live screen capture via MediaProjection (one-time user grant) -->
         <service

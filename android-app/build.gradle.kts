@@ -13,9 +13,9 @@ android {
         minSdk = 26
         targetSdk = 35
         
-        // Version from GitHub Actions
-        versionCode = (project.findProperty("VERSION_CODE") as String?)?.toIntOrNull() ?: 1
-        versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.0"
+        // Version from GitHub Actions (CI overrides with run_number); local default for assembleRelease
+        versionCode = (project.findProperty("VERSION_CODE") as String?)?.toIntOrNull() ?: 400
+        versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.400"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

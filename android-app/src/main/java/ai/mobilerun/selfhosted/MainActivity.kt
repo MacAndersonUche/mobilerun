@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
  * Pairing + minimal setup.
  *
  * Manual: Accessibility (system toggle) — deep-linked to this service.
- * Automatic (system dialogs): POST_NOTIFICATIONS, battery unrestricted.
+ * Automatic (system dialogs): POST_NOTIFICATIONS, battery unrestricted, overlay.
  * On-demand only: MediaProjection when Live View starts (API 30+ screenshots
  * for agent steps use AccessibilityService.takeScreenshot instead).
  */
@@ -45,6 +45,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private val batteryExemptionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        runAutoGrantChain(fromCallback = true)
+    }
+
+    private val overlaySettingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         runAutoGrantChain(fromCallback = true)
@@ -139,6 +145,7 @@ class MainActivity : ComponentActivity() {
         if (::backendClient.isInitialized) {
             backendClient.reportPermissions(mediaProjectionGranted)
             backendClient.ensureServerConnected("main_onResume")
+            OverlayBubbleService.sync(this, backendClient.statusFlow.value)
             if (backendClient.isPaired()) {
                 runAutoGrantChain(fromCallback = false)
             }
@@ -176,8 +183,19 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (!PermissionStatus.canDrawOverlays(this)) {
+            autoGrantRunning = true
+            try {
+                overlaySettingsLauncher.launch(PermissionStatus.overlayPermissionIntent(this))
+            } catch (_: Exception) {
+                PermissionStatus.openOverlaySettings(this)
+                autoGrantRunning = false
+            }
+            return
+        }
         autoGrantRunning = false
         backendClient.reportPermissions(mediaProjectionGranted)
+        OverlayBubbleService.sync(this, backendClient.statusFlow.value)
     }
 
     private fun handleDeepLink(uri: Uri) {
@@ -259,7 +277,10 @@ fun MainScreen(
     }
 
     LaunchedEffect(Unit) {
-        backendClient.statusFlow.collect { connectionStatus = it }
+        backendClient.statusFlow.collect { status ->
+            connectionStatus = status
+            OverlayBubbleService.sync(activity, status)
+        }
     }
     LaunchedEffect(Unit) {
         backendClient.routeFlow.collect { routeStatus = it }
@@ -317,7 +338,7 @@ fun MainScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(text = "MobileRun", style = MaterialTheme.typography.headlineLarge)
+            Text(text = "MacMobileRun", style = MaterialTheme.typography.headlineLarge)
             Text(
                 text = "Executor · wireless · MacAI",
                 style = MaterialTheme.typography.bodyMedium,
@@ -412,7 +433,9 @@ fun MainScreen(
                 val showA11yStuck = snap.accessibilityStuckBinding
                 val showNotifs = !snap.notifications
                 val showBattery = !snap.batteryOptimization
-                val setupDone = snap.readyForAgent && snap.notifications && snap.batteryOptimization
+                val showOverlay = !snap.overlay
+                val setupDone = snap.readyForAgent && snap.notifications &&
+                    snap.batteryOptimization && snap.overlay
 
                 if (!setupDone || showRestricted || showA11yStuck) {
                     Card(modifier = Modifier.fillMaxWidth()) {
@@ -426,7 +449,7 @@ fun MainScreen(
                                     showA11yStuck ->
                                         "Accessibility is stuck Binding after install. Tap Recover — or toggle it Off/On in system settings."
                                     showA11y ->
-                                        "One manual step: turn on Accessibility. Notifications and battery are requested automatically."
+                                        "One manual step: turn on Accessibility. Notifications, battery, and overlay are requested automatically."
                                     else ->
                                         "Finishing automatic system prompts…"
                                 },
@@ -436,7 +459,7 @@ fun MainScreen(
                             if (showRestricted) {
                                 AssistCard(
                                     title = "Allow restricted settings (Android 13+)",
-                                    body = "Sideloaded apps need this before Accessibility can turn on. Apps → MobileRun → ⋮ → Allow restricted settings.",
+                                    body = "Sideloaded apps need this before Accessibility can turn on. Apps → MacMobileRun → ⋮ → Allow restricted settings.",
                                     actionLabel = "Open app settings",
                                     onClick = {
                                         onOpenRestrictedSettings()
@@ -479,6 +502,13 @@ fun MainScreen(
                             if (showBattery) {
                                 Text(
                                     "Waiting for battery unrestricted prompt…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (showOverlay) {
+                                Text(
+                                    "Waiting for “Display over other apps” so the Connected bubble can appear…",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

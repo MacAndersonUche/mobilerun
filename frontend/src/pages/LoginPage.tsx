@@ -15,10 +15,10 @@ export default function LoginPage() {
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-1">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">MacAI</p>
-            <h1 className="text-3xl font-semibold tracking-tight">Welcome to MobileRun</h1>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">MacMobileRun</p>
+            <h1 className="text-3xl font-semibold tracking-tight">Welcome to MacMobileRun</h1>
             <p className="text-sm text-mute">
-              Sign in to manage agents. The APK executes on your phone with the same account.
+              Sign in to run dating & social on your phone. The APK uses the same account.
             </p>
           </div>
 
@@ -82,7 +82,7 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Brand panel — original MacAI composition (no third-party assets) */}
+      {/* Brand panel */}
       <div className="relative hidden overflow-hidden bg-[#0e0e11] md:flex md:flex-col md:justify-between md:p-10">
         <div
           className="pointer-events-none absolute inset-0 opacity-40"
@@ -92,18 +92,18 @@ export default function LoginPage() {
           }}
         />
         <div className="relative">
-          <p className="text-[10px] uppercase tracking-[0.25em] text-mute">MobileRun by MacAI</p>
+          <p className="text-[10px] uppercase tracking-[0.25em] text-mute">MacMobileRun</p>
         </div>
         <div className="relative space-y-4">
           <p className="font-mono text-3xl font-semibold uppercase leading-tight tracking-wide text-white">
-            One API
+            Dating &
             <br />
-            on top of
+            social
             <br />
-            your phone
+            on your phone
           </p>
           <p className="max-w-sm text-sm text-mute">
-            Hosted UI manages agents · APK executes wirelessly · same Cognito account.
+            Run openers and chats · APK executes wirelessly · same Cognito account.
           </p>
           <div className="mt-8 flex gap-3">
             {[0, 1, 2].map((i) => (

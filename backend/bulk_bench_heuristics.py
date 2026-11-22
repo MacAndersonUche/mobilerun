@@ -48,6 +48,15 @@ try:
         hily_like_action,
         hily_on_finder,
         hily_pass_action,
+        hinge_deck_card_name,
+        hinge_dismiss_enable_prompt,
+        hinge_find_compose,
+        hinge_find_send_a_message,
+        hinge_on_discover,
+        hinge_on_matches,
+        hinge_open_discover_tab,
+        tagged_deck_card_name,
+        tagged_on_deck,
         taimi_deck_card_name,
         taimi_dismiss_paywall,
         taimi_is_curated_card,
@@ -94,6 +103,15 @@ except ImportError:
         hily_like_action,
         hily_on_finder,
         hily_pass_action,
+        hinge_deck_card_name,
+        hinge_dismiss_enable_prompt,
+        hinge_find_compose,
+        hinge_find_send_a_message,
+        hinge_on_discover,
+        hinge_on_matches,
+        hinge_open_discover_tab,
+        tagged_deck_card_name,
+        tagged_on_deck,
         taimi_deck_card_name,
         taimi_dismiss_paywall,
         taimi_is_curated_card,
@@ -112,6 +130,7 @@ except ImportError:
 DETECTOR_SETTLE_S = 1.5
 
 # Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
+# Hinge Discover uses Send-a-message (handled separately); Tagged scaffold uses ids.
 _REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk", "taimi"})
 
 
@@ -526,6 +545,10 @@ def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
         return blk_deck_card_name(tree)
     if app == "taimi":
         return taimi_deck_card_name(tree)
+    if app == "hinge":
+        return hinge_deck_card_name(tree)
+    if app == "tagged":
+        return tagged_deck_card_name(tree)
     # Fake-chats / generic: ProfileNN or first mid-card title
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or n.get("desc") or "").strip()
@@ -574,6 +597,10 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
     if app == "taimi" and (
         taimi_on_people_deck(tree) or taimi_swipes_left(tree) is not None
     ):
+        return True
+    if app == "hinge" and hinge_on_discover(tree):
+        return True
+    if app == "tagged" and tagged_on_deck(tree):
         return True
     return False
 
@@ -914,6 +941,80 @@ def plan_bulk_swipe(
                 },
                 "bulk_taimi_exhausted",
             )
+    if app == "hinge":
+        popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if hinge_on_matches(ui_tree) and not hinge_on_discover(ui_tree):
+            if "open hinge discover" not in hist and "hinge_open_discover" not in hist:
+                act = hinge_open_discover_tab(planner=planner)
+                act["dry_run"] = bool(dry_run)
+                return act
+        if not deck_visible and "open hinge discover" not in hist:
+            act = hinge_open_discover_tab(planner=planner)
+            act["dry_run"] = bool(dry_run)
+            return act
+        # Discover "like" = Send a message with bank/instruction text — never Rose
+        if dry_run and deck_visible:
+            card = deck_card_name(app, ui_tree)
+            send_cta = hinge_find_send_a_message(ui_tree)
+            compose = hinge_find_compose(ui_tree)
+            if not card and not send_cta and not compose:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"dry_run — Hinge Discover not verified "
+                            f"(no name / Send a message) ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": False,
+                    },
+                    "bulk_dry_run_hinge_unverified",
+                )
+            label = card or "Discover card"
+            bulk["done"] = target
+            bulk["dry_logs"] = [
+                f"[DRY RUN] would like/pass {target} cards "
+                f"(deck verified on {label})"
+            ]
+            st["bulk_swipe"] = bulk
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] would like/pass {target} cards "
+                        f"(deck verified on {label}) — no Rose/Send "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "bulk_swipe_done": target,
+                    "bulk_swipe_target": target,
+                    "screenshot": True,
+                },
+                "bulk_dry_run_skip_like",
+            )
+        if not dry_run and deck_visible:
+            # Live Discover likes require message-bank / say text — refuse Rose
+            msg = (goal.get("message") or "").strip()
+            if not msg:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            "Hinge Discover requires message-bank / say text "
+                            f"— refusing Rose/Boost/Preferred/HingeX ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_hinge_needs_message",
+                )
 
     # Interruptions first (match / upsell / out-of-likes)
     tl = (ui_tree or "").lower()

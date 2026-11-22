@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Compact multi-window tree: Hinge Discover with Send a message (Mac map) -->
+<hierarchy>
+  <w p="co.hinge.app" a="1">
+    <n t="Alex, 27" xy="540,420" b="[80,360][1000,480]" />
+    <n t="Prompt answer here" xy="540,900" b="[80,800][1000,1000]" />
+    <n t="Send a message" xy="540,2050" b="[120,1980][960,2120]" c="1" />
+    <n t="Rose" xy="900,2050" b="[820,1980][980,2120]" c="1" d="Rose" />
+    <n e="1" xy="400,2050" b="[80,1980][700,2120]" h="Type a message" />
+  </w>
+  <w p="com.android.systemui" a="0">
+    <n t="Status bar" xy="540,40" b="[0,0][1080,80]" />
+  </w>
+</hierarchy>

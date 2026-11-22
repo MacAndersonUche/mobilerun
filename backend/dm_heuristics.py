@@ -639,15 +639,26 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "like_xy": (761, 1948),
     },
     "hinge": {
+        # Real-device map: Mac SM-G996B 1080x2400 (22 Nov). Bottom nav y≈2195
+        # exposes ~0 a11y nodes on main tabs → use verified nav xy.
         "aliases": ("hinge",),
         "package": "co.hinge.app",
         "pkg_markers": ("hinge",),
         "open_label": "Hinge",
+        "open_settle_s": 5.0,
+        "family": "swipe",
         "inbox_labels": ("Matches", "Messages", "Chats", "Liked You", "Inbox"),
-        "new_chat_labels": ("Matches", "Liked You"),
+        "inbox_tab_labels": ("Matches",),
+        # Bottom nav centres (x, y≈2195): Discover / Standouts / Likes You / Matches / Profile
+        "deck_tab_xy": (110, 2195),  # Discover
+        "standouts_tab_xy": (323, 2195),
+        "likes_tab_xy": (539, 2195),  # Likes You
+        "inbox_tab_xy": (754, 2195),  # Matches
+        "profile_tab_xy": (970, 2195),
+        "new_chat_labels": ("Matches", "Your turn", "Their turn"),
         "search_labels": ("Search", "Search…"),
         "search_ids": ("id/likes_search", "id/likes_search_input"),
-        "search_fallback": (980, 160),
+        "search_fallback": None,
         "result_ids": ("id/like_row", "id/like_name"),
         "header_ids": ("id/conversation_title",),
         "compose_labels": (
@@ -655,12 +666,66 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "Message",
             "Your message",
             "Say something",
+            "Send a message",
         ),
         "compose_ids": ("id/your_message", ":id/your_message"),
-        "send_labels": ("Send",),
+        "send_labels": ("Send", "Send a message"),
         "send_ids": ("id/send_message", ":id/send_message"),
-        "send_fallback": (1000, 2280),
-        "compose_fallback": (540, 2250),
+        "send_fallback": None,
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        "prefer_clear_before_type": True,
+        # Paid / upsell — never Rose, Boost, Preferred, HingeX, Super Like
+        "never_tap_labels": (
+            "Rose",
+            "Send a Rose",
+            "Boost",
+            "Preferred",
+            "HingeX",
+            "Hinge X",
+            "Super Like",
+            "Send Super Like",
+            "Standouts",  # paid Standouts feed entry from Discover actions
+            "Enable for",  # notification: Enable for <Name>
+        ),
+        "never_tap_ids": (),
+        # Dismiss "Enable for <Name>" push prompt
+        "notif_dismiss_xy": (985, 396),
+    },
+    "tagged": {
+        # Scaffold — real-device map TBD; package + guards only for now.
+        "aliases": ("tagged",),
+        "package": "com.taggedapp",
+        "pkg_markers": ("tagged",),
+        "open_label": "Tagged",
+        "open_settle_s": 5.0,
+        "family": "swipe",
+        "like_ids": ("id/tagged_like", "tagged_like"),
+        "pass_ids": ("id/tagged_pass", "tagged_pass"),
+        "inbox_labels": ("Messages", "Chats", "Matches", "Inbox"),
+        "inbox_tab_labels": ("Messages", "Chats"),
+        "new_chat_labels": ("Messages", "Chats", "Matches"),
+        "search_labels": ("Search", "Search…"),
+        "search_ids": (),
+        "search_fallback": None,
+        "result_ids": ("id/tagged_match_row", "id/match_row"),
+        "header_ids": (),
+        "compose_labels": ("Message", "Type a message", "Say something", "Aa"),
+        "compose_ids": ("id/message_input",),
+        "send_labels": ("Send",),
+        "send_ids": ("id/send_button",),
+        "send_fallback": None,
+        "compose_fallback": None,
+        "prefer_tap_send": True,
+        "never_tap_labels": (
+            "Boost",
+            "Super Like",
+            "Premium",
+            "Gold",
+            "Subscribe",
+            "Buy credits",
+        ),
+        "never_tap_ids": (),
     },
 }
 
@@ -2813,7 +2878,301 @@ def blk_outgoing_verified(tree: str, message: str) -> bool:
     return saw_msg and saw_sent
 
 
-# --- Taimi (com.takimi.android) SM-G996B — RN, FLAG_SECURE, no vision ---
+# --- Hinge (co.hinge.app) SM-G996B — sparse a11y on main tabs ---
+
+
+def hinge_on_discover(tree: str, *, _log: bool = True) -> bool:
+    """Discover feed / profile: message box or 'Send a message', not Matches list."""
+    if hinge_on_matches(tree, _log=False):
+        return False
+    if hinge_on_thread(tree):
+        return False
+    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    if not nodes:
+        nodes = _parse_compact_nodes(tree)
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
+        for n in nodes
+    ).lower()
+    if "send a message" in blob:
+        return True
+    if any(n.get("editable") for n in nodes) and (
+        "discover" in blob or "like" in blob or "rose" in blob
+    ):
+        return True
+    # Prompt / name + age style card without Your turn
+    if "your turn" not in blob and "their turn" not in blob:
+        if any(
+            t in blob
+            for t in ("compatible", "most compatible", "we met on hinge", "prompt")
+        ):
+            return True
+    return False
+
+
+def hinge_on_matches(tree: str, *, _log: bool = True) -> bool:
+    """Matches tab: Your turn / Their turn / Hidden section headers."""
+    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    if not nodes:
+        nodes = _parse_compact_nodes(tree)
+    blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
+    has_turn = "your turn" in blob or "their turn" in blob
+    has_hidden = bool(re.search(r"\bhidden\b", blob))
+    # Avoid treating Discover "Send a message" as Matches
+    if "send a message" in blob and not has_turn:
+        return False
+    return has_turn or (has_hidden and "matches" in blob)
+
+
+def hinge_on_thread(tree: str) -> bool:
+    """Thread: sole EditText composer, not Discover CTA or Matches list."""
+    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    if not nodes:
+        nodes = _parse_compact_nodes(tree)
+    edits = [n for n in nodes if n.get("editable")]
+    if len(edits) != 1:
+        return False
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
+        for n in nodes
+    ).lower()
+    if "your turn" in blob or "their turn" in blob:
+        return False
+    # Discover profile has EditText + 'Send a message' / Rose — not a thread
+    if "send a message" in blob or "rose" in blob:
+        return False
+    return True
+
+
+def hinge_deck_card_name(tree: str) -> Optional[str]:
+    """Profile / Discover name — never invent profile_N."""
+    skip = {
+        "send a message",
+        "like",
+        "rose",
+        "boost",
+        "preferred",
+        "hingex",
+        "hinge x",
+        "discover",
+        "standouts",
+        "likes you",
+        "matches",
+        "profile",
+        "your turn",
+        "their turn",
+        "hidden",
+        "message",
+        "type a message",
+        "say something",
+        "skip",
+        "comment",
+        "share",
+        "enable for",
+        "dismiss",
+    }
+    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    if not nodes:
+        nodes = _parse_compact_nodes(tree)
+    candidates: List[Tuple[int, str]] = []
+    for n in nodes:
+        t = (n.get("text") or "").strip()
+        if not t or len(t) > 40:
+            continue
+        low = t.lower()
+        if low in skip or low.startswith("enable for"):
+            continue
+        if re.match(r"^profile\d+$", t, re.I):
+            continue
+        if re.match(r"^\d+$", t):
+            continue
+        # Name, age patterns: "Alex, 28" or plain "Alex"
+        y = int(n.get("y1") if n.get("y1") is not None else n.get("y") or 0)
+        if y > 1800:
+            continue
+        name = t.split(",")[0].strip()
+        if len(name) < 2:
+            continue
+        if not re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,30}$", name):
+            continue
+        candidates.append((y, name))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def hinge_dismiss_enable_prompt(
+    tree: str, planner: str = "hinge_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Never tap 'Enable for <Name>'; dismiss at verified xy or Dismiss label."""
+    nodes = _parse_compact_nodes(tree)
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
+        for n in nodes
+    ).lower()
+    if "enable for" not in blob and "get messages notifications" not in blob:
+        return None
+    dismiss = _tree_node_center(tree, "Dismiss", "Not now", "No thanks", "Close")
+    if dismiss:
+        return _fp(
+            {
+                "action": "tap",
+                "x": dismiss[0],
+                "y": dismiss[1],
+                "reason": f"Dismiss Hinge Enable-for prompt ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_dismiss_enable",
+        )
+    xy = DM_APP_PROFILES["hinge"].get("notif_dismiss_xy") or (985, 396)
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Dismiss Hinge Enable-for prompt (map xy) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_dismiss_enable",
+    )
+
+
+def hinge_find_send_a_message(tree: str) -> Optional[Tuple[int, int]]:
+    """Discover / profile CTA 'Send a message' — not Rose/Boost."""
+    for n in _parse_compact_nodes(tree):
+        t = (n.get("text") or n.get("label") or "").strip().lower()
+        d = (n.get("desc") or "").strip().lower()
+        if t == "send a message" or d == "send a message":
+            return (int(n["x"]), int(n["y"]))
+    return _tree_node_center(tree, "Send a message")
+
+
+def hinge_find_compose(tree: str) -> Optional[Tuple[int, int]]:
+    """Only EditText on thread / Discover message box."""
+    edits = [n for n in _parse_compact_nodes(tree) if n.get("editable")]
+    if not edits:
+        return None
+    # Prefer bottom-most editable (composer)
+    edits.sort(key=lambda n: int(n.get("y") or 0))
+    n = edits[-1]
+    return (int(n["x"]), int(n["y"]))
+
+
+def hinge_find_match_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
+    """Matches list: Your turn / Their turn rows; skip Hidden section."""
+    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    if not nodes:
+        nodes = _parse_compact_nodes(tree)
+    hidden_y: Optional[int] = None
+    for n in nodes:
+        t = (n.get("text") or "").strip().lower()
+        if t == "hidden" or t.startswith("hidden"):
+            hidden_y = int(n.get("y") or 0)
+            break
+    best: Optional[Tuple[float, int, int]] = None
+    for n in nodes:
+        text = (n.get("text") or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        if low.startswith(("your turn", "their turn", "hidden", "enable for")):
+            continue
+        y = int(n.get("y") or 0)
+        if hidden_y is not None and y >= hidden_y:
+            continue
+        score = _fuzzy_score(contact, text)
+        if score < 0.6:
+            continue
+        if best is None or score > best[0]:
+            best = (score, int(n["x"]), y)
+    return (best[1], best[2]) if best else None
+
+
+def hinge_open_discover_tab(planner: str = "hinge_heuristic") -> Dict[str, Any]:
+    xy = DM_APP_PROFILES["hinge"].get("deck_tab_xy") or (110, 2195)
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Open Hinge Discover tab (nav xy) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_open_discover",
+    )
+
+
+def hinge_open_matches_tab(planner: str = "hinge_heuristic") -> Dict[str, Any]:
+    xy = DM_APP_PROFILES["hinge"].get("inbox_tab_xy") or (754, 2195)
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Open Hinge Matches tab (nav xy) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_open_matches",
+    )
+
+
+def hinge_is_paid_label(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return any(
+        t in low
+        for t in (
+            "rose",
+            "boost",
+            "preferred",
+            "hingex",
+            "hinge x",
+            "super like",
+            "standouts",
+        )
+    )
+
+
+# --- Tagged (com.taggedapp) scaffold ---
+
+
+def tagged_on_deck(tree: str) -> bool:
+    if _tree_id_center(tree, "id/tagged_like", "tagged_like", "id/tagged_pass"):
+        return True
+    for n in _parse_compact_nodes(tree):
+        t = (n.get("text") or n.get("label") or "").strip().lower()
+        if t not in ("like", "pass"):
+            continue
+        if int(n.get("y") or 0) > 1500:
+            return True
+    return False
+
+
+def tagged_deck_card_name(tree: str) -> Optional[str]:
+    skip = {"like", "pass", "tagged", "messages", "browse", "chat", "meet"}
+    for n in _parse_compact_nodes(tree, package_filter="com.taggedapp"):
+        text = (n.get("text") or "").strip()
+        if re.match(r"Profile\d+", text, re.I):
+            continue
+        if (
+            re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,30}$", text)
+            and int(n.get("y") or 0) < 1200
+            and text.lower() not in skip
+        ):
+            return text.split(",")[0].strip()
+    for n in _parse_compact_nodes(tree):
+        text = (n.get("text") or "").strip()
+        if (
+            re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,30}$", text)
+            and 200 < int(n.get("y") or 0) < 900
+        ):
+            if text.lower() not in skip:
+                return text.split(",")[0].strip()
+    return None
 
 
 def taimi_is_paywall(tree: str) -> bool:
@@ -4018,6 +4377,39 @@ def heuristic_dm_send(
                     "taimi_tap_chat",
                 )
 
+    # --- Hinge real-device path (sparse a11y; never Rose/Boost/Preferred/HingeX) ---
+    if app_key == "hinge" and pkg_ok:
+        popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if (
+            not chat_ok
+            and not typed_message
+            and hinge_on_discover(ui_tree)
+            and not hinge_on_matches(ui_tree)
+            and not hinge_on_thread(ui_tree)
+        ):
+            return hinge_open_matches_tab(planner=planner)
+        if (
+            not chat_ok
+            and not typed_message
+            and not tapped_contact
+            and hinge_on_matches(ui_tree)
+        ):
+            row = hinge_find_match_row(ui_tree, contact)
+            if row:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": row[0],
+                        "y": row[1],
+                        "reason": f"Tap Hinge match '{contact}' (skip Hidden) ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hinge_tap_match",
+                )
+
     # 0a) If the contact row is already on-screen (inbox / matches list), tap it
     # before any search field — dating decks often expose a Search affordance
     # that would otherwise steal the flow. Never tap deck cards / counters /
@@ -4075,6 +4467,7 @@ def heuristic_dm_send(
         and not (app_key == "hily" and hily_on_chats_list(ui_tree))
         and not (app_key == "blk" and blk_on_matches(ui_tree))
         and not (app_key == "taimi" and taimi_on_chats_list(ui_tree))
+        and not (app_key == "hinge" and hinge_on_matches(ui_tree))
     ):
         # Prefer Chats / Matches tab when on a swipe deck (has Like/Pass)
         on_deck = (
@@ -4087,6 +4480,8 @@ def heuristic_dm_send(
             or (app_key == "hily" and hily_on_finder(ui_tree))
             or (app_key == "blk" and blk_on_deck(ui_tree))
             or (app_key == "taimi" and taimi_on_people_deck(ui_tree))
+            or (app_key == "hinge" and hinge_on_discover(ui_tree))
+            or (app_key == "tagged" and tagged_on_deck(ui_tree))
         )
         if on_deck or not _tree_node_center(ui_tree, *search_labels):
             c = _tree_node_center(ui_tree, *tuple(profile["inbox_labels"]))
@@ -4103,7 +4498,15 @@ def heuristic_dm_send(
                     "open_inbox",
                 )
             # Dating apps with verified nav tab xy — never a random toolbar guess
-            if app_key in ("bumble", "yubo", "badoo", "hily", "blk", "taimi"):
+            if app_key in (
+                "bumble",
+                "yubo",
+                "badoo",
+                "hily",
+                "blk",
+                "taimi",
+                "hinge",
+            ):
                 tab = profile.get("inbox_tab_xy")
                 if isinstance(tab, (tuple, list)) and len(tab) >= 2:
                     return _fp(
@@ -4117,9 +4520,9 @@ def heuristic_dm_send(
                         },
                         f"{app_key}_open_chats_tab",
                     )
-            elif app_key in ("tinder", "hinge", "instagram") or (
+            elif app_key in ("tinder", "instagram") or (
                 profile.get("package") or ""
-            ).startswith(("com.tinder", "co.hinge")):
+            ).startswith(("com.tinder",)):
                 return _fp(
                     {
                         "action": "tap",
@@ -4146,6 +4549,7 @@ def heuristic_dm_send(
         and not (app_key == "hily" and hily_on_chats_list(ui_tree))
         and not (app_key == "blk" and blk_on_matches(ui_tree))
         and not (app_key == "taimi" and taimi_on_chats_list(ui_tree))
+        and not (app_key == "hinge" and hinge_on_matches(ui_tree))
     ):
         tab = _tree_node_center(
             ui_tree, "Chats", "Chat", "Matches", "Messages", "Inbox", "Connections"
@@ -4213,6 +4617,10 @@ def heuristic_dm_send(
         or (
             app_key == "taimi"
             and (taimi_on_chats_list(ui_tree) or taimi_on_thread(ui_tree))
+        )
+        or (
+            app_key == "hinge"
+            and (hinge_on_matches(ui_tree) or hinge_on_thread(ui_tree))
         )
     )
     if not chat_ok and not typed_contact and not tapped_search and not skip_search:
@@ -4692,6 +5100,11 @@ def heuristic_dm_send(
             c = blk_send_relative_to_edittext(ui_tree)
         if c is None and app_key == "taimi":
             c = taimi_send_relative_to_edittext(ui_tree)
+        if c is None and app_key == "hinge":
+            # Prefer 'Send a message' on Discover; thread uses Send
+            c = hinge_find_send_a_message(ui_tree) or find_send_center_safe(
+                ui_tree, ("Send",), send_ids=(), profile=profile
+            )
         prefer_tap = bool(profile.get("prefer_tap_send"))
         if c:
             return _fp(

@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Tagged scaffold deck with like/pass ids -->
+<hierarchy>
+  <w p="com.taggedapp" a="1">
+    <n t="Morgan" xy="540,500" b="[200,420][880,580]" />
+    <n i="id/tagged_like" d="Like" xy="780,2100" b="[700,2020][860,2180]" c="1" />
+    <n i="id/tagged_pass" d="Pass" xy="300,2100" b="[220,2020][380,2180]" c="1" />
+  </w>
+</hierarchy>

@@ -256,10 +256,10 @@ jobs:
           retention-days: 90
 
   # Prerelease APK + QR for feature branches (after green build) — does not touch main/latest
-  # FROZEN on apk-preview-381 for Mac install — re-enable the `if` when unfrozen.
+  # Enabled for MacMobileRun final-release branch only (preview; never marks latest).
   publish-apk-prerelease:
     needs: android-build
-    if: false
+    if: github.ref == 'refs/heads/cursor/macmobilerun-final-df3e' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
