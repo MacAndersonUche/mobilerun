@@ -98,6 +98,10 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val anrDismissed: Boolean,
         /** App-window nodes excluding SystemUI / nav bars (for MIN_USEFUL). */
         val appNodes: Int = 0,
+        /** Nodes with non-empty text/content-desc — 0 ⇒ screenshot+vision. */
+        val textNodes: Int = 0,
+        /** True when dump has no labels (Compose/Flutter deck) — force vision. */
+        val needsVision: Boolean = false,
     )
 
     private val screenshotExecutor = Executors.newSingleThreadExecutor { r ->
@@ -164,23 +168,23 @@ class MobilerunAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        serviceInfo = serviceInfo?.apply {
-            // INCLUDE_NOT_IMPORTANT_VIEWS is required for Compose / custom-view UIs
-            // (IG, TikTok, dating apps) — without it rows and icon buttons vanish.
-            flags = flags or
-                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            // Content changes only — not TYPES_ALL_MASK (cheaper event delivery)
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_FOCUSED or
-                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 100
-        } ?: serviceInfo
-        Log.d(TAG, "Accessibility service connected flags=${serviceInfo?.flags}")
+        // Mirror uiautomator: interactive windows + not-important views.
+        // Must call setServiceInfo — assigning flags alone can leave getWindows()
+        // empty while rootInActiveWindow stays stale (Taimi/Hinge empty dumps).
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        info.flags = info.flags or
+            AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+            AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+            AccessibilityEvent.TYPE_VIEW_FOCUSED or
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.notificationTimeout = 100
+        setServiceInfo(info)
+        Log.i(TAG, "Accessibility service connected flags=${serviceInfo?.flags}")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -913,6 +917,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val sb = StringBuilder(8192)
         val counter = intArrayOf(0)
         val appCounter = intArrayOf(0)
+        val textCounter = intArrayOf(0)
         val pkgs = linkedSetOf<String>()
         var windowCount = 0
         var partial = false
@@ -935,6 +940,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 root, " ", sb, counter, 0, deadlineMs, fullMode,
                 markPartial = { partial = true },
                 appCounter = if (countApp) appCounter else null,
+                textCounter = textCounter,
             )
             sb.append("</w>\n")
         }
@@ -955,6 +961,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             val root: AccessibilityNodeInfo,
             val pkg: String,
             val score: Int,
+            val childCount: Int,
             val isIgnoredOverlay: Boolean = false,
         )
 
@@ -962,56 +969,40 @@ class MobilerunAccessibilityService : AccessibilityService() {
             w: AccessibilityWindowInfo?,
             pkg: String,
             fromRootInActive: Boolean,
-        ): Int = PreferredPackagePolicy.scoreWindow(
-            pkg = pkg,
-            hint = hint,
-            fromRootInActive = fromRootInActive,
-            focused = w?.isFocused == true,
-            active = w?.isActive == true,
-            isApplication = w == null || w.type == AccessibilityWindowInfo.TYPE_APPLICATION,
-        )
+            childCount: Int,
+        ): Int {
+            var s = PreferredPackagePolicy.scoreWindow(
+                pkg = pkg,
+                hint = hint,
+                fromRootInActive = fromRootInActive,
+                focused = w?.isFocused == true,
+                active = w?.isActive == true,
+                isApplication = w == null || w.type == AccessibilityWindowInfo.TYPE_APPLICATION,
+            )
+            // Prefer richer roots — rootInActiveWindow is often empty/stale for
+            // Compose / FLAG_SECURE while getWindows() TYPE_APPLICATION has nodes
+            // (Taimi: uiautomator 214 nodes, our dump nodes=0 via empty rootInActive).
+            if (w != null && w.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                s += 30
+            }
+            if (childCount > 0) s += 40 + minOf(childCount, 20)
+            return s
+        }
+
+        fun safeChildCount(root: AccessibilityNodeInfo): Int = try {
+            root.childCount
+        } catch (_: Exception) {
+            0
+        }
 
         val candidates = mutableListOf<WinCand>()
         // Keep launcher/system root aside for empty-tree fallback only
         var fallbackRoot: AccessibilityNodeInfo? = null
         var fallbackPkg = ""
-        val rawActive = try {
-            rootInActiveWindow
-        } catch (e: Exception) {
-            Log.w(TAG, "rootInActiveWindow failed: ${e.message}")
-            null
-        }
-        if (rawActive != null) {
-            val pkg = rawActive.packageName?.toString().orEmpty()
-            if (!isIgnoredOverlayPackage(pkg)) {
-                candidates.add(
-                    WinCand(
-                        window = null,
-                        root = rawActive,
-                        pkg = pkg,
-                        score = scoreWindow(null, pkg, fromRootInActive = true),
-                    ),
-                )
-            } else {
-                // Spay/SystemUI: never preferred. Launcher: keep as last-resort
-                // fallback so home dumps are never windows=0.
-                val isSpayOrUi = pkg.lowercase().let {
-                    it.contains("spay") || it.contains("systemui") ||
-                        it.contains("mobilerun.selfhosted") || it == selfPkg
-                }
-                if (!isSpayOrUi && PreferredPackagePolicy.fallbackRoot(pkg, true)) {
-                    fallbackRoot = rawActive
-                    fallbackPkg = pkg
-                    Log.i(TAG, "keep rootInActiveWindow pkg=$pkg as empty-tree fallback")
-                } else {
-                    Log.i(TAG, "skip rootInActiveWindow pkg=$pkg (overlay/system)")
-                    try {
-                        rawActive.recycle()
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-        }
+
+        // Prefer getWindows() TYPE_APPLICATION first (uiautomator-style), then
+        // rootInActiveWindow as a fallback candidate — never the other way around
+        // when both exist for the same package with unequal richness.
         val winListProbe = try {
             windows?.toList()
         } catch (e: Exception) {
@@ -1034,11 +1025,27 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     }
                     continue
                 }
-                // Dedup same package as rawActive
-                if (candidates.any { it.pkg == pkg && it.window == null }) {
-                    try {
-                        root.recycle()
-                    } catch (_: Exception) {
+                val kids = safeChildCount(root)
+                val existingIdx = candidates.indexOfFirst { it.pkg == pkg }
+                if (existingIdx >= 0) {
+                    val existing = candidates[existingIdx]
+                    if (kids > existing.childCount) {
+                        try {
+                            existing.root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        candidates[existingIdx] = WinCand(
+                            window = w,
+                            root = root,
+                            pkg = pkg,
+                            score = scoreWindow(w, pkg, fromRootInActive = false, kids),
+                            childCount = kids,
+                        )
+                    } else {
+                        try {
+                            root.recycle()
+                        } catch (_: Exception) {
+                        }
                     }
                     continue
                 }
@@ -1047,9 +1054,79 @@ class MobilerunAccessibilityService : AccessibilityService() {
                         window = w,
                         root = root,
                         pkg = pkg,
-                        score = scoreWindow(w, pkg, fromRootInActive = false),
+                        score = scoreWindow(w, pkg, fromRootInActive = false, kids),
+                        childCount = kids,
                     ),
                 )
+            }
+        }
+        val rawActive = try {
+            rootInActiveWindow
+        } catch (e: Exception) {
+            Log.w(TAG, "rootInActiveWindow failed: ${e.message}")
+            null
+        }
+        if (rawActive != null) {
+            val pkg = rawActive.packageName?.toString().orEmpty()
+            if (!isIgnoredOverlayPackage(pkg)) {
+                val kids = safeChildCount(rawActive)
+                val existingIdx = candidates.indexOfFirst { it.pkg == pkg }
+                if (existingIdx >= 0) {
+                    val existing = candidates[existingIdx]
+                    // Keep windows() root when it is richer or equal — rootInActive
+                    // for Taimi/Hinge often reports the package with 0 children.
+                    if (kids > existing.childCount) {
+                        try {
+                            existing.root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        candidates[existingIdx] = WinCand(
+                            window = null,
+                            root = rawActive,
+                            pkg = pkg,
+                            score = scoreWindow(null, pkg, fromRootInActive = true, kids),
+                            childCount = kids,
+                        )
+                    } else {
+                        Log.i(
+                            TAG,
+                            "prefer windows() root pkg=$pkg kids=${existing.childCount} " +
+                                "over rootInActive kids=$kids",
+                        )
+                        try {
+                            rawActive.recycle()
+                        } catch (_: Exception) {
+                        }
+                    }
+                } else {
+                    candidates.add(
+                        WinCand(
+                            window = null,
+                            root = rawActive,
+                            pkg = pkg,
+                            score = scoreWindow(null, pkg, fromRootInActive = true, kids),
+                            childCount = kids,
+                        ),
+                    )
+                }
+            } else {
+                // Spay/SystemUI: never preferred. Launcher: keep as last-resort
+                // fallback so home dumps are never windows=0.
+                val isSpayOrUi = pkg.lowercase().let {
+                    it.contains("spay") || it.contains("systemui") ||
+                        it.contains("mobilerun.selfhosted") || it == selfPkg
+                }
+                if (!isSpayOrUi && PreferredPackagePolicy.fallbackRoot(pkg, true)) {
+                    fallbackRoot = rawActive
+                    fallbackPkg = pkg
+                    Log.i(TAG, "keep rootInActiveWindow pkg=$pkg as empty-tree fallback")
+                } else {
+                    Log.i(TAG, "skip rootInActiveWindow pkg=$pkg (overlay/system)")
+                    try {
+                        rawActive.recycle()
+                    } catch (_: Exception) {
+                    }
+                }
             }
         }
         // Prefer hint via score; NEVER filter away a non-matching best.
@@ -1190,7 +1267,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val body = sb.toString()
         if (body.isBlank()) {
             return TreeResult(
-                tree = """<hierarchy windows="0" nodes="0" empty="true"/>""",
+                tree = """<hierarchy windows="0" nodes="0" empty="true" text_nodes="0" needs_vision="true"/>""",
                 packageName = "",
                 empty = true,
                 chars = 0,
@@ -1202,6 +1279,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 treeGzB64 = null,
                 anrDismissed = false,
                 appNodes = 0,
+                textNodes = 0,
+                needsVision = true,
             )
         }
         val truncated = body.length >= MAX_TREE_CHARS || counter[0] >= MAX_NODES || partial
@@ -1217,6 +1296,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             ?: pkgs.firstOrNull().orEmpty()
         val nodeCount = counter[0]
         val appNodeCount = appCounter[0]
+        val textNodeCount = textCounter[0]
         // Launcher nodes count as app_nodes (home is not SystemUI chrome).
         val effectiveAppNodes = if (
             appNodeCount == 0 && nodeCount > 0 && pkgs.any { isLauncherPackage(it) }
@@ -1227,11 +1307,14 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
         // Empty only when nothing useful — SystemUI-only dumps stay empty;
         // launcher home with icons is NOT empty.
+        // Hinge: containers with 0 text still count as non-empty → vision path.
         val isEmpty = nodeCount == 0 || effectiveAppNodes == 0
+        val needsVision = isEmpty || textNodeCount == 0
         val mode = if (fullMode) "full" else "compact"
         val tree = buildString {
             append("<hierarchy windows=\"$windowCount\" nodes=\"$nodeCount\" ")
-            append("app_nodes=\"$effectiveAppNodes\" ")
+            append("app_nodes=\"$effectiveAppNodes\" text_nodes=\"$textNodeCount\" ")
+            append("needs_vision=\"$needsVision\" ")
             append("partial=\"$truncated\" empty=\"$isEmpty\" mode=\"$mode\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
@@ -1250,6 +1333,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
             treeGzB64 = null,
             anrDismissed = false,
             appNodes = effectiveAppNodes,
+            textNodes = textNodeCount,
+            needsVision = needsVision,
         )
     }
 
@@ -1308,6 +1393,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         fullMode: Boolean,
         markPartial: () -> Unit,
         appCounter: IntArray? = null,
+        textCounter: IntArray? = null,
     ) {
         if (node == null || counter[0] >= MAX_NODES || depth > MAX_DEPTH) return
         if (sb.length >= MAX_TREE_CHARS) return
@@ -1379,7 +1465,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 }
                 buildCompactNodes(
                     child, indent, sb, counter, depth + 1, deadlineMs, fullMode,
-                    markPartial, appCounter,
+                    markPartial, appCounter, textCounter,
                 )
                 try {
                     child?.recycle()
@@ -1398,6 +1484,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
         counter[0]++
         appCounter?.let { it[0]++ }
+        if (text.isNotEmpty() || contentDesc.isNotEmpty() || hint.isNotEmpty()) {
+            textCounter?.let { it[0]++ }
+        }
         val bounds = android.graphics.Rect()
         node.getBoundsInScreen(bounds)
         val cx = (bounds.left + bounds.right) / 2
@@ -1435,7 +1524,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             }
             buildCompactNodes(
                 child, indent, sb, counter, depth + 1, deadlineMs, fullMode,
-                markPartial, appCounter,
+                markPartial, appCounter, textCounter,
             )
             try {
                 child?.recycle()

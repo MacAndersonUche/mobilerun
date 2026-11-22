@@ -1842,6 +1842,9 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
             "a11y_package": str(raw.get("a11y_package") or ""),
             "fg_inferred": bool(raw.get("fg_inferred")),
             "needs_vision": bool(raw.get("needs_vision")),
+            "text_nodes": int(
+                raw.get("text_nodes") or _tree_attr_int(tree, "text_nodes")
+            ),
         }
     tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
     pkg = _tree_reported_package(tree, "")
@@ -3472,14 +3475,31 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             fg_pkg = str(tree_info.get("package") or "").lower()
             wrong_fg = _is_selfhosted_package(fg_pkg)
             fg_inferred = bool(tree_info.get("fg_inferred") or state.get("fg_inferred"))
+            text_nodes = int(tree_info.get("text_nodes") or 0)
+            if text_nodes <= 0 and ui_tree:
+                try:
+                    text_nodes = _tree_attr_int(ui_tree, "text_nodes")
+                except Exception:
+                    text_nodes = 0
+            # Hinge: container-only dump (0 text) → screenshot+vision always
+            zero_text = (
+                bool(tree_info.get("needs_vision"))
+                or ('needs_vision="true"' in (ui_tree or ""))
+                or (
+                    int(tree_info.get("nodes") or 0) > 0
+                    and text_nodes == 0
+                    and not tree_info.get("empty")
+                )
+            )
             needs_vision_hint = bool(
-                tree_info.get("needs_vision") or state.get("needs_vision")
+                tree_info.get("needs_vision") or state.get("needs_vision") or zero_text
             )
             sparse_tree = (
                 tree_info.get("empty")
                 or tree_is_sparse(ui_tree, tree_info.get("nodes"))
                 or wrong_fg
                 or (fg_inferred and int(tree_info.get("nodes") or 0) < 8)
+                or zero_text
             )
             force_vision = bool(state.get("force_vision_once")) or needs_vision_hint
             if force_vision:
@@ -3492,15 +3512,21 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     or np_streak >= 2
                     or wrong_fg
                     or fg_inferred
+                    or zero_text
                 ):
                     image_b64 = _fetch_screenshot_b64(device_id, job=job)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
             use_vision = bool(image_b64) and (
-                sparse_tree or force_vision or np_streak >= 2 or wrong_fg or fg_inferred
+                sparse_tree
+                or force_vision
+                or np_streak >= 2
+                or wrong_fg
+                or fg_inferred
+                or zero_text
             )
-            if sparse_tree or force_vision or wrong_fg or fg_inferred:
+            if sparse_tree or force_vision or wrong_fg or fg_inferred or zero_text:
                 if image_b64:
                     state["vision_fallback"] = True
                     state["tree_sparse"] = bool(sparse_tree)
@@ -3680,7 +3706,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     "no-progress: goal visible, forcing done job=%s", job.get("job_id")
                 )
             elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
-                # Alternate recovery instead of hard-fail (BLK reply Swiped loop)
+                # Fail fast after 2 same taps + at most 2 alts (was 6 → 7 min hangs
+                # on Yubo chats tab / BLK settle loops).
                 alt_n = int(state.get("same_tap_alt_n") or 0)
                 state["same_tap_alt_n"] = alt_n + 1
                 state["same_tap_streak"] = 0
@@ -3688,13 +3715,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["last_tree_fp"] = None
                 alts = (
                     {
-                        "action": "press_button",
-                        "button": "back",
-                        "reason": ("Loop guard — Back (same action, no screen change)"),
-                    },
-                    {
                         "action": "wait",
-                        "seconds": 1.0,
+                        "seconds": 0.8,
                         "reason": ("Loop guard — settle + vision before retry"),
                         "needs_vision": True,
                         "_force_vision": True,
@@ -3708,7 +3730,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         "reason": ("Loop guard — scroll for alternate surface"),
                     },
                 )
-                if alt_n < 6:
+                if alt_n < 2:
                     action = dict(alts[alt_n % len(alts)])
                     kind = str(action.get("action") or "").lower()
                     reason = str(action.get("reason") or "")
@@ -3721,13 +3743,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     kind = "fail"
                     reason = (
-                        "same action repeated with no screen change — aborting "
-                        "(heuristic loop guard after alternate recovery)"
+                        f"same action repeated ({pending_tap}) with no screen change "
+                        f"— fail fast after {alt_n + 1} loop-guard attempts "
+                        f"(refuse hung 7 min tap loop)"
                     )
                     action = {"action": "fail", "reason": reason}
                     logger.info(
                         "no-progress: failing after repeated %s job=%s",
-                        kind,
+                        pending_tap,
                         job.get("job_id"),
                     )
 

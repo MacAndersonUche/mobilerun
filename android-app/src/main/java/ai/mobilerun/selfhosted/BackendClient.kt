@@ -1772,6 +1772,12 @@ class BackendClient(private val context: Context) {
                             // a usable tree (overlay dismiss / vision / recover).
                             // Inferred FG with empty tree → force vision, not Back.
                             val emptyForTarget = detailed.empty || detailed.nodes == 0
+                            // Hinge deck: containers with 0 text → vision (not Back)
+                            val zeroText = detailed.textNodes == 0
+                            val needsVision = emptyForTarget ||
+                                inferredFg ||
+                                detailed.needsVision ||
+                                zeroText
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
                                 "package" to reportedPkg.ifBlank { a11yPkg },
@@ -1781,7 +1787,8 @@ class BackendClient(private val context: Context) {
                                 "preferred_package" to prefer,
                                 "wrong_fg" to (wrongFg && !inferredFg),
                                 "empty" to emptyForTarget,
-                                "needs_vision" to (emptyForTarget || inferredFg),
+                                "needs_vision" to needsVision,
+                                "text_nodes" to detailed.textNodes,
                                 "chars" to detailed.chars,
                                 "nodes" to detailed.nodes,
                                 "a11y" to true,
@@ -1792,6 +1799,7 @@ class BackendClient(private val context: Context) {
                                     "build_ms" to detailed.buildMs,
                                     "bytes" to detailed.bytes,
                                     "nodes" to detailed.nodes,
+                                    "text_nodes" to detailed.textNodes,
                                     "cached" to detailed.cached,
                                     "partial" to detailed.partial,
                                     "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),

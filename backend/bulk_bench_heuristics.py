@@ -2875,7 +2875,8 @@ def plan_bulk_message(
             else _open_chats_tab_action(app_key, ui_tree, history, planner)
         )
         if open_tab:
-            bulk.pop("_chats_settle_done", None)
+            # Do NOT clear settle counters — clearing caused BLK/Yubo reply to
+            # re-settle forever (tap chats → settle → tap chats → 7 min hang).
             st["bulk_message"] = bulk
             return open_tab
         opened_hist = any(
@@ -2887,8 +2888,11 @@ def plan_bulk_message(
             for h in history[-8:]
         )
         # Retry once after a short settle — real apps animate the list in.
-        if opened_hist and not bulk.get("_chats_settle_done"):
+        # Cap at 1 settle; never re-wait (BLK reply hung 7 min on settle loop).
+        settle_n = int(bulk.get("_chats_settle_n") or 0)
+        if opened_hist and settle_n < 1 and not bulk.get("_chats_settle_done"):
             bulk["_chats_settle_done"] = True
+            bulk["_chats_settle_n"] = settle_n + 1
             st["bulk_message"] = bulk
             try:
                 from cloud_agent import save_detector_miss_tree as _miss
@@ -2924,13 +2928,15 @@ def plan_bulk_message(
                 {
                     "action": "fail",
                     "reason": (
-                        f"Chat list not verified for {app_key or 'app'} — "
-                        f"refusing Match%02d / blind scroll ({planner})"
+                        f"Chat list not verified for {app_key or 'app'} after "
+                        f"chats-tab + settle — fail fast "
+                        f"(refuse hung settle loop) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
                     "dry_run_verified": False,
+                    "needs_vision": True,
                 },
                 "bulk_chat_list_unverified",
             )

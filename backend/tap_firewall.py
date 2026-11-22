@@ -351,6 +351,28 @@ def _looks_like_nav_tap(
     return False
 
 
+def _is_generic_container_id(nid: str) -> bool:
+    """True for wrapper ids like …/container that hide the real target child."""
+    low = (nid or "").lower().strip()
+    if not low:
+        return False
+    tail = low.rsplit("/", 1)[-1]
+    if ":" in tail:
+        tail = tail.rsplit(":", 1)[-1]
+    return tail in (
+        "container",
+        "root",
+        "root_container",
+        "content",
+        "content_frame",
+        "coordinator",
+        "frame",
+        "layout",
+        "wrapper",
+        "parent",
+    ) or tail.endswith("container")
+
+
 def intended_target_matches(
     resolved: Dict[str, Any],
     action: Dict[str, Any],
@@ -370,7 +392,8 @@ def intended_target_matches(
     if not want:
         # No declared intent — only paid/keyword checks apply
         return True
-    blob = f"{_norm_blob(resolved)} {point_labels or ''}".lower()
+    rid = str(resolved.get("id") or "")
+    blob = f"{_norm_blob(resolved)} {point_labels or ''} {rid}".lower()
     # Any token from intent appearing in the resolved node / children
     for tok in re.findall(r"[a-z0-9_]{3,}", want):
         if tok in ("tap", "open", "bulk", "heuristic", "planner"):
@@ -382,6 +405,48 @@ def intended_target_matches(
         val = str(resolved.get(field) or "").strip().lower()
         if val and val in want:
             return True
+    # BLK / Compose: tap resolves to a generic …/container while the intended
+    # Like/Pass/Chat lives as a descendant or in point_labels — accept when the
+    # container itself is not a paid control.
+    if _is_generic_container_id(rid):
+        paid = any(
+            p in blob
+            for p in (
+                "crush",
+                "super like",
+                "rose",
+                "boost",
+                "gold",
+                "premium",
+                "spotlight",
+            )
+        )
+        if not paid:
+            # Child/ancestor labels at the point count as a match
+            if point_labels and any(
+                tok in point_labels.lower()
+                for tok in re.findall(r"[a-z0-9_]{3,}", want)
+                if tok not in ("tap", "open", "bulk", "heuristic", "planner")
+            ):
+                return True
+            # Intention named a free nav/like control — container hit is OK
+            if any(
+                tok in want
+                for tok in (
+                    "like",
+                    "pass",
+                    "skip",
+                    "chat",
+                    "chats",
+                    "matches",
+                    "discover",
+                    "people",
+                    "finder",
+                    "message",
+                    "send",
+                )
+            ):
+                return True
     return False
 
 
