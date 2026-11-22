@@ -58,9 +58,13 @@ def prepare_outbound(
     is_new_contact: bool = False,
 ) -> OutboundDecision:
     """
-    Apply signature, classify escalation, and enqueue Needs-you when required.
-    Does NOT send — caller sends only when needs_you is False (or after approve).
+    Apply signature and classify escalation for logging.
+
+    Needs-you portal was removed — always auto-ok so social/dating auto-send
+    proceeds without a human review queue. ``queue`` is unused (kept for API
+    compatibility with callers).
     """
+    del queue  # portal queue retired
     signed = apply_signature(
         draft_reply,
         config,
@@ -77,26 +81,7 @@ def prepare_outbound(
         contact_name=contact_name,
         rules=config.escalation,
     )
-    if not decision.needs_confirmation:
-        return OutboundDecision(final_text=signed, needs_you=False, escalation=decision)
-
-    item = queue.add(
-        source="social",
-        app_name=app_name,
-        package_name=package_name,
-        conversation_id=conversation_id,
-        contact_name=contact_name,
-        inbound_preview=inbound_preview,
-        draft_reply=signed,
-        reasons=decision.reasons,
-        confidence=decision.confidence,
-    )
-    return OutboundDecision(
-        final_text=signed,
-        needs_you=True,
-        escalation=decision,
-        needs_you_id=item.id,
-    )
+    return OutboundDecision(final_text=signed, needs_you=False, escalation=decision)
 
 
 def summarize_unreads(threads: List[Dict[str, Any]]) -> Dict[str, Any]:

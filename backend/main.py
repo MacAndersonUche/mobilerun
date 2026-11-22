@@ -2359,7 +2359,7 @@ async def get_agent_mode(auth: Optional[dict] = Depends(optional_verify_token)):
     return {
         **agent_mode_state,
         "presets": describe_presets(),
-        "needs_you_badge": get_needs_you_queue().pending_count(),
+        "needs_you_badge": 0,  # Needs-you portal removed
         "modes": {
             "normal": "General-purpose phone agent (open apps, navigate, type, multi-step)",
             "dating": "Dating apps: swipes, openers, replies with human-like pacing",
@@ -2668,26 +2668,13 @@ def _load_date_flow(auth: Optional[dict] = None):
     )
 
     def _push(**kwargs) -> str:
-        q = get_needs_you_queue()
-        item = q.add(
-            source="dating",
-            app_name=str(kwargs.get("app") or "dating"),
-            package_name=str(kwargs.get("app") or ""),
-            conversation_id=str((kwargs.get("meta") or {}).get("match_id") or ""),
-            contact_name="",
-            inbound_preview="",
-            draft_reply="",
-            reasons=[str(kwargs.get("kind") or "date_handoff")],
-            meta=dict(kwargs.get("meta") or {}),
+        # Needs-you portal removed — date-flow handoffs no longer enqueue UI items.
+        logger.info(
+            "date-flow handoff (no needs-you): kind=%s app=%s",
+            kwargs.get("kind"),
+            kwargs.get("app"),
         )
-        return item.id
-
-    from mobilerun.dating.matches import MatchStore
-
-    match_store = MatchStore(user_id)
-
-    def _upsert_match(**kwargs):
-        return match_store.upsert_from_date_flow(**kwargs)
+        return ""
 
     persist = default_persist_path()
     if os.environ.get("MOBILERUN_DATA"):
@@ -2697,23 +2684,14 @@ def _load_date_flow(auth: Optional[dict] = None):
             config=cfg,
             persist_path=persist,
             push_needs_you=_push,
-            on_match_upsert=_upsert_match,
+            on_match_upsert=None,  # Matches CRM removed
         )
         _date_flow_mgr._user_id = user_id  # type: ignore[attr-defined]
-        _date_flow_mgr._match_store = match_store  # type: ignore[attr-defined]
     else:
         _date_flow_mgr.config = cfg
         _date_flow_mgr.push_needs_you = _push
-        _date_flow_mgr.on_match_upsert = _upsert_match
-        _date_flow_mgr._match_store = match_store  # type: ignore[attr-defined]
+        _date_flow_mgr.on_match_upsert = None
     return _date_flow_mgr
-
-
-def _load_match_store(auth: Optional[dict] = None):
-    """Private per-user Matches DB (DynamoDB / local). Auth-scoped only."""
-    from mobilerun.dating.matches import MatchStore
-
-    return MatchStore(_dating_user_id(auth))
 
 
 def _save_date_flow(mgr, auth: Optional[dict] = None) -> None:
@@ -3103,133 +3081,14 @@ async def evaluate_date_flow(
     }
 
 
-class MatchUpsertBody(BaseModel):
-    match_id: Optional[str] = None
-    name: str = ""
-    app: str = ""
-    package_name: str = ""
-    date_agreed: str = ""
-    distance_miles: Optional[float] = None
-    whatsapp: str = ""
-    snapchat: str = ""
-    status: str = "chatting"
-    notes: str = ""
-
-
-class MatchPatchBody(BaseModel):
-    name: Optional[str] = None
-    app: Optional[str] = None
-    package_name: Optional[str] = None
-    date_agreed: Optional[str] = None
-    distance_miles: Optional[float] = None
-    whatsapp: Optional[str] = None
-    snapchat: Optional[str] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
-
-
-@app.get("/api/dating/matches")
-async def list_dating_matches(
-    q: str = "",
-    sort: str = "updated_at",
-    order: str = "desc",
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    """Private Matches DB for the authenticated user only."""
-    if (
-        auth is None
-        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
-    ):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    store = _load_match_store(auth)
-    rows = [m.to_dict() for m in store.list(q=q, sort=sort, order=order)]
-    return {"matches": rows, "count": len(rows), "user_id": _dating_user_id(auth)}
-
-
-@app.post("/api/dating/matches")
-async def create_dating_match(
-    body: MatchUpsertBody, auth: Optional[dict] = Depends(optional_verify_token)
-):
-    if (
-        auth is None
-        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
-    ):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    from mobilerun.dating.matches import MatchRecord
-
-    store = _load_match_store(auth)
-    dump = body.dict() if hasattr(body, "dict") else body.model_dump()
-    if not dump.get("match_id"):
-        dump["match_id"] = str(uuid.uuid4())
-    dump["user_id"] = _dating_user_id(auth)
-    rec = store.upsert(MatchRecord.from_dict(dump))
-    return {"status": "success", "match": rec.to_dict()}
-
-
-@app.put("/api/dating/matches/{match_id}")
-async def update_dating_match(
-    match_id: str,
-    body: MatchPatchBody,
-    package_name: str = "",
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    if (
-        auth is None
-        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
-    ):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    store = _load_match_store(auth)
-    dump = (
-        body.dict(exclude_unset=True)
-        if hasattr(body, "dict")
-        else body.model_dump(exclude_unset=True)
-    )
-    rec = store.update(match_id, dump, package_name=package_name)
-    if not rec:
-        raise HTTPException(status_code=404, detail="Match not found")
-    return {"status": "success", "match": rec.to_dict()}
-
-
-@app.delete("/api/dating/matches/{match_id}")
-async def delete_dating_match(
-    match_id: str,
-    package_name: str = "",
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    if (
-        auth is None
-        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
-    ):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    store = _load_match_store(auth)
-    ok = store.delete(match_id, package_name=package_name)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Match not found")
-    return {"status": "success"}
-
-
+@app.api_route("/api/dating/matches", methods=["GET", "POST"])
+@app.api_route("/api/dating/matches/{match_id}", methods=["PUT", "DELETE"])
 @app.get("/api/dating/matches/export.csv")
-async def export_dating_matches_csv(
-    q: str = "",
-    sort: str = "updated_at",
-    order: str = "desc",
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    if (
-        auth is None
-        and os.environ.get("ALLOW_UNAUTHENTICATED", "false").lower() != "true"
-    ):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    from fastapi.responses import PlainTextResponse
-
-    store = _load_match_store(auth)
-    csv_text = store.export_csv(q=q, sort=sort, order=order)
-    return PlainTextResponse(
-        csv_text,
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": 'attachment; filename="matches.csv"',
-        },
+async def dating_matches_removed(match_id: str = ""):
+    """Matches CRM removed — MacMobileRun does not track matches."""
+    raise HTTPException(
+        status_code=410,
+        detail="Matches tracking removed from MacMobileRun",
     )
 
 
@@ -3685,14 +3544,8 @@ async def tick_job(job_id: str, auth: Optional[dict] = Depends(optional_verify_t
 
 @app.get("/api/dating/review-queue")
 async def get_review_queue(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Get messages in review queue (also mirrored in /api/needs-you)."""
-    _load_dating_runtime(auth)
-    return {
-        "messages": dating_mode_state["review_queue"],
-        "needs_you": [
-            i.to_dict() for i in get_needs_you_queue(auth).list_pending(source="dating")
-        ],
-    }
+    """Review queue / Needs-you removed — always empty."""
+    return {"messages": [], "needs_you": [], "removed": True}
 
 
 @app.post("/api/dating/review/{message_id}/approve")
@@ -3747,30 +3600,14 @@ async def edit_message(
 async def enqueue_dating_review(
     message: DatingMessage, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Enqueue a dating draft into review + shared Needs-you queue."""
+    """Review / Needs-you queue removed — accept payload but do not store."""
     payload = message.dict() if hasattr(message, "dict") else message.model_dump()
-    dating_mode_state["review_queue"].append(payload)
-    q = get_needs_you_queue(auth)
-    if q.get(message.id) is None:
-        q.add(
-            source="dating",
-            app_name=message.app_name,
-            package_name=message.package_name,
-            conversation_id=message.conversation_id,
-            contact_name=message.profile_name,
-            inbound_preview="",
-            draft_reply=message.message,
-            reasons=["dating_review"] + (["opener"] if message.is_opener else []),
-            confidence=0.5,
-            meta={"is_opener": message.is_opener},
-            item_id=message.id,
-        )
-    _save_dating_runtime(auth)
     return {
-        "status": "queued",
+        "status": "skipped",
         "message": payload,
-        "needs_you_id": message.id,
-        "badge": q.pending_count(),
+        "needs_you_id": None,
+        "badge": 0,
+        "removed": True,
     }
 
 
@@ -3855,7 +3692,7 @@ async def get_social_status(auth: Optional[dict] = Depends(optional_verify_token
     activity = _activity_for_mode("social", social_mode_state.get("job_id"))
     return {
         **social_mode_state,
-        "needs_you_badge": get_needs_you_queue().pending_count(),
+        "needs_you_badge": 0,
         "activity": activity,
         "job_id": social_mode_state.get("job_id") or activity.get("job_id"),
     }
@@ -4002,16 +3839,26 @@ async def report_social_unreads(
 async def social_prepare_draft(
     body: SocialDraftRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Prepare outbound reply: signature + escalation → Needs-you or auto-ok."""
-    from mobilerun.needs_you.notify import notify_needs_you
+    """Prepare outbound reply: signature applied; always auto-ok (no Needs-you)."""
     from mobilerun.social.agent import prepare_outbound
 
     cfg = _social_config()
-    q = get_needs_you_queue()
+
+    # Queue unused — prepare_outbound always returns needs_you=False
+    class _NoQueue:
+        def add(self, *a, **k):
+            raise RuntimeError("needs-you queue removed")
+
+        def get(self, *a, **k):
+            return None
+
+        def pending_count(self):
+            return 0
+
     decision = prepare_outbound(
         draft_reply=body.draft_reply,
         config=cfg,
-        queue=q,
+        queue=_NoQueue(),  # type: ignore[arg-type]
         app_name=body.app_name,
         package_name=body.package_name,
         conversation_id=body.conversation_id,
@@ -4020,31 +3867,10 @@ async def social_prepare_draft(
         confidence=body.confidence,
         is_new_contact=body.is_new_contact,
     )
-    notify_result = {}
-    if decision.needs_you and decision.needs_you_id:
-        item = q.get(decision.needs_you_id)
-        if item:
-
-            async def _broadcast(did, payload):
-                from backend.live_hub import broadcast_to_ui
-
-                await broadcast_to_ui(did if did != "all" else "", payload)
-
-            # Notify all connected devices + any UI subscribers
-            for did in list(connected_devices.keys()) or [""]:
-                notify_result = await notify_needs_you(
-                    item,
-                    badge_count=q.pending_count(),
-                    broadcast_ui=_broadcast,
-                    send_to_device=_send_to_device if did else None,
-                    device_id=did or None,
-                    email_enabled=cfg.email_notify,
-                    email_to=cfg.email_to,
-                )
     return {
         **decision.to_dict(),
-        "badge": q.pending_count(),
-        "notify": notify_result,
+        "badge": 0,
+        "notify": {},
         "speed_preset": cfg.speed_preset,
     }
 
@@ -4054,70 +3880,17 @@ async def list_needs_you(
     source: Optional[str] = None,
     auth: Optional[dict] = Depends(optional_verify_token),
 ):
-    q = get_needs_you_queue(auth)
-    pending = q.list_pending(source=source)
-    return {
-        "badge": q.pending_count(),
-        "items": [i.to_dict() for i in pending],
-        "all": q.to_list(),
-    }
+    """Needs-you portal removed — empty stub for old clients."""
+    return {"badge": 0, "items": [], "all": [], "removed": True}
 
 
 @app.post("/api/needs-you/{item_id}/approve")
-async def needs_you_approve(
-    item_id: str,
-    body: NeedsYouEdit = NeedsYouEdit(),
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    item = get_needs_you_queue(auth).approve(item_id, edited_reply=body.draft_reply)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    # Keep dating legacy queue in sync
-    dating_mode_state["review_queue"] = [
-        m for m in dating_mode_state["review_queue"] if m.get("id") != item_id
-    ]
-    _save_dating_runtime(auth)
-    return {
-        "status": "approved",
-        "item": item.to_dict(),
-        "badge": get_needs_you_queue(auth).pending_count(),
-    }
-
-
 @app.post("/api/needs-you/{item_id}/reject")
-async def needs_you_reject(
-    item_id: str, auth: Optional[dict] = Depends(optional_verify_token)
-):
-    item = get_needs_you_queue(auth).reject(item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    dating_mode_state["review_queue"] = [
-        m for m in dating_mode_state["review_queue"] if m.get("id") != item_id
-    ]
-    _save_dating_runtime(auth)
-    return {
-        "status": "rejected",
-        "item": item.to_dict(),
-        "badge": get_needs_you_queue(auth).pending_count(),
-    }
-
-
 @app.post("/api/needs-you/{item_id}/edit")
-async def needs_you_edit(
-    item_id: str,
-    body: NeedsYouEdit,
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    if body.draft_reply is None:
-        raise HTTPException(status_code=400, detail="draft_reply required")
-    item = get_needs_you_queue(auth).edit(item_id, body.draft_reply)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    for m in dating_mode_state["review_queue"]:
-        if m.get("id") == item_id:
-            m["message"] = body.draft_reply
-    _save_dating_runtime(auth)
-    return {"status": "updated", "item": item.to_dict()}
+async def needs_you_actions_removed(item_id: str):
+    raise HTTPException(
+        status_code=410, detail="Needs-you portal removed from MacMobileRun"
+    )
 
 
 # === Live view (UI WebSocket) + chat agent ===
@@ -4298,11 +4071,11 @@ async def chat_endpoint(
             except Exception as e:
                 return {"message": f"Stats unavailable: {e}", "stats": {}}
         if intent == "needs_you_list":
-            items = get_needs_you_queue().list_pending()
             return {
-                "message": f"{len(items)} item(s) need you",
-                "badge": len(items),
-                "items": [i.to_dict() for i in items],
+                "message": "Needs-you portal removed — no review queue",
+                "badge": 0,
+                "items": [],
+                "removed": True,
             }
         if intent == "social_unreads":
             unread = social_mode_state.get("unread") or {}

@@ -9,7 +9,6 @@ import {
 import {
   Heart,
   Smartphone,
-  AlertTriangle,
   Settings,
   History,
   MessageCircle,
@@ -26,7 +25,6 @@ import DatingPage from './pages/DatingPage';
 import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
-import NeedsYouPage from './pages/NeedsYouPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import PairPage from './pages/PairPage';
 import { cn } from './lib/cn';
@@ -56,7 +54,6 @@ function Shell() {
     { to: '/devices', icon: Smartphone, label: 'Devices' },
     { to: '/history', icon: History, label: 'History' },
     { to: '/settings', icon: Settings, label: 'Settings' },
-    { to: '/needs-you', icon: AlertTriangle, label: 'Needs' },
   ];
 
   return (
@@ -106,14 +103,14 @@ function Shell() {
             <Route path="/devices" element={<DevicesPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/needs-you" element={<NeedsYouPage />} />
             <Route path="/social" element={<SocialPage />} />
             {/* Kept for job-run / live-view / pairing deep links; not in primary nav */}
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/live" element={<LiveViewPage />} />
             <Route path="/account" element={<AccountPage />} />
-            {/* Matches date-flow UI folded into Run */}
+            {/* Legacy Needs you / Matches URLs → Run */}
+            <Route path="/needs-you" element={<Navigate to="/dating" replace />} />
             <Route path="/matches" element={<Navigate to="/dating" replace />} />
             <Route path="/pair" element={<PairPage />} />
             <Route path="/p/:code" element={<PairPage />} />

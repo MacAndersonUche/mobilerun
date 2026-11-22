@@ -22,7 +22,7 @@ const routes = [
   ['/', 'home'],
   ['/chat', 'chat'],
   ['/devices', 'devices'],
-  ['/needs-you', 'needs-you'],
+  ['/dating', 'dating'],
   ['/social', 'social'],
   ['/dating', 'dating'],
   ['/live', 'live'],

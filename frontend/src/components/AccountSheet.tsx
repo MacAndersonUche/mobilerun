@@ -42,7 +42,6 @@ export default function AccountSheet({
 
   const rows: [string, string][] = [
     ['Workspace', '/settings'],
-    ['Notifications', '/needs-you'],
     ['Preferences', '/settings'],
     ['AWS cost', '/settings'],
     ['Usage', '/history'],

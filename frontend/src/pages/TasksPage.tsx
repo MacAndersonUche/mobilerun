@@ -223,10 +223,6 @@ export default function TasksPage() {
           Social mode is active. Manage chats on the{' '}
           <Link to="/social" className="underline text-emerald-300">
             Social page
-          </Link>{' '}
-          or review{' '}
-          <Link to="/needs-you" className="underline text-amber-300">
-            Needs you
           </Link>
           .
         </div>

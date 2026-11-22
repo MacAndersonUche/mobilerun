@@ -466,10 +466,9 @@ def test_api_date_flow(monkeypatch, tmp_path):
     assert body3["contact_handle"] == "jordan.j92"
     assert body3["contact_kind"] == "snapchat"
 
+    # Matches CRM removed — endpoint gone
     matches = c.get("/api/dating/matches")
-    assert matches.status_code == 200
-    rows = matches.json()["matches"]
-    assert any(m["match_id"] == "api1" and m["snapchat"] == "jordan.j92" for m in rows)
+    assert matches.status_code == 410
 
     # Compose reply must stop AI
     comp = c.post(
@@ -494,74 +493,26 @@ def test_api_date_flow(monkeypatch, tmp_path):
     assert "Snapchat" in cfg2["contact_ask_snapchat_text"]
 
 
-def test_matches_api_auth_and_crud(monkeypatch, tmp_path):
+def test_matches_api_removed(monkeypatch, tmp_path):
     import importlib
 
-    monkeypatch.setenv("ALLOW_UNAUTHENTICATED", "false")
+    monkeypatch.setenv("ALLOW_UNAUTHENTICATED", "true")
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    monkeypatch.setenv("ADMIN_PASSWORD", "admin")
-    monkeypatch.setenv("ALLOWED_USER_EMAILS", "admin")
     monkeypatch.setenv("MOBILERUN_DATA", str(tmp_path))
     monkeypatch.setenv("USE_AWS_STORAGE", "false")
     monkeypatch.delenv("COGNITO_USER_POOL_ID", raising=False)
 
-    import backend.auth as auth_mod
     import backend.main as main_mod
 
-    importlib.reload(auth_mod)
     importlib.reload(main_mod)
-    main_mod._date_flow_mgr = None
     from fastapi.testclient import TestClient
 
     c = TestClient(main_mod.app)
-    assert c.get("/api/dating/matches").status_code == 401
-
-    login = c.post("/api/auth/login", json={"username": "admin", "password": "admin"})
-    assert login.status_code == 200
-    token = login.json()["access_token"]
-    h = {"Authorization": f"Bearer {token}"}
-
-    created = c.post(
-        "/api/dating/matches",
-        headers=h,
-        json={
-            "match_id": "m-auth-1",
-            "name": "Alex",
-            "app": "Hinge",
-            "package_name": "co.hinge.app",
-            "date_agreed": "Sat 7pm café",
-            "whatsapp": "+447700900999",
-            "status": "booked",
-        },
-    )
-    assert created.status_code == 200, created.text
-    assert created.json()["match"]["whatsapp"].endswith("999")
-
-    listed = c.get("/api/dating/matches", headers=h, params={"q": "Alex"})
-    assert listed.status_code == 200
-    assert listed.json()["count"] >= 1
-
-    patched = c.put(
-        "/api/dating/matches/m-auth-1",
-        headers=h,
-        params={"package_name": "co.hinge.app"},
-        json={"snapchat": "alex.snap", "status": "handed_off"},
-    )
-    assert patched.status_code == 200
-    assert patched.json()["match"]["snapchat"] == "alex.snap"
-
-    csv_r = c.get("/api/dating/matches/export.csv", headers=h)
-    assert csv_r.status_code == 200
-    assert "whatsapp" in csv_r.text.lower()
-    assert "+447700900999" in csv_r.text
-
-    deleted = c.delete(
-        "/api/dating/matches/m-auth-1",
-        headers=h,
-        params={"package_name": "co.hinge.app"},
-    )
-    assert deleted.status_code == 200
-    assert c.get("/api/dating/matches", headers=h).json()["count"] == 0
+    assert c.get("/api/dating/matches").status_code == 410
+    assert c.post("/api/dating/matches", json={"name": "Alex"}).status_code == 410
+    assert c.put("/api/dating/matches/x", json={"name": "Alex"}).status_code == 410
+    assert c.delete("/api/dating/matches/x").status_code == 410
+    assert c.get("/api/dating/matches/export.csv").status_code == 410
 
 
 def test_redact_for_log_hides_contacts():

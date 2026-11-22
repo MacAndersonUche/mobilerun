@@ -140,7 +140,7 @@ test('dating and social live activity views', async ({ page }) => {
       body: JSON.stringify({ status: 'ok', apps: [], config: {} }),
     });
   });
-  await page.route('**/api/needs-you**', async (route) => {
+  await page.route('**/api/dating/status**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

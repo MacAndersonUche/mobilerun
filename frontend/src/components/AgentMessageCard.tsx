@@ -51,7 +51,7 @@ export function parseAgentContent(
     thoughts: thoughts.length ? thoughts.join(' ') : undefined,
     steps: steps.length ? steps : undefined,
     answer: answerLines.join('\n') || content,
-    suggestions: ['device info', 'needs you', 'open Settings'],
+    suggestions: ['device info', 'open Settings'],
   };
 }
 

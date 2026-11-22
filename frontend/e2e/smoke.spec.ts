@@ -34,7 +34,7 @@ test('authenticated routes', async ({ page }) => {
   const routes = [
     ['/chat', '04-chat'],
     ['/devices', '05-devices'],
-    ['/needs-you', '06-needs-you'],
+    ['/dating', '06-dating'],
     ['/social', '07-social'],
     ['/dating', '08-dating'],
     ['/live', '09-live'],

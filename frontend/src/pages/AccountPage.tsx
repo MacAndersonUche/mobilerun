@@ -49,7 +49,6 @@ export default function AccountPage() {
       <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">
         {[
           ['Workspace', '/settings'],
-          ['Notifications', '/needs-you'],
           ['Preferences', '/settings'],
           ['AWS cost', '/settings'],
           ['Usage', '/history'],

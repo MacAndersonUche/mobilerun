@@ -215,11 +215,11 @@ test.describe('full button audit', () => {
       ['/', 'Home'],
       ['/chat', 'Chat'],
       ['/devices', 'Devices'],
-      ['/needs-you', 'Needs'],
+      ['/dating', 'Run'],
       ['/settings', 'More'],
       ['/live', 'Live'],
       ['/dating', 'Dating'],
-      ['/matches', 'Matches'],
+      ['/dating', 'Run'],
       ['/social', 'Social'],
       ['/tasks', 'Tasks'],
       ['/history', 'Activity'],
@@ -658,9 +658,9 @@ test.describe('full button audit', () => {
     await page.screenshot({ path: path.join(OUT, '06-social.png'), fullPage: true });
 
     // ---------- Needs you ----------
-    await page.goto('/needs-you');
+    await page.goto('/dating'); // needs-you removed
     await page.waitForTimeout(1000);
-    record('needs-you', 'page load', 'render', true);
+    record('dating-legacy', 'page load', 'render', true);
     // Do not approve/send real drafts — only expand/inspect or reject test items if clearly safety
     const approve = page.getByRole('button', { name: /approve|send/i });
     const reject = page.getByRole('button', { name: /reject|dismiss|skip/i });
@@ -676,15 +676,15 @@ test.describe('full button audit', () => {
       try {
         await reject.first().click();
         await page.waitForTimeout(800);
-        record('needs-you', 'Reject', 'click first', true);
+        record('dating-legacy', 'Reject', 'click first', true);
       } catch (e) {
-        record('needs-you', 'Reject', 'click first', false, String(e).slice(0, 100));
+        record('dating-legacy', 'Reject', 'click first', false, String(e).slice(0, 100));
       }
     }
-    await page.screenshot({ path: path.join(OUT, '07-needs-you.png'), fullPage: true });
+    await page.screenshot({ path: path.join(OUT, '07-dating.png'), fullPage: true });
 
     // ---------- Matches ----------
-    await page.goto('/matches');
+    await page.goto('/dating'); // matches removed
     await page.waitForTimeout(800);
     record('matches', 'page load', 'render', true);
     for (let i = 0; i < (await page.getByRole('button').count()); i++) {

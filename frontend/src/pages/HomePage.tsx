@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
-import { Heart, Smartphone, ChevronRight, Activity } from 'lucide-react';
+import { Heart, Smartphone, ChevronRight } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
-import { Badge, Card, EmptyState, LoadingBlock } from '../components/ui';
+import { Card, EmptyState, LoadingBlock } from '../components/ui';
 import AccountSheet from '../components/AccountSheet';
 import { useAuth } from '../auth';
 
@@ -18,7 +18,6 @@ type Device = {
 export default function HomePage() {
   const { email } = useAuth();
   const [devices, setDevices] = useState<Device[] | null>(null);
-  const [badge, setBadge] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
 
@@ -27,15 +26,9 @@ export default function HomePage() {
     const load = async () => {
       try {
         const headers = { Authorization: `Bearer ${getAuthToken()}` };
-        const [d, ny] = await Promise.all([
-          axios.get(`${getBackendUrl()}/api/devices`, { headers }),
-          axios.get(`${getBackendUrl()}/api/needs-you`, { headers }).catch(() => ({
-            data: { badge: 0 },
-          })),
-        ]);
+        const d = await axios.get(`${getBackendUrl()}/api/devices`, { headers });
         if (!alive) return;
         setDevices(d.data || []);
-        setBadge(ny.data.badge || 0);
         setError(null);
       } catch {
         if (!alive) return;
@@ -78,7 +71,9 @@ export default function HomePage() {
             <Heart className="text-rose-400" size={22} />
             <div>
               <p className="font-medium">Run</p>
-              <p className="text-sm text-mute">Dating openers, dry-run, activity</p>
+              <p className="text-sm text-mute">
+                Auto swipe, message new contacts, reply to chats
+              </p>
             </div>
             <ChevronRight size={16} className="ml-auto text-mute" />
           </Card>
@@ -138,19 +133,6 @@ export default function HomePage() {
           </div>
         )}
       </Card>
-
-      <Link to="/needs-you" className="block">
-        <Card elev className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Activity className="text-amber-300" size={20} />
-            <div>
-              <p className="font-medium">Needs you</p>
-              <p className="text-sm text-mute">Escalated Social & Dating drafts</p>
-            </div>
-          </div>
-          {badge > 0 ? <Badge tone="warn">{badge}</Badge> : <Badge>0</Badge>}
-        </Card>
-      </Link>
 
       <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
     </div>

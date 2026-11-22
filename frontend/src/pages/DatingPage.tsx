@@ -42,19 +42,8 @@ interface DatingStatus {
   running: boolean;
   paused: boolean;
   current_app: string | null;
-  review_queue: ReviewMessage[];
   job_id?: string;
   activity?: ActivityPayload;
-}
-
-interface ReviewMessage {
-  id: string;
-  app_name: string;
-  package_name: string;
-  conversation_id: string;
-  profile_name: string;
-  message: string;
-  is_opener: boolean;
 }
 
 interface AppConfig {
@@ -134,8 +123,6 @@ export default function DatingPage() {
     dates_booked: number;
     by_app?: Record<string, { chats_active: number; invites_sent: number; dates_booked: number }>;
   } | null>(null);
-  const [reviewBeforeSend, setReviewBeforeSend] = useState(true);
-  const [reviewQueue, setReviewQueue] = useState<ReviewMessage[]>([]);
   const [globalMin, setGlobalMin] = useState(100);
   const [globalMax, setGlobalMax] = useState(500);
   const [todayMessages, setTodayMessages] = useState(0);
@@ -217,10 +204,6 @@ export default function DatingPage() {
           headers: authHeaders(),
         }),
       ]);
-      const queueData = await soft<{ messages?: ReviewMessage[] }>(
-        '/api/dating/review-queue',
-        { messages: [] }
-      );
       type SelectorApp = (typeof selectorApps)[number];
       const selData = await soft<{ apps?: SelectorApp[] }>(
         '/api/selectors/status',
@@ -255,7 +238,6 @@ export default function DatingPage() {
         setContactAskSnapchatText(df.contact_ask_snapchat_text);
       }
       setDateFlowStats(configRes.data.date_flow_stats || null);
-      setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
       setGlobalMax(configRes.data.max_total_messages_per_day ?? 500);
       if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
@@ -267,7 +249,6 @@ export default function DatingPage() {
       ) {
         setOpenerMode(configRes.data.opener_mode);
       }
-      setReviewQueue(queueData.messages || []);
       setTemplates(openersRes.data.library?.templates || []);
       setBucketNow(openersRes.data.bucket_now || 'morning');
       setBucketCounts(openersRes.data.bucket_counts || {});
@@ -362,7 +343,7 @@ export default function DatingPage() {
             .filter((a) => a.enabled)
             .map((a) => a.package_name),
           round_robin: true,
-          review_before_send: reviewBeforeSend,
+          review_before_send: false,
           persona_prompt: persona,
           active_hours_start: '09:00',
           active_hours_end: '23:00',
@@ -472,39 +453,6 @@ export default function DatingPage() {
         a.package_name === packageName ? { ...a, enabled: !a.enabled } : a
       )
     );
-  };
-
-  const reviewAction = async (
-    id: string,
-    action: 'approve' | 'reject',
-    edited?: string
-  ) => {
-    try {
-      if (edited) {
-        await axios.post(
-          `${getBackendUrl()}/api/dating/review/${id}/edit`,
-          {
-            id,
-            app_name: '',
-            package_name: '',
-            conversation_id: '',
-            profile_name: '',
-            message: edited,
-            is_opener: false,
-          },
-          { headers: authHeaders() }
-        );
-      }
-      await axios.post(
-        `${getBackendUrl()}/api/dating/review/${id}/${action}`,
-        {},
-        { headers: authHeaders() }
-      );
-      await loadAll();
-    } catch (e) {
-      console.error(e);
-      alert(`Failed to ${action} message`);
-    }
   };
 
   const statusLabel = !status?.running
@@ -694,7 +642,6 @@ export default function DatingPage() {
               </div>
               <div className="text-right text-sm text-mute">
                 <div>{app.inbox.unread} unread</div>
-                <div>{app.inbox.new_matches} new matches</div>
               </div>
             </div>
             <ProgressBar
@@ -807,14 +754,6 @@ export default function DatingPage() {
             </div>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={reviewBeforeSend}
-            onChange={(e) => setReviewBeforeSend(e.target.checked)}
-          />
-          Review before send (sequential queue)
-        </label>
         <label className="block text-sm">
           Persona / style prompt (AI openers)
           <textarea
@@ -991,7 +930,7 @@ export default function DatingPage() {
           Beyond {radiusMiles} mi → suggest meeting in {homeLocation} (public).
           Within radius → mutually convenient public place. Never suggest
           staying over. Decline first channel → ask second once; decline again or
-          ignore → hand off. Saved contacts appear on Matches.
+          ignore → hand off.
         </p>
         <button
           onClick={saveConfig}
@@ -1163,56 +1102,6 @@ export default function DatingPage() {
                   </li>
                 ))}
               </ul>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Review queue */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="text-lg font-semibold">
-          Review Queue ({reviewQueue.length})
-        </h3>
-        {reviewQueue.length === 0 ? (
-          <p className="text-mute text-sm">No messages waiting for review.</p>
-        ) : (
-          reviewQueue.map((msg) => (
-            <div
-              key={msg.id}
-              className="bg-canvas-elev border border-line rounded p-3 space-y-2"
-            >
-              <div className="flex justify-between text-sm">
-                <span>
-                  {msg.app_name} · {msg.profile_name}
-                  {msg.is_opener ? ' · opener' : ' · reply'}
-                </span>
-                <span className="text-mute">{msg.id}</span>
-              </div>
-              <textarea
-                defaultValue={msg.message}
-                id={`msg-${msg.id}`}
-                rows={2}
-                className="w-full bg-surface border border-line rounded px-3 py-2 text-sm"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const el = document.getElementById(
-                      `msg-${msg.id}`
-                    ) as HTMLTextAreaElement;
-                    reviewAction(msg.id, 'approve', el?.value);
-                  }}
-                  className="px-3 py-1 bg-green-700 hover:bg-green-600 rounded text-sm"
-                >
-                  Approve & send
-                </button>
-                <button
-                  onClick={() => reviewAction(msg.id, 'reject')}
-                  className="px-3 py-1 bg-surface-elev hover:bg-gray-600 rounded text-sm"
-                >
-                  Reject
-                </button>
-              </div>
             </div>
           ))
         )}
