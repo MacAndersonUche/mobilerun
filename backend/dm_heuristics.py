@@ -3269,11 +3269,7 @@ def hily_find_chat_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
         if not text:
             continue
         low = text.lower()
-        if (
-            "they liked you" in low
-            or "find out who" in low
-            or "dialogtag_liked" in nid
-        ):
+        if "they liked you" in low or "find out who" in low or "dialogtag_liked" in nid:
             continue
         if "usernamefield" not in nid and "dialogmessageitem" not in nid:
             # Also allow plain name match in chats list

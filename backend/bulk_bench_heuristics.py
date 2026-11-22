@@ -2330,7 +2330,11 @@ def plan_bulk_swipe(
                 "bulk_open_deck",
             )
         # BLK: Discover tab before failing dry-run (Like Icon often only there)
-        if app == "blk" and "open swipe deck" not in hist and "blk discover" not in hist:
+        if (
+            app == "blk"
+            and "open swipe deck" not in hist
+            and "blk discover" not in hist
+        ):
             xy = DM_APP_PROFILES.get("blk", {}).get("deck_tab_xy") or (135, 2170)
             return _fp(
                 {
@@ -2385,8 +2389,7 @@ def plan_bulk_swipe(
                         "x": int(xy[0]),
                         "y": int(xy[1]),
                         "reason": (
-                            f"dry_run — BLK like miss; re-open Discover "
-                            f"({planner})"
+                            f"dry_run — BLK like miss; re-open Discover " f"({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,

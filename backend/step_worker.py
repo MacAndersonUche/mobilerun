@@ -649,8 +649,7 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
         if other:
             other_id = str(other.get("job_id") or "?")
             logger.info(
-                "process_job defer job=%s — device %s busy with %s "
-                "(lease_owner=%s)",
+                "process_job defer job=%s — device %s busy with %s " "(lease_owner=%s)",
                 job_id,
                 did,
                 other_id,

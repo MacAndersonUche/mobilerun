@@ -3644,16 +3644,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     {
                         "action": "press_button",
                         "button": "back",
-                        "reason": (
-                            "Loop guard — Back (same action, no screen change)"
-                        ),
+                        "reason": ("Loop guard — Back (same action, no screen change)"),
                     },
                     {
                         "action": "wait",
                         "seconds": 1.0,
-                        "reason": (
-                            "Loop guard — settle + vision before retry"
-                        ),
+                        "reason": ("Loop guard — settle + vision before retry"),
                         "needs_vision": True,
                         "_force_vision": True,
                     },
@@ -3663,9 +3659,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         "y1": 1600,
                         "x2": 540,
                         "y2": 900,
-                        "reason": (
-                            "Loop guard — scroll for alternate surface"
-                        ),
+                        "reason": ("Loop guard — scroll for alternate surface"),
                     },
                 )
                 if alt_n < 6:

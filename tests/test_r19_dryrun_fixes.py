@@ -47,9 +47,10 @@ def test_unresolved_tap_soft_recovers_not_hard_fail():
     # Vision-confirmed free nav should allow, or soft-recover — never mute job
     assert out.get("action") in ("tap", "fail")
     if out.get("action") == "fail":
-        assert out.get("_soft_recover") is True or "unresolved" in (
-            out.get("reason") or ""
-        ).lower()
+        assert (
+            out.get("_soft_recover") is True
+            or "unresolved" in (out.get("reason") or "").lower()
+        )
         assert "could not resolve topmost" not in (out.get("reason") or "").lower()
 
 
@@ -88,9 +89,12 @@ def test_bumble_reply_opens_chats_from_deck():
     # Must navigate to chats — not scroll the deck
     assert act.get("action") in ("tap", "press_button", "wait")
     assert "scroll" not in (act.get("fastpath_step") or "")
-    assert "chat" in reason or "connection" in reason or "match" in reason or act.get(
-        "label", ""
-    ).lower() in ("chats", "connections")
+    assert (
+        "chat" in reason
+        or "connection" in reason
+        or "match" in reason
+        or act.get("label", "").lower() in ("chats", "connections")
+    )
 
 
 def test_hily_new_no_composer_opens_chats():
@@ -106,9 +110,10 @@ def test_hily_new_no_composer_opens_chats():
     assert act is not None
     # Either Finder recovery / chats handoff — not hard fail on Crush≠composer
     if act.get("action") == "fail":
-        assert "crush" in (act.get("reason") or "").lower() or "composer" not in (
-            act.get("reason") or ""
-        ).lower()
+        assert (
+            "crush" in (act.get("reason") or "").lower()
+            or "composer" not in (act.get("reason") or "").lower()
+        )
     else:
         reason = (act.get("reason") or "").lower()
         assert act.get("action") in ("tap", "press_button", "wait", "done")
