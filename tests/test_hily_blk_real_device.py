@@ -361,7 +361,9 @@ def test_blk_thread_type_send_dry_run():
     assert a["text"].lower() == "hi"
     # Dry-run on composer: never type — verify + done
     a2 = _heuristic_dm_send(
-        BLK_INSTR, tree, hist + ['type("hi") — Type message'],
+        BLK_INSTR,
+        tree,
+        hist + ['type("hi") — Type message'],
         package="com.affinityapps.blk",
         dry_run=True,
     )
@@ -369,9 +371,10 @@ def test_blk_thread_type_send_dry_run():
     assert a2["action"] != "type" or a2.get("text") == ""
     if a2["action"] == "done":
         assert a2.get("dry_run") is True
-        assert a2.get("dry_run_verified") is True or "never typed" in (
-            a2.get("reason") or ""
-        ).lower()
+        assert (
+            a2.get("dry_run_verified") is True
+            or "never typed" in (a2.get("reason") or "").lower()
+        )
     else:
         # clear-only then done on next tick is also OK
         a3 = _heuristic_dm_send(
@@ -382,9 +385,10 @@ def test_blk_thread_type_send_dry_run():
             dry_run=True,
         )
         assert a3 and a3["action"] == "done"
-        assert a3.get("dry_run_verified") is True or "never typed" in (
-            a3.get("reason") or ""
-        ).lower()
+        assert (
+            a3.get("dry_run_verified") is True
+            or "never typed" in (a3.get("reason") or "").lower()
+        )
 
 
 def test_blk_outgoing_requires_sent():

@@ -179,7 +179,9 @@ DETECTOR_SETTLE_S = 1.5
 
 # Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
 # Hinge Discover uses Send-a-message (handled separately); Tagged scaffold uses ids.
-_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk", "taimi"})
+_REAL_GESTURE_APPS = frozenset(
+    {"bumble", "yubo", "badoo", "hily", "blk", "taimi", "tagged", "hinge"}
+)
 
 
 def _delay_band() -> tuple[float, float]:
@@ -1365,6 +1367,39 @@ def _real_like_action(
         if act:
             act["reason"] = f"Taimi Like/Skip ({planner})"
         return act
+    if app == "tagged":
+        act = tagged_like_action(tree, planner=planner)
+        if act:
+            act["reason"] = f"Tagged likeBtn (free) ({planner})"
+        return act
+    if app == "hinge":
+        # Prefer Send Like on like-sheet; else Discover heart — never Rose
+        sheet = hinge_like_sheet_action(tree, planner=planner)
+        if sheet:
+            return sheet
+        heart = _exact_label_center(tree, "Like") or _tree_id_center(
+            tree, "like", "id/like", "btn_like"
+        )
+        if heart:
+            return {
+                "action": "tap",
+                "x": int(heart[0]),
+                "y": int(heart[1]),
+                "reason": f"Hinge free Like ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            }
+        # Swipe-right on Discover card
+        return {
+            "action": "swipe",
+            "x1": 200,
+            "y1": 1400,
+            "x2": 900,
+            "y2": 1400,
+            "reason": f"Hinge free like swipe-right ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        }
     return None
 
 
@@ -1560,6 +1595,17 @@ def plan_bulk_swipe(
             },
             "bulk_wrong_app",
         )
+
+    # Paywall / Play billing / Spay / Wallet first — dismiss then continue
+    # (never paid CTA). Runs before recover so billing sheets don't get stuck.
+    try:
+        from dating_deck import dismiss_paywall_action
+    except ImportError:
+        from backend.dating_deck import dismiss_paywall_action  # type: ignore
+
+    pay = dismiss_paywall_action(ui_tree, package=package, planner=planner)
+    if pay:
+        return _fp(pay, "bulk_paywall_dismiss")
 
     # Job start: leave leftover photo browser / thread / keyboard
     recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
@@ -2014,22 +2060,8 @@ def plan_bulk_swipe(
                 },
                 "bulk_dry_run_skip_like",
             )
-        if not dry_run and deck_visible:
-            # Live Discover likes require message-bank / say text — refuse Rose
-            msg = (goal.get("message") or "").strip()
-            if not msg:
-                return _fp(
-                    {
-                        "action": "fail",
-                        "reason": (
-                            "Hinge Discover requires message-bank / say text "
-                            f"— refusing Rose/Boost/Preferred/HingeX ({planner})"
-                        ),
-                        "planner": planner,
-                        "llm_provider": None,
-                    },
-                    "bulk_hinge_needs_message",
-                )
+        # Live: free Like / Send Like only — never Rose / Boost / HingeX
+        # (message bank used later for new-match / reply jobs, not required to like)
 
     # Interruptions first (match / upsell / out-of-likes)
     tl = (ui_tree or "").lower()
@@ -2101,49 +2133,26 @@ def plan_bulk_swipe(
             "bulk_dismiss_back",
         )
 
-    # Verify previous like: only count when top-card name changed
+    # After like/pass: poll until next profile loads (or end-of-deck / timeout)
     if bulk.get("awaiting_verify"):
-        if app == "taimi" and taimi_is_paywall(ui_tree):
-            bulk["awaiting_verify"] = False
-            bulk["last_name"] = None
-            st["bulk_swipe"] = bulk
-            return taimi_dismiss_paywall(ui_tree, planner=planner)
-        name_now = deck_card_name(app, ui_tree)
-        last = bulk.get("last_name")
-        left_now = taimi_swipes_left(ui_tree) if app == "taimi" else None
-        left_last = bulk.get("last_left")
-        name_ok = bool(name_now and last and name_now != last)
-        left_ok = (
-            left_now is None
-            or left_last is None
-            or (
-                isinstance(left_now, int)
-                and isinstance(left_last, int)
-                and left_now < left_last
-            )
-        )
-        if name_ok and left_ok:
-            bulk["done"] = done + 1
-            done = int(bulk["done"])
-            bulk["last_name"] = name_now
-            if left_now is not None:
-                bulk["last_left"] = left_now
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
-        elif name_now and not last:
-            bulk["last_name"] = name_now
-            if left_now is not None:
-                bulk["last_left"] = left_now
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
-        elif name_now and last and name_now == last:
-            # Same card still showing — do not increment; allow retry
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
-        else:
-            # Name unreadable — do not increment
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
+        try:
+            from dating_deck import plan_wait_for_next_card
+        except ImportError:
+            from backend.dating_deck import plan_wait_for_next_card  # type: ignore
+
+        wait_act = plan_wait_for_next_card(st, app=app, tree=ui_tree, planner=planner)
+        bulk = st.get("bulk_swipe") or bulk
+        done = int(bulk.get("done") or 0)
+        if wait_act:
+            step = "bulk_card_wait"
+            if wait_act.get("_paywall_dismiss"):
+                step = "bulk_paywall_dismiss"
+            elif wait_act.get("stopped_reason") == "end_of_deck":
+                step = "bulk_end_of_deck"
+            elif wait_act.get("_card_wait_timeout"):
+                step = "bulk_card_wait_timeout"
+            return _fp(wait_act, step)
+        # Card changed — fall through to next like (done already bumped)
 
     if done >= target:
         return _fp(
@@ -2353,41 +2362,40 @@ def plan_bulk_swipe(
     card_name = deck_card_name(app, ui_tree)
     next_n = done + 1
 
-    # Real Bumble/Yubo/Badoo/Hily/BLK: mapped gestures / buttons — never (950,2200)
+    # Free LIKE only (heart / thumbs / swipe-right) — never Super/Crush/Rose/paid
+    try:
+        from dating_deck import mark_like_issued, plan_free_like
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            mark_like_issued,
+            plan_free_like,
+        )
+
+    act = None
     if app in _REAL_GESTURE_APPS:
         act = _real_like_action(app, tree=ui_tree, planner=planner)
-        if not act:
-            return _fp(
-                {
-                    "action": "fail",
-                    "reason": f"No real-app like gesture for {app} ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "bulk_like_missing",
-            )
-        bulk["last_name"] = card_name
-        if app == "taimi":
-            bulk["last_left"] = taimi_swipes_left(ui_tree)
-        bulk["awaiting_verify"] = True
-        bulk["_bulk_swipe_inc"] = False  # only after name change
-        st["bulk_swipe"] = bulk
-        act = dict(act)
-        act["reason"] = f"Like profile {next_n}/{target}: {act.get('reason')}"
-        act["delay_s"] = sample_human_delay(random.Random(f"like:{done}"))
-        act["_bulk_swipe_inc"] = False
-        step = "bulk_like_swipe" if act.get("action") == "swipe" else "bulk_like"
-        return _fp(act, step)
-
-    # Fake-chats / button decks: Like by id or exact label — never guessed coords
-    like = _fake_like_center(app, ui_tree)
-    if not like:
+    if not act:
+        act = plan_free_like(app, ui_tree, planner=planner, dry_run=False)
+    if not act:
+        # Fake-chats / button decks: Like by id or exact label
+        like = _fake_like_center(app, ui_tree)
+        if like:
+            act = {
+                "action": "tap",
+                "x": like[0],
+                "y": like[1],
+                "reason": f"Like profile ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+                "_free_like": True,
+            }
+    if not act:
         return _fp(
             {
                 "action": "fail",
                 "reason": (
-                    f"Like control not found in a11y tree — "
-                    f"refusing coord guess ({planner})"
+                    f"Free like control not found for {app or '?'} — "
+                    f"refusing paid/coord guess ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -2395,22 +2403,18 @@ def plan_bulk_swipe(
             "bulk_like_not_found",
         )
 
-    bulk["last_name"] = card_name
-    bulk["awaiting_verify"] = True
-    st["bulk_swipe"] = bulk
-    return _fp(
-        {
-            "action": "tap",
-            "x": like[0],
-            "y": like[1],
-            "reason": f"Like profile {next_n}/{target} ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-            "delay_s": sample_human_delay(random.Random(f"like:{done}")),
-            "_bulk_swipe_inc": False,
-        },
-        "bulk_like",
-    )
+    mark_like_issued(st, app=app, tree=ui_tree)
+    if app == "taimi":
+        bulk = st.setdefault("bulk_swipe", bulk)
+        bulk["last_left"] = taimi_swipes_left(ui_tree)
+        st["bulk_swipe"] = bulk
+    act = dict(act)
+    act["reason"] = f"Like profile {next_n}/{target}: {act.get('reason')}"
+    act["delay_s"] = sample_human_delay(random.Random(f"like:{done}"))
+    act["_bulk_swipe_inc"] = False
+    act["_free_like"] = True
+    step = "bulk_like_swipe" if act.get("action") == "swipe" else "bulk_like"
+    return _fp(act, step)
 
 
 def plan_bulk_message(
@@ -2464,6 +2468,16 @@ def plan_bulk_message(
     opened = _ensure_app_open(app_key, package, history, planner)
     if opened:
         return opened
+
+    # Paywall / billing / Spay while messaging — dismiss then continue
+    try:
+        from dating_deck import dismiss_paywall_action as _dismiss_pay
+    except ImportError:
+        from backend.dating_deck import dismiss_paywall_action as _dismiss_pay  # type: ignore
+
+    pay = _dismiss_pay(ui_tree, package=package, planner=planner)
+    if pay:
+        return _fp(pay, "bulk_msg_paywall_dismiss")
 
     # Hily MBM BEFORE root recover — close + skip (list still underneath)
     if app_key == "hily" and hily_on_mbm(ui_tree):
@@ -3088,6 +3102,17 @@ def plan_bulk_message_new(
     opened = _ensure_app_open(app, package, history, planner)
     if opened:
         return opened
+
+    try:
+        from dating_deck import dismiss_paywall_action as _dismiss_pay_new
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            dismiss_paywall_action as _dismiss_pay_new,
+        )
+
+    pay_new = _dismiss_pay_new(ui_tree, package=package, planner=planner)
+    if pay_new:
+        return _fp(pay_new, "bulk_msg_new_paywall_dismiss")
 
     if app == "hily" and hily_on_mbm(ui_tree):
         return hily_close_mbm(ui_tree, planner=planner) or _fp(

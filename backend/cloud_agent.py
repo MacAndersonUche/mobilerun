@@ -3127,6 +3127,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             )
             job["history"] = history
             job["state"] = state
+        dating_paywall_act = None
+        # Dating paywall / Play billing / Spay / Wallet — dismiss then continue
+        # (never tap Subscribe / Buy / Super Like / Rose / credits CTAs).
+        if prefer_pkg and not force_open_from_launcher:
+            try:
+                try:
+                    from dating_deck import dismiss_paywall_action as _pay_dismiss
+                except ImportError:
+                    from backend.dating_deck import (  # type: ignore
+                        dismiss_paywall_action as _pay_dismiss,
+                    )
+
+                dating_paywall_act = _pay_dismiss(
+                    ui_tree,
+                    package=str(tree_info.get("package") or ""),
+                    planner="dating_paywall",
+                )
+            except Exception as pay_err:
+                logger.warning("dating paywall check failed: %s", pay_err)
+                dating_paywall_act = None
         # If FG is still wrong after dismiss attempts, prefer vision — but do NOT
         # hard-fail; keep running so the next step can dismiss again.
         fg_now = str(tree_info.get("package") or "").lower()
@@ -3310,6 +3330,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         else:
             state["empty_tree_streak"] = 0
             _skip_plan = False
+
+        # Apply dating paywall dismiss after empty/launcher flags settle
+        if dating_paywall_act and not _skip_plan:
+            logger.info(
+                "dating paywall dismiss job=%s reason=%s",
+                job.get("job_id"),
+                dating_paywall_act.get("reason"),
+            )
+            action = dating_paywall_act
+            kind = str(action.get("action") or "").lower()
+            reason = str(action.get("reason") or "")
+            planner = "dating_paywall"
+            llm_provider = None
+            image_b64 = None
+            use_vision = False
+            _skip_plan = True
 
         # Auto-dismiss permission / ANR style blockers even on non-empty trees
         if (not _skip_plan) and tree_looks_blocked(ui_tree):
