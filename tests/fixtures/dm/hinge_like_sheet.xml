@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hinge like sheet: Add a comment + Send Like; Rose PAID left -->
+<hierarchy>
+  <w p="co.hinge.app" a="1">
+    <n t="Add a comment" xy="540,1100" b="[95,1015][985,1190]" />
+    <n e="1" f="1" xy="540,1102" b="[95,1015][985,1190]" h="Add a comment" />
+    <n t="Rose" xy="225,1277" b="[95,1225][355,1330]" c="1" />
+    <n t="Send Like" xy="686,1277" b="[400,1225][980,1330]" c="1" />
+  </w>
+</hierarchy>

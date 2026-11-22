@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Message Before Match sheet over chat list — close, skip contact -->
+<hierarchy>
+  <w p="com.hily.app" a="1">
+    <n i="id/dialogMessageItem" t="Sam" xy="300,500" b="[80,440][900,560]" c="1" />
+    <n i="id/userNameField" t="Alex" xy="300,700" b="[80,640][900,760]" c="1" />
+    <n t="Message Before Match" xy="540,400" b="[100,340][980,460]" />
+    <n i="majorCrushScreen" t="Major Crush" xy="540,900" b="[200,840][880,960]" c="1" />
+    <n i="closeButton" d="Close" xy="74,160" b="[40,120][120,200]" c="1" />
+  </w>
+</hierarchy>

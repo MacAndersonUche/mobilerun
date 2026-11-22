@@ -42,7 +42,7 @@ def test_yubo_profile_s21_selectors():
     assert p["launch_activity"].endswith(".main.MainActivity")
     assert p["open_settle_s"] == 8.0
     assert p["like_swipe"] == (250, 1000, 1050, 1050, 300)
-    assert p["inbox_tab_xy"] == (343, 2180)
+    assert p["inbox_tab_xy"] == (341, 2194)  # unlabeled Chat tab by index (22 Nov)
     assert p["search_fallback"] is None
     assert p["send_fallback"] is None
     assert "Blast" in p["never_tap_labels"]

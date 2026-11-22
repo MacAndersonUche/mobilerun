@@ -554,6 +554,14 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "hingex",
         "hinge x",
         "hinge+",
+        "hingeone",
+        "super boost",
+        "dating intent",
+        "send superswipe",
+        "superswipe",
+        "tagged premium",
+        "major crush",
+        "rewind",
     )
     return any(t in blob for t in paid_toks)
 

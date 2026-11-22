@@ -308,18 +308,22 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "send_fallback": None,  # never coordinate-guess Send on real device
         "compose_fallback": None,
         "prefer_tap_send": True,
-        # NEVER tap these (undo / paid / AV)
+        # NEVER tap these (undo / paid / AV / photo browser SuperSwipe)
         "never_tap_ids": (
             "toolbar_backtrackContainer",
             "profile_details_badgeSuperSwipe",
             "chatToolbar_audioChatButton",
             "chatToolbar_videoChatButton",
             "connections_stickyPromoContainer",
+            "photoBrowser_superswipe",
+            "id/photoBrowser_superswipe",
+            "com.bumble.app:id/photoBrowser_superswipe",
         ),
         "never_tap_labels": (
             "Send a compliment",
             "Undo",
             "SuperSwipe",
+            "Send SuperSwipe",
         ),
     },
     "yubo": {
@@ -333,15 +337,19 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "family": "swipe",
         "like_swipe": (250, 1000, 1050, 1050, 300),
         "pass_swipe": (850, 1000, 30, 1050, 300),
-        # Bottom nav y≈2180 (centers)
-        "nav_y": 2180,
-        "deck_tab_xy": (140, 2180),
-        "inbox_tab_xy": (343, 2180),  # Chat
-        "likes_tab_xy": (540, 2180),
-        "friends_tab_xy": (750, 2180),
-        "more_tab_xy": (940, 2180),
+        # Bottom nav: no text/desc on real device — map by index (22 Nov)
+        # x≈341/540/739/938 y≈2194 (Chat / Likes / Friends / More); deck left of these
+        "nav_y": 2194,
+        "deck_tab_xy": (140, 2194),
+        "inbox_tab_xy": (341, 2194),  # Chat — index 0 of unlabeled row
+        "likes_tab_xy": (540, 2194),
+        "friends_tab_xy": (739, 2194),
+        "more_tab_xy": (938, 2194),
+        "tab_xy_by_index": ((341, 2194), (540, 2194), (739, 2194), (938, 2194)),
+        "inbox_tab_index": 0,
         "inbox_labels": ("Chat", "Chats", "Conversations", "Messages"),
         "inbox_tab_labels": ("Chat",),
+        "allow_index_tab_fallback": True,
         "new_chat_labels": ("Chat", "Conversations"),
         "search_labels": ("Search", "Search…"),
         "search_ids": (
@@ -639,14 +647,16 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "like_xy": (761, 1948),
     },
     "hinge": {
-        # Real-device map: Mac SM-G996B 1080x2400 (22 Nov). Bottom nav y≈2195
-        # exposes ~0 a11y nodes on main tabs → use verified nav xy.
+        # Real-device map: Mac SM-G996B / S21+ 1080x2400 (22 Nov).
+        # Discover + Matches LIST have NO a11y — screenshot/vision for taps there.
+        # Like sheet, Rose sheet, thread, Play review ARE in a11y tree.
         "aliases": ("hinge",),
         "package": "co.hinge.app",
         "pkg_markers": ("hinge",),
         "open_label": "Hinge",
         "open_settle_s": 5.0,
         "family": "swipe",
+        "sparse_main_tabs": True,  # Discover/Matches list → vision
         "inbox_labels": ("Matches", "Messages", "Chats", "Liked You", "Inbox"),
         "inbox_tab_labels": ("Matches",),
         # Bottom nav centres (x, y≈2195): Discover / Standouts / Likes You / Matches / Profile
@@ -655,6 +665,18 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "likes_tab_xy": (539, 2195),  # Likes You
         "inbox_tab_xy": (754, 2195),  # Matches
         "profile_tab_xy": (970, 2195),
+        # Discover: skip / rewind (vision); heart x≈937; Dating Intent chip PAID
+        "skip_xy": (115, 2000),
+        "rewind_xy": (115, 1830),  # PAID
+        "dating_intent_chip_xy": (960, 160),  # Hinge+ paywall — NEVER
+        "like_heart_x": 937,
+        # Like sheet (a11y)
+        "like_comment_bounds": (95, 1015, 985, 1190),
+        "rose_button_bounds": (95, 1225, 355, 1330),  # PAID left
+        "send_like_xy": (686, 1277),
+        "friends_interstitial_close_xy": (989, 201),  # wait 3s before tap
+        "paywall_close_xy": (77, 134),
+        "dating_prefs_back_xy": (63, 154),
         "new_chat_labels": ("Matches", "Your turn", "Their turn"),
         "search_labels": ("Search", "Search…"),
         "search_ids": ("id/likes_search", "id/likes_search_input"),
@@ -662,53 +684,78 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "result_ids": ("id/like_row", "id/like_name"),
         "header_ids": ("id/conversation_title",),
         "compose_labels": (
+            "Send a message",
             "Type a message",
             "Message",
             "Your message",
             "Say something",
-            "Send a message",
+            "Add a comment",
         ),
         "compose_ids": ("id/your_message", ":id/your_message"),
-        "send_labels": ("Send", "Send a message"),
+        "send_labels": ("Send Like", "Send message", "Send", "Send Like anyway"),
         "send_ids": ("id/send_message", ":id/send_message"),
+        "send_message_desc": "Send message",
         "send_fallback": None,
         "compose_fallback": None,
         "prefer_tap_send": True,
         "prefer_clear_before_type": True,
-        # Paid / upsell — never Rose, Boost, Preferred, HingeX, Super Like
         "never_tap_labels": (
             "Rose",
             "Send a Rose",
             "Boost",
+            "Super Boost",
             "Preferred",
             "HingeX",
             "Hinge X",
+            "Hinge+",
+            "HingeOne",
+            "Hinge One",
+            "Dating Intent",
             "Super Like",
             "Send Super Like",
-            "Standouts",  # paid Standouts feed entry from Discover actions
-            "Enable for",  # notification: Enable for <Name>
+            "Standouts",
+            "Enable for",
+            "Rewind",
         ),
         "never_tap_ids": (),
-        # Dismiss "Enable for <Name>" push prompt
         "notif_dismiss_xy": (985, 396),
+        "thread_back_xy": (69, 130),
     },
     "tagged": {
-        # Scaffold — real-device map TBD; package + guards only for now.
+        # Real-device map: Mac S21+ 1080x2400 (22 Nov).
         "aliases": ("tagged",),
         "package": "com.taggedapp",
         "pkg_markers": ("tagged",),
         "open_label": "Tagged",
         "open_settle_s": 5.0,
         "family": "swipe",
-        "like_ids": ("id/tagged_like", "tagged_like"),
-        "pass_ids": ("id/tagged_pass", "tagged_pass"),
+        "nav_y": 2200,
+        "deck_tab_xy": (108, 2200),  # tab_nearby
+        "live_tab_xy": (324, 2200),  # tab_live — never Go Live FAB
+        "match_game_tab_xy": (540, 2200),  # tab_match_game
+        "inbox_tab_xy": (756, 2200),  # tab_chats
+        "notif_tab_xy": (972, 2200),  # tab_notification
+        "inbox_tab_ids": ("tab_chats", "id/tab_chats"),
+        "deck_tab_ids": ("tab_nearby", "id/tab_nearby"),
+        "like_ids": ("likeBtn", "id/likeBtn", "id/tagged_like"),
+        "pass_ids": ("dislikeBtn", "id/dislikeBtn", "id/tagged_pass"),
+        "chat_btn_ids": ("chatBtn", "id/chatBtn"),
+        "like_xy": (860, 1908),
+        "pass_xy": (220, 1908),
+        "chat_btn_xy": (540, 1911),
+        "username_ids": ("tvUsername", "id/tvUsername"),
+        "age_ids": ("tvUserAge", "id/tvUserAge"),
         "inbox_labels": ("Messages", "Chats", "Matches", "Inbox"),
-        "inbox_tab_labels": ("Messages", "Chats"),
+        "inbox_tab_labels": ("Chats", "Messages"),
         "new_chat_labels": ("Messages", "Chats", "Matches"),
         "search_labels": ("Search", "Search…"),
         "search_ids": (),
         "search_fallback": None,
-        "result_ids": ("id/tagged_match_row", "id/match_row"),
+        "result_ids": (
+            "clConversationContainer",
+            "id/clConversationContainer",
+            "conversationList",
+        ),
         "header_ids": (),
         "compose_labels": ("Message", "Type a message", "Say something", "Aa"),
         "compose_ids": ("id/message_input",),
@@ -721,11 +768,17 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "Boost",
             "Super Like",
             "Premium",
+            "TAGGED PREMIUM",
             "Gold",
             "Subscribe",
             "Buy credits",
+            "Go Live",
         ),
-        "never_tap_ids": (),
+        "never_tap_ids": (
+            "sns_fab_go_live",
+            "id/sns_fab_go_live",
+        ),
+        "location_continue_ids": ("dcButtonContinue", "id/dcButtonContinue"),
     },
 }
 
@@ -1384,6 +1437,41 @@ def bumble_on_photo_grid(tree: str) -> bool:
             "encountersGridProfile_list",
             "com.bumble.app:id/encountersGridProfile_list",
         )
+    )
+
+
+def bumble_on_photo_browser(tree: str) -> bool:
+    """True in full-screen photo browser whose only CTA is Send SuperSwipe (paid).
+
+    Do NOT match the deck's profile_details_badgeSuperSwipe badge — that is a
+    normal People card with a paid badge, not the photo browser.
+    """
+    for n in _bumble_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if "photobrowser" in nid.replace("_", ""):
+            return True
+        lab = (n.get("label") or n.get("text") or n.get("desc") or "").strip().lower()
+        if lab == "send superswipe" or "send superswipe" in lab:
+            return True
+    return False
+
+
+def bumble_back_from_photo_browser(
+    planner: str = "bumble_heuristic",
+) -> Dict[str, Any]:
+    """Leave photo browser — never tap SuperSwipe."""
+    return _fp(
+        {
+            "action": "press_button",
+            "button": "back",
+            "reason": (
+                f"Back out of Bumble photo browser "
+                f"(Send SuperSwipe is paid) ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bumble_photo_browser_back",
     )
 
 
@@ -2240,8 +2328,61 @@ def badoo_pass_swipe(planner: str = "badoo_heuristic") -> Dict[str, Any]:
 # --- Hily (com.hily.app) SM-G996B — buttons only; swipe does not register ---
 
 
+def hily_on_top_picks_grid(tree: str) -> bool:
+    """Discover as photo grid (Top picks / Shared interests) — not a swipe deck."""
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('label') or ''} {n.get('desc') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "top picks" in blob or "shared interests" in blob:
+        return True
+    # Crush icon tiles without ActionButton_LIKE → grid
+    has_crush = any(
+        (n.get("text") or n.get("desc") or n.get("label") or "").strip().lower()
+        == "crush"
+        or "crush" in str(n.get("id") or "").lower()
+        for n in _parse_compact_nodes(tree)
+    )
+    if has_crush and not _tree_id_center(
+        tree, "ActionButton_LIKE", "id/ActionButton_LIKE"
+    ):
+        return True
+    return False
+
+
+def hily_first_grid_tile_center(tree: str) -> Optional[Tuple[int, int]]:
+    """Open first Discover grid tile (avoid Crush paid icon)."""
+    candidates: List[Tuple[int, int, int]] = []
+    for n in _parse_compact_nodes(tree):
+        if not n.get("clickable"):
+            continue
+        lab = (n.get("text") or n.get("desc") or n.get("label") or "").strip().lower()
+        nid = str(n.get("id") or "").lower()
+        if "crush" in lab or "crush" in nid:
+            continue
+        if lab in ("like", "pass", "skip", "chats", "discover", "filter"):
+            continue
+        y = int(n.get("y") or 0)
+        x = int(n.get("x") or 0)
+        if y < 280 or y > 1900:
+            continue
+        w = int(n.get("x2") or x) - int(n.get("x1") or x)
+        h = int(n.get("y2") or y) - int(n.get("y1") or y)
+        if w < 120 or h < 120:
+            continue
+        candidates.append((y, x, int(n["y"])))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    y, x, _ = candidates[0]
+    return (x, y)
+
+
 def hily_on_finder(tree: str, *, _log: bool = True) -> bool:
     """True on Hily Finder deck — ActionButton_LIKE / SKIP from S21 map."""
+    if hily_on_top_picks_grid(tree):
+        # Grid is Discover, not the classic button deck
+        return False
     if _tree_id_center(
         tree,
         "ActionButton_LIKE",
@@ -2269,6 +2410,41 @@ def hily_on_finder(tree: str, *, _log: bool = True) -> bool:
     if _log:
         _log_detector_false("hily_on_finder", tree, "com.hily.app")
     return False
+
+
+def hily_close_mbm(
+    tree: str, planner: str = "hily_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Close Message Before Match sheet via closeButton — never Major Crush / credits."""
+    if not hily_on_mbm(tree):
+        return None
+    close = _tree_id_center(
+        tree, "closeButton", "id/closeButton", "com.hily.app:id/closeButton"
+    ) or _tree_node_center(tree, "Close", "Not now", "No thanks")
+    if close:
+        return _fp(
+            {
+                "action": "tap",
+                "x": close[0],
+                "y": close[1],
+                "reason": f"Close Hily MBM sheet ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_mbm_close",
+        )
+    # Verified map: close X ≈ (74, 160)
+    return _fp(
+        {
+            "action": "tap",
+            "x": 74,
+            "y": 160,
+            "reason": f"Close Hily MBM sheet (map xy) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hily_mbm_close",
+    )
 
 
 def hily_on_thread(tree: str) -> bool:
@@ -3040,25 +3216,145 @@ def hinge_dismiss_enable_prompt(
     )
 
 
+def hinge_dismiss_play_review(
+    tree: str, planner: str = "hinge_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Google Play in-app review → Not now."""
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "rate this app" not in blob and "enjoying hinge" not in blob:
+        if "not now" not in blob or "google play" not in blob:
+            # Still allow bare Not now when review sheet copy is sparse
+            if not (
+                "not now" in blob
+                and ("star" in blob or "review" in blob or "play" in blob)
+            ):
+                return None
+    c = _tree_node_center(tree, "Not now", "No thanks")
+    if not c:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": c[0],
+            "y": c[1],
+            "reason": f"Dismiss Play review → Not now ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_play_review_not_now",
+    )
+
+
+def hinge_on_like_sheet(tree: str) -> bool:
+    """Like sheet with Add a comment / Send Like / Rose (a11y present)."""
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "send like" in blob and ("add a comment" in blob or "rose" in blob):
+        return True
+    if "send a rose instead" in blob or "send like anyway" in blob:
+        return True
+    return False
+
+
+def hinge_like_sheet_action(
+    tree: str, planner: str = "hinge_heuristic"
+) -> Optional[Dict[str, Any]]:
+    """Prefer Send Like / Send Like anyway — never Rose / Send a Rose."""
+    if not hinge_on_like_sheet(tree):
+        return None
+    anyway = _tree_node_center(tree, "Send Like anyway", "Send like anyway")
+    if anyway:
+        return _fp(
+            {
+                "action": "tap",
+                "x": anyway[0],
+                "y": anyway[1],
+                "reason": f"Hinge Send Like anyway (never Rose) ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_send_like_anyway",
+        )
+    send_like = _exact_label_center(tree, "Send Like") or _tree_node_center(
+        tree, "Send Like"
+    )
+    if send_like:
+        return _fp(
+            {
+                "action": "tap",
+                "x": send_like[0],
+                "y": send_like[1],
+                "reason": f"Hinge Send Like ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_send_like",
+        )
+    xy = DM_APP_PROFILES["hinge"].get("send_like_xy") or (686, 1277)
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Hinge Send Like (map xy) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_send_like",
+    )
+
+
 def hinge_find_send_a_message(tree: str) -> Optional[Tuple[int, int]]:
-    """Discover / profile CTA 'Send a message' — not Rose/Boost."""
+    """Thread Send message desc, or Discover CTA — never Rose/Boost."""
     for n in _parse_compact_nodes(tree):
         t = (n.get("text") or n.get("label") or "").strip().lower()
         d = (n.get("desc") or "").strip().lower()
+        if d == "send message" or t == "send message":
+            return (int(n["x"]), int(n["y"]))
         if t == "send a message" or d == "send a message":
             return (int(n["x"]), int(n["y"]))
-    return _tree_node_center(tree, "Send a message")
+        if d == "record voice note":
+            continue  # empty composer — not Send
+    return _tree_node_center(tree, "Send a message", "Send message")
 
 
 def hinge_find_compose(tree: str) -> Optional[Tuple[int, int]]:
-    """Only EditText on thread / Discover message box."""
+    """Thread / like-sheet comment EditText (hint Send a message / Add a comment)."""
     edits = [n for n in _parse_compact_nodes(tree) if n.get("editable")]
     if not edits:
         return None
-    # Prefer bottom-most editable (composer)
-    edits.sort(key=lambda n: int(n.get("y") or 0))
-    n = edits[-1]
+    # Prefer focused, else bottom-most
+    focused = [n for n in edits if n.get("focused")]
+    n = (
+        focused[-1]
+        if focused
+        else sorted(edits, key=lambda e: int(e.get("y") or 0))[-1]
+    )
     return (int(n["x"]), int(n["y"]))
+
+
+def hinge_outgoing_verified(tree: str, message: str) -> bool:
+    """View desc ' You: <text>. ' + TextView 'Sent'."""
+    needle = (message or "").strip().lower()
+    if len(needle) < 2:
+        return False
+    saw_you = False
+    saw_sent = False
+    for n in _parse_compact_nodes(tree):
+        d = (n.get("desc") or "").strip().lower()
+        t = (n.get("text") or "").strip().lower()
+        if d.startswith("you:") and needle in d:
+            saw_you = True
+        if t == needle and "you:" in d:
+            saw_you = True
+        if t == "sent" or d == "sent":
+            saw_sent = True
+    return saw_you and saw_sent
 
 
 def hinge_find_match_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
@@ -3128,19 +3424,95 @@ def hinge_is_paid_label(text: str) -> bool:
         for t in (
             "rose",
             "boost",
+            "super boost",
             "preferred",
             "hingex",
             "hinge x",
+            "hinge+",
+            "hingeone",
+            "dating intent",
             "super like",
             "standouts",
+            "rewind",
         )
     )
 
 
-# --- Tagged (com.taggedapp) scaffold ---
+def yubo_chat_tab_xy() -> Tuple[int, int]:
+    """Unlabeled bottom-nav Chat tab — map by index (22 Nov)."""
+    p = DM_APP_PROFILES.get("yubo") or {}
+    tabs = p.get("tab_xy_by_index")
+    idx = int(p.get("inbox_tab_index") or 0)
+    if isinstance(tabs, (tuple, list)) and 0 <= idx < len(tabs):
+        xy = tabs[idx]
+        return (int(xy[0]), int(xy[1]))
+    xy = p.get("inbox_tab_xy") or (341, 2194)
+    return (int(xy[0]), int(xy[1]))
+
+
+def tab_bar_verified(app: Optional[str], tree: str) -> bool:
+    """True when bottom tab bar is on-screen (safe for fixed-xy nav taps)."""
+    app_l = (app or "").lower()
+    nodes = _parse_compact_nodes(tree)
+    if not nodes:
+        return False
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
+    nav_ids = tuple(profile.get("inbox_tab_ids") or ()) + tuple(
+        profile.get("deck_tab_ids") or ()
+    )
+    if app_l == "bumble":
+        nav_ids = nav_ids + (
+            "mainApp_navigationTabBar",
+            "com.bumble.app:id/mainApp_navigationTabBar",
+        )
+    if app_l == "badoo":
+        nav_ids = nav_ids + (
+            "nav_bar_button_connections",
+            "nav_bar_button_encounters",
+        )
+    if app_l == "hily":
+        nav_ids = nav_ids + ("bottomNavTab_1", "bottomNavTab_2", "bottomNavTab_4")
+    if app_l == "tagged":
+        nav_ids = nav_ids + ("tab_nearby", "tab_chats", "tab_match_game")
+    if nav_ids and _tree_id_center(tree, *nav_ids):
+        return True
+    nav_y = int(profile.get("nav_y") or (profile.get("inbox_tab_xy") or (0, 2190))[1])
+    near = [
+        n
+        for n in nodes
+        if n.get("clickable") and abs(int(n.get("y") or 0) - nav_y) < 120
+    ]
+    if len(near) >= 3:
+        return True
+    labels = ("Chats", "Chat", "People", "Discover", "Matches", "Connections", "Nearby")
+    hits = 0
+    for lab in labels:
+        c = _exact_label_center(tree, lab)
+        if c and abs(int(c[1]) - nav_y) < 150:
+            hits += 1
+    return hits >= 1
+
+
+def keyboard_likely_up(tree: str) -> bool:
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable") and n.get("focused"):
+            y = int(n.get("y") or 0)
+            if 900 < y < 1800:
+                return True
+    blob = " ".join(
+        f"{n.get('id') or ''} {n.get('desc') or ''}" for n in _parse_compact_nodes(tree)
+    ).lower()
+    return "inputmethod" in blob or "keyboard" in blob
+
+
+# --- Tagged (com.taggedapp) S21+ map ---
 
 
 def tagged_on_deck(tree: str) -> bool:
+    if _tree_id_center(
+        tree, "likeBtn", "id/likeBtn", "dislikeBtn", "id/dislikeBtn", "tvUsername"
+    ):
+        return True
     if _tree_id_center(tree, "id/tagged_like", "tagged_like", "id/tagged_pass"):
         return True
     for n in _parse_compact_nodes(tree):
@@ -3152,8 +3524,83 @@ def tagged_on_deck(tree: str) -> bool:
     return False
 
 
+def tagged_on_chats(tree: str) -> bool:
+    return bool(
+        _tree_id_center(
+            tree,
+            "conversationList",
+            "id/conversationList",
+            "clConversationContainer",
+            "id/clConversationContainer",
+        )
+    )
+
+
+def tagged_location_overlay_continue(
+    tree: str, planner: str = "tagged_heuristic"
+) -> Optional[Dict[str, Any]]:
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('label') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    if "activate your location" not in blob:
+        return None
+    c = _tree_id_center(tree, "dcButtonContinue", "id/dcButtonContinue")
+    if not c:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": c[0],
+            "y": c[1],
+            "reason": f"Tagged location overlay Continue ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "tagged_location_continue",
+    )
+
+
+def tagged_like_action(
+    tree: str, planner: str = "tagged_heuristic"
+) -> Optional[Dict[str, Any]]:
+    c = _tree_id_center(tree, "likeBtn", "id/likeBtn")
+    if not c:
+        if not tagged_on_deck(tree):
+            return None
+        xy = DM_APP_PROFILES["tagged"].get("like_xy") or (860, 1908)
+        c = (int(xy[0]), int(xy[1]))
+    return _fp(
+        {
+            "action": "tap",
+            "x": c[0],
+            "y": c[1],
+            "reason": f"Tagged likeBtn ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "tagged_like",
+    )
+
+
 def tagged_deck_card_name(tree: str) -> Optional[str]:
-    skip = {"like", "pass", "tagged", "messages", "browse", "chat", "meet"}
+    for n in _parse_compact_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if "tvusername" in nid:
+            text = (n.get("text") or "").strip()
+            if text and not re.match(r"Profile\d+", text, re.I):
+                return text.split(",")[0].strip()
+    skip = {
+        "like",
+        "pass",
+        "tagged",
+        "messages",
+        "browse",
+        "chat",
+        "meet",
+        "nearby",
+        "live",
+    }
     for n in _parse_compact_nodes(tree, package_filter="com.taggedapp"):
         text = (n.get("text") or "").strip()
         if re.match(r"Profile\d+", text, re.I):
@@ -3164,15 +3611,49 @@ def tagged_deck_card_name(tree: str) -> Optional[str]:
             and text.lower() not in skip
         ):
             return text.split(",")[0].strip()
-    for n in _parse_compact_nodes(tree):
-        text = (n.get("text") or "").strip()
-        if (
-            re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,30}$", text)
-            and 200 < int(n.get("y") or 0) < 900
-        ):
-            if text.lower() not in skip:
-                return text.split(",")[0].strip()
     return None
+
+
+def tagged_is_premium(tree: str) -> bool:
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('label') or ''}"
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+    return "tagged premium" in blob
+
+
+def known_root_screen(app: Optional[str], tree: str) -> bool:
+    """Deck, chat list, or verified tab bar — safe place to start a job."""
+    app_l = (app or "").lower()
+    if tab_bar_verified(app_l, tree):
+        return True
+    if app_l == "bumble":
+        return (
+            bumble_on_people_deck(tree, _log=False)
+            or bumble_on_connections(tree, _log=False)
+            or bumble_on_photo_grid(tree)
+        ) and not bumble_on_photo_browser(tree)
+    if app_l == "yubo":
+        return yubo_on_deck(tree, _log=False) or yubo_on_chat_list(tree, _log=False)
+    if app_l == "badoo":
+        return badoo_on_encounters(tree, _log=False) or badoo_on_connections(
+            tree, _log=False
+        )
+    if app_l == "hily":
+        return (
+            hily_on_finder(tree, _log=False)
+            or hily_on_chats_list(tree)
+            or hily_on_top_picks_grid(tree)
+        ) and not hily_on_mbm(tree)
+    if app_l == "hinge":
+        return hinge_on_discover(tree, _log=False) or hinge_on_matches(tree, _log=False)
+    if app_l == "tagged":
+        return tagged_on_deck(tree) or tagged_on_chats(tree)
+    if app_l == "blk":
+        return blk_on_deck(tree) or blk_on_matches(tree)
+    if app_l == "taimi":
+        return taimi_on_people_deck(tree) or taimi_on_chats_list(tree)
+    return False
 
 
 def taimi_is_paywall(tree: str) -> bool:
@@ -4122,17 +4603,21 @@ def heuristic_dm_send(
                 ids=tuple(profile.get("inbox_tab_ids") or ()),
             )
             if not chats:
+                # Real device: unlabeled tabs — use index map (341,2194)
+                chats = yubo_chat_tab_xy()
                 return _fp(
                     {
-                        "action": "fail",
+                        "action": "tap",
+                        "x": int(chats[0]),
+                        "y": int(chats[1]),
                         "reason": (
-                            f"Yubo Chat tab not found by id/content-desc — "
-                            f"refusing fixed xy ({planner})"
+                            f"Open Yubo Chat tab by index "
+                            f"(no text/desc) ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                     },
-                    "yubo_chat_tab_missing",
+                    "yubo_open_chat_tab",
                 )
             return _fp(
                 {
@@ -4193,17 +4678,31 @@ def heuristic_dm_send(
                     },
                     "badoo_open_chats_tab",
                 )
-            tab = profile.get("inbox_tab_xy") or (756, 2210)
+            if tab_bar_verified("badoo", ui_tree):
+                tab = profile.get("inbox_tab_xy") or (756, 2210)
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(tab[0]),
+                        "y": int(tab[1]),
+                        "reason": f"Open Chats tab (nav bar verified) ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "badoo_open_chats_tab",
+                )
             return _fp(
                 {
-                    "action": "tap",
-                    "x": int(tab[0]),
-                    "y": int(tab[1]),
-                    "reason": f"Open Chats tab (nav bar) ({planner})",
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Badoo tab bar not verified — back before nav xy "
+                        f"({planner})"
+                    ),
                     "planner": planner,
                     "llm_provider": None,
                 },
-                "badoo_open_chats_tab",
+                "badoo_recover_before_nav",
             )
 
     # --- Hily real-device path (buttons only; never CRUSH / Allow / Audio) ---
@@ -4211,7 +4710,7 @@ def heuristic_dm_send(
         popup = hily_dismiss_popup(ui_tree, planner=planner)
         if popup:
             return popup
-        # MBM: stop if allowance is 0
+        # MBM sheet: close and do not re-tap the same list row underneath
         if hily_on_mbm(ui_tree):
             allow = hily_mbm_allowance(ui_tree)
             if allow == 0:
@@ -4227,13 +4726,30 @@ def heuristic_dm_send(
                     },
                     "hily_mbm_exhausted",
                 )
+            closed = hily_close_mbm(ui_tree, planner=planner)
+            if closed:
+                return closed
         if (
             not chat_ok
             and not typed_message
-            and hily_on_finder(ui_tree)
+            and (hily_on_finder(ui_tree) or hily_on_top_picks_grid(ui_tree))
             and not hily_on_chats_list(ui_tree)
             and not hily_on_thread(ui_tree)
         ):
+            if not tab_bar_verified("hily", ui_tree):
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": (
+                            f"Hily tab bar not verified — back before nav "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hily_recover_before_nav",
+                )
             tab = profile.get("inbox_tab_xy") or (341, 2190)
             return _fp(
                 {
@@ -4379,9 +4895,24 @@ def heuristic_dm_send(
 
     # --- Hinge real-device path (sparse a11y; never Rose/Boost/Preferred/HingeX) ---
     if app_key == "hinge" and pkg_ok:
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
         popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
         if popup:
             return popup
+        if hinge_on_like_sheet(ui_tree) and not typed_message:
+            # Existing-chat path should leave Discover like sheet
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Leave Hinge like sheet → Matches ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_leave_like_sheet",
+            )
         if (
             not chat_ok
             and not typed_message

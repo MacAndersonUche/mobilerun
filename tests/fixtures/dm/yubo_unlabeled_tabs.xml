@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Yubo bottom tabs: no text/desc — index map Chat @ 341,2194 -->
+<hierarchy>
+  <w p="co.yellw.yellowapp" a="1">
+    <n t="Phoebe" xy="540,500" b="[200,400][880,600]" />
+    <n c="1" xy="140,2194" b="[40,2120][240,2260]" />
+    <n c="1" xy="341,2194" b="[240,2120][440,2260]" />
+    <n c="1" xy="540,2194" b="[440,2120][640,2260]" />
+    <n c="1" xy="739,2194" b="[640,2120][840,2260]" />
+    <n c="1" xy="938,2194" b="[840,2120][1040,2260]" />
+  </w>
+</hierarchy>

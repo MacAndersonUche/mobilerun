@@ -25,6 +25,7 @@ try:
         _tree_id_center,
         _tree_node_center,
         badoo_like_action,
+        badoo_on_connections,
         badoo_on_encounters,
         badoo_pass_action,
         blk_dismiss_popup,
@@ -32,31 +33,46 @@ try:
         blk_like_action,
         blk_on_deck,
         blk_deck_card_name,
+        bumble_back_from_photo_browser,
         bumble_collapsed_older_chats_center,
         bumble_deck_card_name,
         bumble_first_grid_tile_center,
         bumble_like_swipe,
         bumble_on_people_deck,
+        bumble_on_photo_browser,
         bumble_on_photo_grid,
         bumble_pass_swipe,
         compose_center_in_thread,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
+        hily_close_mbm,
         hily_deck_card_name,
         hily_dismiss_popup,
+        hily_first_grid_tile_center,
         hily_like_action,
         hily_on_finder,
+        hily_on_mbm,
+        hily_on_top_picks_grid,
         hily_pass_action,
         hinge_deck_card_name,
         hinge_dismiss_enable_prompt,
+        hinge_dismiss_play_review,
         hinge_find_compose,
         hinge_find_send_a_message,
+        hinge_like_sheet_action,
         hinge_on_discover,
+        hinge_on_like_sheet,
         hinge_on_matches,
         hinge_open_discover_tab,
+        keyboard_likely_up,
+        known_root_screen,
+        tab_bar_verified,
         tagged_deck_card_name,
+        tagged_like_action,
+        tagged_location_overlay_continue,
         tagged_on_deck,
+        yubo_chat_tab_xy,
         taimi_deck_card_name,
         taimi_dismiss_paywall,
         taimi_is_curated_card,
@@ -80,6 +96,7 @@ except ImportError:
         _tree_id_center,
         _tree_node_center,
         badoo_like_action,
+        badoo_on_connections,
         badoo_on_encounters,
         badoo_pass_action,
         blk_dismiss_popup,
@@ -87,31 +104,46 @@ except ImportError:
         blk_like_action,
         blk_on_deck,
         blk_deck_card_name,
+        bumble_back_from_photo_browser,
         bumble_collapsed_older_chats_center,
         bumble_deck_card_name,
         bumble_first_grid_tile_center,
         bumble_like_swipe,
         bumble_on_people_deck,
+        bumble_on_photo_browser,
         bumble_on_photo_grid,
         bumble_pass_swipe,
         compose_center_in_thread,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
+        hily_close_mbm,
         hily_deck_card_name,
         hily_dismiss_popup,
+        hily_first_grid_tile_center,
         hily_like_action,
         hily_on_finder,
+        hily_on_mbm,
+        hily_on_top_picks_grid,
         hily_pass_action,
         hinge_deck_card_name,
         hinge_dismiss_enable_prompt,
+        hinge_dismiss_play_review,
         hinge_find_compose,
         hinge_find_send_a_message,
+        hinge_like_sheet_action,
         hinge_on_discover,
+        hinge_on_like_sheet,
         hinge_on_matches,
         hinge_open_discover_tab,
+        keyboard_likely_up,
+        known_root_screen,
+        tab_bar_verified,
         tagged_deck_card_name,
+        tagged_like_action,
+        tagged_location_overlay_continue,
         tagged_on_deck,
+        yubo_chat_tab_xy,
         taimi_deck_card_name,
         taimi_dismiss_paywall,
         taimi_is_curated_card,
@@ -463,8 +495,8 @@ def _open_chats_tab_action(
 ) -> Optional[Dict[str, Any]]:
     """Tap the app's Chats/Messages/Matches nav using the UI map (never invent).
 
-    Prefer resource-id / content-desc. Yubo never falls back to fixed xy (that
-    caused no_progress taps at ~340,2181 on real phones).
+    Prefer resource-id / content-desc. Fixed-xy only when the tab bar is verified
+    on screen. Yubo uses index-mapped coords (no text/desc on real tabs).
     """
     hist = " ".join(history[-12:]).lower()
     if any(
@@ -475,10 +507,27 @@ def _open_chats_tab_action(
             "open messages",
             "bulk_open_chats",
             "chats/messages tab",
+            "yubo chat tab by index",
         )
     ):
         return None  # already tried — caller should verify/fail
     app_l = (app or "").lower()
+    # Never blind-tap nav while stuck in photo browser / MBM / keyboard
+    if app_l == "bumble" and bumble_on_photo_browser(ui_tree):
+        return bumble_back_from_photo_browser(planner=planner)
+    if app_l == "hily" and hily_on_mbm(ui_tree):
+        return hily_close_mbm(ui_tree, planner=planner)
+    if keyboard_likely_up(ui_tree):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss keyboard before chats tab ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_dismiss_keyboard",
+        )
     profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
     labels = tuple(
         profile.get("inbox_tab_labels")
@@ -486,7 +535,6 @@ def _open_chats_tab_action(
         or ("Chats", "Messages", "Matches", "Connections", "Chat")
     )
     inbox_ids = tuple(profile.get("inbox_tab_ids") or profile.get("inbox_ids") or ())
-    # Badoo / Bumble known nav ids
     if app_l == "badoo":
         inbox_ids = inbox_ids + (
             "nav_bar_button_connections",
@@ -494,17 +542,40 @@ def _open_chats_tab_action(
         )
     if app_l == "hily":
         inbox_ids = inbox_ids + ("bottomNavTab_2", "id/bottomNavTab_2")
+    if app_l == "tagged":
+        inbox_ids = inbox_ids + ("tab_chats", "id/tab_chats")
     c = _nav_tab_center(ui_tree, *labels, ids=inbox_ids)
     if c is None:
         for lab in labels:
             c = _exact_label_center(ui_tree, lab)
             if c:
                 break
-    if c is None and app_l != "yubo":
-        # Fixed-xy fallback allowed for apps with a verified map point — not Yubo
-        xy = profile.get("inbox_tab_xy")
-        if isinstance(xy, (tuple, list)) and len(xy) >= 2:
-            c = (int(xy[0]), int(xy[1]))
+    if c is None and app_l == "yubo":
+        # Unlabeled tabs — index map only when bottom clickables exist
+        if (
+            tab_bar_verified("yubo", ui_tree)
+            or len([n for n in _parse_compact_nodes(ui_tree) if n.get("clickable")])
+            >= 4
+        ):
+            c = yubo_chat_tab_xy()
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(c[0]),
+                    "y": int(c[1]),
+                    "reason": f"Open Yubo Chat tab by index ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_open_chats",
+            )
+        return None
+    if c is None:
+        # Fixed-xy only with verified tab bar (never while on thread/keyboard)
+        if tab_bar_verified(app_l, ui_tree):
+            xy = profile.get("inbox_tab_xy")
+            if isinstance(xy, (tuple, list)) and len(xy) >= 2:
+                c = (int(xy[0]), int(xy[1]))
     if not c:
         return None
     return _fp(
@@ -518,6 +589,102 @@ def _open_chats_tab_action(
         },
         "bulk_open_chats",
     )
+
+
+_ROOT_RECOVER_APPS = frozenset(
+    {"bumble", "yubo", "badoo", "hily", "hinge", "tagged", "blk", "taimi"}
+)
+
+
+def _recover_to_root_action(
+    app: Optional[str],
+    ui_tree: str,
+    history: List[str],
+    planner: str,
+    *,
+    state: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Back out / relaunch until deck, chat list, or tab bar is visible.
+
+    Only for real dating apps that leave leftover sheets/threads between jobs.
+    """
+    app_l = (app or "").lower()
+    if app_l not in _ROOT_RECOVER_APPS:
+        return None
+    if known_root_screen(app_l, ui_tree):
+        return None
+    st = state if isinstance(state, dict) else {}
+    key = f"_root_recover_{app_l}"
+    bucket = st.setdefault(key, {"backs": 0, "relaunched": False})
+    hist = " ".join(history[-10:]).lower()
+
+    if app_l == "bumble" and bumble_on_photo_browser(ui_tree):
+        return bumble_back_from_photo_browser(planner=planner)
+    # Hily MBM is handled in plan_bulk_message (skip contact) — not here
+    if app_l == "hinge":
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
+        en = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if en:
+            return en
+        if hinge_on_like_sheet(ui_tree):
+            # Not a root — back out of like sheet if we landed mid-job
+            pass
+    if app_l == "tagged":
+        loc = tagged_location_overlay_continue(ui_tree, planner=planner)
+        if loc:
+            return loc
+
+    if keyboard_likely_up(ui_tree) or (
+        app_l == "badoo"
+        and any(n.get("editable") for n in _parse_compact_nodes(ui_tree))
+        and not badoo_on_encounters(ui_tree)
+        and not badoo_on_connections(ui_tree)
+    ):
+        bucket["backs"] = int(bucket.get("backs") or 0) + 1
+        st[key] = bucket
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back to leave thread/keyboard → root ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_back",
+        )
+
+    backs = int(bucket.get("backs") or 0)
+    if backs < 4 and "bulk_recover_back" not in hist[-80:]:
+        bucket["backs"] = backs + 1
+        st[key] = bucket
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back toward known root for {app_l} ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_back",
+        )
+    if not bucket.get("relaunched") and app_l in DM_APP_PROFILES:
+        bucket["relaunched"] = True
+        bucket["backs"] = 0
+        st[key] = bucket
+        label = str(DM_APP_PROFILES[app_l].get("open_label") or app_l)
+        return _fp(
+            {
+                "action": "open_app",
+                "app": label,
+                "reason": f"Relaunch {label} to known root ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_relaunch",
+        )
+    return None
 
 
 def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
@@ -602,6 +769,9 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
         return True
     if app == "tagged" and tagged_on_deck(tree):
         return True
+    if app == "hily" and hily_on_top_picks_grid(tree):
+        # Grid is Discover — not a likeable deck until a tile is opened
+        return False
     return False
 
 
@@ -818,7 +988,47 @@ def plan_bulk_swipe(
             "bulk_wrong_app",
         )
 
+    # Job start: leave leftover photo browser / thread / keyboard
+    recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
+    if recover:
+        return recover
+
     deck_visible = _deck_visible(app, ui_tree)
+    # Bumble photo browser (SuperSwipe only) — back out before deck checks
+    if app == "bumble" and bumble_on_photo_browser(ui_tree):
+        return bumble_back_from_photo_browser(planner=planner)
+    # Hily Discover grid: open first tile → profile, or fail safely in dry_run
+    if app == "hily" and hily_on_top_picks_grid(ui_tree):
+        tile = hily_first_grid_tile_center(ui_tree)
+        if tile and "hily grid tile" not in hist and "open grid tile" not in hist:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": tile[0],
+                    "y": tile[1],
+                    "reason": f"Open Hily Top picks grid tile → profile ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                },
+                "bulk_hily_open_grid_tile",
+            )
+        if dry_run:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — Hily Discover is a Top picks grid "
+                        f"(Crush tiles paid); open tile first or fail safely "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                },
+                "bulk_dry_run_hily_grid",
+            )
     # People photo-grid is not a card deck — open first tile before settle/like
     if app == "bumble" and bumble_on_photo_grid(ui_tree):
         tile = bumble_first_grid_tile_center(ui_tree)
@@ -942,19 +1152,49 @@ def plan_bulk_swipe(
                 "bulk_taimi_exhausted",
             )
     if app == "hinge":
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
         popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
         if popup:
             return popup
+        if hinge_on_like_sheet(ui_tree):
+            # Like sheet is a11y — Send Like only (never Rose)
+            if dry_run:
+                card = deck_card_name(app, ui_tree) or "like sheet"
+                bulk["done"] = target
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] would like/pass {target} cards "
+                            f"(deck verified on {card}) — no Send Like/Rose "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "bulk_swipe_done": target,
+                        "bulk_swipe_target": target,
+                        "screenshot": True,
+                    },
+                    "bulk_dry_run_skip_like",
+                )
+            return hinge_like_sheet_action(ui_tree, planner=planner)
         if hinge_on_matches(ui_tree) and not hinge_on_discover(ui_tree):
             if "open hinge discover" not in hist and "hinge_open_discover" not in hist:
                 act = hinge_open_discover_tab(planner=planner)
                 act["dry_run"] = bool(dry_run)
                 return act
         if not deck_visible and "open hinge discover" not in hist:
+            # Discover has no a11y — nav xy only after recover; vision for hearts
             act = hinge_open_discover_tab(planner=planner)
             act["dry_run"] = bool(dry_run)
+            act["needs_vision"] = True
             return act
-        # Discover "like" = Send a message with bank/instruction text — never Rose
+        # Discover "like" = heart (vision) → like sheet Send Like — never Rose
         if dry_run and deck_visible:
             card = deck_card_name(app, ui_tree)
             send_cta = hinge_find_send_a_message(ui_tree)
@@ -1344,6 +1584,32 @@ def plan_bulk_message(
     opened = _ensure_app_open(app_key, package, history, planner)
     if opened:
         return opened
+
+    # Hily MBM BEFORE root recover — close + skip (list still underneath)
+    if app_key == "hily" and hily_on_mbm(ui_tree):
+        skip_name = str(bulk.get("current") or "").strip()
+        if skip_name:
+            names = list(bulk.get("done_names") or [])
+            if skip_name.lower() not in {str(x).lower() for x in names}:
+                names.append(skip_name)
+            bulk["done_names"] = names
+            bulk["current"] = None
+            bulk["typed"] = False
+            st["bulk_message"] = bulk
+        return hily_close_mbm(ui_tree, planner=planner) or _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Close Hily MBM and skip contact ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_hily_mbm_skip",
+        )
+
+    recover = _recover_to_root_action(app_key, ui_tree, history, planner, state=st)
+    if recover:
+        return recover
 
     if done >= target:
         return _fp(
