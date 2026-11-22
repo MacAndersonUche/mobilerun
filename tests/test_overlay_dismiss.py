@@ -8,6 +8,7 @@ from backend.overlay_dismiss import (
     active_window_package,
     detect_foreign_overlay,
     is_foreign_overlay_package,
+    is_launcher_package,
     packages_in_tree,
     plan_dismiss_foreign_overlay,
     dismiss_foreign_overlays_before_plan,
@@ -138,3 +139,49 @@ def test_no_overlay_noop():
     )
     assert hist == ["Opened Bumble"]
     assert "Sam" in tree2
+
+
+def test_home_launcher_not_dismissed_as_overlay():
+    """APK 540: jobs pressed Back on Samsung home — must never treat launcher as overlay."""
+    assert is_launcher_package("com.sec.android.app.launcher")
+    assert not is_foreign_overlay_package(
+        "com.sec.android.app.launcher", "com.takimi.android"
+    )
+    tree = """
+    <hierarchy packages="com.sec.android.app.launcher">
+    <w id="active" p="com.sec.android.app.launcher" f="1">
+     <n t="Taimi" c="1" xy="200,900"/>
+    </w></hierarchy>
+    """
+    assert (
+        detect_foreign_overlay(
+            tree, "com.takimi.android", reported_package="com.sec.android.app.launcher"
+        )
+        is None
+    )
+    calls = []
+
+    def execute_action(_device, act):
+        calls.append(act)
+        return "x"
+
+    dismiss_foreign_overlays_before_plan(
+        device_id="d",
+        call_device=None,
+        execute_action=execute_action,
+        fetch_tree=lambda: {
+            "tree": tree,
+            "package": "com.sec.android.app.launcher",
+            "empty": False,
+        },
+        ui_tree=tree,
+        tree_info={
+            "tree": tree,
+            "package": "com.sec.android.app.launcher",
+            "empty": False,
+        },
+        target_package="com.takimi.android",
+        history=[],
+        state={},
+    )
+    assert calls == []

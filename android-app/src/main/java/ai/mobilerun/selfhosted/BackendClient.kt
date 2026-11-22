@@ -1358,50 +1358,13 @@ class BackendClient(private val context: Context) {
         }
 
         // Screenshot must not queue behind get_ui_tree (cloud 15–28s budget).
+        // Prefer S3 presigned PUT (upload_url) so JPEG never blows API GW WS
+        // 32KB frames / 128KB messages (APK 540: capture OK, WS drop on reply).
         if (command == "screenshot") {
             fastCommandExecutor.execute {
                 try {
-                    val a11y = MobilerunAccessibilityService.instance
-                    val detailed = a11y?.takeScreenshotJpegBase64Detailed(
-                        maxWidth = 720,
-                        quality = 42,
-                    )
-                    val b64 = detailed?.get("data") as? String
-                    if (b64.isNullOrBlank()) {
-                        sendCommandResponse(
-                            requestId,
-                            mapOf(
-                                "ok" to false,
-                                "error" to (
-                                    detailed?.get("error")
-                                        ?: "screenshot unavailable"
-                                    ),
-                                "error_code" to detailed?.get("error_code"),
-                                "a11y" to (a11y != null),
-                                "media_projection" to ScreenCaptureService.isStreaming(),
-                                "timing" to mapOf(
-                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
-                                ),
-                            ),
-                            null,
-                        )
-                    } else {
-                        sendCommandResponse(
-                            requestId,
-                            mapOf(
-                                "ok" to true,
-                                "mime" to "image/jpeg",
-                                "encoding" to "base64",
-                                "data" to b64,
-                                "source" to (detailed?.get("source") ?: "a11y"),
-                                "a11y_error" to detailed?.get("a11y_error"),
-                                "timing" to mapOf(
-                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
-                                ),
-                            ),
-                            null,
-                        )
-                    }
+                    val result = handleScreenshotCommand(params, t0)
+                    sendCommandResponse(requestId, result, null)
                 } catch (e: Exception) {
                     Log.e(tag, "screenshot failed", e)
                     sendCommandResponse(requestId, null, e.message ?: "screenshot failed")
@@ -1734,41 +1697,7 @@ class BackendClient(private val context: Context) {
                             out
                         }
                     }
-                    "screenshot" -> {
-                        // Prefer a11y takeScreenshot; fall back to MediaProjection frame
-                        val detailed = a11yService?.takeScreenshotJpegBase64Detailed(
-                            maxWidth = 720,
-                            quality = 42,
-                        )
-                        val b64 = detailed?.get("data") as? String
-                        if (b64.isNullOrBlank()) {
-                            mapOf(
-                                "ok" to false,
-                                "error" to (
-                                    detailed?.get("error")
-                                        ?: "screenshot unavailable"
-                                    ),
-                                "error_code" to detailed?.get("error_code"),
-                                "a11y" to (a11yService != null),
-                                "media_projection" to ScreenCaptureService.isStreaming(),
-                                "timing" to mapOf(
-                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
-                                ),
-                            )
-                        } else {
-                            mapOf(
-                                "ok" to true,
-                                "mime" to "image/jpeg",
-                                "encoding" to "base64",
-                                "data" to b64,
-                                "source" to (detailed?.get("source") ?: "a11y"),
-                                "a11y_error" to detailed?.get("a11y_error"),
-                                "timing" to mapOf(
-                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
-                                ),
-                            )
-                        }
-                    }
+                    "screenshot" -> handleScreenshotCommand(params, t0)
                     "get_device_info" -> {
                         val imeComponent =
                             android.content.ComponentName(
@@ -1851,6 +1780,112 @@ class BackendClient(private val context: Context) {
         }
         if (jobSessionBusy.get() && !forceShort) {
             OverlayBubbleService.setJobBusy(context.applicationContext, true)
+        }
+    }
+
+    /**
+     * Capture screenshot and either upload via presigned PUT (preferred — stays
+     * under WS size limits) or return base64 only when tiny (&lt;24KB b64).
+     */
+    private fun handleScreenshotCommand(
+        params: Map<String, Any?>?,
+        t0: Long,
+    ): Map<String, Any?> {
+        val a11y = MobilerunAccessibilityService.instance
+        val maxWidth = (params?.get("max_width") as? Number)?.toInt() ?: 720
+        val quality = (params?.get("quality") as? Number)?.toInt() ?: 42
+        val uploadUrl = (params?.get("upload_url") as? String)?.trim().orEmpty()
+        val s3Key = (params?.get("s3_key") as? String)?.trim().orEmpty()
+        val detailed = a11y?.takeScreenshotJpegDetailed(maxWidth = maxWidth, quality = quality)
+            ?: emptyMap()
+        val jpeg = detailed["jpeg"] as? ByteArray
+        val source = detailed["source"] ?: "a11y"
+        if (jpeg == null || jpeg.isEmpty()) {
+            return mapOf(
+                "ok" to false,
+                "error" to (detailed["error"] ?: "screenshot unavailable"),
+                "error_code" to detailed["error_code"],
+                "a11y" to (a11y != null),
+                "media_projection" to ScreenCaptureService.isStreaming(),
+                "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+            )
+        }
+        Log.i(tag, "screenshot capture ok source=$source bytes=${jpeg.size}")
+        if (uploadUrl.isNotEmpty()) {
+            val putOk = putPresignedJpeg(uploadUrl, jpeg)
+            if (putOk) {
+                Log.i(
+                    tag,
+                    "screenshot uploaded s3_key=${s3Key.ifBlank { "?" }} bytes=${jpeg.size}",
+                )
+                return mapOf(
+                    "ok" to true,
+                    "mime" to "image/jpeg",
+                    "encoding" to "s3",
+                    "s3_key" to s3Key.ifBlank { null },
+                    "bytes" to jpeg.size,
+                    "source" to source,
+                    "a11y_error" to detailed["a11y_error"],
+                    "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+                )
+            }
+            Log.w(tag, "screenshot S3 PUT failed — refusing oversized WS base64")
+            return mapOf(
+                "ok" to false,
+                "error" to "screenshot_upload_failed",
+                "bytes" to jpeg.size,
+                "a11y" to (a11y != null),
+                "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+            )
+        }
+        // No upload_url (legacy cloud): only inline when base64 stays small
+        val b64 = android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP)
+        if (b64.length > 24_000) {
+            Log.w(
+                tag,
+                "screenshot too large for WS inline b64_chars=${b64.length} " +
+                    "bytes=${jpeg.size} — need upload_url",
+            )
+            return mapOf(
+                "ok" to false,
+                "error" to "screenshot_too_large_for_ws",
+                "bytes" to jpeg.size,
+                "b64_chars" to b64.length,
+                "a11y" to (a11y != null),
+                "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+            )
+        }
+        return mapOf(
+            "ok" to true,
+            "mime" to "image/jpeg",
+            "encoding" to "base64",
+            "data" to b64,
+            "bytes" to jpeg.size,
+            "b64_chars" to b64.length,
+            "source" to source,
+            "a11y_error" to detailed["a11y_error"],
+            "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+        )
+    }
+
+    private fun putPresignedJpeg(url: String, jpeg: ByteArray): Boolean {
+        return try {
+            val body = jpeg.toRequestBody("image/jpeg".toMediaType())
+            val req = Request.Builder()
+                .url(url)
+                .put(body)
+                .header("Content-Type", "image/jpeg")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val ok = resp.isSuccessful
+                if (!ok) {
+                    Log.w(tag, "presigned PUT HTTP ${resp.code}")
+                }
+                ok
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "presigned PUT failed: ${e.message}", e)
+            false
         }
     }
 

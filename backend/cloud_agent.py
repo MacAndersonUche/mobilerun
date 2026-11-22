@@ -1725,8 +1725,38 @@ def _parse_action_json(raw: str) -> Dict[str, Any]:
     return json.loads(m.group(0))
 
 
+def _tree_attr_int(tree: str, name: str) -> int:
+    m = re.search(rf'\b{re.escape(name)}="(\d+)"', tree or "", re.I)
+    return int(m.group(1)) if m else 0
+
+
+def _tree_reported_package(tree: str, fallback: str = "") -> str:
+    """Prefer active window package, else packages= list first entry."""
+    fb = (fallback or "").strip()
+    if fb:
+        return fb
+    m = re.search(
+        r'<w\b[^>]*\bid="active"[^>]*\bp="([^"]+)"',
+        tree or "",
+        re.I,
+    )
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'\bpackages="([^"]+)"', tree or "", re.I)
+    if m:
+        first = m.group(1).split(",")[0].strip()
+        if first:
+            return first
+    return ""
+
+
 def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
-    """APK may return a plain string or {tree, package, empty, chars, timing, tree_gz}."""
+    """APK may return a plain string or {tree, package, empty, chars, timing, tree_gz}.
+
+    APK 540 bug: launcher trees set empty=\"true\" / app_nodes=0 even with
+    dozens of home-screen nodes. Backend must treat launcher+nodes as non-empty
+    so jobs can open_app instead of looping empty recovery.
+    """
     timing: Dict[str, Any] = {}
     if isinstance(raw, dict):
         tree = raw.get("tree") or raw.get("result") or ""
@@ -1746,26 +1776,97 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
             tree = json.dumps(tree)
         if isinstance(raw.get("timing"), dict):
             timing = dict(raw["timing"])
+        pkg = _tree_reported_package(tree, str(raw.get("package") or ""))
+        nodes = int(raw.get("nodes") or 0) or _tree_attr_int(tree, "nodes")
+        empty = bool(raw.get("empty") or 'empty="true"' in tree or len(tree) < 80)
+        # Launcher / home with nodes is NEVER empty (works with APK 540 installed)
+        if empty and nodes > 0 and _is_launcher_package(pkg):
+            logger.info(
+                "normalize: launcher tree nodes=%s pkg=%s — forcing empty=false",
+                nodes,
+                pkg,
+            )
+            empty = False
+        # App window with counted app_nodes, or launcher home — never empty
+        if empty and nodes > 0 and pkg and not _is_lock_screen_package(pkg):
+            app_nodes = _tree_attr_int(tree, "app_nodes")
+            if app_nodes > 0 or _is_launcher_package(pkg):
+                logger.info(
+                    "normalize: non-empty override nodes=%s app_nodes=%s pkg=%s",
+                    nodes,
+                    app_nodes,
+                    pkg,
+                )
+                empty = False
         return {
             "tree": tree,
-            "package": str(raw.get("package") or ""),
-            "empty": bool(raw.get("empty") or 'empty="true"' in tree or len(tree) < 80),
+            "package": pkg,
+            "empty": empty,
             "chars": int(raw.get("chars") or len(tree)),
-            "nodes": int(raw.get("nodes") or 0),
+            "nodes": nodes,
             "partial": bool(raw.get("partial") or raw.get("truncated")),
             "anr_dismissed": bool(raw.get("anr_dismissed")),
             "timing": timing,
         }
     tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
+    pkg = _tree_reported_package(tree, "")
+    nodes = _tree_attr_int(tree, "nodes")
+    empty = (not tree) or 'empty="true"' in tree or len(tree) < 80
+    if empty and nodes > 0 and _is_launcher_package(pkg):
+        empty = False
     return {
         "tree": tree,
-        "package": "",
-        "empty": (not tree) or 'empty="true"' in tree or len(tree) < 80,
+        "package": pkg,
+        "empty": empty,
         "chars": len(tree),
-        "nodes": 0,
+        "nodes": nodes,
         "partial": False,
         "anr_dismissed": False,
         "timing": {},
+    }
+
+
+def _open_label_for_package(pkg: str) -> str:
+    """Human open_app label for a dating/social package."""
+    p = (pkg or "").lower().strip()
+    if not p:
+        return ""
+    try:
+        from dm_heuristics import DM_APP_PROFILES
+    except ImportError:
+        from backend.dm_heuristics import DM_APP_PROFILES  # type: ignore
+
+    for key, prof in DM_APP_PROFILES.items():
+        want = str(prof.get("package") or "").lower()
+        if want and (want == p or want in p or p in want):
+            return str(prof.get("open_label") or key)
+    return p
+
+
+def _launcher_open_target_action(
+    prefer_pkg: str, fg_package: str
+) -> Optional[Dict[str, Any]]:
+    """If FG is home/launcher and prefer_pkg is a dating target, open it now.
+
+    Backend-only fix for APK 540: do not plan (or Back) on the launcher —
+    emit open_app for the job target immediately.
+    """
+    want = (prefer_pkg or "").strip()
+    fg = (fg_package or "").strip()
+    if not want or not fg:
+        return None
+    if not _is_launcher_package(fg):
+        return None
+    if _fg_matches_open_target(want, fg):
+        return None
+    open_label = _open_label_for_package(want) or want
+    return {
+        "action": "open_app",
+        "app": open_label,
+        "package": want,
+        "reason": (f"Home/launcher FG ({fg}) — open target " f"{open_label} ({want})"),
+        "planner": "launcher_open_target",
+        "llm_provider": None,
     }
 
 
@@ -1916,6 +2017,55 @@ def _renew_job_lease(job: Optional[Dict[str, Any]]) -> None:
         logger.warning("lease renew failed job=%s: %s", jid, e)
 
 
+def _presign_screenshot_put(
+    job_id: str,
+) -> tuple:
+    """Return (upload_url, s3_key) or (None, None) when bucket unset."""
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    jid = (job_id or "").strip() or "anon"
+    if not bucket:
+        return None, None
+    try:
+        import uuid
+
+        import boto3
+
+        key = f"tasks/{jid}/live_{uuid.uuid4().hex[:12]}.jpg"
+        url = boto3.client("s3").generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "ContentType": "image/jpeg",
+            },
+            ExpiresIn=180,
+            HttpMethod="PUT",
+        )
+        return url, key
+    except Exception as e:
+        logger.warning("screenshot presign failed: %s", e)
+        return None, None
+
+
+def _download_screenshot_b64(s3_key: str) -> Optional[str]:
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    if not bucket or not s3_key:
+        return None
+    try:
+        import base64
+
+        import boto3
+
+        body = boto3.client("s3").get_object(Bucket=bucket, Key=s3_key)["Body"].read()
+        if not body:
+            return None
+        logger.info("screenshot downloaded s3_key=%s bytes=%s", s3_key, len(body))
+        return base64.b64encode(body).decode("ascii")
+    except Exception as e:
+        logger.warning("screenshot S3 get failed key=%s: %s", s3_key, e)
+        return None
+
+
 def _fetch_screenshot_b64(
     device_id: str, *, job: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
@@ -1925,13 +2075,21 @@ def _fetch_screenshot_b64(
     except ImportError:
         from backend.device_rpc import call_device  # type: ignore
 
+    jid = str((job or {}).get("job_id") or "")
+    # Prefer S3 upload so JPEG never rides WS (API GW ~32KB frame / 128KB msg)
+    upload_url, s3_key = _presign_screenshot_put(jid)
+    params: Dict[str, Any] = {"max_width": 720, "quality": 42}
+    if upload_url and s3_key:
+        params["upload_url"] = upload_url
+        params["s3_key"] = s3_key
+
     # Samsung One UI a11y takeScreenshot can be slow; allow headroom + one retry
     for attempt, timeout_s in enumerate((22.0, 28.0)):
         try:
             raw = call_device(
                 device_id,
                 "screenshot",
-                {},
+                params,
                 timeout_s=timeout_s,
                 wait_reconnect_s=12.0,
             )
@@ -1939,12 +2097,32 @@ def _fetch_screenshot_b64(
             logger.warning("screenshot rpc failed attempt=%s: %s", attempt + 1, e)
             continue
         if isinstance(raw, dict):
+            if raw.get("ok") and raw.get("s3_key"):
+                b64 = _download_screenshot_b64(str(raw["s3_key"]))
+                if b64:
+                    logger.info(
+                        "screenshot via s3 bytes=%s source=%s",
+                        raw.get("bytes"),
+                        raw.get("source"),
+                    )
+                    return b64
+            if raw.get("ok") and s3_key and raw.get("encoding") == "s3":
+                b64 = _download_screenshot_b64(s3_key)
+                if b64:
+                    return b64
             if raw.get("ok") and raw.get("data"):
-                return str(raw["data"])
+                data = str(raw["data"])
+                logger.info(
+                    "screenshot via ws-inline b64_chars=%s bytes=%s",
+                    len(data),
+                    raw.get("bytes"),
+                )
+                return data
             logger.warning(
-                "screenshot unavailable attempt=%s err=%s",
+                "screenshot unavailable attempt=%s err=%s bytes=%s",
                 attempt + 1,
                 raw.get("error"),
+                raw.get("bytes"),
             )
             continue
         if isinstance(raw, str) and len(raw) > 100:
@@ -2877,9 +3055,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             device_id, call_device, preferred_package=prefer_pkg
         )
         ui_tree = tree_info["tree"]
+        force_open_from_launcher = False
+        # Home/launcher + dating target → open_app immediately (APK 540:
+        # empty-flag + Back-on-launcher left jobs stuck with 0 open_app).
+        fg_home = str(tree_info.get("package") or "")
+        launcher_open_act = _launcher_open_target_action(prefer_pkg, fg_home)
+        if launcher_open_act:
+            force_open_from_launcher = True
+            state["_force_open_from_launcher"] = True
+            job["state"] = state
+            logger.info(
+                "launcher FG → open_app(%s) job=%s pkg=%s",
+                launcher_open_act.get("app"),
+                job.get("job_id"),
+                prefer_pkg,
+            )
         # Mac's rule: auto-dismiss any non-target overlay/window (spay, SystemUI,
         # edge panels, …) via Back / Close / tap-outside — never fail for overlays.
-        if prefer_pkg:
+        # Skip when on launcher — Back does not help; open_app owns the next step.
+        if prefer_pkg and not force_open_from_launcher:
             try:
                 from overlay_dismiss import dismiss_foreign_overlays_before_plan
             except ImportError:
@@ -2959,7 +3153,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 tree_looks_blocked,
             )
 
-        if tree_info.get("empty"):
+        # Launcher home + dating target: open_app immediately (skip empty/plan)
+        if force_open_from_launcher and prefer_pkg:
+            action = launcher_open_act or _launcher_open_target_action(
+                prefer_pkg, fg_home
+            )
+            assert action is not None
+            kind = "open_app"
+            reason = str(action["reason"])
+            planner = "launcher_open_target"
+            llm_provider = None
+            image_b64 = None
+            use_vision = False
+            _skip_plan = True
+            state.pop("_force_open_from_launcher", None)
+            job["state"] = state
+        elif tree_info.get("empty"):
             empty_n = int(state.get("empty_tree_streak") or 0) + 1
             state["empty_tree_streak"] = empty_n
             job["state"] = state

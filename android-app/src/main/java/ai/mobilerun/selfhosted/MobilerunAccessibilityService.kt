@@ -818,15 +818,31 @@ class MobilerunAccessibilityService : AccessibilityService() {
         return if (result.empty) preferStaleNonEmpty(result) else result
     }
 
+    /** True for home-screen launchers — real UI with icons, NOT system chrome. */
+    private fun isLauncherPackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        if (p.isEmpty()) return false
+        return p.contains("android.launcher") ||
+            p.endsWith(".launcher") ||
+            p.contains("nexuslauncher") ||
+            p.contains("launcher3") ||
+            p == "com.miui.home" ||
+            p.contains("com.sec.android.app.launcher")
+    }
+
+    /**
+     * SystemUI / IME / edge panels — never count as dating *or* home content.
+     * Launchers are intentionally excluded (APK 540: home had 38 nodes but
+     * app_nodes=0 empty=true because `.launcher` was treated as chrome).
+     */
     private fun isSystemChromePackage(pkg: String): Boolean {
         val p = pkg.lowercase()
         if (p.isEmpty()) return false
+        if (isLauncherPackage(p)) return false
         return p.contains("systemui") ||
             p.contains("permissioncontroller") ||
             p.contains("inputmethod") ||
             p.contains("navigationbar") ||
-            p.contains("android.launcher") ||
-            p.endsWith(".launcher") ||
             p.contains("edgepanels") ||
             p.contains("samsung.android.app.cocktailbarservice")
     }
@@ -835,6 +851,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
     private fun isIgnoredOverlayPackage(pkg: String): Boolean {
         val p = pkg.lowercase()
         if (p.isEmpty()) return true
+        // Launcher is a real home screen — emit + count nodes (not an overlay)
+        if (isLauncherPackage(p)) return false
         if (isSystemChromePackage(p)) return true
         if (p == packageName || p.contains("mobilerun.selfhosted")) return true
         return p.contains("spay") ||
@@ -1188,12 +1206,21 @@ class MobilerunAccessibilityService : AccessibilityService() {
             ?: pkgs.firstOrNull().orEmpty()
         val nodeCount = counter[0]
         val appNodeCount = appCounter[0]
-        // Empty for the FG app when only SystemUI chrome was dumped
-        val isEmpty = nodeCount == 0 || appNodeCount == 0
+        // Launcher nodes count as app_nodes (home is not SystemUI chrome).
+        val effectiveAppNodes = if (
+            appNodeCount == 0 && nodeCount > 0 && pkgs.any { isLauncherPackage(it) }
+        ) {
+            nodeCount
+        } else {
+            appNodeCount
+        }
+        // Empty only when nothing useful — SystemUI-only dumps stay empty;
+        // launcher home with icons is NOT empty.
+        val isEmpty = nodeCount == 0 || effectiveAppNodes == 0
         val mode = if (fullMode) "full" else "compact"
         val tree = buildString {
             append("<hierarchy windows=\"$windowCount\" nodes=\"$nodeCount\" ")
-            append("app_nodes=\"$appNodeCount\" ")
+            append("app_nodes=\"$effectiveAppNodes\" ")
             append("partial=\"$truncated\" empty=\"$isEmpty\" mode=\"$mode\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
@@ -1211,7 +1238,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             bytes = tree.toByteArray(Charsets.UTF_8).size,
             treeGzB64 = null,
             anrDismissed = false,
-            appNodes = appNodeCount,
+            appNodes = effectiveAppNodes,
         )
     }
 
@@ -1443,6 +1470,28 @@ class MobilerunAccessibilityService : AccessibilityService() {
         maxWidth: Int = 720,
         quality: Int = 45,
     ): Map<String, Any?> {
+        val detail = takeScreenshotJpegDetailed(maxWidth, quality)
+        val jpeg = detail["jpeg"] as? ByteArray
+        if (jpeg != null && jpeg.isNotEmpty()) {
+            val b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+            return detail.filterKeys { it != "jpeg" } + mapOf(
+                "ok" to true,
+                "data" to b64,
+                "bytes" to jpeg.size,
+                "b64_chars" to b64.length,
+            )
+        }
+        return detail.filterKeys { it != "jpeg" }
+    }
+
+    /**
+     * Capture JPEG bytes for S3 upload (avoid WS base64 blowing 32KB frames).
+     * Returns map with ``jpeg`` ByteArray on success + ``source`` / ``bytes``.
+     */
+    fun takeScreenshotJpegDetailed(
+        maxWidth: Int = 720,
+        quality: Int = 45,
+    ): Map<String, Any?> {
         // 1) AccessibilityService.takeScreenshot (API 30+) — short latch so the
         //    RPC never sits past the cloud timeout when Samsung stalls.
         if (Build.VERSION.SDK_INT >= 30) {
@@ -1458,7 +1507,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             while (attempt < 2) {
                 attempt++
                 val latch = CountDownLatch(1)
-                val result = AtomicReference<String?>(null)
+                val jpegRef = AtomicReference<ByteArray?>(null)
                 val err = AtomicReference<String?>(null)
                 val errCode = AtomicReference<Int?>(null)
                 try {
@@ -1499,12 +1548,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                                     val baos = ByteArrayOutputStream()
                                     scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
                                     scaled.recycle()
-                                    result.set(
-                                        Base64.encodeToString(
-                                            baos.toByteArray(),
-                                            Base64.NO_WRAP,
-                                        ),
-                                    )
+                                    jpegRef.set(baos.toByteArray())
                                 } catch (e: Exception) {
                                     Log.e(TAG, "screenshot encode failed", e)
                                     err.set(e.message)
@@ -1531,11 +1575,17 @@ class MobilerunAccessibilityService : AccessibilityService() {
                         Log.w(TAG, "takeScreenshot latch timeout 3s — returning error")
                         err.set(err.get() ?: "latch_timeout_3s")
                     }
-                    val b64 = result.get()
-                    if (!b64.isNullOrBlank()) {
+                    val jpeg = jpegRef.get()
+                    if (jpeg != null && jpeg.isNotEmpty()) {
+                        Log.i(
+                            TAG,
+                            "takeScreenshot ok source=a11y bytes=${jpeg.size} " +
+                                "maxWidth=$maxWidth quality=$quality",
+                        )
                         return mapOf(
                             "ok" to true,
-                            "data" to b64,
+                            "jpeg" to jpeg,
+                            "bytes" to jpeg.size,
                             "source" to "a11y",
                         )
                     }
@@ -1552,12 +1602,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     Log.w(TAG, "takeScreenshot empty err=${err.get()}")
                     // Fall through to MediaProjection; keep error for response
                     val a11yErr = err.get()
-                    val mp = ScreenCaptureService.lastJpegBase64()
-                    if (!mp.isNullOrBlank()) {
-                        Log.i(TAG, "screenshot fallback MediaProjection last frame")
+                    val mp = ScreenCaptureService.lastJpegBase64()?.let {
+                        Base64.decode(it, Base64.DEFAULT)
+                    }
+                    if (mp != null && mp.isNotEmpty()) {
+                        Log.i(
+                            TAG,
+                            "screenshot fallback MediaProjection bytes=${mp.size}",
+                        )
                         return mapOf(
                             "ok" to true,
-                            "data" to mp,
+                            "jpeg" to mp,
+                            "bytes" to mp.size,
                             "source" to "media_projection",
                             "a11y_error" to a11yErr,
                         )
@@ -1578,12 +1634,15 @@ class MobilerunAccessibilityService : AccessibilityService() {
             Log.w(TAG, "takeScreenshot requires API 30+")
         }
         // 2) MediaProjection live-view last frame (no new consent)
-        val mp = ScreenCaptureService.lastJpegBase64()
-        if (!mp.isNullOrBlank()) {
-            Log.i(TAG, "screenshot fallback MediaProjection last frame")
+        val mp = ScreenCaptureService.lastJpegBase64()?.let {
+            Base64.decode(it, Base64.DEFAULT)
+        }
+        if (mp != null && mp.isNotEmpty()) {
+            Log.i(TAG, "screenshot fallback MediaProjection bytes=${mp.size}")
             return mapOf(
                 "ok" to true,
-                "data" to mp,
+                "jpeg" to mp,
+                "bytes" to mp.size,
                 "source" to "media_projection",
             )
         }

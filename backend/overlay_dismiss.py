@@ -38,9 +38,18 @@ _FOREIGN_OVERLAY_MARKERS: Tuple[str, ...] = (
     "permissioncontroller",
     "com.google.android.permissioncontroller",
     "com.samsung.android.honeyboard",  # IME steal — Back dismisses
+    # NOTE: home launchers are NOT overlays — Back on launcher does nothing
+    # useful and blocks open_app (APK 540: job pressed Back on home then failed).
+)
+
+# Home screen packages — never Back-dismiss; cloud must open_app instead
+_LAUNCHER_MARKERS: Tuple[str, ...] = (
     "com.sec.android.app.launcher",
     "com.android.launcher",
     "com.google.android.apps.nexuslauncher",
+    "com.android.launcher3",
+    "com.miui.home",
+    "launcher",
 )
 
 # Safe dismiss labels (exact-ish). Never payment / paid upsells.
@@ -98,12 +107,22 @@ def _pkg_matches_target(pkg: str, target: str) -> bool:
     return p == t or t in p or p in t
 
 
+def is_launcher_package(pkg: str) -> bool:
+    p = (pkg or "").lower().strip()
+    if not p:
+        return False
+    return any(m in p for m in _LAUNCHER_MARKERS)
+
+
 def is_foreign_overlay_package(pkg: str, target_package: str = "") -> bool:
-    """True when ``pkg`` is a known non-target overlay / chrome / launcher."""
+    """True when ``pkg`` is a known non-target overlay / chrome (not home)."""
     p = (pkg or "").lower().strip()
     if not p:
         return False
     if target_package and _pkg_matches_target(p, target_package):
+        return False
+    # Home screen is not an overlay — never Back-dismiss it
+    if is_launcher_package(p):
         return False
     return any(m in p for m in _FOREIGN_OVERLAY_MARKERS)
 
@@ -168,6 +187,9 @@ def detect_foreign_overlay(
     if not target:
         return None
     active = active_window_package(ui_tree, reported_package)
+    # Launcher/home → not a dismissable overlay (open_app instead)
+    if active and is_launcher_package(active):
+        return None
     if active and is_foreign_overlay_package(active, target):
         return active
     if active and not _pkg_matches_target(active, target):
