@@ -1,10 +1,11 @@
 name: Deploy Backend to AWS
 
 on:
-  # Main-only: PR/cursor/** deploys were cancelling each other under
-  # concurrency cancel-in-progress and never reached AWS.
+  # Main-only by default (PR/cursor/** deploys were cancelling each other).
+  # Temporary: also deploy cursor/macmobilerun-final-df3e for real-phone verify
+  # without merging. Revert by redeploying main (or remove this branch from the list).
   push:
-    branches: [main]
+    branches: [main, cursor/macmobilerun-final-df3e]
     paths:
       - 'backend/**'
       - 'infra/**'
