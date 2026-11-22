@@ -1043,8 +1043,10 @@ def _deck_has_like_pass_controls(app: Optional[str], tree: str) -> bool:
     if pass_ and int(pass_[1]) > 1700:
         return True
     # Gesture-only decks (Bumble/Yubo): card stack markers without buttons
-    if app == "bumble" and bumble_on_people_deck(tree) and not bumble_on_photo_grid(
-        tree
+    if (
+        app == "bumble"
+        and bumble_on_people_deck(tree)
+        and not bumble_on_photo_grid(tree)
     ):
         return True
     if app == "yubo" and yubo_on_deck(tree):
@@ -1060,7 +1062,10 @@ def _deck_markers_ok(app: Optional[str], tree: str) -> bool:
     if app == "yubo" and (
         yubo_on_chat(tree)
         or "conversations" in (tree or "").lower()
-        or ("reactions" in (tree or "").lower() and "send a message" not in (tree or "").lower())
+        or (
+            "reactions" in (tree or "").lower()
+            and "send a message" not in (tree or "").lower()
+        )
     ):
         return False
     name = deck_card_name(app, tree)
@@ -1376,9 +1381,7 @@ def plan_bulk_swipe(
                     "action": "tap",
                     "x": int(xy[0]),
                     "y": int(xy[1]),
-                    "reason": (
-                        f"Leave Hily Top picks → Finder deck tab ({planner})"
-                    ),
+                    "reason": (f"Leave Hily Top picks → Finder deck tab ({planner})"),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),

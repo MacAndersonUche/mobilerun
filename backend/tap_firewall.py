@@ -223,8 +223,7 @@ def _point_near_node(x: int, y: int, n: Dict[str, Any], pad: int = 28) -> bool:
     x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
     if None not in (x1, y1, x2, y2):
         return (
-            int(x1) - pad <= x <= int(x2) + pad
-            and int(y1) - pad <= y <= int(y2) + pad
+            int(x1) - pad <= x <= int(x2) + pad and int(y1) - pad <= y <= int(y2) + pad
         )
     cx, cy = int(n.get("x") or -9999), int(n.get("y") or -9999)
     return abs(cx - x) <= 48 + pad and abs(cy - y) <= 48 + pad
@@ -424,6 +423,7 @@ def tap_is_forbidden(
                 f"(got {(resolved.get('label') or resolved.get('id') or '?')[:40]!r})"
             )
     return None
+
 
 # Free-nav / messaging targets vision may green-light on empty trees
 _VISION_ALLOW_TOKENS = (

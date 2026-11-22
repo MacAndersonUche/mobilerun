@@ -3169,7 +3169,9 @@ def _blk_looks_like_person_name(text: str) -> bool:
     if any(w in low for w in _BLK_FILTER_CHIP_WORDS if " " in w):
         return False
     # "Maya" / "Maya, 28" — not filter chips
-    if re.match(r"^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2}(?:,\s*\d{2})?$", t):
+    if re.match(
+        r"^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2}(?:,\s*\d{2})?$", t
+    ):
         return True
     return False
 
@@ -3985,9 +3987,7 @@ def tagged_is_premium(tree: str) -> bool:
     return "tagged premium" in blob
 
 
-def open_chat_thread_present(
-    app: Optional[str], tree: str
-) -> bool:
+def open_chat_thread_present(app: Optional[str], tree: str) -> bool:
     """True when an open 1:1 chat thread is showing (composer / header), not root.
 
     Detects leftover threads at job start: 'Type a message…', 'Aa', editable
@@ -4012,9 +4012,9 @@ def open_chat_thread_present(
             tree, ("Aa", "Message", "Type a message", "Say something")
         ):
             # Connections list has no Aa; thread does
-            if not bumble_on_connections(tree, _log=False) and not bumble_on_people_deck(
+            if not bumble_on_connections(
                 tree, _log=False
-            ):
+            ) and not bumble_on_people_deck(tree, _log=False):
                 return True
         if app_l == "badoo" and compose_field_present(
             tree, ("Aa", "Message", "Type a message")
@@ -4100,7 +4100,9 @@ def open_chat_thread_present(
         nid = str(n.get("id") or "").lower()
         y = int(n.get("y") or 0)
         if y < 400 and (
-            lab in ("back", "navigate up") or nid.endswith("/back") or "navigateup" in nid
+            lab in ("back", "navigate up")
+            or nid.endswith("/back")
+            or "navigateup" in nid
         ):
             has_back = True
         if (
@@ -4123,8 +4125,11 @@ def open_chat_thread_present(
             has_header_name = True
         if n.get("editable") and y > 1600 and "search" not in lab:
             has_bottom_edit = True
-    if has_back and has_header_name and has_bottom_edit and not tab_bar_verified(
-        app_l, tree
+    if (
+        has_back
+        and has_header_name
+        and has_bottom_edit
+        and not tab_bar_verified(app_l, tree)
     ):
         return True
     return False
