@@ -1,0 +1,67 @@
+<hierarchy windows="1" nodes="63" app_nodes="63" text_nodes="61" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1" kids="3">
+ <n t="Matches · They liked you! · Find out who they are to like them back" d="https://im.hily.com/nr/hilybu11v1fyq2jfmoksccoso8osowo.rf3x4" cls="View" s="1" xy="540,1159" b="0,212,1080,2106"/>
+ <n t="Matches" i="matchQueueTitle" cls="TextView" xy="124,278" b="42,254,206,302"/>
+ <n d="https://im.hily.com/nr/hilybu11v1fyq2jfmoksccoso8osowo.rf3x4" cls="ImageView" c="1" xy="181,477" b="76,341,287,614"/>
+ <n d="https://im.hily.com/nr/hilybu11v1fyq2jfmoksccoso8osowo.rf3x4" cls="ImageView" c="1" xy="141,463" b="47,332,236,595"/>
+ <n t="8" i="counterBadgeText" cls="TextView" xy="144,586" b="123,565,166,607"/>
+ <n t="They liked you!" cls="TextView" xy="456,448" b="315,424,598,472"/>
+ <n t="Find out who they are to like them back" cls="TextView" xy="624,497" b="315,477,934,518"/>
+ <n t="All" i="dialogsFilterChip_recent" cls="View" c="1" xy="97,722" b="34,659,160,785"/>
+ <n t="All" cls="TextView" xy="97,721" b="76,699,119,744"/>
+ <n t="Unread" i="dialogsFilterChip_unread" cls="View" c="1" xy="262,722" b="173,659,351,785"/>
+ <n t="Unread" cls="TextView" xy="262,721" b="199,699,325,744"/>
+ <n t="Your turn · 26" i="dialogsFilterChip_yourTurn" cls="View" c="1" xy="501,722" b="372,659,631,785"/>
+ <n t="Your turn" cls="TextView" xy="476,721" b="398,699,554,744"/>
+ <n t="26" i="dialogsFilterChipCounter_yourTurn" cls="TextView" xy="582,721" b="559,699,605,744"/>
+ <n t="Paige · Message before match" d="Verified" i="dialogMessageItem" cls="View" c="1" xy="540,902" b="0,792,1080,1013"/>
+ <n t="Paige" i="userNameField" cls="TextView" xy="321,844" b="268,820,374,868"/>
+ <n d="Verified" i="dialogVerifiedIcon" cls="View" xy="400,841" b="379,820,421,862"/>
+ <n d="icon_majorCrush" i="icon_majorCrush" cls="View" xy="292,903" b="279,890,305,916"/>
+ <n t="Start Chat" cls="TextView" xy="372,902" b="308,884,436,921"/>
+ <n t="Message before match" i="messageField" cls="TextView" xy="508,961" b="268,937,748,985"/>
+ <n t="Tegan · Ready to meet in person?" d="Verified" i="dialogMessageItem" cls="View" c="1" xy="540,1128" b="0,1018,1080,1239"/>
+ <n t="Tegan" i="userNameField" cls="TextView" xy="326,1102" b="268,1078,385,1126"/>
+ <n d="Verified" i="dialogVerifiedIcon" cls="View" xy="411,1099" b="390,1078,432,1120"/>
+ <n t="Ready to meet in person?" i="messageField" cls="TextView" xy="529,1155" b="268,1131,791,1179"/>
+ <n t="Lynda · hey how are you" d="Verified · Read status" i="dialogMessageItem" cls="View" c="1" xy="540,1354" b="0,1244,1080,1465"/>
+ <n t="Lynda" i="userNameField" cls="TextView" xy="325,1328" b="268,1304,382,1352"/>
+ <n d="Verified" i="dialogVerifiedIcon" cls="View" xy="408,1325" b="387,1304,429,1346"/>
+ <n d="Read status" i="ic_delivered" cls="View" xy="1027,1328" b="1017,1318,1038,1339"/>
+ <n t="hey how are you" i="messageField" cls="TextView" xy="448,1381" b="268,1357,629,1405"/>
+ <n t="Chyna · hey how are you" d="Verified · Read status" i="dialogMessageItem" cls="View" c="1" xy="540,1580" b="0,1470,1080,1691"/>
+ <n t="Chyna" i="userNameField" cls="TextView" xy="329,1554" b="268,1530,390,1578"/>
+ <n d="Verified" i="dialogVerifiedIcon" cls="View" xy="416,1551" b="395,1530,437,1572"/>
+ <n d="Read status" i="ic_delivered" cls="View" xy="1027,1554" b="1017,1544,1038,1565"/>
+ <n t="hey how are you" i="messageField" cls="TextView" xy="448,1607" b="268,1583,629,1631"/>
+ <n t="Helyn · hey how are you" d="Verified · Read status" i="dialogMessageItem" cls="View" c="1" xy="540,1806" b="0,1696,1080,1917"/>
+ <n t="Helyn" i="userNameField" cls="TextView" xy="322,1780" b="268,1756,377,1804"/>
+ <n d="Verified" i="dialogVerifiedIcon" cls="View" xy="403,1777" b="382,1756,424,1798"/>
+ <n d="Read status" i="ic_delivered" cls="View" xy="1027,1780" b="1017,1770,1038,1791"/>
+ <n t="hey how are you" i="messageField" cls="TextView" xy="448,1833" b="268,1809,629,1857"/>
+ <n t="Brenda · Draft: vvvvvvvvvvvv" d="Verified · Read status" i="dialogMessageItem" cls="View" c="1" xy="540,2014" b="0,1922,1080,2106"/>
+ <n t="Brenda" i="userNameField" cls="TextView" xy="335,2006" b="268,1982,403,2030"/>
+ <n d="Verified" i="dialogVerifiedIcon" cls="View" xy="429,2003" b="408,1982,450,2024"/>
+ <n d="Read status" i="ic_delivered" cls="View" xy="1027,2006" b="1017,1996,1038,2017"/>
+ <n t="Draft: vvvvvvvvvvvv" i="messageField" cls="TextView" xy="485,2059" b="268,2035,703,2083"/>
+ <n t="Chats" i="dialogsTabTitle" cls="TextView" xy="131,149" b="42,110,221,188"/>
+ <n i="dialogsSearchButton" cls="View" c="1" xy="712,149" b="649,86,775,212"/>
+ <n i="dialogsSafetyButton" cls="View" c="1" xy="849,149" b="786,86,912,212"/>
+ <n d="Rive Animation child" cls="View" xy="985,148" b="933,96,1038,201"/>
+ <n t="Finder" d="Finder" i="bottomNavTab_1" cls="View" c="1" xy="142,2190" b="42,2127,242,2253"/>
+ <n d="Finder" cls="View" xy="142,2169" b="105,2132,179,2206"/>
+ <n t="Finder" cls="TextView" xy="142,2229" b="103,2211,181,2248"/>
+ <n t="Chats" d="Chats" i="bottomNavTab_2" cls="View" c="1" xy="341,2190" b="242,2127,441,2253"/>
+ <n d="Chats" cls="View" xy="342,2169" b="305,2132,379,2206"/>
+ <n t="Chats" cls="TextView" xy="342,2229" b="305,2211,379,2248"/>
+ <n t="Discover" d="Discover" i="bottomNavTab_7" cls="View" c="1" xy="540,2190" b="441,2127,640,2253"/>
+ <n d="Discover" cls="View" xy="541,2169" b="504,2132,578,2206"/>
+ <n t="Discover" cls="TextView" xy="541,2229" b="487,2211,595,2248"/>
+ <n t="Activity" d="Activity" i="bottomNavTab_4" cls="View" c="1" xy="739,2190" b="640,2127,839,2253"/>
+ <n d="Activity" cls="View" xy="740,2169" b="703,2132,777,2206"/>
+ <n t="Activity" cls="TextView" xy="740,2229" b="693,2211,787,2248"/>
+ <n t="Me" d="Me" i="bottomNavTab_5" cls="View" c="1" xy="938,2190" b="839,2127,1038,2253"/>
+ <n d="Me" cls="View" xy="939,2169" b="902,2132,976,2206"/>
+ <n t="Me" cls="TextView" xy="938,2229" b="919,2211,958,2248"/>
+</w>
+</hierarchy>

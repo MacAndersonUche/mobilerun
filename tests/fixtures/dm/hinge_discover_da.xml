@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hinge Discover profile card: Da (real r30 screenshot name) -->
+<hierarchy>
+  <w p="co.hinge.app" a="1" f="1">
+    <n t="Da" xy="200,420" b="[80,360][500,500]"/>
+    <n t="she/her" xy="200,500" b="[80,470][400,540]"/>
+  </w>
+</hierarchy>

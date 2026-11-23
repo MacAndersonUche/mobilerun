@@ -330,8 +330,10 @@ def test_taimi_hinge_unsupported_fail_fast():
     assert "unsupported" in (a.get("reason") or "").lower() or "FLAG_SECURE" in (
         a.get("reason") or ""
     )
+    # r30: Hinge is attempted (real messages were sent 22 Nov). Only Taimi
+    # stays fail-fast (FLAG_SECURE).
     b = unsupported_app_fail_action("hinge auto-swipe 5 profiles")
-    assert b and b.get("action") == "fail"
+    assert b is None
 
     act = plan_bulk_bench(
         "taimi like 3 profiles",

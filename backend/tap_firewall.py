@@ -46,6 +46,9 @@ _DRY_RUN_REFUSE = (
 _LIVE_PAID_REFUSE = (
     "crush",
     "major crush",
+    "they liked you",
+    "liked you!",
+    "find out who they are",
     "message before match",
     "majorcrush",
     "super like",
@@ -129,6 +132,9 @@ def _point_in_node(x: int, y: int, n: Dict[str, Any]) -> bool:
 _POINT_BLOCK_LABELS = (
     "crush",
     "major crush",
+    "they liked you",
+    "liked you!",
+    "find out who they are",
     "like",
     "super like",
     "superswipe",
@@ -200,6 +206,18 @@ def _all_nodes_at(
     return hits
 
 
+def _node_area(n: Dict[str, Any]) -> int:
+    x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
+    if None in (x1, y1, x2, y2):
+        return 0
+    return max(0, int(x2) - int(x1)) * max(0, int(y2) - int(y1))
+
+
+# Full-column ancestors (Hily chats list parent is ~1080x1894). Tight paid
+# tiles and Crush image views stay well under this.
+_HUGE_NODE_AREA = 1080 * 1600
+
+
 def find_blocking_label_at(
     tree: str,
     x: int,
@@ -210,12 +228,26 @@ def find_blocking_label_at(
 
     Dump order is NOT z-order — sheet Crush ImageViews often appear *before*
     bottom-nav in the tree. Matching by label at the point is authoritative.
+
+    Ignore huge ancestor containers whose concatenated text false-positives
+    (r30: Hily parent 'Matches · They liked you! · … to like them back' covers
+    the whole inbox and blocked every chat-row tap). Tight paid labels at the
+    point still block.
     """
     kws = keywords or _POINT_BLOCK_LABELS
-    for n in _all_nodes_at(tree, x, y):
-        if node_matches_keywords(n, kws):
-            return n
-    return None
+    hits = _all_nodes_at(tree, x, y)
+    matching = [n for n in hits if node_matches_keywords(n, kws)]
+    if not matching:
+        return None
+    tight = [n for n in matching if _node_area(n) < _HUGE_NODE_AREA]
+    if tight:
+        return min(tight, key=_node_area)
+    # Only huge matches: allow when a tighter leaf is the real target
+    # (chat row / name under a list parent). Still block empty areas of a
+    # full-screen paid sheet where no smaller node is at the point.
+    if any(_node_area(n) < _HUGE_NODE_AREA for n in hits):
+        return None
+    return matching[0]
 
 
 def _point_near_node(x: int, y: int, n: Dict[str, Any], pad: int = 28) -> bool:
@@ -285,9 +317,15 @@ def resolve_topmost_clickable_at(
 
 
 def labels_at_point(tree: str, x: int, y: int) -> str:
-    """All visible labels covering (x,y) — includes child TextViews of a container."""
+    """All visible labels covering (x,y) — includes child TextViews of a container.
+
+    Skip huge ancestor containers (r30: Hily inbox parent concatenates
+    'They liked you! … to like them back' over every chat row).
+    """
     parts: List[str] = []
     for n in _all_nodes_at(tree, x, y):
+        if _node_area(n) >= _HUGE_NODE_AREA:
+            continue
         parts.append(_norm_blob(n))
     # Also include nearby nodes (label-on-child + tap jitter)
     if not parts:

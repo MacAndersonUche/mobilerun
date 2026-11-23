@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hinge Discover/Matches: FLAG-like empty a11y (common on real device) -->
+<hierarchy>
+  <w p="co.hinge.app" a="1" f="1">
+  </w>
+</hierarchy>

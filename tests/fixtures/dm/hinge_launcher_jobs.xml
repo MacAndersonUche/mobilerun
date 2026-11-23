@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Samsung HOME with Jobs folder — must never be read as a Hinge card name -->
+<hierarchy>
+  <w id="active" t="active" p="com.sec.android.app.launcher" f="1" kids="3">
+    <n d="Page 1 of 1." cls="LinearLayout" xy="540,976" b="[41,0][1039,1952]"/>
+    <n t="Social" d="Social, Folder" i="com.sec.android.app.launcher:id/folder_icon_view" cls="TextView" c="1" xy="165,1152" b="[41,1006][290,1298]"/>
+    <n t="Jobs" d="Jobs, Folder" i="com.sec.android.app.launcher:id/folder_icon_view" cls="TextView" c="1" xy="912,1152" b="[788,1006][1037,1298]"/>
+    <n t="Online Shopping" d="Online Shopping, Folder" cls="TextView" c="1" xy="165,1450" b="[41,1300][290,1590]"/>
+  </w>
+</hierarchy>

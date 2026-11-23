@@ -1291,6 +1291,25 @@ def apply_dry_run_send_guard(
         # passed live Yubo profiles. Identify + report only.
         blocked = True
         would = "swipe" if k == "swipe" else "like/pass tap"
+    elif k in ("tap", "click"):
+        # r30: Hinge empty-tree LLM taps mid-card with reason
+        # "Tapping to like the profile" have no like-control in the tree,
+        # so the control-class classifier misses them. Still skip in dry-run.
+        rblob = f"{reason or ''} {action.get('reason') or ''}".lower()
+        if re.search(
+            r"(tapping to like|tap to like|tap the like|"
+            r"like button|like the profile|like this profile|"
+            r"to like (?:it|the profile|this profile|them)|"
+            r"send (?:a )?like|press like|"
+            r"pass the profile|tap the pass|"
+            r"swipe (?:left|right) to (?:like|pass)|"
+            r"liking profiles|start liking|"
+            r"on the profile (?:list )?to (?:start )?lik|"
+            r"tapping on the profile)",
+            rblob,
+        ):
+            blocked = True
+            would = "like/pass tap"
 
     if not blocked:
         return kind, reason, action
@@ -1316,10 +1335,6 @@ MAX_STEPS_UNMET_ERROR = "max_steps reached, goal not met"
 UNSUPPORTED_AGENT_APPS: Dict[str, str] = {
     "taimi": (
         "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
-        "Fail fast — do not burn steps."
-    ),
-    "hinge": (
-        "Hinge is unsupported: a11y tree is empty / unusable for automation. "
         "Fail fast — do not burn steps."
     ),
 }
@@ -1379,7 +1394,7 @@ def _preserve_terminal_status(job: Dict[str, Any]) -> bool:
 def unsupported_app_fail_action(
     instruction: str, *, package: str = ""
 ) -> Optional[Dict[str, Any]]:
-    """Fail fast (<30s) for Taimi / Hinge instead of burning max_steps."""
+    """Fail fast (<30s) for Taimi (FLAG_SECURE) instead of burning max_steps."""
     try:
         from dm_heuristics import detect_dm_app
     except ImportError:
@@ -2118,6 +2133,10 @@ def plan_next_action(
                 named = _visible_dry_swipe_card_name(
                     instruction, ui_tree, st_bulk
                 )
+                if not named and image_b64:
+                    named = _maybe_vision_swipe_card_name(
+                        instruction, image_b64, st_bulk
+                    )
                 if named:
                     return _guard(
                         {
@@ -2171,6 +2190,33 @@ def plan_next_action(
                     }
                 )
         if bulk_act:
+            # Hinge empty-tree reply: confirm composer from the screenshot.
+            if (
+                dry_run
+                and image_b64
+                and isinstance(bulk_goal, dict)
+                and bulk_goal.get("kind") == "message"
+                and bulk_goal.get("app") == "hinge"
+                and str(bulk_act.get("fastpath_step") or "")
+                == "hinge_wait_composer_vision"
+            ):
+                if _maybe_vision_hinge_composer(image_b64, st_bulk):
+                    try:
+                        from bulk_bench_heuristics import plan_hinge_reply_step
+                    except ImportError:
+                        from backend.bulk_bench_heuristics import (  # type: ignore
+                            plan_hinge_reply_step,
+                        )
+                    retry = plan_hinge_reply_step(
+                        ui_tree,
+                        history,
+                        package=package,
+                        dry_run=True,
+                        message=str(bulk_goal.get("message") or ""),
+                        state=st_bulk,
+                    )
+                    if retry and retry.get("dry_run_verified"):
+                        bulk_act = retry
             # Heuristic "fail" that isn't a safety refuse → LLM handoff
             bak = str(bulk_act.get("action") or "").lower()
             br = (bulk_act.get("reason") or "").lower()
@@ -2209,6 +2255,10 @@ def plan_next_action(
                 named = _visible_dry_swipe_card_name(
                     instruction, ui_tree, st_bulk
                 )
+                if not named and image_b64:
+                    named = _maybe_vision_swipe_card_name(
+                        instruction, image_b64, st_bulk
+                    )
                 if named and str(bulk_act.get("action") or "").lower() != "done":
                     bulk_act = {
                         "action": "done",
@@ -3705,6 +3755,29 @@ def _visible_dry_swipe_card_name(
     instruction: str, ui_tree: str, state: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     """Real profile name already on screen / in bulk state (dry swipe success)."""
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+    app = _bulk_swipe_app_from_instruction(instruction)
+    # Hinge: never read Samsung launcher folder labels (r30 "Jobs").
+    if app == "hinge":
+        try:
+            from dm_heuristics import hinge_in_foreground, hinge_deck_card_name
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                hinge_in_foreground,
+                hinge_deck_card_name,
+            )
+        if not hinge_in_foreground(ui_tree or ""):
+            return None
+        name = hinge_deck_card_name(ui_tree or "")
+        if name and _card_name_is_real_profile(name):
+            return name.split(",")[0].strip()
+        return None
     st = state if isinstance(state, dict) else {}
     bulk = st.get("bulk_swipe") if isinstance(st.get("bulk_swipe"), dict) else {}
     for cand in (
@@ -3713,28 +3786,155 @@ def _visible_dry_swipe_card_name(
         st.get("current_profile_name"),
     ):
         if cand and str(cand).strip():
-            try:
-                from bulk_bench_heuristics import _card_name_is_real_profile
-            except ImportError:
-                from backend.bulk_bench_heuristics import (  # type: ignore
-                    _card_name_is_real_profile,
-                )
             if _card_name_is_real_profile(str(cand).strip()):
                 return str(cand).strip().split(",")[0].strip()
-    app = _bulk_swipe_app_from_instruction(instruction)
     if not app:
         return None
-    try:
-        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
-    except ImportError:
-        from backend.bulk_bench_heuristics import (  # type: ignore
-            deck_card_name,
-            _card_name_is_real_profile,
-        )
     name = deck_card_name(app, ui_tree or "")
     if name and _card_name_is_real_profile(name):
         return name.split(",")[0].strip()
     return None
+
+
+
+def hinge_name_from_vision_reply(text: str) -> Optional[str]:
+    """Parse a first name from a 'ONLY the first name or NONE' vision reply."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    line = raw.splitlines()[0].strip().strip("\"'`").strip()
+    if not line or line.upper() in {"NONE", "N/A", "NA", "UNKNOWN", "NO NAME", "NO"}:
+        return None
+    try:
+        from dm_heuristics import is_launcher_home_label, looks_like_profile_name
+    except ImportError:
+        from backend.dm_heuristics import (  # type: ignore
+            is_launcher_home_label,
+            looks_like_profile_name,
+        )
+    try:
+        from bulk_bench_heuristics import _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            _card_name_is_real_profile,
+        )
+    cand = line.split(",")[0].strip()
+    if is_launcher_home_label(cand) or is_launcher_home_label(line):
+        return None
+    name = (
+        cand
+        if looks_like_profile_name(cand)
+        else (line.split(",")[0].strip() if looks_like_profile_name(line) else "")
+    )
+    if name and _card_name_is_real_profile(name):
+        return name
+    return None
+
+
+def _maybe_vision_hinge_card_name(
+    image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """One screenshot ask for the Hinge profile first name (empty a11y)."""
+    st = state if isinstance(state, dict) else {}
+    cached = st.get("_hinge_vision_name")
+    if cached:
+        return str(cached)
+    if st.get("_hinge_vision_name_tried") or not image_b64:
+        return None
+    st["_hinge_vision_name_tried"] = True
+    prompt = (
+        "This is a screenshot of the Hinge dating app. "
+        "Reply with ONLY the first name of the profile card on screen, "
+        "or NONE if this is the Android launcher, a home-screen folder, "
+        "a paywall, or not a profile. Never reply with folder titles "
+        "like Jobs, Social, or Notes."
+    )
+    try:
+        raw = _call_openai(prompt, image_b64=image_b64)
+    except Exception as exc:
+        logger.warning("hinge vision card name failed: %s", exc)
+        return None
+    name = hinge_name_from_vision_reply(raw or "")
+    if name:
+        st["_hinge_vision_name"] = name
+        st["current_profile_name"] = name
+    return name
+
+
+
+def _maybe_vision_bumble_card_name(
+    image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """One screenshot ask for the Bumble People-card first name (sparse a11y)."""
+    st = state if isinstance(state, dict) else {}
+    cached = st.get("_bumble_vision_name")
+    if cached:
+        return str(cached)
+    if st.get("_bumble_vision_name_tried") or not image_b64:
+        return None
+    st["_bumble_vision_name_tried"] = True
+    prompt = (
+        "This is a screenshot of the Bumble dating app. "
+        "Reply with ONLY the first name of the person on the People "
+        "profile card (for example Kalia), or NONE if this is the owner's "
+        "own Profile tab, a Liked You / Chats / Discover screen, a paywall "
+        "(SuperSwipe, Spotlight, premium), the Android launcher, or no card "
+        "is visible. Never reply with MacAnderson, Profile, Discover, "
+        "People, Liked You, Chats, or Filters."
+    )
+    try:
+        raw = _call_openai(prompt, image_b64=image_b64)
+    except Exception as exc:
+        logger.warning("bumble vision card name failed: %s", exc)
+        return None
+    name = hinge_name_from_vision_reply(raw or "")
+    if name:
+        st["_bumble_vision_name"] = name
+        st["current_profile_name"] = name
+    return name
+
+
+def _maybe_vision_swipe_card_name(
+    instruction: str,
+    image_b64: Optional[str],
+    state: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Vision card-name for swipe apps whose a11y tree omits the name."""
+    app = _bulk_swipe_app_from_instruction(instruction)
+    if app == "bumble":
+        return _maybe_vision_bumble_card_name(image_b64, state)
+    if app == "hinge":
+        return _maybe_vision_hinge_card_name(image_b64, state)
+    return None
+
+
+def _maybe_vision_hinge_composer(
+    image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
+) -> bool:
+    """One screenshot ask: is the Hinge thread composer visible?"""
+    st = state if isinstance(state, dict) else {}
+    if st.get("vision_caption"):
+        cap = str(st.get("vision_caption") or "").lower()
+        if "composer visible" in cap:
+            return True
+    if st.get("_hinge_composer_vision_tried") or not image_b64:
+        return False
+    st["_hinge_composer_vision_tried"] = True
+    prompt = (
+        "This is a Hinge screenshot. Is a message composer or text field "
+        "visible in an already-open chat thread (not the Discover "
+        "'Send a message' like CTA, not a Rose/like sheet)? "
+        "Reply YES or NO only."
+    )
+    try:
+        raw = (_call_openai(prompt, image_b64=image_b64) or "").strip().upper()
+    except Exception as exc:
+        logger.warning("hinge vision composer failed: %s", exc)
+        return False
+    yes = raw.startswith("YES") or raw == "Y"
+    if yes:
+        st["vision_caption"] = "composer visible"
+    return yes
 
 
 def _salvage_dry_swipe_done(
@@ -3744,9 +3944,12 @@ def _salvage_dry_swipe_done(
     state: Dict[str, Any],
     action: Dict[str, Any],
     reason: str,
+    image_b64: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """If dry swipe was blocked or LLM tried to swipe, succeed on a real name."""
     name = _visible_dry_swipe_card_name(instruction, ui_tree, state)
+    if not name and image_b64:
+        name = _maybe_vision_swipe_card_name(instruction, image_b64, state)
     if not name:
         return None
     new_reason = (
@@ -3762,6 +3965,39 @@ def _salvage_dry_swipe_done(
         "last_name": name,
         "planner": action.get("planner") or "dry_swipe_identify",
     }
+
+
+
+def _bumble_photo_browser_override(
+    *,
+    instruction: str,
+    ui_tree: str,
+    package: str = "",
+    action: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """If Bumble full-screen photo browser is up, Back — never SuperSwipe."""
+    blob = f"{instruction} {package}".lower()
+    if "bumble" not in blob and "com.bumble.app" not in blob:
+        return None
+    try:
+        from dm_heuristics import (
+            bumble_on_photo_browser,
+            bumble_back_from_photo_browser,
+        )
+    except ImportError:
+        from backend.dm_heuristics import (  # type: ignore
+            bumble_on_photo_browser,
+            bumble_back_from_photo_browser,
+        )
+    if not bumble_on_photo_browser(ui_tree or ""):
+        return None
+    act = action if isinstance(action, dict) else {}
+    if str(act.get("action") or "").lower() in (
+        "press_button",
+        "back",
+    ) and str(act.get("button") or "back").lower() == "back":
+        return None
+    return bumble_back_from_photo_browser(planner="bumble_firewall")
 
 
 def _log_step_decision(
@@ -4407,7 +4643,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if status_l in ("failed", "completed"):
             return job
 
-    # r28: Taimi / Hinge unsupported — fail fast (<30s) instead of burning steps
+    # r28/r30: Taimi unsupported — fail fast (<30s) instead of burning steps
     if not state.get("_unsupported_checked"):
         state["_unsupported_checked"] = True
         unsup = unsupported_app_fail_action(instruction)
@@ -5668,12 +5904,20 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or "would like/pass" in (reason or "").lower()
             )
         ):
+            salvage_b64 = locals().get("image_b64")
+            if not salvage_b64:
+                try:
+                    salvage_b64 = _fetch_screenshot_b64(device_id, job=job)
+                except Exception as se:
+                    logger.warning("dry swipe salvage screenshot failed: %s", se)
+                    salvage_b64 = None
             salvaged = _salvage_dry_swipe_done(
                 instruction=instruction,
                 ui_tree=ui_tree,
                 state=state,
                 action=action if isinstance(action, dict) else {},
                 reason=reason,
+                image_b64=salvage_b64,
             )
             if salvaged:
                 action = salvaged
@@ -5685,6 +5929,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     job.get("job_id"),
                     reason[:120],
                 )
+
+        # Bumble photo browser is SuperSwipe-only — Back, never end the dry job
+        # here or tap the star.
+        _fg_pkg = str(
+            (tree_info or {}).get("package")
+            or (state or {}).get("target_package")
+            or ""
+        )
+        if "bumble" in str(instruction).lower() or "com.bumble.app" in _fg_pkg.lower():
+            override = _bumble_photo_browser_override(
+                instruction=instruction,
+                ui_tree=ui_tree,
+                package=_fg_pkg,
+                action=action if isinstance(action, dict) else {},
+            )
+            if override:
+                action = override
+                kind = str(override.get("action") or "press_button")
+                reason = str(override.get("reason") or reason)
 
         if kind == "done":
             # Always capture a final screenshot for dry-run compose verification

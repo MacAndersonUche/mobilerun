@@ -29,6 +29,9 @@ OPEN_STAGES: Tuple[str, ...] = (
     "reopen_intent",
 )
 
+# Apps whose a11y is too sparse for drawer search (Hinge Matches/Discover).
+_INTENT_ONLY_STAGES: Tuple[str, ...] = ("launch_intent", "reopen_intent")
+
 # After this many full ladders (intent→drawer→scroll→reopen), fail fast
 # instead of hanging ~7 min on Taimi/Hinge a11y-launcher loops.
 MAX_OPEN_CYCLES = 2
@@ -97,11 +100,28 @@ def resolve_package(app_or_pkg: str, instruction: str = "") -> str:
     return ""
 
 
+def _is_intent_only_open(app_or_pkg: str = "", instruction: str = "") -> bool:
+    blob = f"{app_or_pkg} {instruction}".lower()
+    return "hinge" in blob or "co.hinge.app" in blob
+
+
+def _stages_for(state: Optional[Dict[str, Any]] = None, *, intent_only: bool = False) -> Tuple[str, ...]:
+    st = state if isinstance(state, dict) else {}
+    if intent_only or st.get("open_intent_only"):
+        return _INTENT_ONLY_STAGES
+    return OPEN_STAGES
+
+
 def current_open_stage(state: Dict[str, Any]) -> str:
     st = state if isinstance(state, dict) else {}
-    stage = str(st.get("open_stage") or OPEN_STAGES[0])
-    if stage not in OPEN_STAGES:
-        return OPEN_STAGES[0]
+    stages = _stages_for(st)
+    stage = str(st.get("open_stage") or stages[0])
+    if stage not in stages:
+        # Drawer stages are invalid for intent-only apps (Hinge).
+        if stage not in OPEN_STAGES:
+            return stages[0]
+        if stage not in stages:
+            return stages[0]
     return stage
 
 
@@ -112,16 +132,19 @@ def advance_open_stage(state: Dict[str, Any]) -> str:
     (back to ``launch_intent``) and increments ``open_cycle``. Callers should
     hard-fail via :func:`open_cycles_exhausted` after ``MAX_OPEN_CYCLES``.
     """
+    stages = _stages_for(state)
     cur = current_open_stage(state)
-    idx = OPEN_STAGES.index(cur)
-    if idx >= len(OPEN_STAGES) - 1:
+    if cur not in stages:
+        cur = stages[0]
+    idx = stages.index(cur)
+    if idx >= len(stages) - 1:
         # Finished one full ladder — start next cycle at launch_intent
         cycles = int(state.get("open_cycle") or 0) + 1
         state["open_cycle"] = cycles
-        nxt = OPEN_STAGES[0]
+        nxt = stages[0]
         logger.info("universal_open cycle %s complete → restart %s", cycles, nxt)
     else:
-        nxt = OPEN_STAGES[idx + 1]
+        nxt = stages[idx + 1]
     state["open_stage"] = nxt
     attempts = dict(state.get("open_stage_counts") or {})
     attempts[nxt] = int(attempts.get(nxt) or 0) + 1
@@ -178,9 +201,18 @@ def plan_universal_open(
     st = state if isinstance(state, dict) else {}
     label = resolve_open_label(app_or_pkg, instruction)
     pkg = resolve_package(app_or_pkg or label, instruction)
+    if _is_intent_only_open(label, instruction) or _is_intent_only_open(pkg):
+        st["open_intent_only"] = True
     stage = force_stage or current_open_stage(st)
-    if stage not in OPEN_STAGES:
-        stage = OPEN_STAGES[0]
+    stages = _stages_for(st)
+    if stage not in stages:
+        # Never run home_drawer_search / drawer_scroll_icon for Hinge.
+        if stage in ("home_drawer_search", "drawer_scroll_icon") and st.get(
+            "open_intent_only"
+        ):
+            stage = "reopen_intent"
+        else:
+            stage = stages[0]
     st["open_stage"] = stage
     prefix = reason_prefix or "Universal open"
     return {
