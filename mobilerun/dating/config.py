@@ -14,10 +14,25 @@ class AppProfile:
     daily_swipe_cap: int = 50
     daily_reply_cap: int = 50
     enabled: bool = True
+    # Parked: do not run this app in routine jobs at all (e.g. Hinge — its
+    # Discover/Matches screens expose almost no accessibility tree, so likes
+    # cannot be verified except by a supervised live test). A parked app can
+    # only run via its explicit live-test mode, never by accident.
+    parked: bool = False
 
     # Opening messages (new matches)
     daily_opener_target_min: int = 50  # Randomized target range
     daily_opener_target_max: int = 100
+
+    # Daily cap on messages sent on Discover (new contacts), counted on
+    # VERIFIED sends only. None = unlimited. Mac's numbers (23 Nov 2026):
+    # Hinge 50-100 (default 50, safe end), Hily 5/day, BLK / Yubo /
+    # Facebook Dating unlimited. Bumble, Badoo, Tagged: no number given, so
+    # no cap is set here — do not invent one. Mirrors
+    # backend/discover_caps.py; tests/test_discover_caps.py asserts they agree.
+    daily_discover_message_cap: Optional[int] = None
+    daily_discover_message_cap_min: Optional[int] = None
+    daily_discover_message_cap_max: Optional[int] = None
 
     # Activity patterns
     min_swipe_delay_ms: int = 800
@@ -44,6 +59,10 @@ DEFAULT_APPS = [
     AppProfile(
         name="Taimi",
         package_name="com.takimi.android",  # real package (not com.taimi.app)
+        # Unsupported: Taimi sets FLAG_SECURE, so screenshots come back black
+        # and the screen cannot be read at all. No code fix can work around
+        # that — dropped from the rotation entirely.
+        enabled=False,
     ),
     AppProfile(
         name="Bumble",
@@ -66,6 +85,10 @@ DEFAULT_APPS = [
     AppProfile(
         name="Hily",
         package_name="com.hily.app",
+        # Discover message cap (Mac, 23 Nov 2026): 5 verified sends/day.
+        daily_discover_message_cap=5,
+        daily_discover_message_cap_min=5,
+        daily_discover_message_cap_max=5,
     ),
     AppProfile(
         name="Hinge",
@@ -73,6 +96,15 @@ DEFAULT_APPS = [
         daily_swipe_cap=30,  # Hinge has stricter limits
         daily_opener_target_min=30,
         daily_opener_target_max=60,
+        # Discover message cap (Mac, 23 Nov 2026): configurable 50-100/day,
+        # defaulting to 50, the safe end.
+        daily_discover_message_cap=50,
+        daily_discover_message_cap_min=50,
+        daily_discover_message_cap_max=100,
+        # Parked (23 Nov): Discover/Matches are effectively blind — likes
+        # can only be proven by the supervised one-live-like test, never by
+        # routine live jobs. Dry runs stay available as the safe simulation.
+        parked=True,
     ),
     AppProfile(
         name="Tagged",
@@ -106,6 +138,28 @@ DEFAULT_APPS = [
         enabled=False,  # Disabled by default
     ),
 ]
+
+
+def discover_message_cap_for(profile: AppProfile) -> Optional[int]:
+    """Effective daily Discover cap for a profile (None = unlimited)."""
+    return profile.daily_discover_message_cap
+
+
+def clamp_discover_message_cap(profile: AppProfile, value: int) -> Optional[int]:
+    """Clamp a requested Discover cap into the profile's range."""
+    low = profile.daily_discover_message_cap_min
+    high = profile.daily_discover_message_cap_max
+    if low is None or high is None:
+        return None
+    return max(low, min(high, int(value)))
+
+
+def discover_messages_allowed(profile: AppProfile, sent_today: int) -> bool:
+    """True if one more verified Discover send is allowed today."""
+    cap = discover_message_cap_for(profile)
+    if cap is None:
+        return True
+    return int(sent_today) < cap
 
 
 @dataclass
@@ -172,8 +226,12 @@ Avoid:
     max_total_messages_per_day: int = 500
 
     def get_enabled_apps(self) -> List[AppProfile]:
-        """Get list of enabled apps."""
-        return [app for app in self.apps if app.enabled]
+        """Get list of enabled apps (parked apps never run routinely)."""
+        return [app for app in self.apps if app.enabled and not app.parked]
+
+    def get_parked_apps(self) -> List[AppProfile]:
+        """Apps parked from routine jobs (live-test mode only)."""
+        return [app for app in self.apps if app.parked]
 
     def get_app_by_package(self, package_name: str) -> Optional[AppProfile]:
         """Get app profile by package name."""

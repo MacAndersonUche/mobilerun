@@ -202,6 +202,20 @@ def test_taimi_dry_run_stops_before_send():
         assert a.get("dry_run_verified") is True
 
 
+# Taimi is dropped from the rotation: FLAG_SECURE makes its screenshots
+# black, so the agent cannot read the screen and no Taimi job can work.
+# plan_bulk_swipe therefore refuses Taimi outright (live and dry run) with
+# a policy fail instead of exercising the swipe flow. The dm_heuristics
+# map helpers above are unchanged — only the job entry point refuses.
+def _assert_taimi_refused(act):
+    assert act and act.get("action") == "fail"
+    assert act.get("stopped_reason") == "unsupported_app"
+    reason = (act.get("reason") or "").lower()
+    assert reason.startswith("refusing:")
+    assert "taimi" in reason
+    assert "unsupported" in reason or "flag_secure" in reason
+
+
 def test_taimi_bulk_like_right_button_not_nav():
     deck = _load("taimi_people.xml")
     assert deck_card_name("taimi", deck) == "Alex"
@@ -213,12 +227,7 @@ def test_taimi_bulk_like_right_button_not_nav():
         state=st,
         package="com.takimi.android",
     )
-    assert act and act.get("action") == "tap"
-    assert (act["x"], act["y"]) == (761, 1948)
-    # Never Instant Chat / Chats nav / top chrome
-    assert (act["x"], act["y"]) not in ((541, 1948), (972, 2200), (850, 145))
-    assert st.get("bulk_swipe", {}).get("awaiting_verify") is True
-    assert st.get("bulk_swipe", {}).get("done") == 0
+    _assert_taimi_refused(act)
 
 
 def test_taimi_bulk_curated_uses_skip():
@@ -231,8 +240,7 @@ def test_taimi_bulk_curated_uses_skip():
         state=st,
         package="com.takimi.android",
     )
-    assert act and act.get("action") == "tap"
-    assert (act["x"], act["y"]) == (320, 1948)
+    _assert_taimi_refused(act)
 
 
 def test_taimi_bulk_paywall_backs_out():
@@ -244,9 +252,7 @@ def test_taimi_bulk_paywall_backs_out():
         state=st,
         package="com.takimi.android",
     )
-    assert act and act["action"] == "press_button"
-    assert act.get("button") == "back"
-    assert st["bulk_swipe"].get("done") == 1  # not incremented on paywall
+    _assert_taimi_refused(act)
 
 
 def test_taimi_bulk_zero_left_done():
@@ -258,11 +264,7 @@ def test_taimi_bulk_zero_left_done():
         state=st,
         package="com.takimi.android",
     )
-    assert act and act["action"] == "done"
-    assert (
-        "0 left" in (act.get("reason") or "").lower()
-        or "exhaust" in (act.get("reason") or "").lower()
-    )
+    _assert_taimi_refused(act)
 
 
 def test_taimi_bulk_dry_run_skips_like():
@@ -276,9 +278,4 @@ def test_taimi_bulk_dry_run_skips_like():
         package="com.takimi.android",
         dry_run=True,
     )
-    assert act and act.get("dry_run") is True
-    assert act.get("action") == "done"
-    assert act.get("_dry_run_advance") is not True
-    reason = (act.get("reason") or "").lower()
-    assert "alex" in reason
-    assert "would like/pass 5" in reason
+    _assert_taimi_refused(act)

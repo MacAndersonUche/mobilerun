@@ -119,6 +119,8 @@ _POLICY_FAIL_NO_STUCK = (
     "wrong foreground app",
     "never typed",
     "firewall",
+    "parked",
+    "unsupported",
 )
 
 
@@ -2226,6 +2228,48 @@ def plan_next_action(
                     )
                     if retry and retry.get("dry_run_verified"):
                         bulk_act = retry
+            # Hinge vision-first driver: ground the heart (or re-read the
+            # card name for the post-like verify) from the screenshot, then
+            # re-run the planner so it can consume the grounding in-step.
+            # Live only — dry runs never tap, so they never need grounding.
+            if (
+                image_b64
+                and not dry_run
+                and isinstance(bulk_goal, dict)
+                and bulk_goal.get("kind") == "swipe"
+                and bulk_goal.get("app") == "hinge"
+                and (
+                    bulk_act.get("_hinge_vision_heart_ask")
+                    or bulk_act.get("_hinge_vision_verify")
+                )
+            ):
+                grounded = False
+                if bulk_act.get("_hinge_vision_heart_ask"):
+                    if _maybe_vision_hinge_heart(image_b64, st_bulk):
+                        grounded = True
+                if bulk_act.get("_hinge_vision_verify"):
+                    # Fresh name read for the post-like card-change check.
+                    st_bulk.pop("_hinge_vision_name", None)
+                    st_bulk.pop("_hinge_vision_name_tried", None)
+                    if _maybe_vision_hinge_card_name(image_b64, st_bulk):
+                        grounded = True
+                if grounded:
+                    try:
+                        from bulk_bench_heuristics import plan_bulk_bench
+                    except ImportError:
+                        from backend.bulk_bench_heuristics import (  # type: ignore
+                            plan_bulk_bench,
+                        )
+                    retry = plan_bulk_bench(
+                        instruction,
+                        ui_tree,
+                        history,
+                        state=st_bulk,
+                        package=package,
+                        dry_run=dry_run,
+                    )
+                    if retry:
+                        bulk_act = retry
             # Heuristic "fail" that isn't a safety refuse → LLM handoff
             bak = str(bulk_act.get("action") or "").lower()
             br = (bulk_act.get("reason") or "").lower()
@@ -3870,6 +3914,41 @@ def _maybe_vision_hinge_card_name(
     return name
 
 
+def _maybe_vision_hinge_heart(
+    image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """One screenshot ask: ground the Hinge Discover heart + profile name.
+
+    Stashes state["_hinge_vision_heart"] = {"name", "x", "y"} on success.
+    Never stashes an unvalidated point — parsing/validation via hinge_vision.
+    The planner consumes the stash exactly once, then clears the tried flag
+    so the next card can ask again.
+    """
+    st = state if isinstance(state, dict) else {}
+    if st.get("_hinge_vision_heart"):
+        return st["_hinge_vision_heart"]  # type: ignore[return-value]
+    if st.get("_hinge_vision_heart_tried") or not image_b64:
+        return None
+    st["_hinge_vision_heart_tried"] = True
+    try:
+        from hinge_vision import HINGE_VISION_PROMPT, parse_vision_heart_reply
+    except ImportError:
+        from backend.hinge_vision import (  # type: ignore
+            HINGE_VISION_PROMPT,
+            parse_vision_heart_reply,
+        )
+    try:
+        raw = _call_openai(HINGE_VISION_PROMPT, image_b64=image_b64)
+    except Exception as exc:
+        logger.warning("hinge vision heart failed: %s", exc)
+        return None
+    parsed, reason = parse_vision_heart_reply(raw or "")
+    if not parsed:
+        logger.warning("hinge vision heart rejected: %s", reason)
+        return None
+    st["_hinge_vision_heart"] = parsed
+    return parsed
+
 
 def _maybe_vision_bumble_card_name(
     image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
@@ -4307,7 +4386,12 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                     {
                         "text": text,
                         "clear": bool(action.get("clear")),
-                        "humanize": True,
+                        # Paste vs human-paced typing: Discover messages
+                        # carry humanize=False (one single-commit paste —
+                        # single SET_TEXT / single IME commit, with the
+                        # clipboard fallback where the platform rejects
+                        # SET_TEXT). Replies keep the human-paced default.
+                        "humanize": bool(action.get("humanize", True)),
                     },
                     timeout_s=45,
                 )

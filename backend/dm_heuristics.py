@@ -4381,11 +4381,27 @@ def hinge_on_like_sheet(tree: str) -> bool:
 def hinge_like_sheet_action(
     tree: str, planner: str = "hinge_heuristic"
 ) -> Optional[Dict[str, Any]]:
-    """Prefer Send Like / Send Like anyway — never Rose / Send a Rose."""
+    """Prefer Send Like / Send Like anyway — never Rose / Send a Rose.
+
+    Defense in depth: any resolved tap point inside the paid Rose bounds
+    is refused outright, even if a label lookup resolves there.
+    """
     if not hinge_on_like_sheet(tree):
         return None
+    rose = DM_APP_PROFILES["hinge"].get("rose_button_bounds") or (
+        95,
+        1225,
+        355,
+        1330,
+    )
+
+    def _in_rose(xy: Optional[Tuple[int, int]]) -> bool:
+        if not xy:
+            return False
+        return rose[0] <= int(xy[0]) <= rose[2] and rose[1] <= int(xy[1]) <= rose[3]
+
     anyway = _tree_node_center(tree, "Send Like anyway", "Send like anyway")
-    if anyway:
+    if anyway and not _in_rose(anyway):
         return _fp(
             {
                 "action": "tap",
@@ -4400,7 +4416,7 @@ def hinge_like_sheet_action(
     send_like = _exact_label_center(tree, "Send Like") or _tree_node_center(
         tree, "Send Like"
     )
-    if send_like:
+    if send_like and not _in_rose(send_like):
         return _fp(
             {
                 "action": "tap",
@@ -4413,6 +4429,8 @@ def hinge_like_sheet_action(
             "hinge_send_like",
         )
     xy = DM_APP_PROFILES["hinge"].get("send_like_xy") or (686, 1277)
+    if _in_rose((int(xy[0]), int(xy[1]))):
+        return None
     return _fp(
         {
             "action": "tap",

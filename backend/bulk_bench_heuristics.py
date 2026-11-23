@@ -6,15 +6,32 @@ never AI-generated text.
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+logger = logging.getLogger("mobilerun.bulk_swipe")
 
 try:
     from fake_chats_catalog import bulk_counts, swipe_keys
 except ImportError:
     from backend.fake_chats_catalog import bulk_counts, swipe_keys  # type: ignore
+
+try:
+    from discover_caps import (
+        discover_cap_reason,
+        discover_message_cap,
+        discover_messages_allowed,
+    )
+except ImportError:
+    from backend.discover_caps import (  # type: ignore
+        discover_cap_reason,
+        discover_message_cap,
+        discover_messages_allowed,
+    )
 
 try:
     from dm_heuristics import (
@@ -34,6 +51,7 @@ try:
         blk_on_deck,
         blk_on_matches,
         blk_on_thread,
+        blk_outgoing_verified,
         blk_send_relative_to_edittext,
         blk_deck_card_name,
         bumble_back_from_photo_browser,
@@ -61,6 +79,7 @@ try:
         hily_on_photo_viewer,
         hily_on_profile_sheet,
         hily_on_top_picks_grid,
+        hily_outgoing_verified,
         hily_pass_action,
         _is_system_chrome_package,
         hinge_deck_card_name,
@@ -77,6 +96,7 @@ try:
         hinge_on_like_sheet,
         hinge_on_matches,
         hinge_on_thread,
+        hinge_outgoing_verified,
         hinge_open_discover_tab,
         hinge_open_matches_tab,
         hinge_tap_top_chat,
@@ -84,6 +104,7 @@ try:
         keyboard_likely_up,
         known_root_screen,
         tab_bar_verified,
+        outgoing_bubble_present,
         tagged_chat_action,
         tagged_deck_card_name,
         tagged_like_action,
@@ -105,6 +126,7 @@ try:
         yubo_on_chat,
         yubo_on_chat_list,
         yubo_on_deck,
+        yubo_outgoing_verified,
         yubo_pass_swipe,
     )
 except ImportError:
@@ -125,6 +147,7 @@ except ImportError:
         blk_on_deck,
         blk_on_matches,
         blk_on_thread,
+        blk_outgoing_verified,
         blk_send_relative_to_edittext,
         blk_deck_card_name,
         bumble_back_from_photo_browser,
@@ -152,6 +175,7 @@ except ImportError:
         hily_on_photo_viewer,
         hily_on_profile_sheet,
         hily_on_top_picks_grid,
+        hily_outgoing_verified,
         hily_pass_action,
         _is_system_chrome_package,
         hinge_deck_card_name,
@@ -168,6 +192,7 @@ except ImportError:
         hinge_on_like_sheet,
         hinge_on_matches,
         hinge_on_thread,
+        hinge_outgoing_verified,
         hinge_open_discover_tab,
         hinge_open_matches_tab,
         hinge_tap_top_chat,
@@ -175,6 +200,7 @@ except ImportError:
         keyboard_likely_up,
         known_root_screen,
         tab_bar_verified,
+        outgoing_bubble_present,
         tagged_chat_action,
         tagged_deck_card_name,
         tagged_like_action,
@@ -196,6 +222,7 @@ except ImportError:
         yubo_on_chat,
         yubo_on_chat_list,
         yubo_on_deck,
+        yubo_outgoing_verified,
         yubo_pass_swipe,
     )
 
@@ -206,6 +233,16 @@ DETECTOR_SETTLE_S = 1.5
 _REAL_GESTURE_APPS = frozenset(
     {"bumble", "yubo", "badoo", "hily", "blk", "taimi", "tagged", "hinge"}
 )
+
+# Apps that must never run in routine swipe jobs.
+# Hinge is PARKED: Discover/Matches expose almost no accessibility tree, so a
+# like can only be proven by the supervised one-live-like test — never by a
+# routine live job (dry runs stay available as the safe simulation).
+# Vision-first driver lives in backend/hinge_vision.py.
+PARKED_APPS = frozenset({"hinge"})
+# Apps that cannot work at all: Taimi sets FLAG_SECURE, so screenshots come
+# back black and the screen cannot be read. No code fix can work around it.
+UNSUPPORTED_APPS = frozenset({"taimi"})
 
 
 def _delay_band() -> tuple[float, float]:
@@ -294,6 +331,20 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
                     app = key
                     break
 
+    # Supervised Hinge live test: "hinge live test one like" — exactly one
+    # vision-verified like, Rose guard on, screenshot check after each step.
+    # Hinge is parked for routine jobs; this is the only way to run it.
+    if ("live test" in low or "live-test" in low or "one live like" in low) and (
+        app == "hinge" or "hinge" in low
+    ):
+        return {
+            "kind": "swipe",
+            "count": 1,
+            "message": None,
+            "app": "hinge",
+            "live_test": True,
+        }
+
     # Swipe / like wording variants (never invent a count)
     swipe_patterns = (
         # swipe right on 5 profiles / swipe 5 profiles / auto-swipe 50 profiles
@@ -320,7 +371,17 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
                         if token in aliases or any(a == token for a in aliases):
                             app = key
                             break
-            return {"kind": "swipe", "count": n, "message": None, "app": app}
+            return {
+                "kind": "swipe",
+                "count": n,
+                "message": None,
+                "app": app,
+                "live_test": (
+                    "live test" in low
+                    or "live-test" in low
+                    or "one live like" in low
+                ),
+            }
     if "swipe 50" in low or "auto-swipe" in low:
         return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
@@ -1228,6 +1289,12 @@ def _hinge_empty_tree_recover(
                     "hinge_tap_top_chat",
                 )
             return hinge_tap_top_chat(planner=planner)
+    if (intent or "").lower() == "swipe":
+        # Vision-first driver owns empty-tree Discover: a grounded heart
+        # lets the planner consume it; otherwise ask vision to ground one.
+        # (Message jobs keep the composer-confirm path below.)
+        if isinstance(st, dict) and st.get("_hinge_vision_heart"):
+            return None
     vision_asks = int(bucket.get("vision_asks") or 0)
     if vision_asks >= 3:
         return _fp(
@@ -1236,6 +1303,12 @@ def _hinge_empty_tree_recover(
                 "reason": (
                     f"Empty Hinge a11y after Matches/chat/vision — "
                     f"composer not confirmed ({planner})"
+                    if (intent or "").lower() == "message"
+                    else (
+                        f"Refusing: empty Hinge a11y after vision — "
+                        f"heart could not be grounded, never tap blind "
+                        f"({planner})"
+                    )
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -1260,6 +1333,14 @@ def _hinge_empty_tree_recover(
             "needs_vision": True,
             "_force_vision": True,
             "dry_run_verified": False,
+            # Swipe intent: this wait is really a heart-grounding ask —
+            # cloud_agent grounds the heart from the screenshot, then the
+            # planner consumes it (never a blind tap).
+            **(
+                {"_hinge_vision_heart_ask": True}
+                if (intent or "").lower() == "swipe"
+                else {}
+            ),
         },
         "bulk_recover_empty_vision",
     )
@@ -2014,7 +2095,11 @@ def _real_like_action(
             act["reason"] = f"Tagged likeBtn (free) ({planner})"
         return act
     if app == "hinge":
-        # Prefer Send Like on like-sheet; else Discover heart — never Rose
+        # Prefer Send Like on like-sheet; else Discover heart — never Rose.
+        # No swipe fallback: a horizontal swipe on Hinge only flips the
+        # card's photos and never likes. The vision-grounded heart tap is
+        # the only Discover like path (see hinge_vision); return None so the
+        # caller fails closed instead of guessing.
         sheet = hinge_like_sheet_action(tree, planner=planner)
         if sheet:
             return sheet
@@ -2030,17 +2115,7 @@ def _real_like_action(
                 "planner": planner,
                 "llm_provider": None,
             }
-        # Swipe-right on Discover card
-        return {
-            "action": "swipe",
-            "x1": 200,
-            "y1": 1400,
-            "x2": 900,
-            "y2": 1400,
-            "reason": f"Hinge free like swipe-right ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        }
+        return None
     return None
 
 
@@ -2319,6 +2394,51 @@ def plan_bulk_swipe(
     planner = "bulk_swipe_heuristic"
     hist = " | ".join(history[-12:]).lower()
     app = (goal.get("app") or "") or ""
+
+    # Parked / unsupported apps fail fast — never run by accident. The
+    # "Refusing:" prefix marks these as policy fails so the LLM handoff in
+    # cloud_agent honors them instead of recovering into the app anyway.
+    if app in UNSUPPORTED_APPS:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Refusing: {app} is unsupported — FLAG_SECURE blocks "
+                    f"screenshots, so the screen cannot be read ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "stopped_reason": "unsupported_app",
+            },
+            "bulk_app_unsupported",
+        )
+    live_test = bool(goal.get("live_test")) and app == "hinge"
+    # Parked gate is LIVE-only: a dry run never taps anything, so it stays
+    # available as the safe way to verify the planner path. A routine live
+    # Hinge job is refused; the supervised live test is the only live path.
+    if app in PARKED_APPS and not live_test and not dry_run:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    "Refusing: Hinge is parked — Discover/Matches expose "
+                    "almost no accessibility tree, so a like cannot be "
+                    "verified by a routine job. Run the supervised "
+                    "'hinge live test one like' instead "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "stopped_reason": "hinge_parked",
+            },
+            "bulk_hinge_parked",
+        )
+    if live_test:
+        # Supervised one-live-like test: exactly one like, then stop with a
+        # verification report (see the done block below).
+        target = 1
+        bulk["target"] = 1
+        bulk["hinge_live_test"] = True
 
     # Foreign billing FG (Play / Spay) — dismiss BEFORE wrong-app reopen.
     # In-app upsells stay with per-app interrupt maps; generic dating_deck
@@ -2901,6 +3021,99 @@ def plan_bulk_swipe(
             act["dry_run"] = bool(dry_run)
             act["needs_vision"] = True
             return act
+        # Vision-first Hinge driver (live only, never while a card change is
+        # still being verified — the shared wait path owns those steps).
+        # Discover has no a11y heart, so ground it from a screenshot before
+        # any tap. Never swipe (a horizontal swipe only flips photos), never
+        # tap blind. A like only counts when the card name changes
+        # afterwards (see dating_deck).
+        if not dry_run and not bulk.get("awaiting_verify"):
+            try:
+                from hinge_vision import HINGE_VISION_MAX_ASKS, validate_heart_xy
+            except ImportError:  # pragma: no cover - Lambda layout
+                from backend.hinge_vision import (  # type: ignore
+                    HINGE_VISION_MAX_ASKS,
+                    validate_heart_xy,
+                )
+            heart = st.get("_hinge_vision_heart") if isinstance(st, dict) else None
+            if isinstance(heart, dict) and heart.get("x") is not None:
+                # Re-validate the grounded point (defense in depth) and
+                # consume it exactly once.
+                hx, hy = int(heart["x"]), int(heart["y"])
+                hname = str(heart.get("name") or "")
+                ok, why = validate_heart_xy(hx, hy)
+                st.pop("_hinge_vision_heart", None)
+                st.pop("_hinge_vision_heart_tried", None)
+                bulk["_hinge_vision_heart_asks"] = 0
+                if ok and hname:
+                    bulk["_hinge_vision_like_name"] = hname
+                    bulk["_hinge_vision_heart_used"] = True
+                    st["bulk_swipe"] = bulk
+                    try:
+                        from dating_deck import mark_like_issued
+                    except ImportError:  # pragma: no cover - Lambda layout
+                        from backend.dating_deck import (  # type: ignore
+                            mark_like_issued,
+                        )
+                    mark_like_issued(st, app=app, tree=ui_tree)
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": hx,
+                            "y": hy,
+                            "label": "Like",
+                            "reason": (
+                                f"Hinge vision like '{hname}' at ({hx},{hy}) "
+                                f"— heart grounded from screenshot, never "
+                                f"Rose ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "_free_like": True,
+                            "_hinge_vision_like": True,
+                            "_vision_confirmed_label": "Like",
+                            "dry_run": False,
+                        },
+                        "bulk_hinge_vision_like",
+                    )
+                # Invalid grounding — fall through to re-ask (bounded below).
+                logger.warning("hinge vision heart rejected: %s", why)
+            asks = int(bulk.get("_hinge_vision_heart_asks") or 0)
+            if asks < HINGE_VISION_MAX_ASKS:
+                bulk["_hinge_vision_heart_asks"] = asks + 1
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.9,
+                        "reason": (
+                            f"Hinge Discover has no like button in the tree "
+                            f"— vision grounding the heart "
+                            f"({asks + 1}/{HINGE_VISION_MAX_ASKS}) ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_hinge_vision_heart_ask": True,
+                        "dry_run": False,
+                    },
+                    "bulk_hinge_vision_ask",
+                )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Refusing: Hinge vision could not ground a heart "
+                        f"after {HINGE_VISION_MAX_ASKS} asks — never tap "
+                        f"blind ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "stopped_reason": "hinge_vision_failed",
+                },
+                "bulk_hinge_vision_failed",
+            )
         # Discover dry_run falls through to the shared multi-card pass-advance
         # path below (never one-card done / never Rose).
         # Live: free Like / Send Like only — never Rose / Boost / HingeX
@@ -3010,6 +3223,30 @@ def plan_bulk_swipe(
         # Card changed — fall through to next like (done already bumped)
 
     if done >= target and not dry_run:
+        if bulk.get("hinge_live_test"):
+            # Supervised one-live-like test report — exactly one verified
+            # like, then stop. Never auto-continues into routine swiping.
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"Hinge live test complete: 1 verified like "
+                        f"('{bulk.get('_hinge_vision_like_name') or '?'}', "
+                        f"card changed, Rose never tapped) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "bulk_swipe_done": done,
+                    "bulk_swipe_target": target,
+                    "_hinge_live_test_report": {
+                        "liked": bulk.get("_hinge_vision_like_name"),
+                        "verified": done >= 1,
+                        "rose_avoided": True,
+                        "mode": "hinge_live_test",
+                    },
+                },
+                "bulk_hinge_live_test_done",
+            )
         return _fp(
             {
                 "action": "done",
@@ -4306,6 +4543,77 @@ def plan_secure_folder(
     return None
 
 
+def _today_utc() -> str:
+    """UTC date key for the daily Discover cap counters."""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _discover_verified_count(bulk: Dict[str, Any]) -> int:
+    by_date = bulk.get("discover_verified_by_date")
+    if not isinstance(by_date, dict):
+        return 0
+    return int(by_date.get(_today_utc()) or 0)
+
+
+def _record_discover_verified_send(bulk: Dict[str, Any]) -> int:
+    by_date = bulk.get("discover_verified_by_date")
+    if not isinstance(by_date, dict):
+        by_date = {}
+        bulk["discover_verified_by_date"] = by_date
+    today = _today_utc()
+    by_date[today] = int(by_date.get(today) or 0) + 1
+    return by_date[today]
+
+
+def discover_send_verified(app: str, ui_tree: str, message: str) -> bool:
+    """True when the outgoing Discover message is confirmed on screen.
+
+    Per-app outgoing verifier first (You:/Sent, thread bubble). Hinge
+    like-sheet sends are confirmed when the sheet has closed on a readable
+    tree — Send Like either goes through (sheet closes) or stays/errors on
+    the sheet. An empty/unreadable tree verifies nothing: no evidence means
+    not verified, and the send does not count. Fallback for other apps: the
+    message has left every editable composer while the thread is still open.
+    A message still sitting in the composer, a paywall on screen, or a
+    screen with no composer and no outgoing bubble is NOT verified.
+    """
+    needle = (message or "").strip()
+    if len(needle) < 2:
+        return False
+    tree = ui_tree or ""
+    nodes = _parse_compact_nodes(tree)
+    if not nodes:
+        return False
+    low_app = (app or "").lower()
+    if low_app == "hinge":
+        if hinge_outgoing_verified(tree, message):
+            return True
+        # Like-sheet send: sheet closed on a readable tree means Send Like
+        # landed. (If the tree were empty we already returned False above.)
+        return not hinge_on_like_sheet(tree)
+    if low_app == "hily" and hily_outgoing_verified(tree, message):
+        return True
+    if low_app == "blk" and blk_outgoing_verified(tree, message):
+        return True
+    if low_app == "yubo" and yubo_outgoing_verified(tree, message):
+        return True
+    if outgoing_bubble_present(tree, message):
+        return True
+    # Fallback: still in the thread and the text has left the composer.
+    blob = tree.lower()
+    if "paywall" in blob or "subscribe to continue" in blob:
+        return False
+    needle_low = needle.lower()
+    saw_composer = False
+    for n in nodes:
+        if n.get("editable"):
+            saw_composer = True
+            text = (n.get("text") or "").strip().lower()
+            if text and (needle_low in text or text in needle_low):
+                return False
+    return saw_composer
+
+
 def plan_bulk_message_new(
     instruction: str,
     ui_tree: str,
@@ -4353,6 +4661,39 @@ def plan_bulk_message_new(
     done = int(bulk.get("done") or 0)
     hist = " ".join(history[-16:]).lower()
     skipped = {str(x).lower() for x in (bulk.get("skipped") or [])}
+
+    # Discover daily cap (Mac, 23 Nov 2026): Hinge 50-100/day (default 50),
+    # Hily 5/day, BLK / Yubo / Facebook Dating unlimited. Counts VERIFIED
+    # sends only — a Send tap that never lands does not count. Dry runs
+    # never send, so neither step applies to them.
+    if not dry_run and bulk.get("awaiting_send_verify"):
+        last_message = str(bulk.get("_last_sent_message") or "")
+        polls = int(bulk.get("_send_verify_polls") or 0) + 1
+        bulk["_send_verify_polls"] = polls
+        if discover_send_verified(app, ui_tree, last_message):
+            _record_discover_verified_send(bulk)
+            bulk["awaiting_send_verify"] = False
+            bulk["_send_verify_polls"] = 0
+        elif polls >= 3:
+            # Never verified — the send does not count toward the cap.
+            bulk["awaiting_send_verify"] = False
+            bulk["_send_verify_polls"] = 0
+        st["bulk_message_new"] = bulk
+    if not dry_run:
+        sent_today = _discover_verified_count(bulk)
+        if not discover_messages_allowed(app, sent_today):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": discover_cap_reason(app, sent_today),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "stopped_reason": "discover_cap_reached",
+                    "discover_cap": discover_message_cap(app),
+                    "discover_sent_today": sent_today,
+                },
+                "bulk_discover_cap_reached",
+            )
 
     # Apps with no reliable free new-message surface → like FALLBACK only after
     # we fail to find Matches/Connections/composer (never hard-replace).
@@ -4598,6 +4939,10 @@ def plan_bulk_message_new(
                         {
                             "action": "type",
                             "text": message,
+                            # Paste, not character-by-character typing: the
+                            # message bar is already open, so the device does
+                            # one single-commit paste (humanize=False).
+                            "humanize": False,
                             "reason": (
                                 f"Type like-sheet comment for new contact "
                                 f"({planner})"
@@ -4660,6 +5005,11 @@ def plan_bulk_message_new(
             if send:
                 bulk["done"] = done + 1
                 bulk["typed"] = False
+                # Cap counts verified sends only: verify on the next step
+                # (sheet closed = Send Like landed).
+                bulk["awaiting_send_verify"] = True
+                bulk["_last_sent_message"] = message
+                bulk["_send_verify_polls"] = 0
                 st["bulk_message_new"] = bulk
                 return send
         if dry_run and not hinge_on_like_sheet(ui_tree) and not bulk.get(
@@ -4952,6 +5302,10 @@ def plan_bulk_message_new(
                         {
                             "action": "type",
                             "text": message,
+                            # Paste, not character-by-character typing: the
+                            # composer is already focused, so the device does
+                            # one single-commit paste (humanize=False).
+                            "humanize": False,
                             "reason": (f"Type free opener to new contact ({planner})"),
                             "planner": planner,
                             "llm_provider": None,
@@ -4984,6 +5338,11 @@ def plan_bulk_message_new(
                 bulk["done"] = done + 1
                 bulk["typed"] = False
                 bulk["current"] = None
+                # Cap counts verified sends only: verify on the next step
+                # (outgoing bubble / message left the composer).
+                bulk["awaiting_send_verify"] = True
+                bulk["_last_sent_message"] = message
+                bulk["_send_verify_polls"] = 0
                 st["bulk_message_new"] = bulk
                 return _fp(
                     {

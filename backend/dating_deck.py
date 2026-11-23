@@ -435,8 +435,10 @@ def plan_free_like(
 
     # Swipe-right fallback only for mapped real decks that already use swipe
     # likes — never invent a swipe for apps that must fail-closed (e.g. Tinder
-    # fake-chats without a Like control).
-    if app_l in ("bumble", "yubo", "hinge"):
+    # fake-chats without a Like control). Hinge is NOT here: a horizontal
+    # swipe on Hinge only flips the card's photos, it never likes — a Hinge
+    # like needs the vision-grounded heart tap (see hinge_vision).
+    if app_l in ("bumble", "yubo"):
         return {
             "action": "swipe",
             "x1": 200,
@@ -494,6 +496,54 @@ def plan_wait_for_next_card(
 
     name_now = deck_card_name(app, tree)
     fp_now = deck_fingerprint(tree, app)
+
+    # Hinge vision verify: the Discover tree is usually empty, so compare
+    # against the vision-grounded name of the card just liked
+    # (bulk["_hinge_vision_like_name"]). The name for the current screen
+    # comes from the tree when present, else from a fresh vision read stashed
+    # in state["_hinge_vision_name"] by cloud_agent on the
+    # _hinge_vision_verify ask below. A like is NEVER counted unless the
+    # name actually changes.
+    if app == "hinge" and bulk.get("_hinge_vision_like_name"):
+        like_name = str(bulk.get("_hinge_vision_like_name") or "")
+        if like_name:
+            bulk["last_name"] = like_name
+            if not name_now:
+                vn = state.get("_hinge_vision_name") if isinstance(state, dict) else None
+                if vn:
+                    name_now = str(vn)
+            # A changed fingerprint alone already proves the card changed
+            # (sparse trees where no name parses) — only ask vision when
+            # neither the name nor the fingerprint proves it.
+            fp_proves_change = bool(
+                fp_now and bulk.get("last_fp") and fp_now != bulk["last_fp"]
+            )
+            if not name_now and not fp_proves_change:
+                try:
+                    from hinge_vision import HINGE_VISION_MAX_ASKS
+                except ImportError:  # pragma: no cover - Lambda layout
+                    from backend.hinge_vision import (  # type: ignore
+                        HINGE_VISION_MAX_ASKS,
+                    )
+                asks = int(bulk.get("_hinge_vision_verify_n") or 0)
+                if asks < HINGE_VISION_MAX_ASKS:
+                    bulk["_hinge_vision_verify_n"] = asks + 1
+                    state["bulk_swipe"] = bulk
+                    return {
+                        "action": "wait",
+                        "seconds": CARD_WAIT_SECONDS,
+                        "reason": (
+                            f"Wait for next Hinge profile — vision read "
+                            f"({asks + 1}/{HINGE_VISION_MAX_ASKS}) ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "_card_wait": True,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_hinge_vision_verify": True,
+                    }
+
     last_name = bulk.get("last_name")
     last_fp = bulk.get("last_fp")
 
