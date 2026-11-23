@@ -1624,6 +1624,68 @@ def _real_pass_action(
     return None
 
 
+def _dry_run_pass_advance(
+    app: str,
+    tree: str = "",
+    planner: str = "bulk_swipe_heuristic",
+) -> Dict[str, Any]:
+    """Non-committal pass / left-swipe to reveal the next dry-run card.
+
+    Never likes, never paid. Used only when ``_dry_run_advance`` is set so the
+    dry-run send guard allows the gesture.
+    """
+    act = _real_pass_action(app, tree=tree, planner=planner)
+    if act:
+        return act
+    profile = DM_APP_PROFILES.get(app, {}) if app else {}
+    pass_ids = tuple(profile.get("pass_ids") or ())
+    if pass_ids:
+        c = _tree_id_center(tree, *pass_ids)
+        if c:
+            return {
+                "action": "tap",
+                "x": int(c[0]),
+                "y": int(c[1]),
+                "reason": f"dry_run pass-advance tap ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            }
+    pass_lab = _exact_label_center(tree, "Pass") or _exact_label_center(tree, "Nope")
+    if pass_lab and int(pass_lab[1]) > 1500:
+        return {
+            "action": "tap",
+            "x": int(pass_lab[0]),
+            "y": int(pass_lab[1]),
+            "reason": f"dry_run pass-advance label ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        }
+    # Generic left swipe (pass) — not a like
+    return {
+        "action": "swipe",
+        "x1": 820,
+        "y1": 1400,
+        "x2": 180,
+        "y2": 1400,
+        "reason": f"dry_run pass-advance left-swipe ({planner})",
+        "planner": planner,
+        "llm_provider": None,
+    }
+
+
+def _card_name_is_foreign(name: Optional[str]) -> bool:
+    """True for notification / other-app titles (never a dating card)."""
+    if not name:
+        return True
+    try:
+        from dm_heuristics import _looks_like_notif_or_app_title
+    except ImportError:
+        from backend.dm_heuristics import (  # type: ignore
+            _looks_like_notif_or_app_title,
+        )
+    return bool(_looks_like_notif_or_app_title(name))
+
+
 def _fake_like_center(app: Optional[str], tree: str) -> Optional[tuple[int, int]]:
     """Locate Like for fake-chats / button decks. No coordinate guess."""
     like_ids: tuple = ()
@@ -2285,28 +2347,20 @@ def plan_bulk_swipe(
         if hinge_on_like_sheet(ui_tree):
             # Like sheet is a11y — Send Like only (never Rose)
             if dry_run:
-                card = deck_card_name(app, ui_tree) or "like sheet"
-                evaluated = 1
-                bulk["done"] = evaluated
-                st["bulk_swipe"] = bulk
+                # Dismiss sheet and continue multi-card dry-run (never Send Like)
                 return _fp(
                     {
-                        "action": "done",
+                        "action": "press_button",
+                        "button": "back",
                         "reason": (
-                            f"[DRY RUN] evaluated {evaluated} card ({card}); "
-                            f"would like/pass {target} — no Send Like/Rose "
-                            f"({planner})"
+                            f"[DRY RUN] back out of Hinge like sheet — "
+                            f"no Send Like/Rose ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                         "dry_run": True,
-                        "dry_run_verified": True,
-                        "bulk_swipe_done": evaluated,
-                        "bulk_swipe_target": target,
-                        "bulk_swipe_evaluated": evaluated,
-                        "screenshot": True,
                     },
-                    "bulk_dry_run_skip_like",
+                    "bulk_dry_run_hinge_sheet_back",
                 )
             return hinge_like_sheet_action(ui_tree, planner=planner)
         if hinge_on_matches(ui_tree) and not hinge_on_discover(ui_tree):
@@ -2320,53 +2374,8 @@ def plan_bulk_swipe(
             act["dry_run"] = bool(dry_run)
             act["needs_vision"] = True
             return act
-        # Discover "like" = heart (vision) → like sheet Send Like — never Rose
-        if dry_run and deck_visible:
-            card = deck_card_name(app, ui_tree)
-            send_cta = hinge_find_send_a_message(ui_tree)
-            compose = hinge_find_compose(ui_tree)
-            if not card and not send_cta and not compose:
-                return _fp(
-                    {
-                        "action": "fail",
-                        "reason": (
-                            f"dry_run — Hinge Discover not verified "
-                            f"(no name / Send a message) ({planner})"
-                        ),
-                        "planner": planner,
-                        "llm_provider": None,
-                        "dry_run": True,
-                        "dry_run_verified": False,
-                    },
-                    "bulk_dry_run_hinge_unverified",
-                )
-            label = card or "Discover card"
-            evaluated = 1
-            bulk["done"] = evaluated
-            bulk["dry_logs"] = [
-                f"[DRY RUN] evaluated {evaluated} card ({label}); "
-                f"would like/pass {target}"
-            ]
-            st["bulk_swipe"] = bulk
-            return _fp(
-                {
-                    "action": "done",
-                    "reason": (
-                        f"[DRY RUN] evaluated {evaluated} card ({label}); "
-                        f"would like/pass {target} — no Rose/Send "
-                        f"({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": True,
-                    "dry_run_verified": True,
-                    "bulk_swipe_done": evaluated,
-                    "bulk_swipe_target": target,
-                    "bulk_swipe_evaluated": evaluated,
-                    "screenshot": True,
-                },
-                "bulk_dry_run_skip_like",
-            )
+        # Discover dry_run falls through to the shared multi-card pass-advance
+        # path below (never one-card done / never Rose).
         # Live: free Like / Send Like only — never Rose / Boost / HingeX
         # (message bank used later for new-match / reply jobs, not required to like)
 
@@ -2450,8 +2459,10 @@ def plan_bulk_swipe(
     if pay:
         return _fp(pay, "bulk_paywall_dismiss")
 
-    # After like/pass: poll until next profile loads (or end-of-deck / timeout)
-    if bulk.get("awaiting_verify"):
+    # After like/pass: poll until next profile loads (or end-of-deck / timeout).
+    # dry_run uses its own pass-advance wait loop below — never double-count via
+    # plan_wait_for_next_card (r22 multi-card dry-run).
+    if bulk.get("awaiting_verify") and not dry_run:
         try:
             from dating_deck import plan_wait_for_next_card
         except ImportError:
@@ -2471,7 +2482,7 @@ def plan_bulk_swipe(
             return _fp(wait_act, step)
         # Card changed — fall through to next like (done already bumped)
 
-    if done >= target:
+    if done >= target and not dry_run:
         return _fp(
             {
                 "action": "done",
@@ -2631,7 +2642,8 @@ def plan_bulk_swipe(
                     "bulk_tagged_meet",
                 )
 
-    # dry_run: verify ONE real card, then log would like/pass N once (no loop)
+    # dry_run: step through N distinct cards via pass-advance (never like).
+    # r22: one-card early done was a false pass ("evaluated 1; would like/pass 5").
     if dry_run:
         # Badoo skeleton while encounters_skeleton_profileInfoView loads — wait
         if app == "badoo" and "encounters_skeleton" in (ui_tree or "").lower():
@@ -2715,6 +2727,8 @@ def plan_bulk_swipe(
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_dry_run_no_deck",
             )
@@ -2731,10 +2745,95 @@ def plan_bulk_swipe(
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_dry_run_no_deck_markers",
             )
         card = deck_card_name(app, ui_tree)
+        if card and _card_name_is_foreign(card):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — rejected foreign/notification card name "
+                        f"'{card}' for {app or '?'} (require pkg==target) "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                },
+                "bulk_dry_run_foreign_card",
+            )
+        evaluated_names = list(bulk.get("dry_evaluated_names") or [])
+        # After pass-advance: wait until the top card name changes
+        if bulk.get("awaiting_verify"):
+            last = str(bulk.get("last_name") or "")
+            if card and card != last and card.lower() not in {
+                n.lower() for n in evaluated_names
+            }:
+                bulk["awaiting_verify"] = False
+                bulk["card_wait_n"] = 0
+                st["bulk_swipe"] = bulk
+            else:
+                waits = int(bulk.get("card_wait_n") or 0) + 1
+                bulk["card_wait_n"] = waits
+                st["bulk_swipe"] = bulk
+                if waits <= 4:
+                    return _fp(
+                        {
+                            "action": "wait",
+                            "seconds": 0.8,
+                            "reason": (
+                                f"dry_run — wait for next card after pass "
+                                f"({waits}/4) ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                        },
+                        "bulk_dry_run_card_wait",
+                    )
+                # Card stuck — ask vision once, then fail
+                if not bulk.get("_dry_advance_vision"):
+                    bulk["_dry_advance_vision"] = True
+                    bulk["awaiting_verify"] = False
+                    st["bulk_swipe"] = bulk
+                    return _fp(
+                        {
+                            "action": "wait",
+                            "seconds": 0.6,
+                            "reason": (
+                                f"dry_run — card did not change after pass; "
+                                f"vision locate next profile ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "needs_vision": True,
+                            "_force_vision": True,
+                        },
+                        "bulk_dry_run_advance_vision",
+                    )
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"dry_run — only evaluated {len(evaluated_names)}/"
+                            f"{target} distinct cards; next card never appeared "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": False,
+                        "bulk_swipe_evaluated": len(evaluated_names),
+                        "bulk_swipe_target": target,
+                    },
+                    "bulk_dry_run_stuck_cards",
+                )
         if not card:
             if app == "badoo" and int(bulk.get("badoo_skeleton_waits") or 0) < 3:
                 bulk["badoo_skeleton_waits"] = (
@@ -2763,35 +2862,61 @@ def plan_bulk_swipe(
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_dry_run_no_card_name",
             )
-        # Report cards actually evaluated (1), not the instruction target count
-        evaluated = 1
-        bulk["done"] = evaluated
-        bulk["dry_logs"] = [
-            f"[DRY RUN] evaluated {evaluated} card ({card}); "
-            f"would like/pass {target}"
-        ]
+        if card.lower() not in {n.lower() for n in evaluated_names}:
+            evaluated_names.append(card)
+            bulk["dry_evaluated_names"] = evaluated_names
+            bulk["done"] = len(evaluated_names)
+            bulk["last_name"] = card
+            st["bulk_swipe"] = bulk
+        evaluated = len(evaluated_names)
+        names_blob = ", ".join(evaluated_names)
+        if evaluated >= target:
+            bulk["dry_logs"] = [
+                f"[DRY RUN] evaluated {evaluated} cards ({names_blob}); "
+                f"would like/pass {target}"
+            ]
+            st["bulk_swipe"] = bulk
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] evaluated {evaluated} cards ({names_blob}); "
+                        f"would like/pass {target} — no like ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "bulk_swipe_done": evaluated,
+                    "bulk_swipe_target": target,
+                    "bulk_swipe_evaluated": evaluated,
+                    "screenshot": True,
+                },
+                "bulk_dry_run_skip_like",
+            )
+        # Advance to the next distinct card via pass (guard allows _dry_run_advance)
+        advance = _dry_run_pass_advance(app, tree=ui_tree, planner=planner)
+        bulk["awaiting_verify"] = True
+        bulk["card_wait_n"] = 0
+        bulk["last_name"] = card
         st["bulk_swipe"] = bulk
-        return _fp(
-            {
-                "action": "done",
-                "reason": (
-                    f"[DRY RUN] evaluated {evaluated} card ({card}); "
-                    f"would like/pass {target} — no like/swipe ({planner})"
-                ),
-                "planner": planner,
-                "llm_provider": None,
-                "dry_run": True,
-                "dry_run_verified": True,
-                "bulk_swipe_done": evaluated,
-                "bulk_swipe_target": target,
-                "bulk_swipe_evaluated": evaluated,
-                "screenshot": True,
-            },
-            "bulk_dry_run_skip_like",
-        )
+        advance = {
+            **advance,
+            "_dry_run_advance": True,
+            "dry_run": True,
+            "reason": (
+                f"[DRY RUN] advance {evaluated}/{target} after '{card}' "
+                f"via pass — no like ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        }
+        return _fp(advance, "bulk_dry_run_advance")
 
     card_name = deck_card_name(app, ui_tree)
     next_n = done + 1
@@ -2982,22 +3107,17 @@ def plan_bulk_message(
             done_names.append(str(sk).strip())
     fake_bench = _is_fake_chats_bench(ui_tree, package, instruction)
     list_ok = _chat_list_screen_verified(app_key, ui_tree)
-    # Bumble on Discover/People deck must open Chats first — never scroll deck
-    if (app_key or "").lower() == "bumble" and not list_ok:
-        try:
-            from dm_heuristics import bumble_on_people_deck as _bumble_deck
-        except ImportError:
-            from backend.dm_heuristics import (  # type: ignore
-                bumble_on_people_deck as _bumble_deck,
-            )
-        if _bumble_deck(ui_tree):
-            # Clear one-shot hist gate so we can open Chats from the deck
-            history = [
-                h
-                for h in history
-                if "open chats" not in str(h).lower()
-                and "bulk_open_chats" not in str(h).lower()
-            ]
+    # Rows already parseable → treat as list even when chrome detectors miss
+    # (r22: Yubo/BLK after Back had Roch/Leah/Neff visible but list_ok=False).
+    if not list_ok:
+        rows_probe = _visible_chat_list_rows(
+            ui_tree, app_key, skip_names=list(bulk.get("done_names") or [])
+        )
+        if rows_probe:
+            list_ok = True
+    # Bumble on Discover/People deck: open Chats via _open_chats_tab_action
+    # below. Never clear "open chats" history (that re-tapped Chats every step
+    # and skipped settle/vision — r22 bumble_reply5).
     bulk["chat_list_verified"] = bool(list_ok)
     st["bulk_message"] = bulk
 
@@ -3120,6 +3240,25 @@ def plan_bulk_message(
                 bulk["_chats_tab_taps"] = int(bulk.get("_chats_tab_taps") or 0) + 1
                 st["bulk_message"] = bulk
                 return open_tab
+        # Empty/sparse tree (Taimi/Hinge/Hily on 572) — vision before hard fail
+        if not bulk.get("_chats_tab_missing_vision"):
+            bulk["_chats_tab_missing_vision"] = True
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "reason": (
+                        f"No Chats/Messages tab in tree for {app_key or 'app'} — "
+                        f"vision locate tab ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_chats_tab_vision",
+            )
         return _fp(
             {
                 "action": "fail",
@@ -3128,17 +3267,52 @@ def plan_bulk_message(
                 ),
                 "planner": planner,
                 "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
             },
             "bulk_chats_tab_missing",
         )
 
     # After Back from a thread: refuse row taps until the chat list is verified
     if bulk.get("_await_list_after_back"):
+        if not list_ok:
+            # Visible rows / Conversations chrome after Back → accept list
+            # (r22 yubo_reply5: Back loop while Roch/Leah stayed on screen).
+            rows_after = _visible_chat_list_rows(
+                ui_tree, app_key, skip_names=done_names
+            )
+            if rows_after or (
+                (app_key or "").lower() == "yubo" and yubo_on_chat_list(ui_tree)
+            ):
+                list_ok = True
+                bulk["chat_list_verified"] = True
         if list_ok:
             bulk["_await_list_after_back"] = False
             bulk.pop("_pre_back_cleared", None)
             st["bulk_message"] = bulk
         else:
+            back_n = int(bulk.get("_back_until_list_n") or 0)
+            if back_n >= 2:
+                # Stop Back spam — ask vision instead of looping
+                bulk["_await_list_after_back"] = False
+                st["bulk_message"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.6,
+                        "reason": (
+                            f"Back did not restore chat list — vision locate "
+                            f"rows ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    },
+                    "bulk_back_list_vision",
+                )
+            bulk["_back_until_list_n"] = back_n + 1
+            st["bulk_message"] = bulk
             return _fp(
                 {
                     "action": "press_button",
@@ -3466,8 +3640,9 @@ def plan_bulk_message(
             "bulk_rows_vision",
         )
 
-    # No rows: scroll only on a verified list, cap at MAX_LIST_SCROLLS
-    if list_ok and scroll_n < MAX_LIST_SCROLLS:
+    # No rows after vision: at most one scroll, then fail to vision again
+    # (r22 bumble_reply5 / whatsapp1: loop guard on swipe 540,1800→540,700).
+    if list_ok and scroll_n < 1 and bulk.get("_rows_vision_n"):
         bulk["scroll_count"] = scroll_n + 1
         st["bulk_message"] = bulk
         return _fp(
@@ -3478,8 +3653,8 @@ def plan_bulk_message(
                 "x2": 540,
                 "y2": 700,
                 "reason": (
-                    f"Scroll verified chat list for more rows "
-                    f"({scroll_n + 1}/{MAX_LIST_SCROLLS}) ({planner})"
+                    f"Scroll verified chat list once after vision miss "
+                    f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -3487,6 +3662,26 @@ def plan_bulk_message(
                 "_chat_list_verified": True,
             },
             "bulk_scroll",
+        )
+    if list_ok and scroll_n < MAX_LIST_SCROLLS and not bulk.get("_rows_vision_n"):
+        # Rows expected but vision not yet asked — prefer vision over scroll spam
+        bulk["_rows_vision_n"] = 1
+        st["bulk_message"] = bulk
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 0.6,
+                "reason": (
+                    f"Vision locate chat-list rows for {app_key or 'app'} "
+                    f"before scroll ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+                "chat_list_verified": True,
+            },
+            "bulk_rows_vision",
         )
 
     return _fp(
@@ -3766,6 +3961,24 @@ def plan_bulk_message_new(
                 },
                 "bulk_tagged_open_deck",
             )
+        if not bulk.get("_tagged_new_vision"):
+            bulk["_tagged_new_vision"] = True
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "reason": (
+                        f"Tagged Match card / chatBtn not in tree — "
+                        f"vision locate chatBtn ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_tagged_new_vision",
+            )
         return _fp(
             {
                 "action": "fail",
@@ -3773,6 +3986,7 @@ def plan_bulk_message_new(
                 "planner": planner,
                 "llm_provider": None,
                 "needs_vision": True,
+                "_force_vision": True,
             },
             "bulk_tagged_new_missing",
         )
@@ -3855,10 +4069,34 @@ def plan_bulk_message_new(
                 bulk["typed"] = False
                 st["bulk_message_new"] = bulk
                 return send
-        if not hinge_on_discover(ui_tree):
-            act = hinge_open_discover_tab(planner=planner)
-            act["dry_run"] = bool(dry_run)
-            return act
+        if _app_tree_empty(ui_tree, "hinge") or not hinge_on_discover(ui_tree):
+            # Empty a11y (common on Hinge) — screenshot + vision before fail
+            if _app_tree_empty(ui_tree, "hinge") and not bulk.get("_hinge_empty_vision"):
+                bulk["_hinge_empty_vision"] = True
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.8,
+                        "reason": (
+                            f"Hinge empty a11y tree — vision locate Discover/"
+                            f"heart/Matches ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "vision_hint": "hinge_discover_or_heart",
+                    },
+                    "bulk_hinge_empty_vision",
+                )
+            if not hinge_on_discover(ui_tree):
+                act = hinge_open_discover_tab(planner=planner)
+                act["dry_run"] = bool(dry_run)
+                act["needs_vision"] = True
+                act["_force_vision"] = True
+                return act
         if dry_run and hinge_on_discover(ui_tree):
             card = hinge_deck_card_name(ui_tree) or "Discover"
             bulk["done"] = target
@@ -3891,6 +4129,7 @@ def plan_bulk_message_new(
                 "planner": planner,
                 "llm_provider": None,
                 "needs_vision": True,
+                "_force_vision": True,
                 "vision_hint": "hinge_heart",
             },
             "bulk_hinge_new_need_vision",

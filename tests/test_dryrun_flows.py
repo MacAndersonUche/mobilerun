@@ -226,13 +226,14 @@ def test_dry_run_swipe_logs_n_would_like_pass():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act["action"] == "done"
+    # First distinct card → pass-advance (not premature done)
+    assert act and act.get("dry_run") is True
+    assert act.get("action") != "done"
+    assert act.get("_dry_run_advance") is True
     reason = (act.get("reason") or "").lower()
-    assert "evaluated 1 card" in reason
-    assert "would like/pass 2" in reason
     assert "alex" in reason
     assert st["bulk_swipe"]["done"] == 1
-    assert act.get("dry_run_verified") is True
+    assert st["bulk_swipe"].get("awaiting_verify") is True
 
 
 def test_dry_run_allows_chat_list_scroll_blocks_deck_swipe():

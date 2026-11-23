@@ -171,15 +171,14 @@ def test_dry_run_swipe_logs_n_once_with_real_name():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act["action"] == "done"
+    # r22: first real card → pass-advance (not premature done / invent)
+    assert act and act.get("dry_run") is True
+    assert act.get("action") != "done"
+    assert act.get("_dry_run_advance") is True
     reason = (act.get("reason") or "").lower()
-    assert "evaluated 1 card" in reason
-    assert "would like/pass 5" in reason
     assert "alex" in reason
     assert "profile_1" not in reason
     assert "profile_2" not in reason
-    # Cards actually evaluated (1), not instruction target
-    assert act.get("bulk_swipe_done") == 1
     assert st["bulk_swipe"]["done"] == 1
 
 

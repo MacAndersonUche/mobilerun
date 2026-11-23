@@ -77,20 +77,25 @@ def test_tagged_like_not_dislikebtn_substring():
 
 def test_badoo_dry_run_reports_evaluated_one():
     tree = _load("badoo_encounters.xml")
+    st: dict = {}
     act = plan_bulk_swipe(
         "like 5 profiles on Badoo",
         tree,
         ["Opened Badoo"],
         package="com.badoo.mobile",
         dry_run=True,
-        state={},
+        state=st,
     )
-    assert act and act.get("action") == "done"
-    assert act.get("bulk_swipe_evaluated") == 1
-    assert act.get("bulk_swipe_done") == 1
-    assert act.get("bulk_swipe_target") == 5
-    assert "evaluated 1 card" in (act.get("reason") or "")
-    assert "would like/pass 5" in (act.get("reason") or "")
+    # r22: first card recorded then pass-advance toward 5
+    assert act and act.get("dry_run") is True
+    assert act.get("action") != "done"
+    assert act.get("_dry_run_advance") is True or act.get("action") in (
+        "swipe",
+        "tap",
+        "wait",
+    )
+    assert st.get("bulk_swipe", {}).get("done") == 1
+    assert st.get("bulk_swipe", {}).get("target") == 5
 
 
 def test_blk_open_tab_label_is_matches():
