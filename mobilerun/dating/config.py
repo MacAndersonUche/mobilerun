@@ -108,6 +108,22 @@ DEFAULT_APPS = [
 ]
 
 
+_PACKAGE_DISPLAY_NAMES = {app.package_name: app.name for app in DEFAULT_APPS}
+
+
+def display_name_for_package(package_name: str, app_name: Optional[str] = None) -> str:
+    """Readable dating-app name; maps a package when app_name is missing."""
+    named = (app_name or "").strip()
+    if named:
+        return named
+    pkg = (package_name or "").strip()
+    if pkg in _PACKAGE_DISPLAY_NAMES:
+        return _PACKAGE_DISPLAY_NAMES[pkg]
+    parts = [p for p in pkg.split(".") if p and p.lower() not in {"app", "android", "mobile"}]
+    tail = parts[-1] if parts else pkg
+    return tail[:1].upper() + tail[1:] if tail else "Unknown"
+
+
 @dataclass
 class DatingModeConfig:
     """Overall dating mode configuration."""

@@ -121,11 +121,16 @@ class DatingStats:
 
     def get_or_create_app_stats(self, app_name: str, package_name: str) -> AppStats:
         """Get or create stats for an app."""
+        from mobilerun.dating.config import display_name_for_package
+
+        resolved = display_name_for_package(package_name, app_name)
         if package_name not in self.app_stats:
             self.app_stats[package_name] = AppStats(
-                app_name=app_name,
+                app_name=resolved,
                 package_name=package_name,
             )
+        elif not (self.app_stats[package_name].app_name or "").strip():
+            self.app_stats[package_name].app_name = resolved
         return self.app_stats[package_name]
 
     def check_and_reset_daily(self):
@@ -204,6 +209,8 @@ class DatingStats:
 
     def get_summary(self) -> Dict:
         """Get summary of all stats."""
+        from mobilerun.dating.config import display_name_for_package
+
         return {
             "total_sessions": self.total_sessions,
             "total_runtime_minutes": self.total_runtime_minutes,
@@ -213,7 +220,9 @@ class DatingStats:
             },
             "apps": [
                 {
-                    "name": stats.app_name,
+                    "name": display_name_for_package(
+                        stats.package_name, stats.app_name
+                    ),
                     "package": stats.package_name,
                     "today": {
                         "swipes": stats.swipes_today,
