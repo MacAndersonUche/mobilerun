@@ -2877,6 +2877,7 @@ def plan_bulk_message(
         if open_tab:
             # Do NOT clear settle counters — clearing caused BLK/Yubo reply to
             # re-settle forever (tap chats → settle → tap chats → 7 min hang).
+            bulk["_chats_tab_taps"] = int(bulk.get("_chats_tab_taps") or 0) + 1
             st["bulk_message"] = bulk
             return open_tab
         opened_hist = any(
@@ -2885,8 +2886,15 @@ def plan_bulk_message(
             or "bulk_open_chats" in str(h).lower()
             or "chats/messages tab" in str(h).lower()
             or "matches tab" in str(h).lower()
+            # Yubo reason is "Open Yubo Chat tab by index" — not "open chats"
+            or "yubo chat tab" in str(h).lower()
+            or "chat tab by index" in str(h).lower()
+            or (
+                "vision locate" in str(h).lower()
+                and "chat" in str(h).lower()
+            )
             for h in history[-8:]
-        )
+        ) or int(bulk.get("_chats_tab_taps") or 0) >= 1
         # Retry once after a short settle — real apps animate the list in.
         # Cap at 1 settle; never re-wait (BLK reply hung 7 min on settle loop).
         settle_n = int(bulk.get("_chats_settle_n") or 0)
@@ -2923,14 +2931,39 @@ def plan_bulk_message(
                 },
                 "bulk_settle_chats",
             )
+        # After fixed-xy (esp. Yubo unlabeled speech-bubble tab) with no list:
+        # one vision locate attempt, then fail — never empty-history re-tap
+        # (r21: yubo_reply5 hung 7 min on tap(342,2194) repeat).
+        vision_n = int(bulk.get("_chats_vision_n") or 0)
+        if opened_hist and vision_n < 1:
+            bulk["_chats_vision_n"] = 1
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "delay_s": 0.6,
+                    "reason": (
+                        f"Vision locate {app_key or 'app'} Chats/messages tab "
+                        f"(speech bubble / per-app map) after fixed-xy miss "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_chats_vision",
+            )
         if opened_hist:
             return _fp(
                 {
                     "action": "fail",
                     "reason": (
                         f"Chat list not verified for {app_key or 'app'} after "
-                        f"chats-tab + settle — fail fast "
-                        f"(refuse hung settle loop) ({planner})"
+                        f"chats-tab + settle + vision — fail fast "
+                        f"(refuse hung tap({bulk.get('_chats_tab_taps') or 1}×) "
+                        f"loop) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -2940,10 +2973,14 @@ def plan_bulk_message(
                 },
                 "bulk_chat_list_unverified",
             )
-        # First attempt with mapped coords even if label miss (not Yubo xy)
-        open_tab = _open_chats_tab_action(app_key, ui_tree, [], planner)
-        if open_tab:
-            return open_tab
+        # First attempt with mapped coords when history is empty (label miss).
+        # Never clear history for Yubo — that re-emitted tap(341,2194) forever.
+        if (app_key or "").lower() != "yubo":
+            open_tab = _open_chats_tab_action(app_key, ui_tree, [], planner)
+            if open_tab:
+                bulk["_chats_tab_taps"] = int(bulk.get("_chats_tab_taps") or 0) + 1
+                st["bulk_message"] = bulk
+                return open_tab
         return _fp(
             {
                 "action": "fail",

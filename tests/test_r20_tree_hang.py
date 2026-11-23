@@ -50,7 +50,7 @@ def test_blk_container_firewall_allows_tap():
 
 
 def test_chat_list_settle_fails_fast_not_loops():
-    # After open chats + one settle, next plan must fail — not wait again
+    # After open chats + settle + vision, next plan must fail — not re-tap/settle
     tree = (
         '<hierarchy><w p="com.affinityapps.blk" f="1">'
         '<n t="Discover" xy="135,2170" c="1"/>'
@@ -63,12 +63,15 @@ def test_chat_list_settle_fails_fast_not_loops():
             "current": None,
             "_chats_settle_done": True,
             "_chats_settle_n": 1,
+            "_chats_vision_n": 1,
+            "_chats_tab_taps": 1,
         }
     }
     hist = [
         "Opened BLK[open_ok]",
         "tap(675,2170) — Open Matches tab (bulk_open_chats)",
         "wait — Settle 1.5s after chats tab before re-check",
+        "wait — Vision locate blk Chats/messages tab",
     ]
     act = plan_bulk_message(
         'reply to 5 chats on BLK with "hey"',

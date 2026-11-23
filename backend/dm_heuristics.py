@@ -2170,16 +2170,52 @@ def _is_badge_or_numeric_label(text: str) -> bool:
     return bool(re.match(r"^\d+\+?$", t))
 
 
+# Chrome / top-filter tabs mistaken for a person name on Yubo (r21: "Social")
+_YUBO_CHROME_LABELS = frozenset(
+    {
+        "chat",
+        "chats",
+        "likes",
+        "friends",
+        "more",
+        "aa",
+        "direct",
+        "blast",
+        "send a message",
+        "conversations",
+        "new friends",
+        "reactions",
+        "social",  # top filter tab — not a card name
+        "people",
+        "discover",
+        "explore",
+        "feed",
+        "live",
+        "nearby",
+        "popular",
+        "for you",
+        "following",
+        "yubo",
+    }
+)
+
+
+def _is_yubo_chrome_label(text: str) -> bool:
+    low = (text or "").strip().lower()
+    return bool(low) and low in _YUBO_CHROME_LABELS
+
+
 def yubo_deck_card_name(tree: str) -> Optional[str]:
     """Profile name on the Yubo deck (S21 map: left x≈42 name node).
 
-    Skips numeric/badge labels (``50+``, ``42`` Yubucks) that sit on the same edge.
+    Skips numeric/badge labels (``50+``, ``42`` Yubucks) and chrome tabs
+    (``Social``, ``Likes``, …) that are not person names.
     """
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or "").strip()
         if not text or len(text) > 40:
             continue
-        if _is_badge_or_numeric_label(text):
+        if _is_badge_or_numeric_label(text) or _is_yubo_chrome_label(text):
             continue
         x1 = n.get("x1")
         if x1 is None:
@@ -2189,41 +2225,19 @@ def yubo_deck_card_name(tree: str) -> Optional[str]:
         y = int(n.get("y") or 0)
         if y < 200 or y > 2100:
             continue
-        low = text.lower()
-        if low in (
-            "chat",
-            "likes",
-            "friends",
-            "more",
-            "aa",
-            "direct",
-            "blast",
-            "send a message",
-            "conversations",
-            "new friends",
-            "reactions",
-        ):
-            continue
         return text
     # Fallback: first non-badge mid-card title (not bottom nav / section header)
     for n in _parse_compact_nodes(tree):
         text = (n.get("text") or "").strip()
-        if not text or _is_badge_or_numeric_label(text) or len(text) > 40:
+        if (
+            not text
+            or _is_badge_or_numeric_label(text)
+            or _is_yubo_chrome_label(text)
+            or len(text) > 40
+        ):
             continue
         y = int(n.get("y") or 0)
         if y < 250 or y > 900:
-            continue
-        low = text.lower()
-        if low in (
-            "chat",
-            "likes",
-            "friends",
-            "more",
-            "send a message",
-            "conversations",
-            "new friends",
-            "reactions",
-        ):
             continue
         if int(n.get("x") or 0) > 700:  # skip right-side pills
             continue
@@ -2255,6 +2269,9 @@ def yubo_on_deck(tree: str, *, _log: bool = True) -> bool:
                 "chat",
                 "like",
                 "more",
+                "social",
+                "people",
+                "discover",
             )
         ):
             if _log:

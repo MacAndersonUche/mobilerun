@@ -66,6 +66,8 @@ MAX_SWIPE_LOOPS = MAX_LAUNCHER_SWIPE_LOOPS
 MAX_NO_PROGRESS = 2
 # Same tap coords with unchanged tree → force strategy change
 MAX_SAME_TAP = 2
+# Absolute consecutive same-coord taps (tree fp may jitter) → fail fast
+MAX_SAME_COORD_ANY = 3
 # Intentional policy / safety fails — do NOT escalate stuck_recovery over them.
 # Per-app heuristics + tap firewall own these; generic recovery is fallback-only.
 _POLICY_FAIL_NO_STUCK = (
@@ -3683,13 +3685,16 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = f"App already open ({fg0 or trivial_target})"
                 action = {"action": "done", "reason": reason}
 
-        # Same tap/swipe/scroll + unchanged UI → fail after 2 identical actions
+        # Same tap/swipe coords → fail fast. Tree fingerprint can jitter while the
+        # screen is unchanged (Yubo chats tab tap(342,2194) ×N for 7 min) — so we
+        # trip on (a) no-progress + same coords OR (b) absolute consecutive repeats.
         pending_tap = _same_tap_key(action)
+        same_coord_n = int(state.get("same_tap_streak") or 0)
         if (
             kind in ("tap", "swipe")
             and pending_tap
             and pending_tap == state.get("last_tap_key")
-            and np_streak >= 1
+            and (np_streak >= 1 or same_coord_n >= MAX_SAME_TAP)
         ):
             sat = _goal_satisfied_from_tree(
                 instruction,
@@ -3705,37 +3710,34 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 logger.info(
                     "no-progress: goal visible, forcing done job=%s", job.get("job_id")
                 )
-            elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
-                # Fail fast after 2 same taps + at most 2 alts (was 6 → 7 min hangs
-                # on Yubo chats tab / BLK settle loops).
+            elif (
+                same_coord_n >= MAX_SAME_COORD_ANY - 1
+                or same_coord_n >= MAX_SAME_TAP - 1
+            ):
+                # Fail fast after 2–3 same taps + at most 1 vision alt (was 6 →
+                # 7 min hangs on Yubo chats tab). Absolute coord repeats catch
+                # fingerprint jitter that kept np_streak at 0.
                 alt_n = int(state.get("same_tap_alt_n") or 0)
                 state["same_tap_alt_n"] = alt_n + 1
                 state["same_tap_streak"] = 0
-                state["last_tap_key"] = None
+                # Keep last_tap_key so a re-emitted same coord still matches
                 state["last_tree_fp"] = None
-                alts = (
-                    {
+                # One vision alt only — then fail (r21: any repeat must cap)
+                if alt_n < 1:
+                    action = {
                         "action": "wait",
                         "seconds": 0.8,
-                        "reason": ("Loop guard — settle + vision before retry"),
+                        "reason": (
+                            "Loop guard — vision locate alternate control "
+                            f"(repeated {pending_tap})"
+                        ),
                         "needs_vision": True,
                         "_force_vision": True,
-                    },
-                    {
-                        "action": "swipe",
-                        "x1": 540,
-                        "y1": 1600,
-                        "x2": 540,
-                        "y2": 900,
-                        "reason": ("Loop guard — scroll for alternate surface"),
-                    },
-                )
-                if alt_n < 2:
-                    action = dict(alts[alt_n % len(alts)])
+                    }
                     kind = str(action.get("action") or "").lower()
                     reason = str(action.get("reason") or "")
                     logger.info(
-                        "no-progress: alternate recovery #%s job=%s → %s",
+                        "no-progress: vision recovery #%s job=%s → %s",
                         alt_n + 1,
                         job.get("job_id"),
                         kind,
@@ -3743,8 +3745,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     kind = "fail"
                     reason = (
-                        f"same action repeated ({pending_tap}) with no screen change "
-                        f"— fail fast after {alt_n + 1} loop-guard attempts "
+                        f"same action repeated ({pending_tap}) "
+                        f"×{same_coord_n + 1} — fail fast after "
+                        f"{alt_n + 1} loop-guard attempts "
                         f"(refuse hung 7 min tap loop)"
                     )
                     action = {"action": "fail", "reason": reason}
@@ -4580,14 +4583,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 return job
             tap_key = _same_tap_key(action)
             if tap_key:
-                if tap_key == state.get("last_tap_key") and state.get(
-                    "no_progress_streak"
-                ):
+                # Count consecutive same coords even when tree fp jitters
+                # (r21: hang cap must catch any repeat, not only no_progress).
+                if tap_key == state.get("last_tap_key"):
                     state["same_tap_streak"] = (
                         int(state.get("same_tap_streak") or 0) + 1
                     )
                 else:
                     state["same_tap_streak"] = 1
+                    state["same_tap_alt_n"] = 0
                 state["last_tap_key"] = tap_key
             else:
                 state["same_tap_streak"] = 0
