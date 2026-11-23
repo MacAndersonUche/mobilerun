@@ -16,7 +16,7 @@ async function shot(page: import('@playwright/test').Page, name: string) {
 
 test('login screen', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'MobileRun' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible();
   await shot(page, '01-login');
 });
 
@@ -26,7 +26,7 @@ test('authenticated routes', async ({ page }) => {
     localStorage.setItem('mobilerun_user_email', 'mac@macai.local');
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Your agents' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible({
     timeout: 15000,
   });
   await shot(page, '03-home');
@@ -34,7 +34,7 @@ test('authenticated routes', async ({ page }) => {
   const routes = [
     ['/chat', '04-chat'],
     ['/devices', '05-devices'],
-    ['/needs-you', '06-needs-you'],
+    ['/dating', '06-dating'],
     ['/social', '07-social'],
     ['/dating', '08-dating'],
     ['/live', '09-live'],

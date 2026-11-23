@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Notification: Enable for <Name> — must Dismiss, never Enable -->
+<hierarchy>
+  <w p="co.hinge.app" a="1">
+    <n t="Enable for Sam" xy="400,396" b="[80,340][700,450]" c="1" />
+    <n t="Dismiss" xy="985,396" b="[900,340][1070,450]" c="1" />
+    <n t="Matches" xy="540,120" b="[0,80][1080,160]" />
+    <n t="Your turn" xy="200,280" b="[40,240][400,320]" />
+  </w>
+</hierarchy>

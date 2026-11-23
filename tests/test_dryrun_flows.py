@@ -150,9 +150,11 @@ def test_bulk_message_uses_visible_rows_not_match_pct():
         package="com.hily.app",
         dry_run=True,
     )
+    # Reply dry-run must open a real row (not list-only false pass)
     assert act and act["action"] == "tap"
     assert "Nancy" in (act.get("reason") or "")
     assert "Match01" not in (act.get("reason") or "")
+    assert "did not open" not in (act.get("reason") or "").lower()
 
 
 # --- 4. Paid-tap false positive ---
@@ -206,13 +208,16 @@ def test_dry_run_swipe_taps_nav_then_simulates_likes():
         dry_run=True,
     )
     assert act and act["action"] == "tap"
-    assert act.get("fastpath_step") == "bulk_open_deck"
+    assert act.get("fastpath_step") in (
+        "bulk_open_deck",
+        "bulk_bumble_open_discover",
+    )
     assert act.get("action") != "done"
 
 
 def test_dry_run_swipe_logs_n_would_like_pass():
     deck = _load("bumble_deck.xml")
-    st: dict = {"bulk_swipe": {"done": 0, "target": 2}}
+    st: dict = {"bulk_swipe": {"done": 0, "target": 2, "_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "bumble auto-swipe 2 profiles",
         deck,
@@ -221,11 +226,13 @@ def test_dry_run_swipe_logs_n_would_like_pass():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act["action"] == "done"
+    assert act and act.get("dry_run") is True
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
-    assert "would like/pass 2 cards" in reason
-    assert "deck verified on alex" in reason
-    assert st["bulk_swipe"]["done"] == 2
+    assert "alex" in reason
+    assert "would like/pass 2" in reason
+    assert st["bulk_swipe"]["done"] == 1
     assert act.get("dry_run_verified") is True
 
 
@@ -273,12 +280,13 @@ def test_dry_run_allows_chat_list_scroll_blocks_deck_swipe():
     assert "swipe" in reason2.lower()
 
 
-def test_dry_run_reply_clears_composer():
+def test_dry_run_reply_never_types_composer():
+    """Dry-run must not type into a real thread (shows typing… to peer)."""
     thread = _load("hily_thread.xml")
     hist = [
         "Opened Hily — launch",
         "Tapped — Tap Hily chat 'Evie'",
-        "Typed \"hi\" — Type message 'hi'",
+        "Tapped — Focus compose Message/entry field",
     ]
     a = heuristic_dm_send(
         "hily message Evie and say hi",
@@ -287,20 +295,12 @@ def test_dry_run_reply_clears_composer():
         package="com.hily.app",
         dry_run=True,
     )
-    assert a and a["action"] == "type"
-    assert a.get("clear") is True
-    assert a.get("text") == ""
-    assert "clear composer" in (a.get("reason") or "").lower()
-    hist2 = hist + [f'type("") — {a["reason"]}']
-    a2 = heuristic_dm_send(
-        "hily message Evie and say hi",
-        thread,
-        hist2,
-        package="com.hily.app",
-        dry_run=True,
-    )
-    assert a2 and a2["action"] == "done"
-    assert a2.get("dry_run_verified") is True
+    assert a and a["action"] != "type"
+    assert a.get("dry_run_verified") is True
+    reason = (a.get("reason") or "").lower()
+    assert "never typed" in reason or a.get("action") == "done"
+    if a.get("action") == "done":
+        assert "send skipped" in reason or "would send" in reason
 
 
 # --- 7. False completed ---

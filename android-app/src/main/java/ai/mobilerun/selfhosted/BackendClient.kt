@@ -25,6 +25,7 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlin.random.Random
@@ -86,6 +87,7 @@ class BackendClient(private val context: Context) {
     private var discoveredHttp: String? = null
 
     companion object {
+        private const val TAG = "BackendClient"
         val DEFAULT_CLOUD_HTTP: String = BuildConfig.DEFAULT_CLOUD_HTTP
         val DEFAULT_CLOUD_WS: String = BuildConfig.DEFAULT_CLOUD_WS
 
@@ -126,9 +128,15 @@ class BackendClient(private val context: Context) {
     private var heartbeatJob: Job? = null
     private var registerAckJob: Job? = null
     private var proactiveRefreshJob: Job? = null
+    private var bubbleIdleJob: Job? = null
+    /** Whole-job bubble hide (job_busy → job_idle); not cleared per-step. */
+    private val jobSessionBusy = AtomicBoolean(false)
     private var userDisconnected = false
     @Volatile private var connecting = false
     @Volatile private var lastOpenAtMs: Long = 0L
+    /** Last successfully launched app package — a11y prefers this window. */
+    @Volatile private var lastOpenedPackage: String? = null
+    @Volatile private var lastOpenedAtMs: Long = 0L
 
     private val _statusFlow = MutableStateFlow("Disconnected")
     val statusFlow: StateFlow<String> = _statusFlow
@@ -1113,7 +1121,7 @@ class BackendClient(private val context: Context) {
                                 )
                             val notif =
                                 android.app.Notification.Builder(context, channelId)
-                                    .setContentTitle("Mobilerun update ${release.tag}")
+                                    .setContentTitle("MacMobileRun update ${release.tag}")
                                     .setContentText("Tap to install v${release.versionName}")
                                     .setSmallIcon(R.drawable.ic_stat_mobilerun)
                                     .setContentIntent(pi)
@@ -1226,6 +1234,33 @@ class BackendClient(private val context: Context) {
         val params = message["params"] as? Map<String, Any?>
         val t0 = SystemClock.elapsedRealtime()
 
+        // Whole-job overlay control from cloud (job start → job end)
+        if (command == "job_busy" || command == "job_idle") {
+            val busy = command == "job_busy"
+            jobSessionBusy.set(busy)
+            OverlayBubbleService.setJobBusy(context.applicationContext, busy)
+            bubbleIdleJob?.cancel()
+            if (!busy) {
+                // Job ended — clear sticky preferredPackageHint so the next
+                // home-screen dump is never filtered empty (APK 532 regression).
+                MobilerunAccessibilityService.instance
+                    ?.clearPreferredPackageHint("job_idle")
+                lastOpenedPackage = null
+                lastOpenedAtMs = 0L
+                // Job ended — show bubble immediately; short safety re-show
+                scheduleBubbleIdle(forceShort = true)
+            }
+            sendCommandResponse(requestId, mapOf("ok" to true, "job_busy" to busy), null)
+            return
+        }
+
+        // Only keep bubble hidden while a job session is active — never hide
+        // on housekeeping commands after job_idle (HOME/IME were re-hiding it).
+        if (jobSessionBusy.get()) {
+            OverlayBubbleService.setJobBusy(context.applicationContext, true)
+            bubbleIdleJob?.cancel()
+        }
+
         // CRITICAL: ACK tap/swipe/press on the OkHttp reader thread BEFORE any
         // executor queue. Fresh heartbeats + timed-out taps meant hung get_ui_tree
         // starved the single command pool while Dynamo still looked online.
@@ -1237,6 +1272,7 @@ class BackendClient(private val context: Context) {
                 val a11y = MobilerunAccessibilityService.instance
                 if (a11y == null) {
                     sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    scheduleBubbleIdle()
                     return
                 }
                 sendCommandResponse(
@@ -1257,6 +1293,8 @@ class BackendClient(private val context: Context) {
                         sendAgentEvent(null, null, "tap", "tap($x,$y)")
                     } catch (e: Exception) {
                         Log.w(tag, "tap gesture after ACK failed: ${e.message}")
+                    } finally {
+                        scheduleBubbleIdle()
                     }
                 }
                 return
@@ -1270,6 +1308,7 @@ class BackendClient(private val context: Context) {
                 val a11y = MobilerunAccessibilityService.instance
                 if (a11y == null) {
                     sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    scheduleBubbleIdle()
                     return
                 }
                 sendCommandResponse(
@@ -1287,6 +1326,8 @@ class BackendClient(private val context: Context) {
                         sendAgentEvent(null, null, "swipe", "swipe($x1,$y1->$x2,$y2)")
                     } catch (e: Exception) {
                         Log.w(tag, "swipe gesture after ACK failed: ${e.message}")
+                    } finally {
+                        scheduleBubbleIdle()
                     }
                 }
                 return
@@ -1296,12 +1337,14 @@ class BackendClient(private val context: Context) {
                 val a11y = MobilerunAccessibilityService.instance
                 if (a11y == null) {
                     sendCommandResponse(requestId, null, "Accessibility service not connected")
+                    scheduleBubbleIdle()
                     return
                 }
                 val ok = when (button) {
                     "back" -> a11y.pressBack()
                     "home" -> a11y.pressHome()
                     "recents" -> a11y.pressRecents()
+                    "enter" -> a11y.pressEnter()
                     else -> false
                 }
                 sendCommandResponse(
@@ -1312,11 +1355,30 @@ class BackendClient(private val context: Context) {
                     ),
                     null,
                 )
+                scheduleBubbleIdle()
                 return
             }
         }
 
-        // Slow path: tree / type / open_app / screenshot — never blocks tap ACK
+        // Screenshot must not queue behind get_ui_tree (cloud 15–28s budget).
+        // Prefer S3 presigned PUT (upload_url) so JPEG never blows API GW WS
+        // 32KB frames / 128KB messages (APK 540: capture OK, WS drop on reply).
+        if (command == "screenshot") {
+            fastCommandExecutor.execute {
+                try {
+                    val result = handleScreenshotCommand(params, t0)
+                    sendCommandResponse(requestId, result, null)
+                } catch (e: Exception) {
+                    Log.e(tag, "screenshot failed", e)
+                    sendCommandResponse(requestId, null, e.message ?: "screenshot failed")
+                } finally {
+                    scheduleBubbleIdle()
+                }
+            }
+            return
+        }
+
+        // Slow path: tree / type / open_app — never blocks tap ACK
         slowCommandExecutor.execute {
             val done = java.util.concurrent.atomic.AtomicBoolean(false)
             val watchdog = scope.launch {
@@ -1512,14 +1574,32 @@ class BackendClient(private val context: Context) {
                             ?: (params?.get("package") as? String)
                             ?: ""
                         val pkg = params?.get("package") as? String
-                        var launched = openAppByNameOrPackage(app, pkg)
+                        val openMode = (params?.get("open_mode") as? String)
+                            ?.trim()
+                            ?.lowercase()
+                            .orEmpty()
+                        val forceFallback = params?.get("fallback") == true ||
+                            openMode in setOf(
+                                "home_drawer_search",
+                                "drawer_scroll_icon",
+                                "reopen_intent",
+                            )
+                        var launched: String? = null
+                        var openPath = "intent"
+                        // Stage 1: launch intent (unless drawer-only modes)
+                        if (openMode != "home_drawer_search" && openMode != "drawer_scroll_icon") {
+                            launched = openAppByNameOrPackage(app, pkg)
+                        }
                         var viaSecureFolder = false
                         var secureFolderWaitMs = 0L
-                        if (launched == null) {
+                        if (launched == null && openMode != "home_drawer_search" &&
+                            openMode != "drawer_scroll_icon"
+                        ) {
                             val sf = openAppViaSecureFolder(app, pkg)
                             launched = sf.packageName
                             viaSecureFolder = sf.openedSecureFolder
                             secureFolderWaitMs = sf.waitMs
+                            if (viaSecureFolder) openPath = "secure_folder"
                             if (sf.needsFingerprint) {
                                 sendAgentEvent(
                                     null,
@@ -1529,27 +1609,99 @@ class BackendClient(private val context: Context) {
                                 )
                             }
                         }
-                        sendAgentEvent(null, null, "open_app", "open_app($app)")
+                        // Stage 2/3: Home → drawer search / scroll icon (never stuck)
+                        if (launched == null || forceFallback) {
+                            val drawer = openAppViaDrawer(
+                                app,
+                                pkg,
+                                scrollPages = openMode == "drawer_scroll_icon" ||
+                                    (launched == null && forceFallback),
+                            )
+                            if (drawer != null) {
+                                launched = drawer
+                                openPath = if (openMode == "drawer_scroll_icon") {
+                                    "drawer_scroll"
+                                } else {
+                                    "drawer_search"
+                                }
+                                viaSecureFolder = false
+                            }
+                        }
+                        // Stage 4: final intent retry after Home
+                        if (launched == null) {
+                            a11yService?.pressHome()
+                            Thread.sleep(400)
+                            launched = openAppByNameOrPackage(app, pkg)
+                            if (launched != null) openPath = "reopen_intent"
+                        }
+                        sendAgentEvent(null, null, "open_app", "open_app($app) via=$openPath")
                         if (launched == null) {
                             throw Exception(
                                 "Could not open app: $app" +
                                     if (secureFolderInstalled()) {
                                         " (not in main profile; Secure Folder unlock failed or timed out)"
                                     } else {
-                                        ""
+                                        " (intent+drawer failed)"
                                     },
                             )
                         }
-                        // Brief settle — keep agent steps under the 3–5s budget
-                        val settle = 280L + kotlin.random.Random.nextLong(0, 180)
+                        lastOpenedPackage = launched
+                        lastOpenedAtMs = System.currentTimeMillis()
+                        a11yService?.setPreferredPackageHint(launched)
+                        // Longer settle for Compose/FLAG_SECURE (Taimi/Hinge) —
+                        // rootInActiveWindow lags behind the real FG window.
+                        val slowFg = launched.contains("takimi", ignoreCase = true) ||
+                            launched.contains("hinge", ignoreCase = true) ||
+                            launched.contains("tinder", ignoreCase = true)
+                        val settle = if (slowFg) {
+                            900L + kotlin.random.Random.nextLong(0, 400)
+                        } else {
+                            280L + kotlin.random.Random.nextLong(0, 180)
+                        }
                         Thread.sleep(settle)
                         val activePkg = a11yService?.activePackageName().orEmpty()
+                        val (resolvedFg, fgSource) = ForegroundResolver.resolveReportedPackage(
+                            context,
+                            a11yPackage = activePkg,
+                            preferHint = launched,
+                            lastOpened = launched,
+                            lastOpenedAtMs = lastOpenedAtMs,
+                            selfPkg = context.packageName,
+                        )
+                        // FG verify — if still launcher (a11y+usage), try drawer once
+                        val stillHome = ForegroundResolver.isLauncherOrChrome(resolvedFg) &&
+                            fgSource != "last_opened"
+                        if (stillHome && openPath == "intent") {
+                            Log.w(tag, "open_app FG still $activePkg/$resolvedFg — drawer fallback")
+                            val drawer2 = openAppViaDrawer(app, pkg, scrollPages = true)
+                            if (drawer2 != null) {
+                                launched = drawer2
+                                openPath = "drawer_after_fg_miss"
+                                lastOpenedPackage = launched
+                                lastOpenedAtMs = System.currentTimeMillis()
+                                a11yService?.setPreferredPackageHint(launched)
+                                Thread.sleep(500)
+                            }
+                        }
+                        val active2 = a11yService?.activePackageName().orEmpty()
+                        val (fgFinal, fgSrc2) = ForegroundResolver.resolveReportedPackage(
+                            context,
+                            a11yPackage = active2.ifBlank { activePkg },
+                            preferHint = launched,
+                            lastOpened = launched,
+                            lastOpenedAtMs = lastOpenedAtMs,
+                            selfPkg = context.packageName,
+                        )
                         mapOf(
                             "ok" to true,
                             "requested" to app,
                             "package" to launched,
-                            "active_package" to activePkg,
+                            "active_package" to fgFinal.ifBlank { active2.ifBlank { activePkg } },
+                            "active_package_source" to fgSrc2,
+                            "a11y_package" to active2.ifBlank { activePkg },
                             "launched" to true,
+                            "open_path" to openPath,
+                            "open_mode" to openMode.ifBlank { "launch_intent" },
                             "secure_folder" to viaSecureFolder,
                             "secure_folder_wait_ms" to secureFolderWaitMs,
                             "a11y" to (a11yService != null),
@@ -1577,21 +1729,81 @@ class BackendClient(private val context: Context) {
                                 ),
                             )
                         } else {
-                            var detailed = a11yService.getUITreeDetailed(allowCache = true)
-                            // One forced rebuild if empty — covers post-reconnect a11y blips
-                            if (detailed.empty) {
+                            val prefer = (
+                                params?.get("preferred_package") as? String
+                                    ?: params?.get("package") as? String
+                                    ?: lastOpenedPackage
+                                )?.trim()?.takeIf { it.isNotEmpty() }
+                            var detailed = a11yService.getUITreeDetailed(
+                                allowCache = true,
+                                preferredPackage = prefer,
+                            )
+                            // Wrong FG: rebuild once, but NEVER mark a non-empty
+                            // dump as empty (launcher-only with sticky hint was
+                            // the APK 532 home-screen empty-tree loop).
+                            val pkgNow = detailed.packageName
+                            val wrongFg = !prefer.isNullOrBlank() &&
+                                pkgNow.isNotBlank() &&
+                                !pkgNow.contains(prefer, ignoreCase = true) &&
+                                !prefer.contains(pkgNow, ignoreCase = true)
+                            if (detailed.empty || (wrongFg && detailed.nodes == 0)) {
                                 Thread.sleep(120)
-                                detailed = a11yService.getUITreeDetailed(allowCache = false)
+                                detailed = a11yService.getUITreeDetailed(
+                                    allowCache = false,
+                                    preferredPackage = prefer,
+                                )
                             }
                             val tree = detailed.tree
+                            val a11yPkg = detailed.packageName.ifBlank {
+                                a11yService.activePackageName().orEmpty()
+                            }
+                            // When a11y still reports launcher after open, infer FG
+                            // via UsageStats / lastOpened (Taimi/Hinge FLAG_SECURE).
+                            val (reportedPkg, pkgSource) = ForegroundResolver.resolveReportedPackage(
+                                context,
+                                a11yPackage = a11yPkg,
+                                preferHint = prefer,
+                                lastOpened = lastOpenedPackage,
+                                lastOpenedAtMs = lastOpenedAtMs,
+                                selfPkg = context.packageName,
+                            )
+                            val inferredFg = pkgSource == "usage_stats" ||
+                                pkgSource == "last_opened"
+                            // empty = no nodes only. Wrong FG with nodes is still
+                            // a usable tree (overlay dismiss / vision / recover).
+                            // Inferred FG with empty tree → force vision, not Back.
+                            val emptyForTarget = detailed.empty || detailed.nodes == 0
+                            // Hinge deck: containers with 0 text → vision (not Back)
+                            val zeroText = detailed.textNodes == 0
+                            val needsVision = emptyForTarget ||
+                                inferredFg ||
+                                detailed.needsVision ||
+                                zeroText
+                            // Parse win_diag from hierarchy for on-device debug
+                            val winDiag = Regex("""win_diag="([^"]*)"""")
+                                .find(tree)?.groupValues?.getOrNull(1).orEmpty()
+                            if (emptyForTarget || winDiag.isNotEmpty()) {
+                                Log.i(
+                                    TAG,
+                                    "get_ui_tree empty=$emptyForTarget nodes=${detailed.nodes} " +
+                                        "text=${detailed.textNodes} needs_vision=$needsVision " +
+                                        "win_diag=$winDiag prefer=$prefer pkg=$reportedPkg",
+                                )
+                            }
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
-                                "package" to detailed.packageName.ifBlank {
-                                    a11yService.activePackageName().orEmpty()
-                                },
-                                "empty" to detailed.empty,
+                                "package" to reportedPkg.ifBlank { a11yPkg },
+                                "a11y_package" to a11yPkg,
+                                "package_source" to pkgSource,
+                                "fg_inferred" to inferredFg,
+                                "preferred_package" to prefer,
+                                "wrong_fg" to (wrongFg && !inferredFg),
+                                "empty" to emptyForTarget,
+                                "needs_vision" to needsVision,
+                                "text_nodes" to detailed.textNodes,
                                 "chars" to detailed.chars,
                                 "nodes" to detailed.nodes,
+                                "win_diag" to winDiag,
                                 "a11y" to true,
                                 "truncated" to detailed.partial,
                                 "partial" to detailed.partial,
@@ -1600,6 +1812,7 @@ class BackendClient(private val context: Context) {
                                     "build_ms" to detailed.buildMs,
                                     "bytes" to detailed.bytes,
                                     "nodes" to detailed.nodes,
+                                    "text_nodes" to detailed.textNodes,
                                     "cached" to detailed.cached,
                                     "partial" to detailed.partial,
                                     "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
@@ -1612,29 +1825,7 @@ class BackendClient(private val context: Context) {
                             out
                         }
                     }
-                    "screenshot" -> {
-                        val b64 = a11yService?.takeScreenshotJpegBase64(
-                            maxWidth = 720,
-                            quality = 42,
-                        )
-                        if (b64.isNullOrBlank()) {
-                            mapOf(
-                                "ok" to false,
-                                "error" to "screenshot unavailable",
-                                "a11y" to (a11yService != null),
-                            )
-                        } else {
-                            mapOf(
-                                "ok" to true,
-                                "mime" to "image/jpeg",
-                                "encoding" to "base64",
-                                "data" to b64,
-                                "timing" to mapOf(
-                                    "round_trip_ms" to (SystemClock.elapsedRealtime() - t0),
-                                ),
-                            )
-                        }
-                    }
+                    "screenshot" -> handleScreenshotCommand(params, t0)
                     "get_device_info" -> {
                         val imeComponent =
                             android.content.ComponentName(
@@ -1690,7 +1881,139 @@ class BackendClient(private val context: Context) {
                     watchdog.cancel()
                     sendCommandResponse(requestId, null, e.message ?: "Unknown error")
                 }
+            } finally {
+                scheduleBubbleIdle()
             }
+        }
+    }
+
+    /**
+     * Re-show Connected bubble only when the *job* is over.
+     * During jobSessionBusy keep hidden across planning gaps, but always arm
+     * a hard idle timeout so a Dynamo cancel (no job_idle) cannot leave the
+     * bubble stuck forever (≤3 min). After job_idle, restore within seconds.
+     */
+    private fun scheduleBubbleIdle(forceShort: Boolean = false) {
+        bubbleIdleJob?.cancel()
+        bubbleIdleJob = scope.launch {
+            val waitMs = when {
+                forceShort -> 5_000L
+                jobSessionBusy.get() -> 3 * 60_000L // hard cap while busy
+                else -> 15_000L
+            }
+            delay(waitMs)
+            jobSessionBusy.set(false)
+            OverlayBubbleService.setJobBusy(context.applicationContext, false)
+            Log.i(tag, "overlay bubble idle timeout (${waitMs}ms) — restored")
+        }
+        if (jobSessionBusy.get() && !forceShort) {
+            OverlayBubbleService.setJobBusy(context.applicationContext, true)
+        }
+    }
+
+    /**
+     * Capture screenshot and either upload via presigned PUT (preferred — stays
+     * under WS size limits) or return base64 only when tiny (&lt;24KB b64).
+     */
+    private fun handleScreenshotCommand(
+        params: Map<String, Any?>?,
+        t0: Long,
+    ): Map<String, Any?> {
+        val a11y = MobilerunAccessibilityService.instance
+        val maxWidth = (params?.get("max_width") as? Number)?.toInt() ?: 720
+        val quality = (params?.get("quality") as? Number)?.toInt() ?: 42
+        val uploadUrl = (params?.get("upload_url") as? String)?.trim().orEmpty()
+        val s3Key = (params?.get("s3_key") as? String)?.trim().orEmpty()
+        val detailed = a11y?.takeScreenshotJpegDetailed(maxWidth = maxWidth, quality = quality)
+            ?: emptyMap()
+        val jpeg = detailed["jpeg"] as? ByteArray
+        val source = detailed["source"] ?: "a11y"
+        if (jpeg == null || jpeg.isEmpty()) {
+            return mapOf(
+                "ok" to false,
+                "error" to (detailed["error"] ?: "screenshot unavailable"),
+                "error_code" to detailed["error_code"],
+                "a11y" to (a11y != null),
+                "media_projection" to ScreenCaptureService.isStreaming(),
+                "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+            )
+        }
+        Log.i(tag, "screenshot capture ok source=$source bytes=${jpeg.size}")
+        if (uploadUrl.isNotEmpty()) {
+            val putOk = putPresignedJpeg(uploadUrl, jpeg)
+            if (putOk) {
+                Log.i(
+                    tag,
+                    "screenshot uploaded s3_key=${s3Key.ifBlank { "?" }} bytes=${jpeg.size}",
+                )
+                return mapOf(
+                    "ok" to true,
+                    "mime" to "image/jpeg",
+                    "encoding" to "s3",
+                    "s3_key" to s3Key.ifBlank { null },
+                    "bytes" to jpeg.size,
+                    "source" to source,
+                    "a11y_error" to detailed["a11y_error"],
+                    "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+                )
+            }
+            Log.w(tag, "screenshot S3 PUT failed — refusing oversized WS base64")
+            return mapOf(
+                "ok" to false,
+                "error" to "screenshot_upload_failed",
+                "bytes" to jpeg.size,
+                "a11y" to (a11y != null),
+                "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+            )
+        }
+        // No upload_url (legacy cloud): only inline when base64 stays small
+        val b64 = android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP)
+        if (b64.length > 24_000) {
+            Log.w(
+                tag,
+                "screenshot too large for WS inline b64_chars=${b64.length} " +
+                    "bytes=${jpeg.size} — need upload_url",
+            )
+            return mapOf(
+                "ok" to false,
+                "error" to "screenshot_too_large_for_ws",
+                "bytes" to jpeg.size,
+                "b64_chars" to b64.length,
+                "a11y" to (a11y != null),
+                "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+            )
+        }
+        return mapOf(
+            "ok" to true,
+            "mime" to "image/jpeg",
+            "encoding" to "base64",
+            "data" to b64,
+            "bytes" to jpeg.size,
+            "b64_chars" to b64.length,
+            "source" to source,
+            "a11y_error" to detailed["a11y_error"],
+            "timing" to mapOf("round_trip_ms" to (SystemClock.elapsedRealtime() - t0)),
+        )
+    }
+
+    private fun putPresignedJpeg(url: String, jpeg: ByteArray): Boolean {
+        return try {
+            val body = jpeg.toRequestBody("image/jpeg".toMediaType())
+            val req = Request.Builder()
+                .url(url)
+                .put(body)
+                .header("Content-Type", "image/jpeg")
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val ok = resp.isSuccessful
+                if (!ok) {
+                    Log.w(tag, "presigned PUT HTTP ${resp.code}")
+                }
+                ok
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "presigned PUT failed: ${e.message}", e)
+            false
         }
     }
 
@@ -1774,11 +2097,21 @@ class BackendClient(private val context: Context) {
      */
     private fun startUiActivity(intent: Intent): Boolean {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        // Prefer move-to-front + PendingIntent BAL allow — we no longer request overlay
-        try {
-            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-            am.appTasks.firstOrNull()?.moveToFront()
-        } catch (_: Exception) {
+        // Prefer move-to-front + PendingIntent BAL allow — we no longer request overlay.
+        // CRITICAL: never bring MacMobileRun's own task to front when launching
+        // another package — that steals FG and makes a11y dump our empty window
+        // (open_unconfirmed package=ai.mobilerun.selfhosted).
+        val targetPkg = intent.`package`
+            ?: intent.component?.packageName
+            ?: ""
+        val selfPkg = context.packageName
+        val launchingOther = targetPkg.isNotBlank() && targetPkg != selfPkg
+        if (!launchingOther) {
+            try {
+                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                am.appTasks.firstOrNull()?.moveToFront()
+            } catch (_: Exception) {
+            }
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= 34) {
@@ -1828,7 +2161,7 @@ class BackendClient(private val context: Context) {
                     )
                 }
                 val notif = android.app.Notification.Builder(context, channelId)
-                    .setContentTitle("MobileRun")
+                    .setContentTitle("MacMobileRun")
                     .setContentText("Opening requested screen…")
                     .setSmallIcon(R.drawable.ic_stat_mobilerun)
                     .setContentIntent(pi)
@@ -1845,8 +2178,98 @@ class BackendClient(private val context: Context) {
     }
 
     /**
-     * Launch via PackageManager.getLaunchIntentForPackage — never by hunting
-     * launcher icons. Returns the package that was launched, or null.
+     * Home → app drawer → search/type → tap result (or scroll pages for icon).
+     * Used when launch intent fails or FG stays on launcher (never stuck).
+     */
+    private fun openAppViaDrawer(
+        app: String,
+        pkg: String?,
+        scrollPages: Boolean = false,
+    ): String? {
+        val a11y = MobilerunAccessibilityService.instance ?: return null
+        val label = app.trim()
+            .removePrefix("open ")
+            .removePrefix("Open ")
+            .trim()
+            .ifBlank { pkg?.substringAfterLast('.') ?: return null }
+        val dm = context.resources.displayMetrics
+        val w = dm.widthPixels.coerceAtLeast(720)
+        val h = dm.heightPixels.coerceAtLeast(1280)
+        Log.i(tag, "openAppViaDrawer label=$label scroll=$scrollPages ${w}x$h")
+        try {
+            a11y.pressHome()
+            Thread.sleep(450)
+            // Swipe up to open app drawer (One UI / Pixel / AOSP)
+            a11y.swipeFireAndForget(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.22).toInt(), 380)
+            Thread.sleep(700)
+            // Tap drawer search if present
+            val searchLabels = listOf(
+                "Search", "Search apps", "Search for apps", "Find apps", "Apps",
+            )
+            var focusedSearch = false
+            for (s in searchLabels) {
+                if (a11y.tapByVisibleText(s, fuzzy = true)) {
+                    focusedSearch = true
+                    Thread.sleep(350)
+                    break
+                }
+            }
+            // Fallback: tap top search band
+            if (!focusedSearch) {
+                GestureController.tap(w / 2, (h * 0.12).toInt(), humanize = false)
+                Thread.sleep(350)
+            }
+            // Type app name into focused field
+            val typed = try {
+                a11y.inputText(label, clear = true, humanize = false)
+            } catch (_: Exception) {
+                false
+            }
+            if (typed) {
+                Thread.sleep(500)
+                if (a11y.tapByVisibleText(label, fuzzy = true)) {
+                    Thread.sleep(700)
+                    val resolved = resolvePackageName(label.lowercase(), pkg)
+                        ?: pkg?.takeIf { it.contains('.') }
+                    Log.i(tag, "drawer search tapped '$label' pkg=$resolved")
+                    return resolved
+                }
+            }
+            // Scroll drawer pages hunting the icon
+            if (scrollPages || !typed) {
+                // Clear search: Home + drawer again without typing
+                a11y.pressHome()
+                Thread.sleep(350)
+                a11y.swipeFireAndForget(w / 2, (h * 0.78).toInt(), w / 2, (h * 0.22).toInt(), 380)
+                Thread.sleep(600)
+                repeat(4) { page ->
+                    if (a11y.tapByVisibleText(label, fuzzy = true)) {
+                        Thread.sleep(700)
+                        val resolved = resolvePackageName(label.lowercase(), pkg)
+                            ?: pkg?.takeIf { it.contains('.') }
+                        Log.i(tag, "drawer scroll page=$page tapped '$label'")
+                        return resolved
+                    }
+                    // Swipe drawer to next page (left ←)
+                    a11y.swipeFireAndForget(
+                        (w * 0.85).toInt(),
+                        (h * 0.55).toInt(),
+                        (w * 0.15).toInt(),
+                        (h * 0.55).toInt(),
+                        320,
+                    )
+                    Thread.sleep(450)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "openAppViaDrawer failed: ${e.message}")
+        }
+        return null
+    }
+
+    /**
+     * Launch via PackageManager.getLaunchIntentForPackage, with drawer
+     * search/scroll fallbacks when intent fails or FG stays on launcher.
      */
     private data class SecureFolderLaunch(
         val packageName: String?,
@@ -2036,6 +2459,13 @@ class BackendClient(private val context: Context) {
             "tinder" to "com.tinder",
             "bumble" to "com.bumble.app",
             "hinge" to "co.hinge.app",
+            "badoo" to "com.badoo.mobile",
+            "hily" to "com.hily.app",
+            "blk" to "com.affinityapps.blk",
+            "yubo" to "co.yellw.yellowapp",
+            "tagged" to "com.taggedapp",
+            "taimi" to "com.takimi.android",
+            "takimi" to "com.takimi.android",
             "phone" to "com.samsung.android.dialer",
             "messages" to "com.google.android.apps.messaging",
             "photos" to "com.google.android.apps.photos",

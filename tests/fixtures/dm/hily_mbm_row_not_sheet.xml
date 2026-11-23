@@ -1,0 +1,13 @@
+<!-- Chats list with Paige row preview 'Message before match' — NOT the MBM sheet -->
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Chats" xy="540,160" b="400,100,680,220"/>
+ <n i="dialogMessageItem" c="1" xy="540,600" b="40,520,1040,680"/>
+ <n t="Paige" i="userNameField" xy="300,560" b="200,520,500,600"/>
+ <n t="Message before match" xy="300,620" b="200,590,700,650"/>
+ <n i="dialogMessageItem" c="1" xy="540,800" b="40,720,1040,880"/>
+ <n t="Alex" i="userNameField" xy="300,760" b="200,720,500,800"/>
+ <n t="hey there" xy="300,820" b="200,790,500,850"/>
+ <n i="bottomNavTab_2" d="Chats" c="1" xy="540,2190" b="432,2120,648,2260"/>
+</w>
+</hierarchy>

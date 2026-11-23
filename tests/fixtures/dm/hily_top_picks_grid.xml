@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hily Discover as Top picks grid with Crush icons (paid) -->
+<hierarchy>
+  <w p="com.hily.app" a="1">
+    <n t="Top picks" xy="200,160" b="[40,120][400,200]" />
+    <n t="Shared interests" xy="700,160" b="[500,120][900,200]" />
+    <n t="Crush" xy="900,700" b="[850,650][980,780]" c="1" d="Crush" />
+    <n t="Ava" xy="270,600" b="[40,400][520,900]" c="1" />
+    <n t="Mia" xy="810,600" b="[560,400][1040,900]" c="1" />
+    <n i="bottomNavTab_1" xy="142,2190" b="[40,2120][240,2260]" c="1" />
+    <n i="bottomNavTab_2" xy="341,2190" b="[240,2120][440,2260]" c="1" />
+  </w>
+</hierarchy>

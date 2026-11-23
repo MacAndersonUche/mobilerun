@@ -1,10 +1,14 @@
 name: Deploy Backend to AWS
 
+# Portal UI (frontend/) deploys via Netlify (macsmobilerun.netlify.app).
+# This workflow deploys the Lambda/API backend only.
+
 on:
-  # Main-only: PR/cursor/** deploys were cancelling each other under
-  # concurrency cancel-in-progress and never reached AWS.
+  # Main-only by default (PR/cursor/** deploys were cancelling each other).
+  # Temporary: also deploy cursor/macmobilerun-final-df3e for real-phone verify
+  # without merging. Revert by redeploying main (or remove this branch from the list).
   push:
-    branches: [main]
+    branches: [main, cursor/macmobilerun-final-df3e]
     paths:
       - 'backend/**'
       - 'infra/**'
@@ -38,6 +42,9 @@ concurrency:
   # (matrix jobs were starving the shared runner pool + this queue).
   cancel-in-progress: true
 
+# Path filters above: backend-only. Android APK builds in a separate workflow
+# and runs in parallel — this job must NEVER wait on android-build.
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -68,11 +75,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
 
       - name: Install CDK dependencies
         working-directory: infra

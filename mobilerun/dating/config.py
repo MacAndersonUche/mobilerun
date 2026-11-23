@@ -43,7 +43,7 @@ class AppProfile:
 DEFAULT_APPS = [
     AppProfile(
         name="Taimi",
-        package_name="com.taimi.app",
+        package_name="com.takimi.android",  # real package (not com.taimi.app)
     ),
     AppProfile(
         name="Bumble",
@@ -53,7 +53,7 @@ DEFAULT_APPS = [
     ),
     AppProfile(
         name="Yubo",
-        package_name="co.yellownw.yubo",
+        package_name="co.yellw.yellowapp",  # real package
     ),
     AppProfile(
         name="Badoo",
@@ -61,7 +61,7 @@ DEFAULT_APPS = [
     ),
     AppProfile(
         name="BLK",
-        package_name="com.match.blk",
+        package_name="com.affinityapps.blk",  # real package
     ),
     AppProfile(
         name="Hily",
@@ -73,6 +73,19 @@ DEFAULT_APPS = [
         daily_swipe_cap=30,  # Hinge has stricter limits
         daily_opener_target_min=30,
         daily_opener_target_max=60,
+    ),
+    AppProfile(
+        name="Tagged",
+        package_name="com.taggedapp",
+        daily_swipe_cap=40,
+        daily_opener_target_min=20,
+        daily_opener_target_max=50,
+    ),
+    AppProfile(
+        name="WhatsApp",
+        package_name="com.whatsapp",
+        daily_swipe_cap=0,
+        enabled=True,
     ),
     AppProfile(
         name="Facebook",

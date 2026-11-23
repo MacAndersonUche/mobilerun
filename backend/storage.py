@@ -174,8 +174,75 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 # Must exceed worst-case step wall time (screenshot retries ~3×15s ≈ 45s+;
-# observed 64.8s). Renew before slow RPCs; never rely on a single acquire.
-DEFAULT_JOB_LEASE_S = 120
+# observed 64.8s; chain of 6 steps can exceed 120s). Renew before slow RPCs.
+# r19: bump so EventBridge tick cannot steal a mid-chain lease (overlap).
+DEFAULT_JOB_LEASE_S = 180
+
+
+def release_job_lease(
+    job_id: str,
+    owner: Optional[str] = None,
+    *,
+    now: Optional[int] = None,
+) -> bool:
+    """Clear lease so the next tick can acquire (r26: failed invoke held lease).
+
+    Only the current owner (or any caller when owner is None / expired) may clear.
+    """
+    if not job_id:
+        return False
+    now = int(now if now is not None else time.time())
+    table = _table("JOBS_TABLE")
+    if table is None:
+        store = globals().setdefault("_LOCAL_JOBS", {})
+        item = store.get(job_id)
+        if not item:
+            return False
+        cur_owner = str(item.get("lease_owner") or "")
+        cur_exp = int(item.get("lease_expires_at") or 0)
+        if owner and cur_owner and cur_owner != owner and cur_exp > now:
+            return False
+        item = dict(item)
+        item["lease_owner"] = ""
+        item["lease_expires_at"] = 0
+        item["updated_at"] = now
+        store[job_id] = item
+        return True
+    try:
+        values: Dict[str, Any] = {":empty": "", ":zero": 0, ":now": now}
+        cond = (
+            "attribute_not_exists(lease_owner) OR lease_owner = :empty "
+            "OR lease_expires_at <= :now OR attribute_not_exists(lease_expires_at)"
+        )
+        if owner:
+            values[":owner"] = owner
+            cond = (
+                "attribute_not_exists(lease_owner) OR lease_owner = :empty "
+                "OR lease_owner = :owner OR lease_expires_at <= :now "
+                "OR attribute_not_exists(lease_expires_at)"
+            )
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression=(
+                "SET lease_owner = :empty, lease_expires_at = :zero, "
+                "updated_at = :now"
+            ),
+            ConditionExpression=cond,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except Exception as e:
+        name = type(e).__name__
+        if (
+            "ConditionalCheckFailed" not in name
+            and "ConditionalCheckFailed" not in str(e)
+        ):
+            import logging
+
+            logging.getLogger("mobilerun.storage").warning(
+                "release_job_lease failed job=%s: %s", job_id, e
+            )
+        return False
 
 
 def acquire_job_lease(
@@ -382,7 +449,16 @@ def list_due_jobs(
 ) -> List[Dict[str, Any]]:
     table = _table("JOBS_TABLE")
     if table is None:
-        return []
+        store = globals().get("_LOCAL_JOBS") or {}
+        now_ts = now_ts or int(time.time())
+        due = [
+            dict(j)
+            for j in store.values()
+            if str(j.get("status") or "") == "running"
+            and int(j.get("next_run_at") or 0) <= now_ts
+        ]
+        due.sort(key=lambda j: int(j.get("next_run_at") or 0))
+        return due[:limit]
     now_ts = now_ts or int(time.time())
     # Query running jobs due for next step
     resp = table.query(
@@ -393,6 +469,58 @@ def list_due_jobs(
         Limit=limit,
     )
     return resp.get("Items", [])
+
+
+def other_running_job_on_device(
+    device_id: str,
+    *,
+    except_job_id: str = "",
+    now: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return another running job on the same device with a live lease.
+
+    Prevents two agent jobs overlapping on one phone (r19 bumble_swipe5 overlap).
+    """
+    did = (device_id or "").strip()
+    if not did:
+        return None
+    now = int(now if now is not None else time.time())
+    except_id = (except_job_id or "").strip()
+    table = _table("JOBS_TABLE")
+    candidates: List[Dict[str, Any]] = []
+    if table is None:
+        store = globals().get("_LOCAL_JOBS") or {}
+        candidates = [dict(j) for j in store.values()]
+    else:
+        try:
+            resp = table.query(
+                IndexName="status-index",
+                KeyConditionExpression="#s = :running",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":running": "running"},
+                Limit=40,
+            )
+            candidates = list(resp.get("Items") or [])
+        except Exception:
+            return None
+    for j in candidates:
+        jid = str(j.get("job_id") or "")
+        if not jid or jid == except_id:
+            continue
+        if str(j.get("status") or "") != "running":
+            continue
+        if str(j.get("device_id") or "").strip() != did:
+            continue
+        holder = str(j.get("lease_owner") or "")
+        exp = int(j.get("lease_expires_at") or 0)
+        # Live lease on another job → device busy
+        if holder and exp > now:
+            return j
+        # Recently updated running job without expired lease clock
+        updated = int(j.get("updated_at") or 0)
+        if updated and (now - updated) < 90:
+            return j
+    return None
 
 
 def list_recent_jobs(limit: int = 50) -> List[Dict[str, Any]]:

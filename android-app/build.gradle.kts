@@ -13,9 +13,11 @@ android {
         minSdk = 26
         targetSdk = 35
         
-        // Version from GitHub Actions
-        versionCode = (project.findProperty("VERSION_CODE") as String?)?.toIntOrNull() ?: 1
-        versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.0"
+        // Version from GitHub Actions (CI overrides with run_number ≥500).
+        // Default must stay > phone's installed 489 so accidental local/CI
+        // builds without -PVERSION_CODE still upgrade in place.
+        versionCode = (project.findProperty("VERSION_CODE") as String?)?.toIntOrNull() ?: 500
+        versionName = (project.findProperty("VERSION_NAME") as String?) ?: "1.0.500"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -48,8 +50,24 @@ android {
     }
 
     buildTypes {
+        debug {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            // Same debug.keystore as release so preview upgrades over phone builds
+            signingConfig = signingConfigs.getByName("release")
+        }
+        // Fast preview APK for CI feature branches — no R8/minify/shrink
+        create("preview") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

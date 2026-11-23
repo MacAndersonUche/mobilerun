@@ -1,0 +1,12 @@
+<!-- Chat list with header title 'Chat' at y≈159 — must not tap as tab -->
+<hierarchy windows="1" nodes="12" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n t="Chat" xy="116,159" b="40,100,220,210"/>
+ <n t="Conversations" xy="200,1100" b="40,1072,400,1140"/>
+ <n t="Sam" i="id/match_row" c="1" xy="242,1200" b="200,1160,360,1240"/>
+ <n t="hey" xy="300,1260" b="200,1240,500,1280"/>
+ <n t="Riley" i="id/match_name" c="1" xy="242,1400" b="200,1360,360,1440"/>
+ <n d="Chat" c="1" xy="343,2180" b="250,2120,430,2240"/>
+ <n d="Likes" c="1" xy="540,2180" b="450,2120,630,2240"/>
+</w>
+</hierarchy>

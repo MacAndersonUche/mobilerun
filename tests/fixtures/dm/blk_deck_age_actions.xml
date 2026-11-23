@@ -1,0 +1,12 @@
+<!-- BLK Discover card with age + unlabeled X/heart/crown (no Like Icon desc) -->
+<hierarchy windows="1" nodes="12" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="Jordan" xy="300,1400" b="80,1360,520,1440"/>
+ <n t="29" xy="300,1480" b="80,1440,200,1520"/>
+ <n c="1" xy="270,1800" b="200,1720,340,1880"/>
+ <n c="1" xy="540,1800" b="470,1720,610,1880"/>
+ <n c="1" xy="810,1800" b="740,1720,880,1880"/>
+ <n i="nav_swipe" d="Discover" c="1" xy="135,2170" b="50,2120,220,2220"/>
+ <n i="nav_connections" d="Matches" c="1" xy="675,2170" b="590,2120,760,2220"/>
+</w>
+</hierarchy>

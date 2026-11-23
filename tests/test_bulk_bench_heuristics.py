@@ -166,7 +166,7 @@ def test_badoo_bulk_uses_voteyes_not_y2000_filter():
 
 def test_bulk_swipe_dry_run_skips_like():
     deck = _load("bumble_deck.xml")
-    st: dict = {}
+    st: dict = {"bulk_swipe": {"_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "bumble auto-swipe 5 profiles",
         deck,
@@ -175,13 +175,14 @@ def test_bulk_swipe_dry_run_skips_like():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act.get("action") == "done"
-    assert act.get("dry_run") is True
+    # r23: identify card + done — never like/pass/horizontal swipe
+    assert act and act.get("dry_run") is True
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
-    assert "would like/pass 5 cards" in reason
-    assert "deck verified on alex" in reason
-    # Never mutates the deck via like tap
-    assert act.get("action") != "tap"
+    assert "alex" in reason
+    assert "would like/pass 5" in reason
+    assert act.get("bulk_swipe_evaluated") == 1
 
 
 def test_bulk_message_dry_run_stops_before_send():
@@ -198,28 +199,33 @@ def test_bulk_message_dry_run_stops_before_send():
             "done": 0,
             "target": 5,
             "current": "Match01",
-            "typed": True,
+            "typed": False,
             "counted_current": False,
             "cleared": False,
+            "dry_verified": False,
         }
     }
     act = plan_bulk_message(
         "tinder auto-message 5 matches tell them hi baby",
         chat,
-        ["Opened Tinder — launch", "tap — Open Match01", "type — hi baby"],
+        ["Opened Tinder — launch", "tap — Open Match01", "Focus compose"],
         state=st,
         package="com.tinder",
         dry_run=True,
     )
-    # Clears composer draft before any done/back
-    assert act and act.get("action") == "type"
-    assert act.get("clear") is True and act.get("text") == ""
-    assert act.get("fastpath_step") == "bulk_dry_run_clear_composer"
+    # Dry-run verifies composer and logs bank text — never types
+    assert act and act.get("action") != "type"
+    assert "never typed" in (act.get("reason") or "").lower()
+    assert act.get("would_send_text") == "hi baby" or "hi baby" in (
+        act.get("reason") or ""
+    )
+    st["bulk_message"]["dry_verified"] = True
+    st["bulk_message"]["typed"] = True
     st["bulk_message"]["cleared"] = True
     act2 = plan_bulk_message(
         "tinder auto-message 5 matches tell them hi baby",
         chat,
-        ["Opened Tinder — launch", "tap — Open Match01", "type — hi baby", "clear"],
+        ["Opened Tinder — launch", "tap — Open Match01", "composer verified"],
         state=st,
         package="com.tinder",
         dry_run=True,

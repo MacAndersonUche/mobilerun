@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Tagged match card + bottom nav ids -->
+<hierarchy>
+  <w p="com.taggedapp" a="1">
+    <n i="tvUsername" t="Casey" xy="540,500" b="[200,440][880,560]" />
+    <n i="tvUserAge" t="26" xy="540,560" b="[200,540][880,600]" />
+    <n i="dislikeBtn" xy="220,1908" b="[140,1830][300,1980]" c="1" />
+    <n i="chatBtn" xy="540,1911" b="[460,1830][620,1980]" c="1" />
+    <n i="likeBtn" xy="860,1908" b="[780,1830][940,1980]" c="1" />
+    <n i="tab_nearby" xy="108,2200" b="[20,2130][200,2270]" c="1" />
+    <n i="tab_live" xy="324,2200" b="[240,2130][420,2270]" c="1" />
+    <n i="tab_match_game" xy="540,2200" b="[460,2130][620,2270]" c="1" />
+    <n i="tab_chats" xy="756,2200" b="[680,2130][840,2270]" c="1" />
+    <n i="tab_notification" xy="972,2200" b="[900,2130][1050,2270]" c="1" />
+    <n i="sns_fab_go_live" t="Go Live" xy="900,1800" b="[820,1720][980,1880]" c="1" />
+  </w>
+</hierarchy>

@@ -42,7 +42,6 @@ export default function AccountSheet({
 
   const rows: [string, string][] = [
     ['Workspace', '/settings'],
-    ['Notifications', '/needs-you'],
     ['Preferences', '/settings'],
     ['AWS cost', '/settings'],
     ['Usage', '/history'],
@@ -146,7 +145,7 @@ export default function AccountSheet({
           Log out
         </Button>
 
-        <p className="pt-1 text-center text-xs text-mute">MobileRun by MacAI</p>
+        <p className="pt-1 text-center text-xs text-mute">MacMobileRun</p>
       </div>
     </Sheet>
   );

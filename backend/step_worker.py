@@ -27,6 +27,7 @@ try:
         get_device_connections,
         get_job,
         list_due_jobs,
+        other_running_job_on_device,
         put_job,
         save_job_progress,
     )
@@ -36,12 +37,87 @@ except ImportError:
         get_device_connections,
         get_job,
         list_due_jobs,
+        other_running_job_on_device,
         put_job,
         save_job_progress,
     )
 
 logger = logging.getLogger("mobilerun.step")
 logger.setLevel(logging.INFO)
+
+# Hard walls (r23: jobs sat 209–583s past last progress; entry-only 90s check missed).
+try:
+    from cloud_agent import NO_PROGRESS_TIMEOUT_S as _NP_S
+    from cloud_agent import TASK_TIMEOUT_S as _TASK_WALL_S
+except ImportError:
+    try:
+        from backend.cloud_agent import (  # type: ignore
+            NO_PROGRESS_TIMEOUT_S as _NP_S,
+            TASK_TIMEOUT_S as _TASK_WALL_S,
+        )
+    except ImportError:
+        _NP_S = 90
+        _TASK_WALL_S = 900
+
+# Per StepWorker invoke / single-step wall (default = no-progress 90s)
+STEP_WALL_S = int(os.environ.get("AGENT_STEP_WALL_S") or str(_NP_S))
+# Job-level hard cap. r24: 180s killed every reply/new before LLM could
+# navigate (~24 heuristic rounds). Default 600s; keep 90s no-UI-progress.
+JOB_WALL_S = int(os.environ.get("AGENT_JOB_WALL_S") or "600")
+
+
+def _fail_job_timeout(
+    job: Dict[str, Any], *, error: str, last_action: str
+) -> Dict[str, Any]:
+    state = job.setdefault("state", {})
+    if not isinstance(state, dict):
+        state = {}
+        job["state"] = state
+    now = int(time.time())
+    job["status"] = "failed"
+    job["error"] = error
+    job["completed_at"] = now
+    job["updated_at"] = now
+    state["last_action"] = last_action
+    job["state"] = state
+    logger.warning(
+        "step_worker timeout job=%s action=%s err=%s",
+        job.get("job_id"),
+        last_action,
+        error,
+    )
+    return job
+
+
+def enforce_job_wall_clock(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Hard wall-clock fail-fast for StepWorker (per-job + no-UI-progress).
+
+    Returns a failed job dict when the wall is exceeded, else None.
+    """
+    now = int(time.time())
+    created = int(job.get("created_at") or now)
+    state = job.get("state") if isinstance(job.get("state"), dict) else {}
+    # Absolute job wall (r23: refuse 7+ min hangs)
+    wall = min(int(JOB_WALL_S), int(_TASK_WALL_S))
+    if now - created > wall:
+        return _fail_job_timeout(
+            job,
+            error=f"Job wall-clock exceeded ({wall}s)",
+            last_action="job_wall_timeout",
+        )
+    # No UI progress wall — use last_ui_progress_at (not busywork last_progress_at)
+    last_ui = int(state.get("last_ui_progress_at") or created)
+    steps = int(state.get("steps") or 0)
+    if now - last_ui > int(STEP_WALL_S) and steps >= 1:
+        return _fail_job_timeout(
+            job,
+            error=(
+                f"No UI progress for {STEP_WALL_S}s "
+                f"(last_ui_progress_at={last_ui}; StepWorker hard wall)"
+            ),
+            last_action="no_progress_timeout",
+        )
+    return None
 
 
 def _to_plain(obj: Any) -> Any:
@@ -219,8 +295,23 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     swipe_cap = int(caps.get("swipe_cap", 50))
     reply_cap = int(caps.get("reply_cap", 50))
 
+    scope = str(
+        job.get("contact_scope") or state.get("contact_scope") or "both"
+    ).lower()
     total_msgs = openers + replies
-    if total_msgs >= global_max or (openers >= opener_target and replies >= reply_cap):
+    if total_msgs >= global_max:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
+    if scope == "new" and openers >= opener_target and swipes >= swipe_cap:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
+    if scope == "existing" and replies >= reply_cap:
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
+    if scope == "both" and openers >= opener_target and replies >= reply_cap:
         job["status"] = "completed"
         job["completed_at"] = int(time.time())
         return job
@@ -228,9 +319,26 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     humanizer = _humanizer_for_job(job)
 
     # Prefer openers until target, then replies — always sequential (one per tick)
-    # Randomise action choice slightly when both swipe and reply are eligible
+    # contact_scope: new → openers/likes only; existing → replies only; both → mix
     dry = bool(job.get("dry_run", False))
-    if openers < opener_target:
+    if scope == "existing":
+        action = "reply"
+        state["replies_sent"] = replies + 1
+        gap = humanizer.sample_message_gap_seconds()
+    elif scope == "new":
+        if openers < opener_target:
+            action = "opener"
+            state["openers_sent"] = openers + 1
+            gap = humanizer.sample_message_gap_seconds()
+        elif swipes < swipe_cap:
+            action = "swipe"
+            state["swipes_done"] = swipes + 1
+            gap = humanizer.sample_swipe_step_gap_seconds()
+        else:
+            job["status"] = "completed"
+            job["completed_at"] = int(time.time())
+            return job
+    elif openers < opener_target:
         action = "opener"
         state["openers_sent"] = openers + 1
         gap = humanizer.sample_message_gap_seconds()
@@ -376,6 +484,11 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["updated_at"] = int(time.time())
         return job
 
+    # Hard wall BEFORE any RPC/LLM (r23: 90s check only inside cloud_agent was late)
+    timed = enforce_job_wall_clock(job)
+    if timed:
+        return timed
+
     try:
         from cloud_agent import run_one_agent_step
     except ImportError:
@@ -383,6 +496,7 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
     # Suppress per-step Lambda self-kicks while chaining in-process — one kick
     # after the chain if still running (avoids 6 workers racing one job).
+    invoke_t0 = time.time()
     job["_suppress_kick"] = True
     updated = run_one_agent_step(job)
     # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
@@ -392,6 +506,27 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     lease_jid = str(job.get("job_id") or "")
     for _ in range(max(0, chain_budget - 1)):
         if updated.get("status") != "running":
+            break
+        # r28: honor cancel between chained steps — never continue after stop
+        try:
+            from cloud_agent import refresh_job_cancel_status
+        except ImportError:
+            from backend.cloud_agent import (  # type: ignore
+                refresh_job_cancel_status,
+            )
+        if refresh_job_cancel_status(updated):
+            break
+        # Per-invoke wall + no-progress re-check between chained steps
+        if time.time() - invoke_t0 > float(STEP_WALL_S):
+            updated = _fail_job_timeout(
+                updated,
+                error=f"StepWorker invoke exceeded {STEP_WALL_S}s wall",
+                last_action="step_invoke_wall_timeout",
+            )
+            break
+        timed = enforce_job_wall_clock(updated)
+        if timed:
+            updated = timed
             break
         nra = int(updated.get("next_run_at") or 0)
         # Respect intentional backoff (rate-limit / offline waits)
@@ -575,18 +710,83 @@ def _worker_owner(context: Any = None) -> str:
     return req
 
 
+def _cleanup_cancelled_job(job: Dict[str, Any]) -> None:
+    """Restore bubble / HOME when a job was cancelled mid-flight (Dynamo stop)."""
+    did = str(job.get("device_id") or "")
+    if not did:
+        return
+    try:
+        from cloud_agent import _end_job_cleanup
+        from device_rpc import call_device
+    except ImportError:
+        try:
+            from backend.cloud_agent import _end_job_cleanup  # type: ignore
+            from backend.device_rpc import call_device  # type: ignore
+        except ImportError:
+            return
+    try:
+        _end_job_cleanup(job, did, call_device)
+    except Exception as e:
+        logger.warning("cancelled-job cleanup failed: %s", e)
+
+
 def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
+        # Cancelled/stopped in Dynamo — still restore overlay bubble
+        if str(job.get("status") or "") in ("stopped", "cancelled", "failed"):
+            st = job.get("state") if isinstance(job.get("state"), dict) else {}
+            if st.get("job_busy_sent") and not st.get("job_cleanup_done"):
+                _cleanup_cancelled_job(job)
+                st["job_cleanup_done"] = True
+                job["state"] = st
         return
     job_id = str(job.get("job_id") or "")
     owner = owner or _worker_owner()
+    # Device mutex: another live job on same phone → defer (r19 overlap)
+    did = str(job.get("device_id") or "").strip()
+    if did and job_id:
+        other = other_running_job_on_device(did, except_job_id=job_id)
+        if other:
+            other_id = str(other.get("job_id") or "?")
+            logger.info(
+                "process_job defer job=%s — device %s busy with %s " "(lease_owner=%s)",
+                job_id,
+                did,
+                other_id,
+                other.get("lease_owner"),
+            )
+            # Push next_run slightly so we don't hot-spin
+            try:
+                job["next_run_at"] = int(time.time()) + 15
+                job["updated_at"] = int(time.time())
+                put_job(_to_plain(job))
+            except Exception:
+                pass
+            return
     # Lease: second concurrent worker skips — prevents parallel swipes
     if job_id and not acquire_job_lease(job_id, owner):
         holder = "?"
         try:
             cur = get_job(job_id) or {}
             holder = str(cur.get("lease_owner") or "?")
+            # Still enforce wall clock even when lease is held (r26: stuck lease
+            # previously blocked the 90s wall until TTL expired).
+            timed = enforce_job_wall_clock(cur if isinstance(cur, dict) else job)
+            if timed:
+                try:
+                    save_job_progress(_to_plain(timed), owner=None)
+                except Exception:
+                    pass
+                try:
+                    from storage import release_job_lease as _rel
+                except ImportError:
+                    from backend.storage import release_job_lease as _rel  # type: ignore
+                try:
+                    _rel(job_id, None)
+                except Exception:
+                    pass
+                return
         except Exception:
             holder = "?"
         logger.info(
@@ -599,6 +799,22 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     # Propagate owner so step code can renew before slow screenshot/RPC calls
     job["_lease_owner"] = owner
     job["lease_owner"] = owner
+    # Fail hung jobs before dispatch (dating/social/agent all share walls)
+    timed = enforce_job_wall_clock(job)
+    if timed:
+        try:
+            save_job_progress(_to_plain(timed), owner=owner)
+        except Exception:
+            pass
+        try:
+            from storage import release_job_lease
+        except ImportError:
+            from backend.storage import release_job_lease  # type: ignore
+        try:
+            release_job_lease(job_id, owner)
+        except Exception:
+            pass
+        return
     try:
         if kind == "dating":
             updated = run_dating_step(job)
@@ -606,9 +822,6 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             updated = run_social_step(job)
         else:
             updated = run_agent_step(job)
-        # Renew after the step (slow screenshots / RPC may have burned most of TTL)
-        if job_id:
-            acquire_job_lease(job_id, owner)
         # Targeted update — never put_item whole item (would revive cancelled jobs)
         # and never write lease fields (stale writeback bug).
         ok = save_job_progress(_to_plain(updated), owner=owner)
@@ -617,6 +830,8 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
                 "process_job progress not saved job=%s — status changed or lease lost",
                 job_id,
             )
+            # Likely cancelled mid-step — restore bubble
+            _cleanup_cancelled_job(updated if isinstance(updated, dict) else job)
     except Exception as e:
         # Persist the crash so Tasks/tick show a real error instead of idle-0.
         logger.exception("process_job crash job=%s: %s", job.get("job_id"), e)
@@ -624,10 +839,24 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             state = job.setdefault("state", {})
             if isinstance(state, dict):
                 state["last_action"] = f"process_job_crash: {e}"
+                # Force LLM handoff on next successful tick if job stays running
+                state["_bulk_llm_handoff"] = True
+                state["force_vision_once"] = True
                 job["state"] = state
-            job["status"] = "failed"
-            job["error"] = f"step_worker crash: {e}"
-            job["completed_at"] = int(time.time())
+            # Keep running when possible so handoff can recover — only hard-fail
+            # on truly fatal worker crashes.
+            fatal = any(
+                tok in str(e).lower()
+                for tok in ("no module", "syntaxerror", "memoryerror")
+            )
+            if fatal:
+                job["status"] = "failed"
+                job["error"] = f"step_worker crash: {e}"
+                job["completed_at"] = int(time.time())
+            else:
+                job["status"] = "running"
+                job["error"] = f"step_worker soft crash → handoff: {e}"
+                job["next_run_at"] = int(time.time()) + 2
             job["updated_at"] = int(time.time())
             save_job_progress(_to_plain(job), owner=owner)
         except Exception as persist_err:
@@ -636,7 +865,27 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
                 job.get("job_id"),
                 persist_err,
             )
-        raise
+        # Do not re-raise — finally must release the lease
+    finally:
+        # r26 CRITICAL: always release so the next tick is not skipped with
+        # "lease held by <failed invocation>" until the 90s wall.
+        if job_id:
+            try:
+                from storage import release_job_lease
+            except ImportError:
+                from backend.storage import release_job_lease  # type: ignore
+            try:
+                released = release_job_lease(job_id, owner)
+                logger.info(
+                    "process_job lease release job=%s owner=%s ok=%s",
+                    job_id,
+                    owner,
+                    released,
+                )
+            except Exception as rel_err:
+                logger.warning(
+                    "process_job lease release failed job=%s: %s", job_id, rel_err
+                )
 
 
 def handler(event: Dict[str, Any], context: Any):

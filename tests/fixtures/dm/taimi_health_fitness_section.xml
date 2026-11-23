@@ -1,0 +1,12 @@
+<hierarchy windows="1" nodes="16" partial="false" empty="false" mode="compact" packages="com.takimi.android">
+<w id="active" t="active" p="com.takimi.android" f="1">
+ <n t="12 left" xy="700,124" b="618,100,820,148"/>
+ <n t="Health and Fitness" xy="300,1580" b="80,1507,600,1665"/>
+ <n t="Active today" xy="300,1700" b="80,1670,400,1730"/>
+ <n c="1" xy="320,1948" b="200,1875,440,2022"/>
+ <n c="1" xy="541,1948" b="460,1875,620,2022"/>
+ <n c="1" xy="761,1948" b="680,1875,840,2022"/>
+ <n d="People" c="1" xy="540,2200" b="470,2140,610,2260"/>
+ <n d="Chats" c="1" xy="972,2200" b="900,2140,1044,2260"/>
+</w>
+</hierarchy>

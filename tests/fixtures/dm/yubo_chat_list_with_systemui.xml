@@ -1,0 +1,16 @@
+<hierarchy windows="2" nodes="12" empty="false" packages="co.yellw.yellowapp,com.android.systemui">
+ <w id="systemui" t="1" p="com.android.systemui" f="0">
+  <n d="Messages notification" xy="540,80" c="1"/>
+  <n d="Back" xy="80,2200" c="1"/>
+ </w>
+ <w id="active" t="1" p="co.yellw.yellowapp" f="1">
+  <n t="Conversations" xy="200,200"/>
+  <n t="New friends" xy="200,280"/>
+  <n t="Leah" xy="180,1200"/>
+  <n t="Hey whats up" xy="400,1200"/>
+  <n t="Marcia" xy="180,1400"/>
+  <n t="Nice to meet you" xy="400,1400"/>
+  <n t="Chat" xy="341,2194" c="1"/>
+  <n t="Likes" xy="540,2194" c="1"/>
+ </w>
+</hierarchy>

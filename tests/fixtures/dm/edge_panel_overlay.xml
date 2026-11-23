@@ -1,0 +1,11 @@
+<!-- Samsung Edge panels cocktailbar overlay over Hily -->
+<hierarchy windows="2" nodes="6" partial="false" empty="false" mode="compact" packages="com.samsung.android.app.cocktailbarservice,com.hily.app">
+<w id="active" t="active" p="com.samsung.android.app.cocktailbarservice" f="1">
+ <n t="Edge panels" xy="1000,800" b="900,200,1080,2000"/>
+ <n t="Close" c="1" xy="980,220" b="940,180,1040,260"/>
+</w>
+<w id="2" t="1" p="com.hily.app" f="0">
+ <n t="Finder" xy="140,2190" c="1"/>
+ <n t="Alex" xy="300,1400"/>
+</w>
+</hierarchy>

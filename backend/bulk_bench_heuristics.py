@@ -25,29 +25,63 @@ try:
         _tree_id_center,
         _tree_node_center,
         badoo_like_action,
+        badoo_on_connections,
         badoo_on_encounters,
         badoo_pass_action,
         blk_dismiss_popup,
         blk_end_of_deck,
         blk_like_action,
         blk_on_deck,
+        blk_on_matches,
+        blk_on_thread,
+        blk_send_relative_to_edittext,
         blk_deck_card_name,
+        bumble_back_from_photo_browser,
         bumble_collapsed_older_chats_center,
         bumble_deck_card_name,
         bumble_first_grid_tile_center,
         bumble_like_swipe,
         bumble_on_people_deck,
+        bumble_on_photo_browser,
         bumble_on_photo_grid,
         bumble_pass_swipe,
         compose_center_in_thread,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
+        hily_close_mbm,
         hily_deck_card_name,
         hily_dismiss_popup,
+        hily_first_grid_tile_center,
         hily_like_action,
+        hily_back_from_photo_viewer,
         hily_on_finder,
+        hily_on_mbm,
+        hily_on_photo_viewer,
+        hily_on_profile_sheet,
+        hily_on_top_picks_grid,
         hily_pass_action,
+        _is_system_chrome_package,
+        hinge_deck_card_name,
+        hinge_dismiss_enable_prompt,
+        hinge_dismiss_play_review,
+        hinge_find_compose,
+        hinge_find_send_a_message,
+        hinge_like_sheet_action,
+        hinge_on_discover,
+        hinge_on_like_sheet,
+        hinge_on_matches,
+        hinge_open_discover_tab,
+        keyboard_likely_up,
+        known_root_screen,
+        tab_bar_verified,
+        tagged_chat_action,
+        tagged_deck_card_name,
+        tagged_like_action,
+        tagged_dismiss_exit_dialog,
+        tagged_location_overlay_continue,
+        tagged_on_deck,
+        yubo_chat_tab_xy,
         taimi_deck_card_name,
         taimi_dismiss_paywall,
         taimi_is_curated_card,
@@ -59,6 +93,8 @@ try:
         thread_header_verified,
         yubo_deck_card_name,
         yubo_like_swipe,
+        yubo_on_chat,
+        yubo_on_chat_list,
         yubo_on_deck,
         yubo_pass_swipe,
     )
@@ -71,29 +107,63 @@ except ImportError:
         _tree_id_center,
         _tree_node_center,
         badoo_like_action,
+        badoo_on_connections,
         badoo_on_encounters,
         badoo_pass_action,
         blk_dismiss_popup,
         blk_end_of_deck,
         blk_like_action,
         blk_on_deck,
+        blk_on_matches,
+        blk_on_thread,
+        blk_send_relative_to_edittext,
         blk_deck_card_name,
+        bumble_back_from_photo_browser,
         bumble_collapsed_older_chats_center,
         bumble_deck_card_name,
         bumble_first_grid_tile_center,
         bumble_like_swipe,
         bumble_on_people_deck,
+        bumble_on_photo_browser,
         bumble_on_photo_grid,
         bumble_pass_swipe,
         compose_center_in_thread,
         detect_dm_app,
         find_send_center_safe,
         focused_is_compose_not_search,
+        hily_close_mbm,
         hily_deck_card_name,
         hily_dismiss_popup,
+        hily_first_grid_tile_center,
         hily_like_action,
+        hily_back_from_photo_viewer,
         hily_on_finder,
+        hily_on_mbm,
+        hily_on_photo_viewer,
+        hily_on_profile_sheet,
+        hily_on_top_picks_grid,
         hily_pass_action,
+        _is_system_chrome_package,
+        hinge_deck_card_name,
+        hinge_dismiss_enable_prompt,
+        hinge_dismiss_play_review,
+        hinge_find_compose,
+        hinge_find_send_a_message,
+        hinge_like_sheet_action,
+        hinge_on_discover,
+        hinge_on_like_sheet,
+        hinge_on_matches,
+        hinge_open_discover_tab,
+        keyboard_likely_up,
+        known_root_screen,
+        tab_bar_verified,
+        tagged_chat_action,
+        tagged_deck_card_name,
+        tagged_like_action,
+        tagged_dismiss_exit_dialog,
+        tagged_location_overlay_continue,
+        tagged_on_deck,
+        yubo_chat_tab_xy,
         taimi_deck_card_name,
         taimi_dismiss_paywall,
         taimi_is_curated_card,
@@ -105,6 +175,8 @@ except ImportError:
         thread_header_verified,
         yubo_deck_card_name,
         yubo_like_swipe,
+        yubo_on_chat,
+        yubo_on_chat_list,
         yubo_on_deck,
         yubo_pass_swipe,
     )
@@ -112,7 +184,10 @@ except ImportError:
 DETECTOR_SETTLE_S = 1.5
 
 # Real dating decks that must NOT use emu Like-button / (950,2200) fallbacks.
-_REAL_GESTURE_APPS = frozenset({"bumble", "yubo", "badoo", "hily", "blk", "taimi"})
+# Hinge Discover uses Send-a-message (handled separately); Tagged scaffold uses ids.
+_REAL_GESTURE_APPS = frozenset(
+    {"bumble", "yubo", "badoo", "hily", "blk", "taimi", "tagged", "hinge"}
+)
 
 
 def _delay_band() -> tuple[float, float]:
@@ -231,6 +306,50 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     if "swipe 50" in low or "auto-swipe" in low:
         return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
+    # New-contact messaging: message "hello miss" to 5 new profiles on Hinge
+    qm_new_quoted = re.search(
+        r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
+        r"to\s+(\d+)\s+new\s+(?:profiles?|matches|contacts|people)",
+        text,
+        re.I,
+    )
+    if qm_new_quoted:
+        return {
+            "kind": "message_new",
+            "count": int(qm_new_quoted.group(2)),
+            "message": qm_new_quoted.group(1).strip(),
+            "app": app,
+            "contact_scope": "new",
+        }
+    qm_new_n = re.search(
+        r"(?:message|auto[- ]?message)\s+(\d+)\s+new\s+"
+        r"(?:profiles?|matches|contacts|people)",
+        low,
+    )
+    if qm_new_n:
+        n_new = int(qm_new_n.group(1))
+        qm_body = re.search(r"[\"']([^\"']+)[\"']", text)
+        msg_new = qm_body.group(1).strip() if qm_body else None
+        if not msg_new:
+            return {
+                "kind": "message_new",
+                "count": n_new,
+                "message": None,
+                "app": app,
+                "contact_scope": "new",
+                "error": (
+                    "No message text in instruction — provide quoted text "
+                    "for new-contact messaging"
+                ),
+            }
+        return {
+            "kind": "message_new",
+            "count": n_new,
+            "message": msg_new,
+            "app": app,
+            "contact_scope": "new",
+        }
+
     # Quoted message BEFORE "to N": reply "hey" to 5 existing chats on Hily
     qm_first = re.search(
         r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
@@ -244,6 +363,7 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
             "count": int(qm_first.group(2)),
             "message": qm_first.group(1).strip(),
             "app": app,
+            "contact_scope": "existing",
         }
 
     m = re.search(
@@ -310,6 +430,19 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _wa_strip_preview(name: str) -> str:
+    """Strip WhatsApp 'Name · last message' / 'Name — preview' to the contact."""
+    raw = (name or "").strip()
+    if not raw:
+        return raw
+    for sep in (" · ", " • ", " — ", " - ", " | "):
+        if sep in raw:
+            left = raw.split(sep, 1)[0].strip()
+            if len(left) >= 2:
+                return left
+    return raw
+
+
 def _visible_chat_list_rows(
     ui_tree: str,
     app: Optional[str],
@@ -318,20 +451,172 @@ def _visible_chat_list_rows(
 ) -> List[Dict[str, Any]]:
     """Visible inbox/match row names from the a11y tree (skip already-done)."""
     try:
-        from dm_heuristics import _looks_like_chat_list_row
+        from dm_heuristics import (
+            _blk_looks_like_person_name,
+            _looks_like_chat_list_row,
+            _looks_like_message_preview,
+            blk_on_matches,
+        )
     except ImportError:
-        from backend.dm_heuristics import _looks_like_chat_list_row  # type: ignore
+        from backend.dm_heuristics import (  # type: ignore
+            _blk_looks_like_person_name,
+            _looks_like_chat_list_row,
+            _looks_like_message_preview,
+            blk_on_matches,
+        )
 
     skip = {str(s).strip().lower() for s in (skip_names or []) if s}
-    profile = DM_APP_PROFILES.get((app or "").lower(), {}) if app else {}
+    app_l = (app or "").lower()
+    profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
     result_ids = tuple(profile.get("result_ids") or ())
+    # BLK Compose Matches list has no row resource-ids — fall back to names
+    blk_name_fallback = app_l == "blk" and (not result_ids or blk_on_matches(ui_tree))
+    # Yubo Compose Conversations: plain-text names (Roch/Leah/…) with no row ids
+    yubo_name_fallback = False
+    if app_l == "yubo":
+        try:
+            from dm_heuristics import yubo_on_chat_list as _yubo_list
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                yubo_on_chat_list as _yubo_list,
+            )
+        yubo_name_fallback = _yubo_list(ui_tree, _log=False) or (
+            "conversations" in (ui_tree or "").lower()
+        )
+    # Hily: Matches/All/Unread chrome present but row ids missing
+    hily_name_fallback = app_l == "hily" and (
+        "matches" in (ui_tree or "").lower()
+        or "unread" in (ui_tree or "").lower()
+        or "dialogmessageitem" in (ui_tree or "").lower()
+    )
+    # Generic: chat-list chrome + scrollable mid-list short names (any dating app)
+    generic_list_chrome = any(
+        tok in (ui_tree or "").lower()
+        for tok in (
+            "conversations",
+            "matches",
+            "messages",
+            "inbox",
+            "connections",
+            "new friends",
+            "your turn",
+            "their turn",
+        )
+    )
+    # WhatsApp home: many rows only have text (no resource-id). Accept mid-list
+    # Title Case / short names when chats chrome is present.
+    wa_home = app_l in ("whatsapp", "wa") and (
+        "conversations_row_contact_name" in (ui_tree or "").lower()
+        or "contact_row_container" in (ui_tree or "").lower()
+        or 'p="com.whatsapp"' in (ui_tree or "").lower()
+        or "com.whatsapp" in (ui_tree or "").lower()
+    )
     rows: List[Dict[str, Any]] = []
     seen: set = set()
+    # BLK: never open Hidden-section rows
+    hidden_y: Optional[int] = None
+    if app_l == "blk":
+        for n0 in _parse_compact_nodes(ui_tree):
+            t0 = (n0.get("text") or "").strip().lower()
+            if t0.startswith("hidden"):
+                hidden_y = int(n0.get("y") or 0)
+                break
     for n in _parse_compact_nodes(ui_tree):
-        if not _looks_like_chat_list_row(n, result_ids):
-            continue
-        label = (n.get("text") or n.get("label") or "").strip()
+        label = (n.get("text") or n.get("label") or n.get("desc") or "").strip()
         if not label:
+            continue
+        # Drop photo content-desc noise ("Precious Achalugo picture")
+        if (
+            label.lower().endswith(" picture")
+            and "photo" in str(n.get("id") or "").lower()
+        ):
+            continue
+        row_ok = _looks_like_chat_list_row(n, result_ids)
+        if not row_ok and wa_home:
+            nid = str(n.get("id") or "").lower()
+            y = int(n.get("y") or 0)
+            # Explicit WA row ids always win
+            if "conversations_row_contact_name" in nid or (
+                "contact_row" in nid and "message" not in nid
+            ):
+                row_ok = True
+            elif (
+                not nid
+                and 450 <= y <= 2100
+                and 2 <= len(label) <= 40
+                and not _looks_like_message_preview(label)
+                and label.lower()
+                not in (
+                    "chats",
+                    "updates",
+                    "calls",
+                    "status",
+                    "communities",
+                    "calls tab",
+                    "new chat",
+                )
+            ):
+                # Plain text row on chats list (Mom / Alex / Work Group)
+                row_ok = True
+        if not row_ok and blk_name_fallback:
+            # Person name mid-list (Your turn / Their turn) — Title Case person
+            # names only so message previews like "hey" / "Good and you" never
+            # become rows. Allow "First" or "First Last".
+            y = int(n.get("y") or 0)
+            words = label.split()
+            title_case = bool(words) and all(
+                w[:1].isupper() and (len(w) == 1 or w[1:].islower() or "'" in w)
+                for w in words
+            )
+            if (
+                250 <= y <= 2000
+                and title_case
+                and _blk_looks_like_person_name(label)
+                and not label.lower().startswith(("your turn", "their turn", "hidden"))
+                and not _looks_like_message_preview(label)
+            ):
+                row_ok = True
+        if not row_ok and (
+            yubo_name_fallback or hily_name_fallback or generic_list_chrome
+        ):
+            # Generic chat-row: short name text in mid-list (not tabs/headers/
+            # previews). Real Yubo: Roch, Leah, Marcia, Hafsa, Amie ♡.
+            y = int(n.get("y") or 0)
+            x = int(n.get("x") or 0)
+            words = label.split()
+            # Allow heart / emoji suffix on names ("Amie ♡")
+            name_core = re.sub(r"[\W_]+$", "", label, flags=re.UNICODE).strip() or label
+            core_words = name_core.split()
+            title_case = bool(core_words) and all(
+                w[:1].isupper()
+                and (len(w) == 1 or w[1:].islower() or "'" in w or not w.isalpha())
+                for w in core_words
+                if w.isalpha() or "'" in w
+            )
+            y_min = 1050 if yubo_name_fallback else 280
+            if (
+                y_min <= y <= 2050
+                and x <= 700
+                and 2 <= len(name_core) <= 28
+                and title_case
+                and not _looks_like_message_preview(label)
+                and not _looks_like_message_preview(name_core)
+                and label.lower()
+                not in (
+                    "all",
+                    "unread",
+                    "top picks",
+                    "finder",
+                    "social",
+                    "people",
+                    "discover",
+                    "treasure",
+                )
+            ):
+                row_ok = True
+        if not row_ok:
+            continue
+        if hidden_y is not None and int(n.get("y") or 0) >= hidden_y:
             continue
         # Strip "Chat with X" / "Match X" prefixes for the contact key
         name = label
@@ -340,16 +625,182 @@ def _visible_chat_list_rows(
             if low.startswith(pref):
                 name = label[len(pref) :].strip()
                 break
-        # Skip counters / chrome
+        if app_l in ("whatsapp", "wa"):
+            name = _wa_strip_preview(name)
+            low = name.lower()
+        # Skip counters / chrome / message bubbles (never tap bubbles as rows)
         if re.search(r"^\d+\s*(matches?|people|likes?)$", name, re.I):
             continue
-        if "they liked you" in low or "liked you" == low:
+        # Hily upsell: "They liked you!" / "Find out who they are…" / Matches promo
+        if (
+            "they liked you" in low
+            or "liked you" == low
+            or "find out who" in low
+            or "liked you!" in low
+            or "find out who they are" in low
+        ):
             continue
+        # r28: reply-paywall rows — never treat as real conversation
+        # Yubo "ADDED YOU", Hily "They liked you", BLK Discover "Send a message"
+        if (
+            "added you" in low
+            or low == "added you"
+            or "elite pack" in low
+            or "see who added" in low
+            or low in ("send a message", "message", "say hello")
+            or "send a message" == low
+        ):
+            continue
+        # Paywall / promo row markers on the node id
+        nid_early = str(n.get("id") or "").lower()
+        if any(
+            tok in nid_early
+            for tok in (
+                "added_you",
+                "likedyou",
+                "liked_you",
+                "elite",
+                "premium_row",
+                "upsell",
+            )
+        ):
+            continue
+        # r26: never treat Discover filter chips / section labels as chats
+        try:
+            from dm_heuristics import (
+                looks_like_profile_name,
+                looks_like_section_label,
+            )
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                looks_like_profile_name,
+                looks_like_section_label,
+            )
+        name_core = re.sub(r"[\W_]+$", "", name, flags=re.UNICODE).strip() or name
+        if looks_like_section_label(name_core) or looks_like_section_label(label):
+            continue
+        if _card_name_is_owner(name_core) or _card_name_is_owner(name):
+            continue
+        # Person-name heuristic — Age / Notes / Junk never open as a thread.
+        # Allow WA numbers, fake-chats ProfileN/MatchN, emoji-suffixed names.
+        wa_ok = app_l in ("whatsapp", "wa") and bool(re.search(r"\d{3,}", name))
+        fake_ok = bool(re.match(r"^(?:Profile|Match)\d+$", name, re.I))
+        if not (
+            wa_ok
+            or fake_ok
+            or looks_like_profile_name(name_core)
+            or looks_like_profile_name(name)
+        ):
+            continue
+        nid = str(n.get("id") or "").lower()
+        cls = str(n.get("cls") or "").lower()
+        # Never tap the premium liked-you badge / promo tile as a chat row
+        if "dialogtag_liked" in nid or "tag_liked" in nid:
+            continue
+        if "liked" in nid and ("you" in low or "tag" in nid):
+            continue
+        if any(
+            tok in nid or tok in cls
+            for tok in (
+                "bubble",
+                "message_text",
+                "outgoing",
+                "incoming",
+                "chat_message",
+                "msg_text",
+                "conversations_row_message",
+                "row_message",
+                "last_message",
+                "preview",
+            )
+        ):
+            continue
+        # Long preview snippets are bubbles / previews, not contact names
+        if len(name) > 28 and " " in name and not n.get("clickable"):
+            # WhatsApp name+preview concatenated on contact_name still OK after strip
+            if app_l not in ("whatsapp", "wa"):
+                continue
         key = name.lower()
         if key in skip or key in seen:
             continue
         if len(name) < 2 or len(name) > 40:
             continue
+        # WhatsApp Community / Announcements / Channels are not 1:1 DMs
+        if any(
+            tok in key
+            for tok in (
+                "community",
+                "communities",
+                "announcement",
+                "announcements",
+                "channel",
+                "channels",
+                "broadcast",
+                "newsletter",
+            )
+        ):
+            continue
+        # Header chrome / section headers / menu text — never a row
+        if key in (
+            "chat",
+            "chats",
+            "matches",
+            "messages",
+            "inbox",
+            "connections",
+            "live now",
+            "older chats",
+            "your matches",
+            "new friends",
+            "conversations",
+            "reactions",
+            "updates",
+            "calls",
+            "status",
+            "communities",
+            "calls tab",
+            "new chat",
+            "archived",
+            "all",
+            "unread",
+            "top picks",
+            "finder",
+            "social",
+            "people",
+            "discover",
+            "treasure",  # Badoo promo row — never a person
+            "encounters",
+        ):
+            continue
+        if any(
+            tok in key
+            for tok in (
+                "unmatch",
+                "report",
+                "did you meet",
+                "live now",
+                "older chats",
+                "your turn",
+                "their turn",
+                "treasure",
+                "buy credits",
+                "they liked you",
+            )
+        ):
+            continue
+        # Phone numbers are not contact display names for dating DMs
+        # (WhatsApp may show numbers — allow for WA only when row id matches)
+        if re.fullmatch(r"[\d\s\-()+]{7,}", name):
+            if app_l not in ("whatsapp", "wa") or "contact_name" not in nid:
+                continue
+        if int(n.get("y") or 0) < 200:
+            continue
+        unread = bool(
+            n.get("unread")
+            or "unread" in nid
+            or "badge" in nid
+            or re.search(r"\bunread\b", low)
+        )
         seen.add(key)
         rows.append(
             {
@@ -357,6 +808,7 @@ def _visible_chat_list_rows(
                 "x": int(n["x"]),
                 "y": int(n["y"]),
                 "label": label,
+                "unread": unread,
             }
         )
     rows.sort(key=lambda r: (r["y"], r["x"]))
@@ -444,8 +896,8 @@ def _open_chats_tab_action(
 ) -> Optional[Dict[str, Any]]:
     """Tap the app's Chats/Messages/Matches nav using the UI map (never invent).
 
-    Prefer resource-id / content-desc. Yubo never falls back to fixed xy (that
-    caused no_progress taps at ~340,2181 on real phones).
+    Prefer resource-id / content-desc. Fixed-xy only when the tab bar is verified
+    on screen. Yubo uses index-mapped coords (no text/desc on real tabs).
     """
     hist = " ".join(history[-12:]).lower()
     if any(
@@ -456,10 +908,44 @@ def _open_chats_tab_action(
             "open messages",
             "bulk_open_chats",
             "chats/messages tab",
+            "yubo chat tab by index",
         )
     ):
         return None  # already tried — caller should verify/fail
     app_l = (app or "").lower()
+    # Any sheet/modal/viewer → never tap bottom nav underneath
+    try:
+        from dm_heuristics import app_overlay_present
+    except ImportError:
+        from backend.dm_heuristics import app_overlay_present  # type: ignore
+
+    overlay = app_overlay_present(app_l, ui_tree)
+    if overlay:
+        if app_l == "bumble" and overlay == "bumble_photo_browser":
+            return bumble_back_from_photo_browser(planner=planner)
+        if app_l == "hily" and overlay == "hily_mbm":
+            return hily_close_mbm(ui_tree, planner=planner)
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (f"Back — close {overlay} before chats/nav tap ({planner})"),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_chats_overlay_back",
+        )
+    if keyboard_likely_up(ui_tree):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss keyboard before chats tab ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_dismiss_keyboard",
+        )
     profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
     labels = tuple(
         profile.get("inbox_tab_labels")
@@ -467,7 +953,6 @@ def _open_chats_tab_action(
         or ("Chats", "Messages", "Matches", "Connections", "Chat")
     )
     inbox_ids = tuple(profile.get("inbox_tab_ids") or profile.get("inbox_ids") or ())
-    # Badoo / Bumble known nav ids
     if app_l == "badoo":
         inbox_ids = inbox_ids + (
             "nav_bar_button_connections",
@@ -475,72 +960,651 @@ def _open_chats_tab_action(
         )
     if app_l == "hily":
         inbox_ids = inbox_ids + ("bottomNavTab_2", "id/bottomNavTab_2")
+    if app_l == "tagged":
+        inbox_ids = inbox_ids + ("tab_chats", "id/tab_chats")
     c = _nav_tab_center(ui_tree, *labels, ids=inbox_ids)
     if c is None:
+        # Exact label ONLY in the bottom nav band — never header titles
+        # (Yubo 'Chat' at y≈159 / Hily 'Chats' header).
         for lab in labels:
-            c = _exact_label_center(ui_tree, lab)
+            c = _exact_label_center(ui_tree, lab, y_min=1800)
             if c:
                 break
-    if c is None and app_l != "yubo":
-        # Fixed-xy fallback allowed for apps with a verified map point — not Yubo
-        xy = profile.get("inbox_tab_xy")
-        if isinstance(xy, (tuple, list)) and len(xy) >= 2:
-            c = (int(xy[0]), int(xy[1]))
+    if c is None and app_l == "yubo":
+        # Unlabeled tabs — index map only when bottom clickables exist
+        if (
+            tab_bar_verified("yubo", ui_tree)
+            or len([n for n in _parse_compact_nodes(ui_tree) if n.get("clickable")])
+            >= 4
+        ):
+            c = yubo_chat_tab_xy()
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(c[0]),
+                    "y": int(c[1]),
+                    "reason": f"Open Yubo Chat tab by index ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_open_chats",
+            )
+        return None
+    if c is None:
+        # Fixed-xy only with verified tab bar (never while on thread/keyboard)
+        if tab_bar_verified(app_l, ui_tree):
+            xy = profile.get("inbox_tab_xy")
+            if isinstance(xy, (tuple, list)) and len(xy) >= 2:
+                c = (int(xy[0]), int(xy[1]))
     if not c:
         return None
+    # SAFETY: any node (clickable or not) at the point with paid/crush labels
+    # blocks — real Hily Crush is a non-clickable ImageView over Chats.
+    try:
+        from tap_firewall import (
+            find_blocking_label_at,
+            resolve_topmost_clickable_at,
+            _POINT_BLOCK_LABELS,
+        )
+    except ImportError:
+        from backend.tap_firewall import (  # type: ignore
+            find_blocking_label_at,
+            resolve_topmost_clickable_at,
+            _POINT_BLOCK_LABELS,
+        )
+    blocker = find_blocking_label_at(ui_tree, int(c[0]), int(c[1]), _POINT_BLOCK_LABELS)
+    if blocker:
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (
+                    f"Back — chats tab covered by "
+                    f"{(blocker.get('label') or blocker.get('id') or 'sheet')[:40]} "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_chats_covered_back",
+        )
+    top = resolve_topmost_clickable_at(ui_tree, int(c[0]), int(c[1]))
+    if top:
+        lab = (top.get("label") or top.get("text") or "").lower()
+        # Accept if resolved node looks like a chats/messages tab
+        if lab and not any(
+            t in lab for t in ("chat", "message", "match", "connection", "inbox")
+        ):
+            # Fixed-xy fallback may land on wrong chrome — refuse
+            if app_l == "hily" and "crush" in lab:
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": f"Back — Hily Crush covers chats tab ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_hily_crush_covers_chats",
+                )
+    tab_label = str(labels[0]) if labels else "Chats"
     return _fp(
         {
             "action": "tap",
             "x": int(c[0]),
             "y": int(c[1]),
-            "reason": f"Open chats/messages tab ({planner})",
+            "reason": f"Open {tab_label} tab ({planner})",
             "planner": planner,
             "llm_provider": None,
+            "label": tab_label,
         },
         "bulk_open_chats",
     )
 
 
+_ROOT_RECOVER_APPS = frozenset(
+    {
+        "bumble",
+        "yubo",
+        "badoo",
+        "hily",
+        "hinge",
+        "tagged",
+        "blk",
+        "taimi",
+        "whatsapp",
+    }
+)
+
+
+def _app_tree_empty(ui_tree: str, app: Optional[str] = None) -> bool:
+    """True only when fewer than ~3 useful (non-system) nodes exist.
+
+    r23: BLK Matches with 23 nodes ('Your turn (0)', tabs) was misclassified
+    empty because compact dumps omit ``p=`` → ``target_useful==0``. Count
+    unlabeled useful nodes; package match is a hint, not required.
+    """
+    nodes = _parse_compact_nodes(ui_tree)
+    if not nodes:
+        return True
+    useful = 0
+    for n in nodes:
+        p = str(n.get("package") or "").lower()
+        if _is_system_chrome_package(p):
+            continue
+        if "mobilerun.selfhosted" in p or p.endswith(".selfhosted"):
+            continue
+        if "spay" in p or "samsungpay" in p:
+            continue
+        useful += 1
+        if useful >= 3:
+            return False
+    return useful < 3
+
+
+def _inbox_nothing_to_reply(app: Optional[str], ui_tree: str) -> bool:
+    """True when the chat list is open but has zero unreplied rows.
+
+    e.g. BLK ``Your turn (0)`` / ``Their turn (2)`` / ``Hidden (1)`` with no
+    person names → complete 0 replies, do not fail as empty tree (r23).
+    ``Your turn (0)`` wins even if Their turn/Hidden have counts (those are
+    not unreplied work for us). Older chats with a non-zero count still expand.
+    """
+    blob = (ui_tree or "").lower()
+    rows = _visible_chat_list_rows(ui_tree, app)
+    if rows:
+        return False
+    zero_turn = bool(
+        re.search(r"your\s*turn\s*\(\s*0\s*\)", blob)
+        or re.search(r"your\s*turn\s*:\s*0\b", blob)
+        or "your turn (0)" in blob
+    )
+    if zero_turn:
+        return True
+    if _should_expand_collapsed_section(ui_tree):
+        return False
+    return False
+
+
+def _should_expand_collapsed_section(ui_tree: str) -> bool:
+    """Expand Older chats only when count suggests unreplied chats.
+
+    Never expand Their turn / Hidden just because they have a count — those
+    are not 'your turn' unreplied work (r23 BLK Your turn (0)).
+    """
+    blob = (ui_tree or "").lower()
+    if re.search(r"your\s*turn\s*\(\s*0\s*\)", blob):
+        return False
+    if re.search(r"your\s*turn\s*\(\s*[1-9]\d*\s*\)", blob):
+        return False  # focus Your turn first; don't dive into Hidden
+    # Bumble Older chats · (N) with N>0
+    if re.search(r"older chats\s*[·•]?\s*\(\s*[1-9]\d*\s*\)", blob):
+        return True
+    if re.search(r"older chats\s+[1-9]\d*\b", blob):
+        return True
+    return False
+
+
+def _recover_to_root_action(
+    app: Optional[str],
+    ui_tree: str,
+    history: List[str],
+    planner: str,
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    allow_open_thread: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Back out / relaunch until deck, chat list, or tab bar is visible.
+
+    Only for real dating apps that leave leftover sheets/threads between jobs.
+    Hard-caps relaunches/backs so we never loop open↔back unbounded.
+
+    Sheets/modals/viewers are checked BEFORE known_root_screen — Discover
+    grid / bottom-nav under a covering sheet must not short-circuit recover.
+
+    When ``allow_open_thread`` is True (message planner already opened / is
+    targeting a thread), do NOT treat an open 1:1 chat as an overlay to Back
+    out of — proceed to composer / dry-run send instead.
+    """
+    app_l = (app or "").lower()
+    if app_l not in _ROOT_RECOVER_APPS:
+        return None
+
+    try:
+        from dm_heuristics import app_overlay_present
+    except ImportError:
+        from backend.dm_heuristics import app_overlay_present  # type: ignore
+
+    # Tagged "End Tagged?" after accidental Back at root — Cancel, never exit
+    if app_l == "tagged":
+        exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+        if exit_dlg:
+            return exit_dlg
+
+    # Overlay first — even when Discover/nav underneath looks like a root
+    overlay = app_overlay_present(app_l, ui_tree)
+    st_early = state if isinstance(state, dict) else {}
+    # Message/reply planner already opened / is targeting a thread — do not
+    # Back to root (that caused the open→back→open "No UI progress" loop).
+    # Keyboard on a target thread is fine for compose; still clear real sheets.
+    if allow_open_thread and overlay in (
+        None,
+        "open_chat_thread",
+        "keyboard",
+        "hinge_like_sheet",
+    ):
+        return None
+    # Hinge new-contact: like/comment sheet is the goal surface — never Back
+    if overlay == "hinge_like_sheet" and isinstance(
+        st_early.get("bulk_message_new"), dict
+    ):
+        return None
+    # Tagged landing with bottom nav is a safe root — NEVER Back out of the app.
+    # Navigate to Meet Me / Nearby via deck tab instead of "Back toward known root"
+    # / "Back out of open_chat_thread" (closes app → End Tagged? loop).
+    if app_l == "tagged":
+        try:
+            from dm_heuristics import tab_bar_verified as _tab_ok
+        except ImportError:
+            from backend.dm_heuristics import tab_bar_verified as _tab_ok  # type: ignore
+
+        if _tab_ok(app_l, ui_tree) and overlay in (
+            None,
+            "open_chat_thread",
+            "keyboard",
+        ):
+            return None
+        if overlay == "open_chat_thread" and tagged_on_deck(ui_tree):
+            return None
+    if overlay:
+        if app_l == "bumble" and overlay == "bumble_photo_browser":
+            return bumble_back_from_photo_browser(planner=planner)
+        if app_l == "hily" and overlay == "hily_photo_viewer":
+            return hily_back_from_photo_viewer(planner=planner)
+        if app_l == "hily" and overlay == "hily_profile_sheet":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Back out of Hily profile/Crush sheet → root ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_profile_sheet_back",
+            )
+        if app_l == "hily" and overlay == "hily_mbm":
+            # Skip-contact path owns MBM close in message planner; still Back here
+            # when recover is asked from swipe/job-start.
+            return hily_close_mbm(ui_tree, planner=planner) or _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Back out of Hily MBM sheet → root ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_mbm_back",
+            )
+        if app_l == "hinge" and overlay == "hinge_like_sheet":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Back out of Hinge like sheet → root ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_like_sheet_back",
+            )
+        if app_l == "tagged" and overlay == "tagged_location_overlay":
+            loc = tagged_location_overlay_continue(ui_tree, planner=planner)
+            if loc:
+                return loc
+        if overlay == "keyboard":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Dismiss keyboard → root ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_recover_keyboard",
+            )
+        # Generic overlay: Back
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back out of {overlay} → root ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_overlay_back",
+        )
+
+    if known_root_screen(app_l, ui_tree):
+        return None
+    st = state if isinstance(state, dict) else {}
+    key = f"_root_recover_{app_l}"
+    bucket = st.setdefault(key, {"backs": 0, "relaunches": 0, "relaunched": False})
+    hist = " ".join(history[-16:]).lower()
+    relaunches = int(bucket.get("relaunches") or 0)
+    backs = int(bucket.get("backs") or 0)
+
+    # Empty / wrong-FG tree → request vision + relaunch once (don't hard-fail
+    # before the vision path can run — Hinge/Taimi/Hily empty Finder cases).
+    if _app_tree_empty(ui_tree, app_l):
+        vision_asks = int(bucket.get("vision_asks") or 0)
+        if vision_asks < 2 and app_l in DM_APP_PROFILES:
+            bucket["vision_asks"] = vision_asks + 1
+            st[key] = bucket
+            label = str(DM_APP_PROFILES[app_l].get("open_label") or app_l)
+            if vision_asks == 0:
+                return _fp(
+                    {
+                        "action": "open_app",
+                        "app": label,
+                        "reason": (
+                            f"Empty/wrong FG tree for {app_l} — "
+                            f"re-open + vision ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    },
+                    "bulk_recover_empty_reopen",
+                )
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 1.2,
+                    "reason": (
+                        f"Empty app a11y tree for {app_l} — "
+                        f"vision settle ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_recover_empty_vision",
+            )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Empty app a11y tree for {app_l} after recover — "
+                    f"fail fast (needs vision / unlock) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+            },
+            "bulk_recover_empty_tree",
+        )
+
+    if relaunches >= 3 or backs >= 8:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Root recover exhausted for {app_l} "
+                    f"(backs={backs} relaunches={relaunches}) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_exhausted",
+        )
+
+    if app_l == "hinge":
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
+        en = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if en:
+            return en
+    if app_l == "tagged":
+        loc = tagged_location_overlay_continue(ui_tree, planner=planner)
+        if loc:
+            return loc
+
+    if keyboard_likely_up(ui_tree) or (
+        app_l == "badoo"
+        and any(n.get("editable") for n in _parse_compact_nodes(ui_tree))
+        and not badoo_on_encounters(ui_tree)
+        and not badoo_on_connections(ui_tree)
+    ):
+        bucket["backs"] = backs + 1
+        st[key] = bucket
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back to leave thread/keyboard → root ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_back",
+        )
+
+    # Count recent recover backs across full recent history (not last 80 chars)
+    recent_backs = sum(
+        1 for h in history[-12:] if "bulk_recover_back" in str(h).lower()
+    )
+    # Tagged: never Back at landing. Reply → Messages/inbox; swipe/new → Meet Me.
+    if app_l == "tagged":
+        # Cap Meet Me / Messages recover taps (r23: tagged_new looped 108,2200)
+        tagged_nav_n = sum(
+            1
+            for h in history[-10:]
+            if (
+                "tagged → meet" in str(h).lower()
+                or "tagged → messages" in str(h).lower()
+                or "bulk_tagged_meet" in str(h).lower()
+                or "bulk_tagged_open_messages" in str(h).lower()
+                or (
+                    "tab xy" in str(h).lower()
+                    and "tagged" in str(h).lower()
+                )
+            )
+        )
+        if tagged_nav_n >= 2:
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "reason": (
+                        f"Tagged nav tap loop — vision locate tab "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_tagged_nav_vision",
+            )
+        reply_job = isinstance(st, dict) and isinstance(st.get("bulk_message"), dict)
+        if reply_job:
+            msgs = _nav_tab_center(
+                ui_tree, "Messages", "Chats", "Inbox"
+            ) or _tree_id_center(
+                ui_tree, "tab_chats", "id/tab_chats", "tab_messages", "id/tab_messages"
+            )
+            if msgs and int(msgs[1]) >= 1700:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(msgs[0]),
+                        "y": int(msgs[1]),
+                        "reason": (
+                            f"Tagged → Messages/inbox for reply "
+                            f"(not Meet Me) ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Messages",
+                    },
+                    "bulk_tagged_open_messages",
+                )
+            xy = DM_APP_PROFILES.get("tagged", {}).get("inbox_tab_xy") or (756, 2200)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Tagged → Messages tab xy for reply ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "Messages",
+                    "needs_vision": True,
+                },
+                "bulk_tagged_open_messages",
+            )
+        meet = _nav_tab_center(
+            ui_tree, "Meet", "Meet Me", "Browse", "Nearby", "Discover"
+        ) or _tree_id_center(
+            ui_tree, "tab_nearby", "id/tab_nearby", "tab_meet", "id/tab_meet"
+        )
+        if meet and int(meet[1]) >= 1700:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(meet[0]),
+                    "y": int(meet[1]),
+                    "reason": (
+                        f"Tagged → Meet Me / Nearby (no Back from landing) "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "Meet Me",
+                },
+                "bulk_tagged_meet_me",
+            )
+        xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (108, 2200)
+        return _fp(
+            {
+                "action": "tap",
+                "x": int(xy[0]),
+                "y": int(xy[1]),
+                "reason": (
+                    f"Tagged → Meet Me tab xy (refuse Back/End Tagged?) " f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "label": "Meet Me",
+                "needs_vision": True,
+            },
+            "bulk_tagged_meet_me",
+        )
+    if backs < 4 and recent_backs < 3:
+        bucket["backs"] = backs + 1
+        st[key] = bucket
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back toward known root for {app_l} ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_back",
+        )
+    # Taimi (and sparse Compose apps): at most one relaunch — avoid open↔open loop
+    max_relaunch = 1 if app_l in ("taimi", "hinge") else 3
+    if relaunches < max_relaunch and app_l in DM_APP_PROFILES:
+        bucket["relaunches"] = relaunches + 1
+        bucket["relaunched"] = True
+        # Do NOT reset backs — keep the hard cap honest
+        st[key] = bucket
+        label = str(DM_APP_PROFILES[app_l].get("open_label") or app_l)
+        return _fp(
+            {
+                "action": "open_app",
+                "app": label,
+                "reason": f"Relaunch {label} to known root ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_recover_relaunch",
+        )
+    return _fp(
+        {
+            "action": "fail",
+            "reason": (f"Could not reach known root for {app_l} ({planner})"),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bulk_recover_fail",
+    )
+
+
 def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
-    """Top-card display name for swipe verification (real maps + fake-chats)."""
+    """Top-card display name for swipe verification (real maps + fake-chats).
+
+    Rejects profile section labels (Intentions, Health and Fitness, …).
+    Prefer elements that look like Name / Name, age.
+    """
     app = (app or "").lower()
+    raw: Optional[str] = None
     if app == "yubo":
-        return yubo_deck_card_name(tree)
-    if app == "bumble":
-        return bumble_deck_card_name(tree)
-    if app == "badoo":
+        raw = yubo_deck_card_name(tree)
+    elif app == "bumble":
+        raw = bumble_deck_card_name(tree)
+    elif app == "badoo":
         for n in _parse_compact_nodes(tree):
             nid = str(n.get("id") or "").lower()
             if "profileinfo_name" in nid:
                 text = (n.get("text") or n.get("label") or "").strip()
                 if text:
-                    return text.split(",")[0].strip()
+                    raw = text.split(",")[0].strip()
+                    break
                 desc = (n.get("desc") or "").strip()
                 m = re.match(r"(.+?),\s*\d+", desc)
                 if m:
-                    return m.group(1).strip()
+                    raw = m.group(1).strip()
+                    break
+    elif app == "hily":
+        raw = hily_deck_card_name(tree)
+    elif app == "blk":
+        raw = blk_deck_card_name(tree)
+    elif app == "taimi":
+        raw = taimi_deck_card_name(tree)
+    elif app == "hinge":
+        raw = hinge_deck_card_name(tree)
+    elif app == "tagged":
+        raw = tagged_deck_card_name(tree)
+    else:
+        # Fake-chats / generic: ProfileNN or first mid-card title
+        for n in _parse_compact_nodes(tree):
+            text = (n.get("text") or n.get("desc") or "").strip()
+            if re.match(r"Profile\d+", text, re.I):
+                raw = text
+                break
+            if re.match(r"Match\d+", text, re.I) and int(n.get("y") or 0) < 1200:
+                raw = text
+                break
+    if not raw:
         return None
-    if app == "hily":
-        return hily_deck_card_name(tree)
-    if app == "blk":
-        return blk_deck_card_name(tree)
-    if app == "taimi":
-        return taimi_deck_card_name(tree)
-    # Fake-chats / generic: ProfileNN or first mid-card title
-    for n in _parse_compact_nodes(tree):
-        text = (n.get("text") or n.get("desc") or "").strip()
-        if re.match(r"Profile\d+", text, re.I):
-            return text
-        if re.match(r"Match\d+", text, re.I) and int(n.get("y") or 0) < 1200:
-            return text
-    return None
+    if _card_name_is_foreign(raw) and not re.match(
+        r"^(?:Profile|Match)\d+$", raw, re.I
+    ):
+        return None
+    return raw
 
 
-def _deck_visible(app: Optional[str], tree: str) -> bool:
-    """True when the swipe/like deck is on screen (map like/pass ids first)."""
+def _deck_has_like_pass_controls(app: Optional[str], tree: str) -> bool:
+    """True when like/pass/skip controls (or mapped swipe deck ids) are present."""
     app = (app or "").lower()
     profile = DM_APP_PROFILES.get(app, {}) if app else {}
-    # Map like/pass resource-ids first (Hily ActionButton_*, Badoo VoteYes/No, …)
     like_ids = tuple(profile.get("like_ids") or ())
     pass_ids = tuple(profile.get("pass_ids") or ())
     if like_ids and _tree_id_center(tree, *like_ids):
@@ -554,12 +1618,88 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
         tree, "id/gamepad_like", "gamepad_like", "id/btn_like", "encounter_like"
     ):
         return True
-    # Exact bottom-row Like/Pass (avoid matching "likely" etc. via substring)
     like = _exact_label_center(tree, "Like")
     pass_ = _exact_label_center(tree, "Pass")
     if like and int(like[1]) > 1700:
         return True
     if pass_ and int(pass_[1]) > 1700:
+        return True
+    # Gesture-only decks (Bumble/Yubo): card stack markers without buttons
+    if (
+        app == "bumble"
+        and bumble_on_people_deck(tree)
+        and not bumble_on_photo_grid(tree)
+    ):
+        return True
+    if app == "yubo" and yubo_on_deck(tree):
+        return True
+    # BLK unlabeled X/heart/crown cluster (age card, no Like Icon desc)
+    if app == "blk" and blk_on_deck(tree):
+        return True
+    return False
+
+
+def _deck_markers_ok(app: Optional[str], tree: str) -> bool:
+    """Require a real profile card (name±age) AND deck/like controls — no false passes."""
+    app = (app or "").lower()
+    if app == "hily" and hily_on_top_picks_grid(tree):
+        return False
+    if app == "yubo" and (
+        yubo_on_chat(tree)
+        or "conversations" in (tree or "").lower()
+        or (
+            "reactions" in (tree or "").lower()
+            and "send a message" not in (tree or "").lower()
+        )
+    ):
+        return False
+    name = deck_card_name(app, tree)
+    if not name:
+        # End-of-deck / exhausted still counts as "evaluated" for stop, not pass
+        if app == "blk" and blk_end_of_deck(tree):
+            return True
+        return False
+    low = name.lower().strip()
+    # BLK age-only marker (age_29) is a real card when like/pass cluster present
+    if low.startswith("age_") and app == "blk" and blk_on_deck(tree):
+        return True
+    if low in (
+        "education",
+        "height",
+        "reactions",
+        "chat",
+        "likes",
+        "friends",
+        "discover",
+        "filters",
+        "verified",
+    ) or low.startswith("verified"):
+        return False
+    if not _deck_has_like_pass_controls(app, tree) and app not in (
+        "bumble",
+        "yubo",
+        "hinge",
+        "taimi",
+    ):
+        # Hinge heart is vision-only; Bumble/Yubo/Taimi gesture decks OK with
+        # name alone if on_*_deck already true (Taimi like/pass are unlabeled).
+        if app == "hinge" and hinge_on_discover(tree):
+            return True
+        if app in ("bumble", "yubo", "taimi") and _deck_visible(app, tree):
+            return True
+        return False
+    if app == "taimi" and _deck_visible(app, tree):
+        return True
+    return True
+
+
+def _deck_visible(app: Optional[str], tree: str) -> bool:
+    """True when the swipe/like deck is on screen (map like/pass ids first)."""
+    app = (app or "").lower()
+    if app == "hily" and hily_on_top_picks_grid(tree):
+        # Grid is Discover — not a likeable deck
+        return False
+    if _deck_has_like_pass_controls(app, tree):
         return True
     if app == "bumble" and bumble_on_people_deck(tree):
         return True
@@ -574,6 +1714,10 @@ def _deck_visible(app: Optional[str], tree: str) -> bool:
     if app == "taimi" and (
         taimi_on_people_deck(tree) or taimi_swipes_left(tree) is not None
     ):
+        return True
+    if app == "hinge" and hinge_on_discover(tree):
+        return True
+    if app == "tagged" and tagged_on_deck(tree):
         return True
     return False
 
@@ -613,6 +1757,39 @@ def _real_like_action(
         if act:
             act["reason"] = f"Taimi Like/Skip ({planner})"
         return act
+    if app == "tagged":
+        act = tagged_like_action(tree, planner=planner)
+        if act:
+            act["reason"] = f"Tagged likeBtn (free) ({planner})"
+        return act
+    if app == "hinge":
+        # Prefer Send Like on like-sheet; else Discover heart — never Rose
+        sheet = hinge_like_sheet_action(tree, planner=planner)
+        if sheet:
+            return sheet
+        heart = _exact_label_center(tree, "Like") or _tree_id_center(
+            tree, "like", "id/like", "btn_like"
+        )
+        if heart:
+            return {
+                "action": "tap",
+                "x": int(heart[0]),
+                "y": int(heart[1]),
+                "reason": f"Hinge free Like ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            }
+        # Swipe-right on Discover card
+        return {
+            "action": "swipe",
+            "x1": 200,
+            "y1": 1400,
+            "x2": 900,
+            "y2": 1400,
+            "reason": f"Hinge free like swipe-right ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        }
     return None
 
 
@@ -632,6 +1809,94 @@ def _real_pass_action(
     if app == "taimi":
         return taimi_pass_action(tree, planner=planner)
     return None
+
+
+def _card_name_is_foreign(name: Optional[str]) -> bool:
+    """True for notification / other-app titles / section labels (never a card)."""
+    if not name:
+        return True
+    try:
+        from dm_heuristics import (
+            _looks_like_notif_or_app_title,
+            looks_like_section_label,
+        )
+    except ImportError:
+        from backend.dm_heuristics import (  # type: ignore
+            _looks_like_notif_or_app_title,
+            looks_like_section_label,
+        )
+    if looks_like_section_label(name):
+        return True
+    return bool(_looks_like_notif_or_app_title(name))
+
+
+def _owner_profile_names() -> set:
+    """Device owner display names that must never count as a swipe card."""
+    names: set = set()
+    env = (os.environ.get("MOBILERUN_OWNER_NAMES") or "").strip()
+    for part in env.split(","):
+        p = part.strip()
+        if p:
+            names.add(p.lower())
+            # Also bare first token: "MacAnderson, 30" → macanderson
+            names.add(p.split(",")[0].strip().lower())
+    # Sensible default for this device owner's profile chrome
+    names.update({"macanderson", "mac anderson"})
+    return names
+
+
+def _card_name_is_owner(name: Optional[str]) -> bool:
+    """True when name matches the device owner's profile (reject as card)."""
+    if not name:
+        return False
+    raw = str(name).strip().lower()
+    core = raw.split(",")[0].strip()
+    owners = _owner_profile_names()
+    return raw in owners or core in owners
+
+
+def _card_name_is_real_profile(name: Optional[str]) -> bool:
+    """True when name looks like 'Name' / 'Name, age' (not section labels)."""
+    if not name:
+        return False
+    raw = str(name).strip()
+    # Fake-chats ProfileN / MatchN and BLK age-only markers
+    if re.match(r"^(?:Profile|Match)\d+$", raw, re.I):
+        return True
+    if re.match(r"^age_\d{2}$", raw, re.I):
+        return True
+    if _card_name_is_owner(raw):
+        return False
+    if _card_name_is_foreign(raw):
+        return False
+    # r28: Social / Chats / home-folder chrome
+    low = raw.lower().split(",")[0].strip()
+    if low in ("social", "chats", "chat", "messages", "inbox", "people", "discover"):
+        return False
+    try:
+        from dm_heuristics import looks_like_profile_name
+    except ImportError:
+        from backend.dm_heuristics import looks_like_profile_name  # type: ignore
+    return bool(looks_like_profile_name(raw))
+
+
+def _fg_pkg_matches_target(app: Optional[str], package: str) -> bool:
+    """Require foreground package == target app before identifying a card."""
+    if not app or app not in DM_APP_PROFILES:
+        return True  # unknown app — don't hard-block
+    want = str(DM_APP_PROFILES[app].get("package") or "").lower()
+    pkg = (package or "").lower()
+    if not want:
+        return True
+    if not pkg:
+        return False
+    markers = tuple(DM_APP_PROFILES[app].get("pkg_markers") or ()) + (
+        want.split(".")[-1],
+        app,
+    )
+    if want in pkg:
+        return True
+    return any(m and str(m).lower() in pkg for m in markers)
 
 
 def _fake_like_center(app: Optional[str], tree: str) -> Optional[tuple[int, int]]:
@@ -661,12 +1926,23 @@ def _dialog_center(tree: str, labels: Sequence[str]) -> Optional[tuple[int, int]
     return _tree_node_center(tree, *labels)
 
 
-def _exact_label_center(tree: str, label: str) -> Optional[tuple[int, int]]:
+def _exact_label_center(
+    tree: str,
+    label: str,
+    *,
+    y_min: Optional[int] = None,
+    y_max: Optional[int] = None,
+) -> Optional[tuple[int, int]]:
     """Center of a node whose text/desc equals label (avoids 'Like' ⊂ 'Super Like')."""
     needle = (label or "").strip().lower()
     if not needle:
         return None
     for n in _parse_compact_nodes(tree):
+        y = int(n.get("y") or 0)
+        if y_min is not None and y < y_min:
+            continue
+        if y_max is not None and y > y_max:
+            continue
         blob = " ".join(
             str(n.get(k) or "").strip() for k in ("text", "desc", "hint", "label")
         ).lower()
@@ -677,7 +1953,7 @@ def _exact_label_center(tree: str, label: str) -> Optional[tuple[int, int]]:
         ]
         if needle not in fields and blob != needle:
             continue
-        x, y = int(n.get("x") or 0), int(n.get("y") or 0)
+        x = int(n.get("x") or 0)
         if x or y:
             return (x, y)
     # Regex exact attr match on compact / uiautomator dumps
@@ -694,9 +1970,16 @@ def _exact_label_center(tree: str, label: str) -> Optional[tuple[int, int]]:
             continue
         g = [int(x) for x in m.groups()]
         if len(g) == 2:
-            return (g[0], g[1])
-        if len(g) >= 4:
-            return ((g[0] + g[2]) // 2, (g[1] + g[3]) // 2)
+            xy = (g[0], g[1])
+        elif len(g) >= 4:
+            xy = ((g[0] + g[2]) // 2, (g[1] + g[3]) // 2)
+        else:
+            continue
+        if y_min is not None and xy[1] < y_min:
+            continue
+        if y_max is not None and xy[1] > y_max:
+            continue
+        return xy
     return None
 
 
@@ -768,12 +2051,41 @@ def plan_bulk_swipe(
     hist = " | ".join(history[-12:]).lower()
     app = (goal.get("app") or "") or ""
 
+    # Foreign billing FG (Play / Spay) — dismiss BEFORE wrong-app reopen.
+    # In-app upsells stay with per-app interrupt maps; generic dating_deck
+    # paywall is a FALLBACK after those miss.
+    pkg_l = (package or "").lower()
+    if any(
+        x in pkg_l for x in ("spay", "samsungpay", "vending", "android.gms", "billing")
+    ):
+        try:
+            from dating_deck import dismiss_paywall_action as _pay_foreign
+        except ImportError:
+            from backend.dating_deck import (  # type: ignore
+                dismiss_paywall_action as _pay_foreign,
+            )
+
+        pay_f = _pay_foreign(ui_tree, package=package, planner=planner)
+        if pay_f:
+            return _fp(pay_f, "bulk_paywall_dismiss")
+
+    # r28: Yubo Reactions / Elite Pack — Back out (never count scrolls as likes)
+    if app == "yubo":
+        try:
+            from dating_deck import yubo_paywall_back_action as _yubo_back
+        except ImportError:
+            from backend.dating_deck import (  # type: ignore
+                yubo_paywall_back_action as _yubo_back,
+            )
+        yb = _yubo_back(ui_tree, planner=planner)
+        if yb:
+            return _fp(yb, "bulk_yubo_reactions_back")
+
     # ALWAYS verify FG package matches the named app before any swipe/tap.
     # (Previously skipped open_app when any deck was visible — swiped Bumble for Yubo.)
     want_pkg = ""
     if app and app in DM_APP_PROFILES:
         want_pkg = str(DM_APP_PROFILES[app].get("package") or "").lower()
-    pkg_l = (package or "").lower()
     if want_pkg and want_pkg not in pkg_l:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
@@ -791,38 +2103,247 @@ def plan_bulk_swipe(
             "bulk_wrong_app",
         )
 
+    # Job start: leave leftover photo browser / thread / keyboard
+    recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
+    if recover:
+        return recover
+
     deck_visible = _deck_visible(app, ui_tree)
-    # People photo-grid is not a card deck — open first tile before settle/like
-    if app == "bumble" and bumble_on_photo_grid(ui_tree):
-        tile = bumble_first_grid_tile_center(ui_tree)
-        if tile and "grid tile" not in hist and "open grid tile" not in hist:
+    # Bumble photo browser (SuperSwipe only) — back out before deck checks
+    if app == "bumble" and bumble_on_photo_browser(ui_tree):
+        return bumble_back_from_photo_browser(planner=planner)
+    # Hily photo viewer / profile sheet — back before swipe/HOME
+    if app == "hily" and hily_on_photo_viewer(ui_tree):
+        return hily_back_from_photo_viewer(planner=planner)
+    if app == "hily" and hily_on_profile_sheet(ui_tree):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (
+                    f"Back out of Hily profile sheet (Crush) before swipe "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_profile_sheet_back",
+        )
+    # Hily Top picks / Discover grid → go to Finder deck (never Crush tiles)
+    if app == "hily" and hily_on_top_picks_grid(ui_tree):
+        tries = int(bulk.get("_hily_finder_nav_n") or 0)
+        if tries < 3:
+            bulk["_hily_finder_nav"] = True
+            bulk["_hily_finder_nav_n"] = tries + 1
+            bulk.pop("_deck_settle_done", None)  # allow settle after each try
+            st["bulk_swipe"] = bulk
+            labeled = _nav_tab_center(ui_tree, "Finder") or _exact_label_center(
+                ui_tree, "Finder", y_min=1800
+            )
+            if labeled:
+                xy = (int(labeled[0]), int(labeled[1]))
+            else:
+                xy = DM_APP_PROFILES.get("hily", {}).get("deck_tab_xy") or (142, 2190)
             return _fp(
                 {
                     "action": "tap",
-                    "x": tile[0],
-                    "y": tile[1],
-                    "reason": f"Open first People grid tile → card ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": bool(dry_run),
-                },
-                "bulk_open_grid_tile",
-            )
-        if dry_run and ("grid tile" in hist or "open grid tile" in hist):
-            return _fp(
-                {
-                    "action": "fail",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
                     "reason": (
-                        f"dry_run — People photo grid still visible after tile tap; "
-                        f"card not verified ({planner})"
+                        f"Leave Hily Top picks → Finder deck tab "
+                        f"({tries + 1}/3) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
-                    "dry_run": True,
-                    "dry_run_verified": False,
+                    "dry_run": bool(dry_run),
+                    "label": "Finder",
                 },
-                "bulk_dry_run_grid_not_card",
+                "bulk_hily_open_finder",
             )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Hily still on Top picks grid after Finder nav — "
+                    f"refuse Crush tile loop ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "dry_run_verified": False,
+            },
+            "bulk_dry_run_hily_grid",
+        )
+    # Yubo: Chat/Conversations list → leave for the deck tab (swipe jobs)
+    if app == "yubo" and yubo_on_chat_list(ui_tree) and not yubo_on_deck(ui_tree):
+        if not bulk.get("_yubo_tried_deck"):
+            bulk["_yubo_tried_deck"] = True
+            st["bulk_swipe"] = bulk
+            # Prefer a labeled bottom-nav hit; else resource-id / x-band map
+            labeled = _nav_tab_center(ui_tree, "For you", "Discover", "People", "Swipe")
+            if labeled and int(labeled[1]) >= 1800:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(labeled[0]),
+                        "y": int(labeled[1]),
+                        "reason": f"Leave Yubo Chat list → deck tab ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Deck",
+                    },
+                    "bulk_yubo_open_deck",
+                )
+            try:
+                from dm_heuristics import yubo_bottom_tab_center, yubo_deck_tab_xy
+            except ImportError:
+                from backend.dm_heuristics import (  # type: ignore
+                    yubo_bottom_tab_center,
+                    yubo_deck_tab_xy,
+                )
+            mapped = yubo_bottom_tab_center(ui_tree, which="deck")
+            if mapped:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(mapped[0]),
+                        "y": int(mapped[1]),
+                        "reason": (
+                            f"Leave Yubo Chat list → deck tab by "
+                            f"id/position ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Deck",
+                    },
+                    "bulk_yubo_open_deck",
+                )
+            xy = yubo_deck_tab_xy()
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Leave Yubo Chat list → deck tab index "
+                        f"(unlabeled — vision) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "label": "Deck",
+                    "needs_vision": True,
+                    "_force_vision": True,
+                    # Firewall: empty-tree refuse needs this confirmed label
+                    "_vision_confirmed_label": "Deck",
+                },
+                "bulk_yubo_open_deck",
+            )
+    # Bumble People/Discover grids — navigate to leftmost swipe deck tab
+    # (first bottom-nav item = main card stack; People @540 is the photo grid).
+    if app == "bumble" and (
+        bumble_on_photo_grid(ui_tree)
+        or "same dating goals" in (ui_tree or "").lower()
+        or (
+            not bumble_on_people_deck(ui_tree)
+            and any(
+                t in (ui_tree or "").lower() for t in ("people", "discover", "for you")
+            )
+        )
+    ):
+        # Prefer labeled Discover / For You in the bottom nav; else leftmost
+        # clickable in the nav band (never People @ mid).
+        disc = (
+            _nav_tab_center(
+                ui_tree,
+                "Discover",
+                "For You",
+                "For you",
+                ids=("com.bumble.app:id/mainApp_navigationTabBar",),
+            )
+            or _exact_label_center(ui_tree, "Discover", y_min=1800)
+            or _exact_label_center(ui_tree, "For You", y_min=1800)
+        )
+        # Leftmost bottom-nav clickable (x < 400) = swipe deck tab
+        if disc is None or int(disc[0]) >= 450:
+            leftmost = None
+            for n in _parse_compact_nodes(ui_tree):
+                y = int(n.get("y") or 0)
+                x = int(n.get("x") or 0)
+                if y < 2000 or x >= 400 or not n.get("clickable"):
+                    continue
+                lab = (n.get("text") or n.get("label") or "").lower()
+                if lab in ("people", "chats", "beeline", "profile"):
+                    continue
+                if leftmost is None or x < leftmost[0]:
+                    leftmost = (x, y)
+            if leftmost:
+                disc = leftmost
+        tries = int(bulk.get("_bumble_discover_tries") or 0)
+        if tries < 2:
+            bulk["_bumble_discover_tries"] = tries + 1
+            bulk["_bumble_tried_discover"] = True
+            st["bulk_swipe"] = bulk
+            if disc and int(disc[1]) >= 1800:
+                xy = (int(disc[0]), int(disc[1]))
+            else:
+                xy = DM_APP_PROFILES.get("bumble", {}).get("discover_tab_xy") or (
+                    DM_APP_PROFILES.get("bumble", {}).get("deck_tab_xy") or (324, 2197)
+                )
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Leave Bumble People/Discover grid → leftmost "
+                        f"swipe deck tab ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "label": "Discover",
+                    "needs_vision": tries >= 1,
+                },
+                "bulk_bumble_open_discover",
+            )
+        # After Discover taps still on grid — ask vision once before failing
+        if not bulk.get("_bumble_vision_asked"):
+            bulk["_bumble_vision_asked"] = True
+            st["bulk_swipe"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "reason": (
+                        f"Bumble Discover not yet a card stack — "
+                        f"vision/settle retry ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_bumble_need_vision",
+            )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Bumble swipe deck not found after Discover nav — "
+                    f"People/Discover still grids; refuse SuperSwipe "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "dry_run_verified": False,
+            },
+            "bulk_bumble_grid_not_deck",
+        )
     if not deck_visible:
         opened = _ensure_app_open(goal.get("app"), package, history, planner)
         if opened:
@@ -836,6 +2357,7 @@ def plan_bulk_swipe(
                 "bulk_open_deck",
                 "open finder",
                 "open people",
+                "finder deck tab",
             )
         ) and not bulk.get("_deck_settle_done"):
             bulk["_deck_settle_done"] = True
@@ -865,8 +2387,79 @@ def plan_bulk_swipe(
                 },
                 "bulk_settle_deck",
             )
+        # Hily: after settle still no Finder — Back once, vision once, then fail
+        # (empty tree / Crush tiles must not loop 7 min).
+        if app == "hily" and bulk.get("_deck_settle_done"):
+            retries = int(bulk.get("_hily_post_settle_n") or 0)
+            if retries < 1:
+                bulk["_hily_post_settle_n"] = retries + 1
+                bulk["_deck_settle_done"] = False
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": (
+                            f"Hily deck miss after settle — Back then "
+                            f"Finder ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                    },
+                    "bulk_hily_deck_miss_back",
+                )
+            if not bulk.get("_hily_deck_vision"):
+                bulk["_hily_deck_vision"] = True
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.6,
+                        "reason": (
+                            f"Hily deck miss — vision locate Finder Like/Pass "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    },
+                    "bulk_hily_deck_vision",
+                )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hily Finder deck not verified after Back+vision — "
+                        f"fail fast (refuse Crush tile hang) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                },
+                "bulk_hily_deck_miss_fail",
+            )
 
-    # App-specific popups (Hily Got it / Maybe later; BLK Send Like anyway)
+    # App-specific + harmless popups (Streaks Got it!, rate-us, tips)
+    # Prefer labeled dismiss; never paid upsells.
+    try:
+        from cloud_agent import permission_dialog_action
+    except ImportError:
+        try:
+            from backend.cloud_agent import permission_dialog_action  # type: ignore
+        except ImportError:
+            permission_dialog_action = None  # type: ignore
+    if permission_dialog_action:
+        perm = permission_dialog_action(ui_tree, package=package)
+        if perm:
+            return perm
+    if app == "tagged":
+        exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+        if exit_dlg:
+            return exit_dlg
     if app == "hily":
         popup = hily_dismiss_popup(ui_tree, planner=planner)
         if popup:
@@ -891,6 +2484,61 @@ def plan_bulk_swipe(
         popup = blk_dismiss_popup(ui_tree, planner=planner)
         if popup:
             return popup
+    # Generic harmless dismiss only when a known interstitial is on screen
+    blob_l = (ui_tree or "").lower()
+    interstitial = any(
+        p in blob_l
+        for p in (
+            "introducing streaks",
+            "enjoying",
+            "rate us",
+            "rate this",
+            "how are we doing",
+            "turn on notifications",
+            "get messages notifications",
+            "enable notifications",
+            "allow notifications",
+            "tips for you",
+            "pro tip",
+        )
+    )
+    if interstitial and not any(
+        paid in blob_l
+        for paid in (
+            "buy credits",
+            "subscribe",
+            "super like",
+            "boost now",
+            "get gold",
+            "premium",
+            "crush",
+        )
+    ):
+        for lab in (
+            "Got it!",
+            "Got it",
+            "Not now",
+            "No thanks",
+            "Maybe later",
+            "Don't allow",
+            "Dont allow",
+            "Close",
+            "Dismiss",
+        ):
+            c = _exact_label_center(ui_tree, lab) or _tree_node_center(ui_tree, lab)
+            if c and 200 < int(c[1]) < 2300:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": c[0],
+                        "y": c[1],
+                        "reason": f"Dismiss popup → {lab} ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": lab,
+                    },
+                    "bulk_harmless_popup",
+                )
     if app == "taimi":
         if taimi_is_paywall(ui_tree):
             # Count as skipped — never Continue; do not increment likes
@@ -914,6 +2562,47 @@ def plan_bulk_swipe(
                 },
                 "bulk_taimi_exhausted",
             )
+    if app == "hinge":
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
+        popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if hinge_on_like_sheet(ui_tree):
+            # Like sheet is a11y — Send Like only (never Rose)
+            if dry_run:
+                # Dismiss sheet and continue multi-card dry-run (never Send Like)
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": (
+                            f"[DRY RUN] back out of Hinge like sheet — "
+                            f"no Send Like/Rose ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "bulk_dry_run_hinge_sheet_back",
+                )
+            return hinge_like_sheet_action(ui_tree, planner=planner)
+        if hinge_on_matches(ui_tree) and not hinge_on_discover(ui_tree):
+            if "open hinge discover" not in hist and "hinge_open_discover" not in hist:
+                act = hinge_open_discover_tab(planner=planner)
+                act["dry_run"] = bool(dry_run)
+                return act
+        if not deck_visible and "open hinge discover" not in hist:
+            # Discover has no a11y — nav xy only after recover; vision for hearts
+            act = hinge_open_discover_tab(planner=planner)
+            act["dry_run"] = bool(dry_run)
+            act["needs_vision"] = True
+            return act
+        # Discover dry_run falls through to the shared multi-card pass-advance
+        # path below (never one-card done / never Rose).
+        # Live: free Like / Send Like only — never Rose / Boost / HingeX
+        # (message bank used later for new-match / reply jobs, not required to like)
 
     # Interruptions first (match / upsell / out-of-likes)
     tl = (ui_tree or "").lower()
@@ -985,51 +2674,40 @@ def plan_bulk_swipe(
             "bulk_dismiss_back",
         )
 
-    # Verify previous like: only count when top-card name changed
-    if bulk.get("awaiting_verify"):
-        if app == "taimi" and taimi_is_paywall(ui_tree):
-            bulk["awaiting_verify"] = False
-            bulk["last_name"] = None
-            st["bulk_swipe"] = bulk
-            return taimi_dismiss_paywall(ui_tree, planner=planner)
-        name_now = deck_card_name(app, ui_tree)
-        last = bulk.get("last_name")
-        left_now = taimi_swipes_left(ui_tree) if app == "taimi" else None
-        left_last = bulk.get("last_left")
-        name_ok = bool(name_now and last and name_now != last)
-        left_ok = (
-            left_now is None
-            or left_last is None
-            or (
-                isinstance(left_now, int)
-                and isinstance(left_last, int)
-                and left_now < left_last
-            )
-        )
-        if name_ok and left_ok:
-            bulk["done"] = done + 1
-            done = int(bulk["done"])
-            bulk["last_name"] = name_now
-            if left_now is not None:
-                bulk["last_left"] = left_now
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
-        elif name_now and not last:
-            bulk["last_name"] = name_now
-            if left_now is not None:
-                bulk["last_left"] = left_now
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
-        elif name_now and last and name_now == last:
-            # Same card still showing — do not increment; allow retry
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
-        else:
-            # Name unreadable — do not increment
-            bulk["awaiting_verify"] = False
-            st["bulk_swipe"] = bulk
+    # FALLBACK: generic paywall/billing dismiss after per-app interrupt maps miss
+    try:
+        from dating_deck import dismiss_paywall_action
+    except ImportError:
+        from backend.dating_deck import dismiss_paywall_action  # type: ignore
 
-    if done >= target:
+    pay = dismiss_paywall_action(ui_tree, package=package, planner=planner)
+    if pay:
+        return _fp(pay, "bulk_paywall_dismiss")
+
+    # After like/pass: poll until next profile loads (or end-of-deck / timeout).
+    # dry_run uses its own pass-advance wait loop below — never double-count via
+    # plan_wait_for_next_card (r22 multi-card dry-run).
+    if bulk.get("awaiting_verify") and not dry_run:
+        try:
+            from dating_deck import plan_wait_for_next_card
+        except ImportError:
+            from backend.dating_deck import plan_wait_for_next_card  # type: ignore
+
+        wait_act = plan_wait_for_next_card(st, app=app, tree=ui_tree, planner=planner)
+        bulk = st.get("bulk_swipe") or bulk
+        done = int(bulk.get("done") or 0)
+        if wait_act:
+            step = "bulk_card_wait"
+            if wait_act.get("_paywall_dismiss"):
+                step = "bulk_paywall_dismiss"
+            elif wait_act.get("stopped_reason") == "end_of_deck":
+                step = "bulk_end_of_deck"
+            elif wait_act.get("_card_wait_timeout"):
+                step = "bulk_card_wait_timeout"
+            return _fp(wait_act, step)
+        # Card changed — fall through to next like (done already bumped)
+
+    if done >= target and not dry_run:
         return _fp(
             {
                 "action": "done",
@@ -1043,11 +2721,60 @@ def plan_bulk_swipe(
         )
 
     if not deck_visible:
-        # Prefer People (Bumble) over Discover — Discover is often a different tab
+        # Bumble: try Discover nav before failing — real swipe screen is Discover
         if app == "bumble":
-            disc = _exact_label_center(ui_tree, "People") or _tree_node_center(
-                ui_tree, "People", "Encounters"
+            tries = int(bulk.get("_bumble_discover_tries") or 0)
+            if tries < 2 and "bulk_bumble_open_discover" not in hist:
+                bulk["_bumble_discover_tries"] = tries + 1
+                st["bulk_swipe"] = bulk
+                disc = _nav_tab_center(ui_tree, "Discover") or (
+                    DM_APP_PROFILES.get("bumble", {}).get("discover_tab_xy")
+                    or (324, 2197)
+                )
+                if isinstance(disc, (tuple, list)) and len(disc) >= 2:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(disc[0]),
+                            "y": int(disc[1]),
+                            "reason": (f"Open Bumble Discover swipe deck ({planner})"),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": bool(dry_run),
+                            "label": "Discover",
+                            "needs_vision": True,
+                        },
+                        "bulk_bumble_open_discover",
+                    )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Bumble swipe deck not verified — People/Discover are "
+                        f"grids (never SuperSwipe) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                },
+                "bulk_bumble_no_deck",
             )
+        # Badoo: Encounters (nav_bar_button_encounters), never People/Discover.
+        if app == "badoo":
+            disc = (
+                _tree_id_center(
+                    ui_tree,
+                    "nav_bar_button_encounters",
+                    "com.badoo.mobile:id/nav_bar_button_encounters",
+                )
+                or _exact_label_center(ui_tree, "Encounters")
+                or _tree_node_center(ui_tree, "Encounters")
+            )
+            if not disc:
+                xy = DM_APP_PROFILES["badoo"].get("encounters_tab_xy") or (324, 2210)
+                disc = (int(xy[0]), int(xy[1]))
         else:
             disc = (
                 _exact_label_center(ui_tree, "People")
@@ -1071,11 +2798,150 @@ def plan_bulk_swipe(
                 },
                 "bulk_open_deck",
             )
+        # BLK: Discover tab before failing dry-run (Like Icon often only there)
+        if (
+            app == "blk"
+            and "open swipe deck" not in hist
+            and "blk discover" not in hist
+        ):
+            xy = DM_APP_PROFILES.get("blk", {}).get("deck_tab_xy") or (135, 2170)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": f"Open BLK Discover swipe deck ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "label": "Discover",
+                },
+                "bulk_open_deck",
+            )
+        # Tagged: Meet Me / Nearby bottom nav — never Back out of landing
+        if app == "tagged":
+            tries = int(bulk.get("_tagged_meet_tries") or 0)
+            if tries < 3 and "bulk_tagged_meet" not in hist:
+                bulk["_tagged_meet_tries"] = tries + 1
+                st["bulk_swipe"] = bulk
+                meet = _nav_tab_center(
+                    ui_tree, "Meet", "Meet Me", "Browse", "Nearby"
+                ) or _tree_id_center(
+                    ui_tree, "tab_nearby", "id/tab_nearby", "tab_meet", "id/tab_meet"
+                )
+                if meet and int(meet[1]) >= 1700:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(meet[0]),
+                            "y": int(meet[1]),
+                            "reason": (
+                                f"Open Tagged Meet Me / Nearby deck ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": bool(dry_run),
+                            "label": "Meet Me",
+                        },
+                        "bulk_tagged_meet",
+                    )
+                xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (
+                    108,
+                    2200,
+                )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Open Tagged Meet Me tab (try {tries + 1}/3) "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "label": "Meet Me",
+                        "needs_vision": True,
+                    },
+                    "bulk_tagged_meet",
+                )
 
-    # dry_run: verify ONE real card, then log would like/pass N once (no loop)
+    # dry_run: identify current card + report would-be like/pass — NEVER swipe,
+    # like, or pass (r23: left-swipe "advance" passed 5 real Yubo profiles).
+    # Optional vertical profile scroll only; real advancing is live-mode only.
     if dry_run:
-        like_ok = bool(deck_visible or _fake_like_center(app, ui_tree))
+        # Badoo skeleton while encounters_skeleton_profileInfoView loads — wait
+        if app == "badoo" and "encounters_skeleton" in (ui_tree or "").lower():
+            waits = int(bulk.get("badoo_skeleton_waits") or 0)
+            if waits < 3:
+                bulk["badoo_skeleton_waits"] = waits + 1
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 1.2,
+                        "reason": (
+                            f"Wait for Badoo Encounters skeleton to resolve "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "bulk_badoo_skeleton_wait",
+                )
+        like_ok = bool(
+            deck_visible
+            or _fake_like_center(app, ui_tree)
+            or (app == "blk" and blk_like_action(ui_tree, planner=planner))
+            or (app == "tagged" and tagged_like_action(ui_tree, planner=planner))
+        )
         if not like_ok and not deck_visible:
+            # One more Discover/Finder nav before hard fail
+            if app == "blk" and not bulk.get("_blk_deck_nav_fail"):
+                bulk["_blk_deck_nav_fail"] = True
+                st["bulk_swipe"] = bulk
+                xy = DM_APP_PROFILES.get("blk", {}).get("deck_tab_xy") or (135, 2170)
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"dry_run — BLK like miss; re-open Discover " f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "label": "Discover",
+                    },
+                    "bulk_open_deck",
+                )
+            if app == "tagged" and not bulk.get("_tagged_deck_nav_fail"):
+                bulk["_tagged_deck_nav_fail"] = True
+                st["bulk_swipe"] = bulk
+                xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (
+                    108,
+                    2200,
+                )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"dry_run — Tagged like miss; re-open Meet Me "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "label": "Meet Me",
+                        "needs_vision": True,
+                    },
+                    "bulk_tagged_meet",
+                )
             return _fp(
                 {
                     "action": "fail",
@@ -1087,11 +2953,103 @@ def plan_bulk_swipe(
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_dry_run_no_deck",
             )
+        if not _deck_markers_ok(app, ui_tree):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — no real profile card markers for {app or '?'} "
+                        f"(need name+age / like-pass; refuse Chat-tab / filter "
+                        f"false pass) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_dry_run_no_deck_markers",
+            )
+        # r28: require FG package == target before identifying a card
+        # (home-screen "Social" folder was falsely identified as a card)
+        if not _fg_pkg_matches_target(app, package):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — FG package '{package or '?'}' is not "
+                        f"{app or '?'} (refuse home-folder / wrong-app card "
+                        f"names) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_dry_run_wrong_pkg",
+            )
         card = deck_card_name(app, ui_tree)
+        if card and (_card_name_is_foreign(card) or _card_name_is_owner(card)):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — rejected non-profile card name "
+                        f"'{card}' for {app or '?'} (need Name / Name, age; "
+                        f"never Social/Chats/owner) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_dry_run_foreign_card",
+            )
+        if card and not _card_name_is_real_profile(card):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — rejected non-profile card name '{card}' "
+                        f"for {app or '?'} (section label / not Name, age) "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_dry_run_section_label",
+            )
         if not card:
+            if app == "badoo" and int(bulk.get("badoo_skeleton_waits") or 0) < 3:
+                bulk["badoo_skeleton_waits"] = (
+                    int(bulk.get("badoo_skeleton_waits") or 0) + 1
+                )
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 1.2,
+                        "reason": (f"Wait for Badoo card name (loading) ({planner})"),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "bulk_badoo_card_wait",
+                )
             return _fp(
                 {
                     "action": "fail",
@@ -1103,27 +3061,37 @@ def plan_bulk_swipe(
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_dry_run_no_card_name",
             )
-        bulk["done"] = target
+        # r25: dry success = identify 1 real name — no scroll/swipe required.
+        # (Prior vscroll step let LLM handoff steal the turn and emit a real
+        # swipe that dry_run then failed as unverified.)
+        evaluated = 1
+        bulk["done"] = evaluated
+        bulk["last_name"] = card
+        bulk["_dry_vscroll_done"] = True
         bulk["dry_logs"] = [
-            f"[DRY RUN] would like/pass {target} cards (deck verified on {card})"
+            f"[DRY RUN] evaluated {evaluated} card ({card}); "
+            f"would like/pass {target}"
         ]
         st["bulk_swipe"] = bulk
         return _fp(
             {
                 "action": "done",
                 "reason": (
-                    f"[DRY RUN] would like/pass {target} cards "
-                    f"(deck verified on {card}) — no like/swipe ({planner})"
+                    f"[DRY RUN] evaluated {evaluated} card ({card}); "
+                    f"would like/pass {target} — no swipe/like/pass ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
                 "dry_run": True,
                 "dry_run_verified": True,
-                "bulk_swipe_done": target,
+                "bulk_swipe_done": evaluated,
                 "bulk_swipe_target": target,
+                "bulk_swipe_evaluated": evaluated,
                 "screenshot": True,
             },
             "bulk_dry_run_skip_like",
@@ -1132,41 +3100,41 @@ def plan_bulk_swipe(
     card_name = deck_card_name(app, ui_tree)
     next_n = done + 1
 
-    # Real Bumble/Yubo/Badoo/Hily/BLK: mapped gestures / buttons — never (950,2200)
+    # Per-app mapped LIKE first (Badoo VoteYes, BLK heart, …). Generic
+    # dating_deck.plan_free_like is FALLBACK only when the map misses.
+    try:
+        from dating_deck import mark_like_issued, plan_free_like
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            mark_like_issued,
+            plan_free_like,
+        )
+
+    act = None
     if app in _REAL_GESTURE_APPS:
         act = _real_like_action(app, tree=ui_tree, planner=planner)
-        if not act:
-            return _fp(
-                {
-                    "action": "fail",
-                    "reason": f"No real-app like gesture for {app} ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "bulk_like_missing",
-            )
-        bulk["last_name"] = card_name
-        if app == "taimi":
-            bulk["last_left"] = taimi_swipes_left(ui_tree)
-        bulk["awaiting_verify"] = True
-        bulk["_bulk_swipe_inc"] = False  # only after name change
-        st["bulk_swipe"] = bulk
-        act = dict(act)
-        act["reason"] = f"Like profile {next_n}/{target}: {act.get('reason')}"
-        act["delay_s"] = sample_human_delay(random.Random(f"like:{done}"))
-        act["_bulk_swipe_inc"] = False
-        step = "bulk_like_swipe" if act.get("action") == "swipe" else "bulk_like"
-        return _fp(act, step)
-
-    # Fake-chats / button decks: Like by id or exact label — never guessed coords
-    like = _fake_like_center(app, ui_tree)
-    if not like:
+    if not act:
+        act = plan_free_like(app, ui_tree, planner=planner, dry_run=False)
+    if not act:
+        # Fake-chats / button decks: Like by id or exact label
+        like = _fake_like_center(app, ui_tree)
+        if like:
+            act = {
+                "action": "tap",
+                "x": like[0],
+                "y": like[1],
+                "reason": f"Like profile ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+                "_free_like": True,
+            }
+    if not act:
         return _fp(
             {
                 "action": "fail",
                 "reason": (
-                    f"Like control not found in a11y tree — "
-                    f"refusing coord guess ({planner})"
+                    f"Free like control not found for {app or '?'} — "
+                    f"refusing paid/coord guess ({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -1174,22 +3142,18 @@ def plan_bulk_swipe(
             "bulk_like_not_found",
         )
 
-    bulk["last_name"] = card_name
-    bulk["awaiting_verify"] = True
-    st["bulk_swipe"] = bulk
-    return _fp(
-        {
-            "action": "tap",
-            "x": like[0],
-            "y": like[1],
-            "reason": f"Like profile {next_n}/{target} ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-            "delay_s": sample_human_delay(random.Random(f"like:{done}")),
-            "_bulk_swipe_inc": False,
-        },
-        "bulk_like",
-    )
+    mark_like_issued(st, app=app, tree=ui_tree)
+    if app == "taimi":
+        bulk = st.setdefault("bulk_swipe", bulk)
+        bulk["last_left"] = taimi_swipes_left(ui_tree)
+        st["bulk_swipe"] = bulk
+    act = dict(act)
+    act["reason"] = f"Like profile {next_n}/{target}: {act.get('reason')}"
+    act["delay_s"] = sample_human_delay(random.Random(f"like:{done}"))
+    act["_bulk_swipe_inc"] = False
+    act["_free_like"] = True
+    step = "bulk_like_swipe" if act.get("action") == "swipe" else "bulk_like"
+    return _fp(act, step)
 
 
 def plan_bulk_message(
@@ -1244,6 +3208,64 @@ def plan_bulk_message(
     if opened:
         return opened
 
+    # Hily MBM BEFORE root recover / generic paywall — close + skip (per-app map)
+    if app_key == "hily" and hily_on_mbm(ui_tree):
+        skip_name = str(bulk.get("current") or "").strip()
+        if skip_name:
+            names = list(bulk.get("done_names") or [])
+            if skip_name.lower() not in {str(x).lower() for x in names}:
+                names.append(skip_name)
+            bulk["done_names"] = names
+            bulk["current"] = None
+            bulk["typed"] = False
+            st["bulk_message"] = bulk
+        return hily_close_mbm(ui_tree, planner=planner) or _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Close Hily MBM and skip contact ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_hily_mbm_skip",
+        )
+
+    # FALLBACK: foreign billing / clear paywall after per-app MBM handling
+    try:
+        from dating_deck import dismiss_paywall_action as _dismiss_pay
+    except ImportError:
+        from backend.dating_deck import dismiss_paywall_action as _dismiss_pay  # type: ignore
+
+    pay = _dismiss_pay(ui_tree, package=package, planner=planner)
+    if pay:
+        return _fp(pay, "bulk_msg_paywall_dismiss")
+
+    # Badoo: Buy Credits / Treasure promo sheets (reply5 stalled on Open Treasure)
+    if (app_key or "").lower() == "badoo":
+        try:
+            from dm_heuristics import badoo_dismiss_popup as _badoo_pop
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                badoo_dismiss_popup as _badoo_pop,
+            )
+        pop = _badoo_pop(ui_tree, planner=planner)
+        if pop:
+            return pop
+
+    # Once we intentionally opened / are targeting a thread, do NOT back out.
+    # Back-to-root is for job start leftovers and non-target threads only.
+    allow_thread = bool(str(bulk.get("current") or "").strip())
+    recover = _recover_to_root_action(
+        app_key,
+        ui_tree,
+        history,
+        planner,
+        state=st,
+        allow_open_thread=allow_thread,
+    )
+    if recover:
+        return recover
+
     if done >= target:
         return _fp(
             {
@@ -1258,27 +3280,65 @@ def plan_bulk_message(
         )
 
     done_names = list(bulk.get("done_names") or [])
+    # Soft-recover skips (upsell rows refused by firewall) — never re-tap
+    for sk in list(st.get("skipped_tap_labels") or []):
+        if sk and str(sk).strip().lower() not in {d.lower() for d in done_names}:
+            done_names.append(str(sk).strip())
     fake_bench = _is_fake_chats_bench(ui_tree, package, instruction)
     list_ok = _chat_list_screen_verified(app_key, ui_tree)
+    # Rows already parseable → treat as list even when chrome detectors miss
+    # (r22: Yubo/BLK after Back had Roch/Leah/Neff visible but list_ok=False).
+    if not list_ok:
+        rows_probe = _visible_chat_list_rows(
+            ui_tree, app_key, skip_names=list(bulk.get("done_names") or [])
+        )
+        if rows_probe:
+            list_ok = True
+    # Bumble on Discover/People deck: open Chats via _open_chats_tab_action
+    # below. Never clear "open chats" history (that re-tapped Chats every step
+    # and skipped settle/vision — r22 bumble_reply5).
     bulk["chat_list_verified"] = bool(list_ok)
     st["bulk_message"] = bulk
 
     # Ensure we're on the Chats/Messages list before inventing targets
     if not list_ok and not bulk.get("current"):
-        open_tab = _open_chats_tab_action(app_key, ui_tree, history, planner)
+        # Yubo: if already on Chat list (Conversations), never tap header 'Chat'
+        if (app_key or "").lower() == "yubo" and yubo_on_chat_list(ui_tree):
+            list_ok = True
+            bulk["chat_list_verified"] = True
+            st["bulk_message"] = bulk
+        open_tab = (
+            None
+            if list_ok
+            else _open_chats_tab_action(app_key, ui_tree, history, planner)
+        )
         if open_tab:
-            bulk.pop("_chats_settle_done", None)
+            # Do NOT clear settle counters — clearing caused BLK/Yubo reply to
+            # re-settle forever (tap chats → settle → tap chats → 7 min hang).
+            bulk["_chats_tab_taps"] = int(bulk.get("_chats_tab_taps") or 0) + 1
             st["bulk_message"] = bulk
             return open_tab
-        opened_hist = any(
-            "open chats" in str(h).lower()
-            or "bulk_open_chats" in str(h).lower()
-            or "chats/messages tab" in str(h).lower()
-            for h in history[-8:]
+        opened_hist = (
+            any(
+                "open chats" in str(h).lower()
+                or "open matches" in str(h).lower()
+                or "bulk_open_chats" in str(h).lower()
+                or "chats/messages tab" in str(h).lower()
+                or "matches tab" in str(h).lower()
+                # Yubo reason is "Open Yubo Chat tab by index" — not "open chats"
+                or "yubo chat tab" in str(h).lower()
+                or "chat tab by index" in str(h).lower()
+                or ("vision locate" in str(h).lower() and "chat" in str(h).lower())
+                for h in history[-8:]
+            )
+            or int(bulk.get("_chats_tab_taps") or 0) >= 1
         )
         # Retry once after a short settle — real apps animate the list in.
-        if opened_hist and not bulk.get("_chats_settle_done"):
+        # Cap at 1 settle; never re-wait (BLK reply hung 7 min on settle loop).
+        settle_n = int(bulk.get("_chats_settle_n") or 0)
+        if opened_hist and settle_n < 1 and not bulk.get("_chats_settle_done"):
             bulk["_chats_settle_done"] = True
+            bulk["_chats_settle_n"] = settle_n + 1
             st["bulk_message"] = bulk
             try:
                 from cloud_agent import save_detector_miss_tree as _miss
@@ -1309,25 +3369,75 @@ def plan_bulk_message(
                 },
                 "bulk_settle_chats",
             )
+        # After fixed-xy (esp. Yubo unlabeled speech-bubble tab) with no list:
+        # one vision locate attempt, then fail — never empty-history re-tap
+        # (r21: yubo_reply5 hung 7 min on tap(342,2194) repeat).
+        vision_n = int(bulk.get("_chats_vision_n") or 0)
+        if opened_hist and vision_n < 1:
+            bulk["_chats_vision_n"] = 1
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "delay_s": 0.6,
+                    "reason": (
+                        f"Vision locate {app_key or 'app'} Chats/messages tab "
+                        f"(speech bubble / per-app map) after fixed-xy miss "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_chats_vision",
+            )
         if opened_hist:
             return _fp(
                 {
                     "action": "fail",
                     "reason": (
-                        f"Chat list not verified for {app_key or 'app'} — "
-                        f"refusing Match%02d / blind scroll ({planner})"
+                        f"Chat list not verified for {app_key or 'app'} after "
+                        f"chats-tab + settle + vision — fail fast "
+                        f"(refuse hung tap({bulk.get('_chats_tab_taps') or 1}×) "
+                        f"loop) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": bool(dry_run),
                     "dry_run_verified": False,
+                    "needs_vision": True,
                 },
                 "bulk_chat_list_unverified",
             )
-        # First attempt with mapped coords even if label miss (not Yubo xy)
-        open_tab = _open_chats_tab_action(app_key, ui_tree, [], planner)
-        if open_tab:
-            return open_tab
+        # First attempt with mapped coords when history is empty (label miss).
+        # Never clear history for Yubo — that re-emitted tap(341,2194) forever.
+        if (app_key or "").lower() != "yubo":
+            open_tab = _open_chats_tab_action(app_key, ui_tree, [], planner)
+            if open_tab:
+                bulk["_chats_tab_taps"] = int(bulk.get("_chats_tab_taps") or 0) + 1
+                st["bulk_message"] = bulk
+                return open_tab
+        # Empty/sparse tree (Taimi/Hinge/Hily on 572) — vision before hard fail
+        if not bulk.get("_chats_tab_missing_vision"):
+            bulk["_chats_tab_missing_vision"] = True
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "reason": (
+                        f"No Chats/Messages tab in tree for {app_key or 'app'} — "
+                        f"vision locate tab ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_chats_tab_vision",
+            )
         return _fp(
             {
                 "action": "fail",
@@ -1336,38 +3446,123 @@ def plan_bulk_message(
                 ),
                 "planner": planner,
                 "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
             },
             "bulk_chats_tab_missing",
         )
 
-    # Bumble: collapsed "Older chats · (N)" must be expanded before picking rows
+    # After Back from a thread: refuse row taps until the chat list is verified
+    if bulk.get("_await_list_after_back"):
+        if not list_ok:
+            # Visible rows / Conversations chrome after Back → accept list
+            # (r22 yubo_reply5: Back loop while Roch/Leah stayed on screen).
+            rows_after = _visible_chat_list_rows(
+                ui_tree, app_key, skip_names=done_names
+            )
+            if rows_after or (
+                (app_key or "").lower() == "yubo" and yubo_on_chat_list(ui_tree)
+            ):
+                list_ok = True
+                bulk["chat_list_verified"] = True
+        if list_ok:
+            bulk["_await_list_after_back"] = False
+            bulk.pop("_pre_back_cleared", None)
+            st["bulk_message"] = bulk
+        else:
+            back_n = int(bulk.get("_back_until_list_n") or 0)
+            if back_n >= 2:
+                # Stop Back spam — ask vision instead of looping
+                bulk["_await_list_after_back"] = False
+                st["bulk_message"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.6,
+                        "reason": (
+                            f"Back did not restore chat list — vision locate "
+                            f"rows ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    },
+                    "bulk_back_list_vision",
+                )
+            bulk["_back_until_list_n"] = back_n + 1
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Still in thread after send — Back until chat list "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "bulk_back_until_list",
+            )
+
+    # Nothing to reply to (Your turn (0) / empty list) → done 0, not empty-tree fail
+    if list_ok and not bulk.get("current") and _inbox_nothing_to_reply(app_key, ui_tree):
+        return _fp(
+            {
+                "action": "done",
+                "reason": (
+                    f"Nothing to reply to on {app_key or 'app'} "
+                    f"(empty Your turn / no unreplied rows) — 0/{target} ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "dry_run_verified": True,
+                "bulk_message_done": 0,
+                "bulk_message_target": target,
+                "stopped_reason": "nothing_to_reply",
+            },
+            "bulk_nothing_to_reply",
+        )
+
+    # Bumble: expand Older chats only when count suggests unreplied chats
     if (
         list_ok
         and (app_key or "").lower() == "bumble"
         and not bulk.get("current")
         and "older chats" not in " ".join(history[-6:]).lower()
+        and _should_expand_collapsed_section(ui_tree)
     ):
         rows_probe = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
         older = bumble_collapsed_older_chats_center(ui_tree)
         if older and not rows_probe:
-            return _fp(
-                {
-                    "action": "tap",
-                    "x": older[0],
-                    "y": older[1],
-                    "reason": f"Expand Older chats section ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "bulk_expand_older_chats",
-            )
+            # Refuse off-screen / invisible expand targets (v=0 RecyclerView)
+            if int(older[0]) > 1080 or int(older[0]) < 0:
+                older = None
+            if older:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": older[0],
+                        "y": older[1],
+                        "reason": f"Expand Older chats section ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Older chats",
+                    },
+                    "bulk_expand_older_chats",
+                )
 
     next_name = str(bulk.get("current") or "").strip()
     if not next_name:
         rows = _visible_chat_list_rows(ui_tree, app_key, skip_names=done_names)
+        # Prefer already-read chats (avoid marking unread as read when possible)
         if rows:
-            next_name = str(rows[0]["name"])
-            bulk["_next_row"] = rows[0]
+            read_rows = [r for r in rows if not r.get("unread")]
+            pick = (read_rows or rows)[0]
+            next_name = str(pick["name"])
+            bulk["_next_row"] = pick
         elif fake_bench:
             # Match%02d ONLY on the fake-chats bench APK
             next_name = "Match%02d" % (done + 1)
@@ -1375,6 +3570,9 @@ def plan_bulk_message(
         else:
             next_name = ""
             bulk.pop("_next_row", None)
+
+    # Reply dry-run must open a real 1:1 thread + reach composer before
+    # counting — list-only "verified rows" is a false pass (APK 530).
 
     # On conversation with current match — require verified thread header
     header_hit = bool(next_name) and thread_header_verified(app_key, ui_tree, next_name)
@@ -1409,9 +3607,35 @@ def plan_bulk_message(
                 bulk["done_names"] = done_names
                 bulk["current"] = None
                 st["bulk_message"] = bulk
+            # Badoo/etc: dismiss keyboard + clear composer BEFORE Back so we
+            # leave the thread cleanly (never Back with IME up → wrong focus).
+            if keyboard_likely_up(ui_tree) or any(
+                n.get("editable") and n.get("focused")
+                for n in _parse_compact_nodes(ui_tree)
+            ):
+                if not bulk.get("_pre_back_cleared"):
+                    bulk["_pre_back_cleared"] = True
+                    st["bulk_message"] = bulk
+                    return _fp(
+                        {
+                            "action": "press_button",
+                            "button": "back",
+                            "reason": (
+                                f"Dismiss keyboard before leaving thread "
+                                f"({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "bulk_dismiss_keyboard_before_back",
+                    )
+            # Verify we left the thread before picking the next row
+            bulk["_await_list_after_back"] = True
+            st["bulk_message"] = bulk
             return _fp(
                 {
-                    "action": "back",
+                    "action": "press_button",
+                    "button": "back",
                     "reason": f"Message sent to {next_name}; back to list ({planner})",
                     "planner": planner,
                     "llm_provider": None,
@@ -1424,17 +3648,23 @@ def plan_bulk_message(
         if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
             c = compose_center_in_thread(app_key, ui_tree, next_name)
             if c is None:
+                # r26: never raise / hard-fail — hand off to LLM agent loop
                 return _fp(
                     {
-                        "action": "fail",
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
                         "reason": (
                             f"Compose not found for {next_name} after header "
-                            f"verify — refusing list Message tap ({planner})"
+                            f"verify — hand off to LLM ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
                     },
-                    "bulk_compose_not_found",
+                    "bulk_compose_not_found_handoff",
                 )
             return _fp(
                 {
@@ -1447,50 +3677,37 @@ def plan_bulk_message(
                 },
                 "bulk_focus_compose",
             )
-        if not bulk.get("typed"):
-            bulk["typed"] = True
-            bulk["cleared"] = False
-            st["bulk_message"] = bulk
-            return _fp(
-                {
-                    "action": "type",
-                    "text": message,
-                    "clear": True,
-                    "reason": f"Type bank text to {next_name} ({planner})",
-                    "planner": planner,
-                    "llm_provider": None,
-                    "delay_s": sample_human_delay(random.Random(f"type:{done}")),
-                },
-                "bulk_type",
-            )
-        # dry_run: verify compose, CLEAR draft, go back, continue until target
+        # dry_run: NEVER type into a real thread (shows "typing…" to the other
+        # person). Open thread → verify composer → log bank text → back out.
         if dry_run:
-            if not bulk.get("cleared"):
+            if not bulk.get("dry_verified"):
+                bulk["dry_verified"] = True
+                bulk["typed"] = True  # skip live type path
                 bulk["cleared"] = True
                 st["bulk_message"] = bulk
                 return _fp(
                     {
-                        "action": "type",
-                        "text": "",
-                        "clear": True,
+                        "action": "wait",
+                        "seconds": 0.4,
                         "reason": (
-                            f"[DRY RUN] clear composer after verify "
-                            f"('{message}' for {next_name})"
+                            f"[DRY RUN] composer verified for {next_name}; "
+                            f"would send '{message}' — never typed ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                         "dry_run": True,
                         "dry_run_verified": True,
                         "screenshot": True,
+                        "would_send_text": message,
                     },
-                    "bulk_dry_run_clear_composer",
+                    "bulk_dry_run_verify_composer",
                 )
-            # Count this dry-run reply and return to list
             if not bulk.get("counted_current"):
                 bulk["done"] = done + 1
                 bulk["counted_current"] = True
                 bulk["typed"] = False
                 bulk["cleared"] = False
+                bulk["dry_verified"] = False
                 if next_name and next_name.lower() not in {
                     str(x).lower() for x in done_names
                 }:
@@ -1503,7 +3720,7 @@ def plan_bulk_message(
                     {
                         "action": "done",
                         "reason": (
-                            f"dry_run — replied (typed+cleared) to "
+                            f"dry_run — verified composer (never typed) for "
                             f"{bulk['done']}/{target} chats; send skipped ({planner})"
                         ),
                         "planner": planner,
@@ -1520,8 +3737,8 @@ def plan_bulk_message(
                 {
                     "action": "back",
                     "reason": (
-                        f"[DRY RUN] cleared composer for {next_name}; "
-                        f"back to list ({planner})"
+                        f"[DRY RUN] back out after composer verify for "
+                        f"{next_name} (never typed) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -1529,6 +3746,22 @@ def plan_bulk_message(
                     "dry_run_verified": True,
                 },
                 "bulk_dry_run_back",
+            )
+        if not bulk.get("typed"):
+            bulk["typed"] = True
+            bulk["cleared"] = False
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "type",
+                    "text": message,
+                    "clear": True,
+                    "reason": f"Type bank text to {next_name} ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "delay_s": sample_human_delay(random.Random(f"type:{done}")),
+                },
+                "bulk_type",
             )
         send = find_send_center_safe(
             ui_tree,
@@ -1591,9 +3824,31 @@ def plan_bulk_message(
             "bulk_open_match",
         )
 
-    # No rows: scroll only on a verified list, cap at MAX_LIST_SCROLLS
+    # No rows: one vision locate before scrolling invents nothing
     scroll_n = int(bulk.get("scroll_count") or 0)
-    if list_ok and scroll_n < MAX_LIST_SCROLLS:
+    if list_ok and not rows and not bulk.get("_rows_vision_n"):
+        bulk["_rows_vision_n"] = 1
+        st["bulk_message"] = bulk
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 0.6,
+                "reason": (
+                    f"Vision locate chat-list rows for {app_key or 'app'} "
+                    f"(name + preview siblings) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+                "chat_list_verified": True,
+            },
+            "bulk_rows_vision",
+        )
+
+    # No rows after vision: at most one scroll, then fail to vision again
+    # (r22 bumble_reply5 / whatsapp1: loop guard on swipe 540,1800→540,700).
+    if list_ok and scroll_n < 1 and bulk.get("_rows_vision_n"):
         bulk["scroll_count"] = scroll_n + 1
         st["bulk_message"] = bulk
         return _fp(
@@ -1604,8 +3859,8 @@ def plan_bulk_message(
                 "x2": 540,
                 "y2": 700,
                 "reason": (
-                    f"Scroll verified chat list for more rows "
-                    f"({scroll_n + 1}/{MAX_LIST_SCROLLS}) ({planner})"
+                    f"Scroll verified chat list once after vision miss "
+                    f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -1614,7 +3869,46 @@ def plan_bulk_message(
             },
             "bulk_scroll",
         )
+    if list_ok and scroll_n < MAX_LIST_SCROLLS and not bulk.get("_rows_vision_n"):
+        # Rows expected but vision not yet asked — prefer vision over scroll spam
+        bulk["_rows_vision_n"] = 1
+        st["bulk_message"] = bulk
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 0.6,
+                "reason": (
+                    f"Vision locate chat-list rows for {app_key or 'app'} "
+                    f"before scroll ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+                "chat_list_verified": True,
+            },
+            "bulk_rows_vision",
+        )
 
+    # Empty list after vision/scroll → nothing to reply (success 0), not hang
+    if list_ok and _inbox_nothing_to_reply(app_key, ui_tree):
+        return _fp(
+            {
+                "action": "done",
+                "reason": (
+                    f"Nothing to reply to on {app_key or 'app'} after scroll/"
+                    f"vision — 0/{target} ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "dry_run_verified": True,
+                "bulk_message_done": 0,
+                "bulk_message_target": target,
+                "stopped_reason": "nothing_to_reply",
+            },
+            "bulk_nothing_to_reply",
+        )
     return _fp(
         {
             "action": "fail",
@@ -1626,6 +3920,7 @@ def plan_bulk_message(
             "llm_provider": None,
             "dry_run": bool(dry_run),
             "dry_run_verified": False,
+            "needs_vision": True,
         },
         "bulk_no_chat_rows",
     )
@@ -1691,6 +3986,855 @@ def plan_secure_folder(
     return None
 
 
+def plan_bulk_message_new(
+    instruction: str,
+    ui_tree: str,
+    history: List[str],
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    package: str = "",
+    dry_run: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Message NEW contacts (not existing chats).
+
+    Try free messaging from profile/match on every dating app. If a paywall /
+    upsell appears, dismiss it and continue with the next person. Fall back to
+    like/swipe only when no free compose/match surface is available.
+
+    Hinge: heart → like-sheet comment → Send Like (never Rose).
+    Tagged: chatBtn on Match card.
+    Hily: first free message; skip Message Before Match / paid.
+    BLK / Bumble / Badoo: Matches/Connections → free composer when allowed.
+    """
+    goal = parse_bulk_goal(instruction)
+    if not goal or goal.get("kind") != "message_new":
+        return None
+    if goal.get("error") or not (goal.get("message") or "").strip():
+        return _fp(
+            {
+                "action": "fail",
+                "reason": str(
+                    goal.get("error") or "No message text for new-contact messaging"
+                ),
+                "planner": "bulk_message_new_heuristic",
+                "llm_provider": None,
+            },
+            "bulk_message_new_missing_text",
+        )
+    app = (goal.get("app") or "").lower()
+    planner = "bulk_message_new_heuristic"
+    message = str(goal["message"]).strip()
+    target = int(goal.get("count") or 1)
+    st = state if isinstance(state, dict) else {}
+    bulk = st.setdefault(
+        "bulk_message_new",
+        {"done": 0, "typed": False, "awaiting_send": False, "skipped": []},
+    )
+    done = int(bulk.get("done") or 0)
+    hist = " ".join(history[-16:]).lower()
+    skipped = {str(x).lower() for x in (bulk.get("skipped") or [])}
+
+    # Apps with no reliable free new-message surface → like FALLBACK only after
+    # we fail to find Matches/Connections/composer (never hard-replace).
+    like_fallback_apps = {
+        "bumble",
+        "yubo",
+        "badoo",
+        "blk",
+        "taimi",
+        "tinder",
+        "facebook",
+    }
+
+    opened = _ensure_app_open(app, package, history, planner)
+    if opened:
+        return opened
+
+    # Per-app Hily MBM first — generic paywall is FALLBACK only
+    if app == "hily" and hily_on_mbm(ui_tree):
+        return hily_close_mbm(ui_tree, planner=planner) or _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Close Hily MBM — skip paid new contact ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_hily_mbm_skip_new",
+        )
+
+    # Paywall while messaging a new person → dismiss, skip that person, continue
+    try:
+        from dating_deck import (
+            find_free_compose_center,
+            skip_new_contact_on_paywall,
+        )
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            find_free_compose_center,
+            skip_new_contact_on_paywall,
+        )
+
+    pay_skip = skip_new_contact_on_paywall(
+        st,
+        tree=ui_tree,
+        package=package,
+        planner=planner,
+        name=str(bulk.get("current") or ""),
+    )
+    if pay_skip:
+        return _fp(pay_skip, "bulk_msg_new_paywall_skip")
+
+    allow_thread = bool(str(bulk.get("current") or "").strip())
+    recover = _recover_to_root_action(
+        app,
+        ui_tree,
+        history,
+        planner,
+        state=st,
+        allow_open_thread=allow_thread,
+    )
+    if recover:
+        return recover
+
+    if done >= target:
+        return _fp(
+            {
+                "action": "done",
+                "reason": (
+                    f"New-contact messaging complete: {done}/{target} ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+            },
+            "bulk_message_new_done",
+        )
+
+    if app == "tagged":
+        exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+        if exit_dlg:
+            return exit_dlg
+        loc = tagged_location_overlay_continue(ui_tree, planner=planner)
+        if loc:
+            return loc
+        if tagged_on_deck(ui_tree):
+            if dry_run:
+                bulk["done"] = target
+                st["bulk_message_new"] = bulk
+                name = tagged_deck_card_name(ui_tree) or "match card"
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] would chatBtn → message {target} new "
+                            f"contacts (verified on {name}) — no send ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                    },
+                    "bulk_dry_run_tagged_new",
+                )
+            chat = tagged_chat_action(ui_tree, planner=planner)
+            if chat:
+                return chat
+        # Not on deck yet — open Meet/Browse up to 2× before failing
+        tried = int(bulk.get("_tagged_tried_deck") or 0)
+        if tried < 2:
+            bulk["_tagged_tried_deck"] = tried + 1
+            st["bulk_message_new"] = bulk
+            # Exit dialog first (End Tagged?)
+            exit_dlg = tagged_dismiss_exit_dialog(ui_tree, planner=planner)
+            if exit_dlg:
+                return exit_dlg
+            meet = _nav_tab_center(
+                ui_tree, "Meet", "Browse", "Discover", "Nearby"
+            ) or _tree_id_center(
+                ui_tree, "tab_meet", "id/tab_meet", "nav_meet", "tab_nearby"
+            )
+            if meet and int(meet[1]) >= 1800:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(meet[0]),
+                        "y": int(meet[1]),
+                        "reason": f"Tagged → Meet/Browse deck for chatBtn ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Meet",
+                    },
+                    "bulk_tagged_open_deck",
+                )
+            # Prefer profile deck_tab_xy (tab_nearby ≈108,2200) over mid-screen guess
+            xy = DM_APP_PROFILES.get("tagged", {}).get("deck_tab_xy") or (108, 2200)
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": (
+                        f"Tagged → deck tab for chatBtn "
+                        f"(try {tried + 1}/2, vision) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "Meet",
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_tagged_open_deck",
+            )
+        if not bulk.get("_tagged_new_vision"):
+            bulk["_tagged_new_vision"] = True
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "reason": (
+                        f"Tagged Match card / chatBtn not in tree — "
+                        f"vision locate chatBtn ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_tagged_new_vision",
+            )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": f"Tagged Match card / chatBtn not found ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+            },
+            "bulk_tagged_new_missing",
+        )
+
+    if app == "hinge":
+        play = hinge_dismiss_play_review(ui_tree, planner=planner)
+        if play:
+            return play
+        popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+        if popup:
+            return popup
+        if hinge_on_like_sheet(ui_tree):
+            compose = hinge_find_compose(ui_tree)
+            editable = compose or any(
+                n.get("editable") for n in _parse_compact_nodes(ui_tree)
+            )
+            # r23: dry_run success = like/comment sheet with editable field open
+            # (never type / never "would send — skipped" after a mute tap).
+            if dry_run and editable:
+                bulk["done"] = target
+                bulk["typed"] = True
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] Hinge like/comment sheet editable "
+                            f"verified; would send '{message}' — never typed "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "would_send_text": message,
+                    },
+                    "bulk_hinge_new_dry_editable",
+                )
+            if compose and not bulk.get("typed"):
+                if "tap" in hist and "comment" in hist:
+                    if dry_run:
+                        bulk["typed"] = True
+                        st["bulk_message_new"] = bulk
+                        return _fp(
+                            {
+                                "action": "done",
+                                "reason": (
+                                    f"[DRY RUN] Hinge like-sheet composer verified; "
+                                    f"would type '{message}' — never typed ({planner})"
+                                ),
+                                "planner": planner,
+                                "llm_provider": None,
+                                "dry_run": True,
+                                "dry_run_verified": True,
+                                "would_send_text": message,
+                            },
+                            "bulk_hinge_new_dry_no_type",
+                        )
+                    bulk["typed"] = True
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "type",
+                            "text": message,
+                            "reason": (
+                                f"Type like-sheet comment for new contact "
+                                f"({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "bulk_hinge_new_type",
+                    )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": compose[0],
+                        "y": compose[1],
+                        "reason": f"Focus Add a comment field ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_hinge_new_focus_comment",
+                )
+            if dry_run:
+                # Sheet without editable — vision locate like/comment button
+                if not bulk.get("_hinge_sheet_vision"):
+                    bulk["_hinge_sheet_vision"] = True
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "wait",
+                            "seconds": 0.6,
+                            "reason": (
+                                f"Hinge like sheet missing editable — "
+                                f"vision locate like/comment ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "needs_vision": True,
+                            "_force_vision": True,
+                            "vision_hint": "hinge_like_or_comment",
+                        },
+                        "bulk_hinge_sheet_vision",
+                    )
+                bulk["done"] = target
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] would Send Like with comment to "
+                            f"{target} new profiles — never Rose ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                    },
+                    "bulk_dry_run_hinge_new",
+                )
+            send = hinge_like_sheet_action(ui_tree, planner=planner)
+            if send:
+                bulk["done"] = done + 1
+                bulk["typed"] = False
+                st["bulk_message_new"] = bulk
+                return send
+        if dry_run and not hinge_on_like_sheet(ui_tree) and not bulk.get(
+            "_hinge_like_vision"
+        ):
+            # Discover without sheet — vision find like/comment (r23 hinge_new3)
+            bulk["_hinge_like_vision"] = True
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.6,
+                    "reason": (
+                        f"Hinge dry_run — vision locate like/comment button "
+                        f"to open editable sheet ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                    "vision_hint": "hinge_like_or_comment",
+                },
+                "bulk_hinge_like_vision",
+            )
+        if _app_tree_empty(ui_tree, "hinge") or not hinge_on_discover(ui_tree):
+            # Empty a11y (common on Hinge) — screenshot + vision before fail
+            if _app_tree_empty(ui_tree, "hinge") and not bulk.get("_hinge_empty_vision"):
+                bulk["_hinge_empty_vision"] = True
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.8,
+                        "reason": (
+                            f"Hinge empty a11y tree — vision locate Discover/"
+                            f"heart/Matches ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "vision_hint": "hinge_discover_or_heart",
+                    },
+                    "bulk_hinge_empty_vision",
+                )
+            if not hinge_on_discover(ui_tree):
+                act = hinge_open_discover_tab(planner=planner)
+                act["dry_run"] = bool(dry_run)
+                act["needs_vision"] = True
+                act["_force_vision"] = True
+                return act
+        if dry_run and hinge_on_discover(ui_tree):
+            card = hinge_deck_card_name(ui_tree) or "Discover"
+            bulk["done"] = target
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] would heart → like sheet → Send Like to "
+                        f"{target} new profiles (verified on {card}) "
+                        f"— never Rose ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "needs_vision": True,
+                },
+                "bulk_dry_run_hinge_new_discover",
+            )
+        # Live: heart is vision-only on Discover — mark for vision path
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 0.5,
+                "reason": (
+                    f"Hinge Discover heart requires vision tap "
+                    f"(x≈937) then like sheet ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+                "vision_hint": "hinge_heart",
+            },
+            "bulk_hinge_new_need_vision",
+        )
+
+    if app == "hily":
+        if hily_on_photo_viewer(ui_tree):
+            return hily_back_from_photo_viewer(planner=planner)
+        if hily_on_profile_sheet(ui_tree):
+            # Never treat Crush as a composer — close sheet and fail dry-run
+            if dry_run:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"dry_run — Hily profile sheet shows Crush/Major "
+                            f"crush (paid); close sheet, no free composer "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": False,
+                        "_close_sheet": True,
+                    },
+                    "bulk_dry_run_hily_crush_sheet",
+                )
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Close Hily profile sheet before new-message ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_profile_sheet_back",
+            )
+        if hily_on_top_picks_grid(ui_tree):
+            # New-contact: message free matches/chats — never Top picks Crush tiles
+            if not bulk.get("_hily_new_to_chats"):
+                bulk["_hily_new_to_chats"] = True
+                st["bulk_message_new"] = bulk
+                xy = DM_APP_PROFILES.get("hily", {}).get("inbox_tab_xy") or (341, 2190)
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Leave Hily Top picks → Chats for free matches "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Chats",
+                    },
+                    "bulk_hily_new_open_chats",
+                )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hily new-contact still on Top picks — refuse Crush "
+                        f"tiles; use free chat/match starts ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                },
+                "bulk_hily_new_top_picks_refuse",
+            )
+        # Dry-run: ONLY a free message composer counts — never Crush/Like CTA
+        compose = _tree_node_center(
+            ui_tree, "Type a message", "Say something", "Write a message"
+        ) or _tree_id_center(
+            ui_tree, "messageInput", "id/messageInput", "compose_edit_text"
+        )
+        # Editable compose field in thread
+        if not compose:
+            for n in _parse_compact_nodes(ui_tree):
+                if n.get("editable") and int(n.get("y") or 0) > 1600:
+                    lab = (n.get("label") or n.get("hint") or "").lower()
+                    if "search" in lab:
+                        continue
+                    compose = (int(n["x"]), int(n["y"]))
+                    break
+        if dry_run:
+            if not compose:
+                # No free composer on profile — go to Chats/Matches for free
+                # messaging instead of hard-failing the job.
+                if not bulk.get("_hily_new_to_chats_after_miss"):
+                    bulk["_hily_new_to_chats_after_miss"] = True
+                    st["bulk_message_new"] = bulk
+                    xy = DM_APP_PROFILES.get("hily", {}).get("inbox_tab_xy") or (
+                        341,
+                        2190,
+                    )
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(xy[0]),
+                            "y": int(xy[1]),
+                            "reason": (
+                                f"Hily: no free composer on profile — open "
+                                f"Chats for free matches ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "label": "Chats",
+                        },
+                        "bulk_hily_new_open_chats",
+                    )
+                # Already on chats path — fall through to reply planner via done
+                # that hands off: mark verified skip for this path
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] Hily: no free new-profile composer "
+                            f"(Crush/Like ≠ composer) — would message free "
+                            f"matches/chats instead ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "_handoff_bulk_message": True,
+                    },
+                    "bulk_dry_run_hily_new_chats_handoff",
+                )
+            # Close any leftover sheet before declaring done
+            if hily_on_profile_sheet(ui_tree) or hily_on_photo_viewer(ui_tree):
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": f"Close Hily sheet after composer verify ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                    },
+                    "hily_new_close_after_verify",
+                )
+            bulk["done"] = target
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"[DRY RUN] would first-message {target} new Hily "
+                        f"contacts (composer verified) — skip MBM/paid "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                },
+                "bulk_dry_run_hily_new",
+            )
+        # Live: never auto-Crush; only free like path if available
+        like_ctl = hily_like_action(ui_tree, planner=planner)
+        if like_ctl:
+            return like_ctl
+
+    # --- BLK / Bumble / Badoo / others: free message from Matches/Connections ---
+    if app in ("blk", "bumble", "badoo", "taimi", "yubo", "tinder"):
+        # Already in a free thread with composer → type / dry-run / send
+        compose = find_free_compose_center(ui_tree)
+        on_thread = False
+        if app == "blk":
+            on_thread = blk_on_thread(ui_tree)
+        elif compose and not _deck_visible(app, ui_tree):
+            on_thread = True
+        if on_thread and compose:
+            if dry_run:
+                bulk["done"] = max(done, 1)
+                bulk["current"] = None
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] free composer verified for new contact "
+                            f"— would send '{message}' — never typed ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "would_send_text": message,
+                    },
+                    "bulk_new_free_compose_dry",
+                )
+            if not bulk.get("typed"):
+                if "tap" in hist and (
+                    "compose" in hist or "message" in hist or "focus" in hist
+                ):
+                    bulk["typed"] = True
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "type",
+                            "text": message,
+                            "reason": (f"Type free opener to new contact ({planner})"),
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "bulk_new_free_type",
+                    )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": compose[0],
+                        "y": compose[1],
+                        "reason": f"Focus free composer for new contact ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": "Message",
+                    },
+                    "bulk_new_free_focus",
+                )
+            # Typed → send (prefer labeled Send; BLK unlabeled right of EditText)
+            prof = DM_APP_PROFILES.get(app) or {}
+            send = find_send_center_safe(
+                ui_tree,
+                tuple(prof.get("send_labels") or ("Send",)),
+                send_ids=tuple(prof.get("send_ids") or ()),
+                profile=prof,
+            )
+            if send is None and app == "blk":
+                send = blk_send_relative_to_edittext(ui_tree)
+            if send:
+                bulk["done"] = done + 1
+                bulk["typed"] = False
+                bulk["current"] = None
+                st["bulk_message_new"] = bulk
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(send[0]),
+                        "y": int(send[1]),
+                        "reason": (
+                            f"Send free opener to new contact "
+                            f"{bulk.get('done')}/{target} ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "bulk_new_free_send",
+                )
+
+        # Open Matches / Connections inbox for free-messageable people
+        on_inbox = False
+        if app == "blk":
+            on_inbox = blk_on_matches(ui_tree)
+            popup = blk_dismiss_popup(ui_tree, planner=planner)
+            if popup:
+                return popup
+        elif app == "bumble":
+            on_inbox = bool(
+                _nav_tab_center(ui_tree, "Connections", "Chats")
+                and not bumble_on_people_deck(ui_tree)
+            ) or ("connections" in (ui_tree or "").lower() and "for you" not in hist)
+            # Prefer connections list rows
+            on_inbox = bool(
+                _visible_chat_list_rows(ui_tree, "bumble", skip_names=list(skipped))
+            )
+        elif app == "badoo":
+            on_inbox = bool(
+                _visible_chat_list_rows(ui_tree, "badoo", skip_names=list(skipped))
+            ) or badoo_on_connections(ui_tree)
+
+        if not on_inbox and not on_thread:
+            # Navigate to Matches/Connections (per-app map) before like-fallback
+            tries = int(bulk.get("_inbox_nav_tries") or 0)
+            if tries < 2:
+                bulk["_inbox_nav_tries"] = tries + 1
+                st["bulk_message_new"] = bulk
+                opened_tab = _open_chats_tab_action(app, ui_tree, history, planner)
+                if opened_tab:
+                    return opened_tab
+                xy = DM_APP_PROFILES.get(app, {}).get("inbox_tab_xy")
+                if xy:
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(xy[0]),
+                            "y": int(xy[1]),
+                            "reason": (
+                                f"Open {app} Matches/Connections for free "
+                                f"new-person messaging ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "label": "Matches",
+                        },
+                        "bulk_new_open_matches",
+                    )
+
+        if on_inbox and not on_thread:
+            # Tap next match/connection row not yet skipped
+            row_dicts = _visible_chat_list_rows(ui_tree, app, skip_names=list(skipped))
+            if not row_dicts and app == "blk":
+                row_dicts = [
+                    {"name": n, "x": x, "y": y}
+                    for n, x, y in _blk_new_message_rows(ui_tree, skipped=skipped)
+                ]
+            if row_dicts:
+                row0 = row_dicts[0]
+                name = str(row0.get("name") or row0.get("label") or f"match{done + 1}")
+                xy = (int(row0["x"]), int(row0["y"]))
+                bulk["current"] = name
+                st["bulk_message_new"] = bulk
+                if dry_run:
+                    bulk["done"] = max(done, 1)
+                    st["bulk_message_new"] = bulk
+                    return _fp(
+                        {
+                            "action": "done",
+                            "reason": (
+                                f"[DRY RUN] would open new match '{name}' → "
+                                f"free message — no send ({planner})"
+                            ),
+                            "planner": planner,
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "dry_run_verified": True,
+                        },
+                        "bulk_new_match_row_dry",
+                    )
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(xy[0]),
+                        "y": int(xy[1]),
+                        "reason": (
+                            f"Open new match '{name}' for free messaging "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "label": name,
+                    },
+                    "bulk_new_open_match_row",
+                )
+
+        # No free match/composer after inbox tries → like FALLBACK (not hard replace)
+        if app in like_fallback_apps and int(bulk.get("_inbox_nav_tries") or 0) >= 2:
+            if not bulk.get("_liked_fallback"):
+                bulk["_liked_fallback"] = True
+                st["bulk_message_new"] = bulk
+            fake = f"{app} like {target} profiles"
+            return plan_bulk_swipe(
+                fake,
+                ui_tree,
+                history,
+                state=state,
+                package=package,
+                dry_run=dry_run,
+            )
+
+    return _fp(
+        {
+            "action": "fail",
+            "reason": (
+                f"New-contact messaging not supported / screen unknown "
+                f"for {app or 'app'} ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "bulk_message_new_unsupported",
+    )
+
+
+def _blk_new_message_rows(
+    tree: str, *, skipped: Optional[set] = None
+) -> List[Tuple[str, int, int]]:
+    """BLK Matches name rows for free outreach — skip Hidden section + skipped."""
+    skipped = skipped or set()
+    rows: List[Tuple[str, int, int]] = []
+    in_hidden = False
+    for n in _parse_compact_nodes(tree):
+        t = (n.get("text") or n.get("label") or "").strip()
+        if not t:
+            continue
+        low = t.lower()
+        y = int(n.get("y") or 0)
+        if low.startswith("hidden"):
+            in_hidden = True
+            continue
+        if low.startswith("your turn") or low.startswith("their turn"):
+            in_hidden = False
+            continue
+        if in_hidden or y < 200 or y > 2000:
+            continue
+        if low in skipped:
+            continue
+        # Person name — Title Case / short token
+        if re.match(r"^[A-Z][a-zA-Z'\-]{1,24}$", t) or (
+            "," in t and re.match(r"^[A-Za-z]", t)
+        ):
+            if t.lower() in ("matches", "discover", "likes", "boost", "pass"):
+                continue
+            rows.append((t.split(",")[0].strip(), int(n.get("x") or 300), y))
+    return rows
+
+
 def plan_bulk_bench(
     instruction: str,
     ui_tree: str,
@@ -1706,6 +4850,29 @@ def plan_bulk_bench(
     goal = parse_bulk_goal(instruction)
     if not goal:
         return None
+    # r28: Taimi / Hinge unsupported — fail fast under 30s
+    app0 = str(goal.get("app") or "")
+    if app0 in ("taimi", "hinge"):
+        msg = (
+            "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
+            "Fail fast — do not burn steps."
+            if app0 == "taimi"
+            else (
+                "Hinge is unsupported: a11y tree is empty / unusable. "
+                "Fail fast — do not burn steps."
+            )
+        )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": msg,
+                "planner": "unsupported_app",
+                "llm_provider": None,
+                "dry_run_verified": False,
+                "unsupported_app": app0,
+            },
+            "bulk_unsupported_app",
+        )
     if goal["kind"] == "swipe":
         # Only for swipe-capable apps when detected
         app = goal.get("app")
@@ -1713,7 +4880,17 @@ def plan_bulk_bench(
             app
             and app not in swipe_keys()
             and app
-            not in ("facebook", "bumble", "yubo", "badoo", "hily", "blk", "taimi")
+            not in (
+                "facebook",
+                "bumble",
+                "yubo",
+                "badoo",
+                "hily",
+                "blk",
+                "taimi",
+                "hinge",
+                "tagged",
+            )
         ):
             # messaging apps: no-op skip with done reason
             return _fp(
@@ -1727,6 +4904,15 @@ def plan_bulk_bench(
                 "bulk_swipe_skip",
             )
         return plan_bulk_swipe(
+            instruction,
+            ui_tree,
+            history,
+            state=state,
+            package=package,
+            dry_run=dry_run,
+        )
+    if goal["kind"] == "message_new":
+        return plan_bulk_message_new(
             instruction,
             ui_tree,
             history,

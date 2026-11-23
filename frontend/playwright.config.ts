@@ -12,8 +12,25 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
-    { name: 'mobile', use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } } },
+    {
+      name: 'desktop',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+    },
+    {
+      name: 'mobile',
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
+    },
+    {
+      // Samsung Galaxy S21+ CSS viewport (~384×854)
+      name: 's21',
+      use: {
+        ...devices['Galaxy S8'],
+        viewport: { width: 384, height: 854 },
+        deviceScaleFactor: 2.75,
+        isMobile: true,
+        hasTouch: true,
+      },
+    },
   ],
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined

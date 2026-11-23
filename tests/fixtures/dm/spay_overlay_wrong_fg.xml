@@ -1,0 +1,12 @@
+<!-- Samsung Pay overlay wrongly selected as active while dating app is open -->
+<hierarchy windows="2" nodes="6" partial="false" empty="false" mode="compact" packages="com.samsung.android.spay,com.takimi.android">
+<w id="active" t="active" p="com.samsung.android.spay" f="1">
+ <n t="Samsung Pay" xy="540,200" b="100,150,980,250"/>
+ <n t="Quick access" xy="540,400" b="100,360,980,440"/>
+</w>
+<w id="2" t="1" p="com.takimi.android" f="0">
+ <n t="Alex" xy="300,1580" b="80,1507,600,1665"/>
+ <n t="12 left" xy="700,124" b="618,100,820,148"/>
+ <n d="People" c="1" xy="540,2200" b="470,2140,610,2260"/>
+</w>
+</hierarchy>

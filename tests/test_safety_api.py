@@ -1,4 +1,4 @@
-"""API tests: safety check → pause + Needs-you; resume only via /api/safety/resume."""
+"""API tests: safety check → pause; resume only via /api/safety/resume."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def test_humanizer_get_and_update(client):
     assert u.json()["overrides"]["shuffle_apps"] is False
 
 
-def test_mock_dating_verification_triggers_pause_and_needs_you(client):
+def test_mock_dating_verification_triggers_pause(client):
     c, main = client
     # Start dating so pause is meaningful
     main.dating_mode_state["running"] = True
@@ -83,17 +83,10 @@ def test_mock_dating_verification_triggers_pause_and_needs_you(client):
         "login",
     )
     assert data["dating_paused"] is True
-    assert data["needs_you_id"]
-    assert data["badge"] >= 1
-
+    # Internal id may still be minted for notify; portal list stays empty
     ny = c.get("/api/needs-you").json()
-    items = ny["items"]
-    assert any(i["source"] == "safety" for i in items)
-    safety_item = next(i for i in items if i["source"] == "safety")
-    assert "MockDating" in safety_item["app_name"]
-    assert "needs_resume" in safety_item["reasons"] or "safety_pause" in (
-        safety_item["reasons"] or []
-    )
+    assert ny["items"] == []
+    assert ny.get("removed") is True or ny.get("badge", 0) == 0
 
     # Step worker must honour pause
     from backend.step_worker import run_dating_step

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Heart, Play, Pause, Square, RefreshCw } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
@@ -41,19 +42,8 @@ interface DatingStatus {
   running: boolean;
   paused: boolean;
   current_app: string | null;
-  review_queue: ReviewMessage[];
   job_id?: string;
   activity?: ActivityPayload;
-}
-
-interface ReviewMessage {
-  id: string;
-  app_name: string;
-  package_name: string;
-  conversation_id: string;
-  profile_name: string;
-  message: string;
-  is_opener: boolean;
 }
 
 interface AppConfig {
@@ -133,8 +123,6 @@ export default function DatingPage() {
     dates_booked: number;
     by_app?: Record<string, { chats_active: number; invites_sent: number; dates_booked: number }>;
   } | null>(null);
-  const [reviewBeforeSend, setReviewBeforeSend] = useState(true);
-  const [reviewQueue, setReviewQueue] = useState<ReviewMessage[]>([]);
   const [globalMin, setGlobalMin] = useState(100);
   const [globalMax, setGlobalMax] = useState(500);
   const [todayMessages, setTodayMessages] = useState(0);
@@ -143,6 +131,9 @@ export default function DatingPage() {
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
+  const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
+    'both'
+  );
   const [deviceId, setDeviceId] = useState('');
   const [devices, setDevices] = useState<
     Array<{ device_id: string; name?: string; connected?: boolean }>
@@ -213,10 +204,6 @@ export default function DatingPage() {
           headers: authHeaders(),
         }),
       ]);
-      const queueData = await soft<{ messages?: ReviewMessage[] }>(
-        '/api/dating/review-queue',
-        { messages: [] }
-      );
       type SelectorApp = (typeof selectorApps)[number];
       const selData = await soft<{ apps?: SelectorApp[] }>(
         '/api/selectors/status',
@@ -251,7 +238,6 @@ export default function DatingPage() {
         setContactAskSnapchatText(df.contact_ask_snapchat_text);
       }
       setDateFlowStats(configRes.data.date_flow_stats || null);
-      setReviewBeforeSend(configRes.data.review_before_send ?? true);
       setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
       setGlobalMax(configRes.data.max_total_messages_per_day ?? 500);
       if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
@@ -263,7 +249,6 @@ export default function DatingPage() {
       ) {
         setOpenerMode(configRes.data.opener_mode);
       }
-      setReviewQueue(queueData.messages || []);
       setTemplates(openersRes.data.library?.templates || []);
       setBucketNow(openersRes.data.bucket_now || 'morning');
       setBucketCounts(openersRes.data.bucket_counts || {});
@@ -323,6 +308,7 @@ export default function DatingPage() {
           ? {
               device_id: deviceId || undefined,
               dry_run: dryRun,
+              contact_scope: contactScope,
               stand_in_package: 'ai.mobilerun.mockdating',
             }
           : {};
@@ -357,7 +343,7 @@ export default function DatingPage() {
             .filter((a) => a.enabled)
             .map((a) => a.package_name),
           round_robin: true,
-          review_before_send: reviewBeforeSend,
+          review_before_send: false,
           persona_prompt: persona,
           active_hours_start: '09:00',
           active_hours_end: '23:00',
@@ -469,39 +455,6 @@ export default function DatingPage() {
     );
   };
 
-  const reviewAction = async (
-    id: string,
-    action: 'approve' | 'reject',
-    edited?: string
-  ) => {
-    try {
-      if (edited) {
-        await axios.post(
-          `${getBackendUrl()}/api/dating/review/${id}/edit`,
-          {
-            id,
-            app_name: '',
-            package_name: '',
-            conversation_id: '',
-            profile_name: '',
-            message: edited,
-            is_opener: false,
-          },
-          { headers: authHeaders() }
-        );
-      }
-      await axios.post(
-        `${getBackendUrl()}/api/dating/review/${id}/${action}`,
-        {},
-        { headers: authHeaders() }
-      );
-      await loadAll();
-    } catch (e) {
-      console.error(e);
-      alert(`Failed to ${action} message`);
-    }
-  };
-
   const statusLabel = !status?.running
     ? 'Stopped'
     : status.paused
@@ -510,18 +463,25 @@ export default function DatingPage() {
 
   return (
     <div className="mr-page space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold flex items-center gap-2">
-            <Heart className="text-rose-400" /> Dating Mode
-          </h2>
-          <p className="text-mute mt-1">
-            Sequential messaging · human-like pacing · per-app caps
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
+            <Heart className="text-rose-400 shrink-0" /> Run
+          </h1>
+          <p className="text-mute mt-1 text-sm sm:text-base">
+            MacMobileRun · app selection, dry-run, openers, start/stop, activity
+          </p>
+          <p className="text-mute mt-1 text-sm">
+            Covers new contacts, existing chats, or both — dating here,{' '}
+            <Link to="/social" className="text-accent underline underline-offset-2">
+              Social
+            </Link>{' '}
+            for unread chat follow-ups.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <span
-            className={`px-3 py-1 rounded text-sm ${
+            className={`min-h-[44px] inline-flex items-center px-3 py-2 rounded text-sm ${
               status?.running && !status.paused
                 ? 'bg-green-900 text-green-300'
                 : status?.paused
@@ -534,10 +494,11 @@ export default function DatingPage() {
           </span>
           <button
             onClick={() => loadAll()}
-            className="p-2 rounded bg-surface-elev hover:bg-gray-600"
+            className="tap-target rounded-xl bg-surface-elev hover:bg-gray-600"
             title="Refresh"
+            aria-label="Refresh"
           >
-            <RefreshCw size={16} />
+            <RefreshCw size={18} />
           </button>
         </div>
       </div>
@@ -555,44 +516,63 @@ export default function DatingPage() {
         onSpeedChange={onSpeedChange}
       />
 
-      {/* Controls */}
-      <div className="flex flex-wrap gap-3 items-center">
-        <button
-          disabled={loading}
-          onClick={() => control('start')}
-          className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded"
-          data-testid="dating-start"
-          title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
-        >
-          <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
-        </button>
-        <button
-          disabled={loading || !status?.running}
-          onClick={() => control('pause')}
-          className="flex items-center gap-2 px-4 py-2 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded"
-        >
-          <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
-        </button>
-        <button
-          disabled={loading || !status?.running}
-          onClick={() => control('stop')}
-          className="flex items-center gap-2 px-4 py-2 bg-surface-elev hover:bg-gray-600 disabled:opacity-50 rounded"
-          data-testid="dating-stop"
-        >
-          <Square size={16} /> Stop
-        </button>
-        <label className="flex items-center gap-2 text-sm text-mute ml-2">
+      {/* Controls — stack on phone for one-handed use */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+          <button
+            disabled={loading}
+            onClick={() => control('start')}
+            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-3 text-sm font-medium hover:bg-rose-500 disabled:opacity-50"
+            data-testid="dating-start"
+            title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
+          >
+            <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
+          </button>
+          <button
+            disabled={loading || !status?.running}
+            onClick={() => control('pause')}
+            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-yellow-700 px-3 text-sm font-medium hover:bg-yellow-600 disabled:opacity-50"
+          >
+            <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
+          </button>
+          <button
+            disabled={loading || !status?.running}
+            onClick={() => control('stop')}
+            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-surface-elev px-3 text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
+            data-testid="dating-stop"
+          >
+            <Square size={16} /> Stop
+          </button>
+        </div>
+        <label className="tap-target flex items-center gap-2 text-sm text-mute">
           <input
             type="checkbox"
+            className="h-5 w-5 accent-rose-500"
             checked={dryRun}
             onChange={(e) => setDryRun(e.target.checked)}
             data-testid="dating-dry-run"
           />
           Dry-run (no real likes/messages)
         </label>
+        <label className="flex w-full flex-col gap-1 text-sm text-mute sm:w-auto sm:flex-row sm:items-center sm:gap-2">
+          Contacts
+          <select
+            className="mr-input text-sm sm:min-w-[12rem]"
+            value={contactScope}
+            onChange={(e) =>
+              setContactScope(e.target.value as 'new' | 'existing' | 'both')
+            }
+            data-testid="dating-contact-scope"
+            aria-label="Contact scope"
+          >
+            <option value="new">New (openers / first message)</option>
+            <option value="existing">Existing chats</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
         {devices.length > 0 && (
           <select
-            className="mr-input text-sm max-w-xs"
+            className="mr-input w-full text-sm sm:max-w-xs"
             value={deviceId}
             onChange={(e) => setDeviceId(e.target.value)}
             data-testid="dating-device"
@@ -666,7 +646,6 @@ export default function DatingPage() {
               </div>
               <div className="text-right text-sm text-mute">
                 <div>{app.inbox.unread} unread</div>
-                <div>{app.inbox.new_matches} new matches</div>
               </div>
             </div>
             <ProgressBar
@@ -779,14 +758,6 @@ export default function DatingPage() {
             </div>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={reviewBeforeSend}
-            onChange={(e) => setReviewBeforeSend(e.target.checked)}
-          />
-          Review before send (sequential queue)
-        </label>
         <label className="block text-sm">
           Persona / style prompt (AI openers)
           <textarea
@@ -963,7 +934,7 @@ export default function DatingPage() {
           Beyond {radiusMiles} mi → suggest meeting in {homeLocation} (public).
           Within radius → mutually convenient public place. Never suggest
           staying over. Decline first channel → ask second once; decline again or
-          ignore → hand off. Saved contacts appear on Matches.
+          ignore → hand off.
         </p>
         <button
           onClick={saveConfig}
@@ -1135,56 +1106,6 @@ export default function DatingPage() {
                   </li>
                 ))}
               </ul>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Review queue */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="text-lg font-semibold">
-          Review Queue ({reviewQueue.length})
-        </h3>
-        {reviewQueue.length === 0 ? (
-          <p className="text-mute text-sm">No messages waiting for review.</p>
-        ) : (
-          reviewQueue.map((msg) => (
-            <div
-              key={msg.id}
-              className="bg-canvas-elev border border-line rounded p-3 space-y-2"
-            >
-              <div className="flex justify-between text-sm">
-                <span>
-                  {msg.app_name} · {msg.profile_name}
-                  {msg.is_opener ? ' · opener' : ' · reply'}
-                </span>
-                <span className="text-mute">{msg.id}</span>
-              </div>
-              <textarea
-                defaultValue={msg.message}
-                id={`msg-${msg.id}`}
-                rows={2}
-                className="w-full bg-surface border border-line rounded px-3 py-2 text-sm"
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const el = document.getElementById(
-                      `msg-${msg.id}`
-                    ) as HTMLTextAreaElement;
-                    reviewAction(msg.id, 'approve', el?.value);
-                  }}
-                  className="px-3 py-1 bg-green-700 hover:bg-green-600 rounded text-sm"
-                >
-                  Approve & send
-                </button>
-                <button
-                  onClick={() => reviewAction(msg.id, 'reject')}
-                  className="px-3 py-1 bg-surface-elev hover:bg-gray-600 rounded text-sm"
-                >
-                  Reject
-                </button>
-              </div>
             </div>
           ))
         )}

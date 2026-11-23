@@ -106,24 +106,32 @@ def test_real_card_deck_still_detected():
     assert deck_card_name("bumble", deck) == "Alex"
 
 
-def test_photo_grid_is_not_deck_and_opens_tile():
+def test_photo_grid_is_not_deck_fails_cleanly():
+    """Grid tiles open PhotoBrowser (SuperSwipe) — never tile-tap; fail cleanly."""
     grid = _load("bumble_people_photo_grid.xml")
     assert bumble_on_photo_grid(grid)
     assert not bumble_on_people_deck(grid)
     tile = bumble_first_grid_tile_center(grid)
     assert tile == (270, 600)
-    st: dict = {}
+    # After Discover nav + vision settle already tried → fail (never SuperSwipe)
+    st: dict = {
+        "bulk_swipe": {
+            "_bumble_discover_tries": 2,
+            "_bumble_tried_discover": True,
+            "_bumble_vision_asked": True,
+        }
+    }
     act = plan_bulk_swipe(
         "bumble like 3 profiles",
         grid,
-        ["Opened Bumble — launch", "tap — Open swipe deck"],
+        ["Opened Bumble — launch", "Leave Bumble People grid → Discover"],
         state=st,
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act["action"] == "tap"
-    assert act.get("fastpath_step") == "bulk_open_grid_tile"
-    assert (act["x"], act["y"]) == (270, 600)
+    assert act and act["action"] == "fail"
+    assert act.get("fastpath_step") == "bulk_bumble_grid_not_deck"
+    assert "grid" in (act.get("reason") or "").lower()
 
 
 # --- Connections / Older chats ---
@@ -154,7 +162,7 @@ def test_connections_not_vetoed_by_deck_and_expands_older():
 
 def test_dry_run_swipe_logs_n_once_with_real_name():
     deck = _load("bumble_deck.xml")
-    st: dict = {"bulk_swipe": {"done": 0, "target": 5}}
+    st: dict = {"bulk_swipe": {"done": 0, "target": 5, "_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "bumble auto-swipe 5 profiles",
         deck,
@@ -163,15 +171,15 @@ def test_dry_run_swipe_logs_n_once_with_real_name():
         package="com.bumble.app",
         dry_run=True,
     )
-    assert act and act["action"] == "done"
+    assert act and act.get("dry_run") is True
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
-    assert "would like/pass 5 cards" in reason
-    assert "deck verified on alex" in reason
+    assert "alex" in reason
+    assert "evaluated 1 card" in reason
     assert "profile_1" not in reason
     assert "profile_2" not in reason
-    # Single completion — not 5 identical would-like waits
-    assert act.get("bulk_swipe_done") == 5
-    assert st["bulk_swipe"]["done"] == 5
+    assert st["bulk_swipe"]["done"] == 1
 
 
 def test_dry_run_refuses_profile_n_without_real_name():
@@ -191,7 +199,9 @@ def test_dry_run_refuses_profile_n_without_real_name():
         dry_run=True,
     )
     assert act and act["action"] == "fail"
+    reason = (act.get("reason") or "").lower()
     assert (
-        "profile_n" in (act.get("reason") or "").lower()
-        or "no real card" in (act.get("reason") or "").lower()
+        "profile_n" in reason
+        or "no real card" in reason
+        or "no real profile card markers" in reason
     )

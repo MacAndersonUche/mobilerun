@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="4" empty="false" packages="com.android.permissioncontroller">
+ <w id="active" t="1" p="com.android.permissioncontroller" f="1">
+  <n t="Allow MacMobileRun to send you notifications?" xy="540,900"/>
+  <n t="Allow" xy="300,1600" c="1"/>
+  <n t="Don't allow" xy="780,1600" c="1"/>
+ </w>
+</hierarchy>

@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="5" empty="false" packages="com.badoo.mobile">
+ <w id="active" t="1" p="com.badoo.mobile" f="1">
+  <n i="com.badoo.mobile:id/nav_bar_button_connections" t="Chats" xy="756,2210" c="1"/>
+  <n i="com.badoo.mobile:id/nav_bar_button_encounters" t="Encounters" xy="324,2210" c="1"/>
+  <n t="Likes" xy="540,2210" c="1"/>
+ </w>
+</hierarchy>

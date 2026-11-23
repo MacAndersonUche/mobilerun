@@ -18,7 +18,7 @@ const routes = [
   '/',
   '/chat',
   '/devices',
-  '/needs-you',
+  '/dating',
   '/social',
   '/dating',
   '/live',

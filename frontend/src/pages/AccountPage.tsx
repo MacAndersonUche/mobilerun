@@ -37,7 +37,7 @@ export default function AccountPage() {
         <div>
           <h2 className="font-medium">Link a phone</h2>
           <p className="text-sm text-mute">
-            Open Devices → Connect phone and scan the QR with the MobileRun APK
+            Open Devices → Connect phone and scan the QR with the MacMobileRun APK
             (or copy the link). No device code or in-app sign-in.
           </p>
         </div>
@@ -49,7 +49,6 @@ export default function AccountPage() {
       <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">
         {[
           ['Workspace', '/settings'],
-          ['Notifications', '/needs-you'],
           ['Preferences', '/settings'],
           ['AWS cost', '/settings'],
           ['Usage', '/history'],
@@ -77,7 +76,7 @@ export default function AccountPage() {
         Log out
       </Button>
 
-      <p className="pt-2 text-center text-xs text-mute">MobileRun by MacAI</p>
+      <p className="pt-2 text-center text-xs text-mute">MacMobileRun</p>
     </div>
   );
 }

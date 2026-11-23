@@ -17,9 +17,9 @@ import androidx.core.content.ContextCompat
  * Minimal permission surface for the executor APK.
  *
  * Required for agent work: Accessibility (manual).
- * Auto-prompted once: POST_NOTIFICATIONS, battery unrestricted.
- * Not in onboarding: overlay, MediaProjection (live-view only, on demand),
- * QUERY_ALL_PACKAGES (install-time), foreground service (started by app).
+ * Auto-prompted once: POST_NOTIFICATIONS, battery unrestricted, overlay (display over apps).
+ * On-demand: MediaProjection (live-view only), QUERY_ALL_PACKAGES (install-time),
+ * foreground service (started by app).
  */
 object PermissionStatus {
     data class Snapshot(
@@ -40,7 +40,6 @@ object PermissionStatus {
             "notifications" to notifications,
             "media_projection" to mediaGranted,
             "battery_optimization" to batteryOptimization,
-            // Kept in wire format for older portal rows; always optional now
             "overlay" to overlay,
             "query_packages" to queryPackages,
             "foreground_service" to foregroundService,
@@ -52,7 +51,7 @@ object PermissionStatus {
             get() = accessibility && accessibilityBound && !accessibilityStuckBinding
 
         val needsAutoGrant: Boolean
-            get() = !notifications || !batteryOptimization
+            get() = !notifications || !batteryOptimization || !overlay
     }
 
     fun snapshot(context: Context, mediaProjectionGranted: Boolean = false): Snapshot {
@@ -67,7 +66,7 @@ object PermissionStatus {
                 context.getSharedPreferences("mobilerun", Context.MODE_PRIVATE)
                     .getBoolean("media_projection_granted", false),
             batteryOptimization = isIgnoringBatteryOptimizations(context),
-            overlay = false, // no longer requested; report false so portal does not nag
+            overlay = canDrawOverlays(context),
             queryPackages = canQueryPackages(context),
             foregroundService = true,
         )
@@ -125,6 +124,8 @@ object PermissionStatus {
         return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
+    fun canDrawOverlays(context: Context): Boolean = Settings.canDrawOverlays(context)
+
     fun canQueryPackages(context: Context): Boolean {
         return try {
             val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -172,14 +173,14 @@ object PermissionStatus {
             } catch (_: Exception) {
             }
         }
-        // Fallback: general Accessibility list (user picks MobileRun)
+        // Fallback: general Accessibility list (user picks MacMobileRun)
         context.startActivity(
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
     }
 
-    /** Android 13+ sideload: Apps → MobileRun → ⋮ → Allow restricted settings */
+    /** Android 13+ sideload: Apps → MacMobileRun → ⋮ → Allow restricted settings */
     fun openAppDetails(context: Context) {
         val intent = Intent(
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -208,6 +209,23 @@ object PermissionStatus {
                 Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
+        }
+    }
+
+    fun overlayPermissionIntent(context: Context): Intent {
+        return Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}"),
+        )
+    }
+
+    fun openOverlaySettings(context: Context) {
+        try {
+            context.startActivity(
+                overlayPermissionIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (_: Exception) {
+            openAppDetails(context)
         }
     }
 

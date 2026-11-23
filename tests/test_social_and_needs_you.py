@@ -86,7 +86,8 @@ def test_escalation_autosend_trusted_simple():
     assert not d.needs_confirmation
 
 
-def test_prepare_outbound_queues_needs_you():
+def test_prepare_outbound_never_queues_needs_you():
+    """Needs-you portal removed — escalations no longer block auto-send."""
     q = NeedsYouQueue()
     cfg = SocialModeConfig()
     decision = prepare_outbound(
@@ -100,9 +101,9 @@ def test_prepare_outbound_queues_needs_you():
         inbound_preview="Free tomorrow?",
         confidence=0.9,
     )
-    assert decision.needs_you
-    assert decision.needs_you_id
-    assert q.pending_count() == 1
+    assert decision.needs_you is False
+    assert decision.needs_you_id is None
+    assert q.pending_count() == 0
     assert DEFAULT_SIGNATURE in decision.final_text
 
 
@@ -184,7 +185,7 @@ def client(monkeypatch, tmp_path):
     return TestClient(backend_main.app)
 
 
-def test_api_social_draft_and_needs_you(client):
+def test_api_social_draft_autosends_without_needs_you(client):
     res = client.post("/api/mode", json={"mode": "social", "speed_preset": "balanced"})
     assert res.status_code == 200
     assert res.json()["mode"] == "social"
@@ -204,22 +205,18 @@ def test_api_social_draft_and_needs_you(client):
     )
     assert draft.status_code == 200
     body = draft.json()
-    assert body["needs_you"] is True
-    assert body["badge"] >= 1
+    assert body["needs_you"] is False
+    assert body["badge"] == 0
     assert "— from MacAI" in body["final_text"]
 
     ny = client.get("/api/needs-you")
     assert ny.status_code == 200
-    item_id = body["needs_you_id"]
-    approve = client.post(
-        f"/api/needs-you/{item_id}/approve",
-        json={"draft_reply": "Friday 7 works — from MacAI"},
-    )
-    assert approve.status_code == 200
-    assert approve.json()["status"] == "approved"
+    assert ny.json()["badge"] == 0
+    assert ny.json()["items"] == []
+    assert client.post("/api/needs-you/x/approve").status_code == 410
 
 
-def test_dating_review_mirrors_needs_you(client):
+def test_dating_review_queue_removed(client):
     res = client.post(
         "/api/dating/review",
         json={
@@ -233,8 +230,7 @@ def test_dating_review_mirrors_needs_you(client):
         },
     )
     assert res.status_code == 200
+    assert res.json().get("removed") is True
     ny = client.get("/api/needs-you?source=dating")
-    assert any(i["id"] == "dating_msg_1" for i in ny.json()["items"])
-    reject = client.post("/api/needs-you/dating_msg_1/reject")
-    assert reject.status_code == 200
-    assert client.get("/api/needs-you?source=dating").json()["badge"] == 0
+    assert ny.json()["items"] == []
+    assert ny.json()["badge"] == 0

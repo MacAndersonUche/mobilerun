@@ -21,13 +21,12 @@ export default function SocialPage() {
   const [apps, setApps] = useState<AppRow[]>([]);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [sigOn, setSigOn] = useState(true);
-  const [sigText, setSigText] = useState('— from MacAI');
+  const [sigText, setSigText] = useState('— from MacMobileRun');
   const [askNew, setAskNew] = useState(true);
   const [emailNotify, setEmailNotify] = useState(false);
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [unread, setUnread] = useState(0);
-  const [badge, setBadge] = useState(0);
   const [loading, setLoading] = useState(false);
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
@@ -40,21 +39,19 @@ export default function SocialPage() {
 
   const load = async () => {
     try {
-      const [cfg, status, ny] = await Promise.all([
+      const [cfg, status] = await Promise.all([
         axios.get(`${getBackendUrl()}/api/social/config`, { headers: headers() }),
         axios.get(`${getBackendUrl()}/api/social/status`, { headers: headers() }),
-        axios.get(`${getBackendUrl()}/api/needs-you`, { headers: headers() }),
       ]);
       setApps(cfg.data.apps || []);
       setSpeed(cfg.data.speed_preset || 'balanced');
       setSigOn(cfg.data.signature?.enabled_global ?? true);
-      setSigText(cfg.data.signature?.text || '— from MacAI');
+      setSigText(cfg.data.signature?.text || '— from MacMobileRun');
       setAskNew(cfg.data.escalation?.always_ask_new_contacts ?? true);
       setEmailNotify(!!cfg.data.email_notify);
       setRunning(!!status.data.running);
       setPaused(!!status.data.paused);
       setUnread(status.data.unread?.total_unread || 0);
-      setBadge(ny.data.badge || 0);
       setActivity(status.data.activity || null);
     } catch (e) {
       console.error(e);
@@ -176,15 +173,15 @@ export default function SocialPage() {
     <div className="mr-page space-y-6">
       <div>
         <h2 className="text-2xl font-semibold flex items-center gap-2">
-          <MessageCircle className="text-emerald-400" /> Social Mode
+          <MessageCircle className="text-emerald-400" /> Social
         </h2>
         <p className="text-mute mt-1 text-sm">
-          WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + replies in
-          Mac&apos;s tone with humanizer pacing. Sensitive drafts go to{' '}
-          <Link to="/needs-you" className="text-amber-300 underline">
-            Needs you
+          Secondary to{' '}
+          <Link to="/dating" className="text-accent underline underline-offset-2">
+            Run
           </Link>
-          {badge > 0 ? ` (${badge})` : ''}.
+          . WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + auto
+          replies with humanizer pacing.
         </p>
       </div>
 
@@ -309,14 +306,14 @@ export default function SocialPage() {
       </div>
 
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="font-semibold">Escalation</h3>
+        <h3 className="font-semibold">Notifications</h3>
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={askNew}
             onChange={(e) => setAskNew(e.target.checked)}
           />
-          Always ask for new contacts
+          Prefer careful pacing for brand-new contacts
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -326,10 +323,6 @@ export default function SocialPage() {
           />
           Email notify (SES → macandersonuche@yahoo.com, off by default)
         </label>
-        <p className="text-xs text-mute">
-          Money, commitments, plans/times, personal info, and low confidence always
-          escalate to Needs you (UI badge + APK push).
-        </p>
       </div>
 
       <button

@@ -26,7 +26,7 @@ type Msg = {
 
 const FOLLOW_UPS = [
   'device info',
-  'needs you',
+  'device status',
   'switch to social',
   'open Settings',
   'dating dry run',

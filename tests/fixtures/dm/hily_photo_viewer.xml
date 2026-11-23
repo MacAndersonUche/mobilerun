@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="6" empty="false" packages="com.hily.app">
+ <w id="active" t="1" p="com.hily.app" f="1">
+  <n t="1 of 4" xy="540,120"/>
+  <n i="com.hily.app:id/app_top_bar_back" d="Navigate up" xy="80,140" c="1"/>
+  <n t="Photo" xy="540,900"/>
+ </w>
+</hierarchy>

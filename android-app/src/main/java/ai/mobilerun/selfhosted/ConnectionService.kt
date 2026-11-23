@@ -101,6 +101,7 @@ class ConnectionService : Service() {
                 handler.removeCallbacks(wsWatchdog)
                 unregisterScreenReceiver()
                 releaseLocks()
+                OverlayBubbleService.stop(applicationContext)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
@@ -139,6 +140,7 @@ class ConnectionService : Service() {
         handler.removeCallbacks(wsWatchdog)
         unregisterScreenReceiver()
         releaseLocks()
+        OverlayBubbleService.stop(applicationContext)
         super.onDestroy()
     }
 
@@ -233,7 +235,7 @@ class ConnectionService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "MobileRun connection",
+                "MacMobileRun connection",
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
@@ -243,6 +245,10 @@ class ConnectionService : Service() {
         try {
             val nm = getSystemService(NotificationManager::class.java)
             nm.notify(NOTIF_ID, buildNotification(status))
+        } catch (_: Exception) {
+        }
+        try {
+            OverlayBubbleService.sync(applicationContext, status)
         } catch (_: Exception) {
         }
     }
@@ -255,9 +261,9 @@ class ConnectionService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val title = if (status == "Connected") {
-            "MobileRun connected"
+            "MacMobileRun connected"
         } else {
-            "MobileRun · $status"
+            "MacMobileRun · $status"
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)

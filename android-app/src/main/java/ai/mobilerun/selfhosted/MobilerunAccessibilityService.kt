@@ -96,6 +96,12 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val bytes: Int,
         val treeGzB64: String?,
         val anrDismissed: Boolean,
+        /** App-window nodes excluding SystemUI / nav bars (for MIN_USEFUL). */
+        val appNodes: Int = 0,
+        /** Nodes with non-empty text/content-desc — 0 ⇒ screenshot+vision. */
+        val textNodes: Int = 0,
+        /** True when dump has no labels (Compose/Flutter deck) — force vision. */
+        val needsVision: Boolean = false,
     )
 
     private val screenshotExecutor = Executors.newSingleThreadExecutor { r ->
@@ -116,27 +122,95 @@ class MobilerunAccessibilityService : AccessibilityService() {
     @Volatile private var cachedResult: TreeResult? = null
     @Volatile private var lastNonEmptyResult: TreeResult? = null
     @Volatile private var lastNonEmptyAtMs: Long = 0
+    /**
+     * Hint from open_app / get_ui_tree — prefer this package's window.
+     * Private field + explicit setters avoid JVM clash with setPreferredPackageHint().
+     */
+    @Volatile private var preferredPkgHint: String? = null
+    @Volatile private var preferredPackageHintSetAtMs: Long = 0L
+    @Volatile private var lastScreenshotAtMs: Long = 0L
+
+    /** Read-only view of the current preferred-package hint. */
+    fun preferredPackageHint(): String? = preferredPkgHint
+
+    /** Clear sticky hint (job end / timeout / explicit). Prefer is never a hard filter. */
+    fun clearPreferredPackageHint(reason: String = "clear") {
+        if (preferredPkgHint != null) {
+            Log.i(TAG, "clear preferredPackageHint was=$preferredPkgHint reason=$reason")
+        }
+        preferredPkgHint = null
+        preferredPackageHintSetAtMs = 0L
+    }
+
+    fun setPreferredPackageHint(pkg: String?) {
+        val trimmed = pkg?.trim()?.takeIf { it.isNotEmpty() }
+        preferredPkgHint = trimmed
+        preferredPackageHintSetAtMs =
+            if (trimmed != null) SystemClock.elapsedRealtime() else 0L
+        if (trimmed != null) {
+            Log.i(TAG, "set preferredPackageHint=$trimmed")
+        }
+    }
+
+    private fun refreshPreferredPackageHint() {
+        val hint = preferredPkgHint
+        if (hint.isNullOrBlank()) return
+        if (
+            PreferredPackagePolicy.hintExpired(
+                SystemClock.elapsedRealtime(),
+                preferredPackageHintSetAtMs,
+            )
+        ) {
+            clearPreferredPackageHint("ttl_expired")
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        serviceInfo = serviceInfo?.apply {
-            // INCLUDE_NOT_IMPORTANT_VIEWS is required for Compose / custom-view UIs
-            // (IG, TikTok, dating apps) — without it rows and icon buttons vanish.
-            flags = flags or
+        ensureInteractiveServiceFlags("onServiceConnected")
+    }
+
+    /**
+     * Mirror uiautomator / UiAutomation: interactive windows + not-important
+     * views. Must call setServiceInfo — assigning flags alone (or only once
+     * at connect) can leave getWindows() empty while rootInActiveWindow stays
+     * stale (Taimi: uiautomator 195 nodes, our dump nodes=0).
+     */
+    private fun ensureInteractiveServiceFlags(why: String) {
+        try {
+            val info = serviceInfo ?: AccessibilityServiceInfo()
+            val before = info.flags
+            info.flags = info.flags or
                 AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
                 AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            // Content changes only — not TYPES_ALL_MASK (cheaper event delivery)
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_FOCUSED or
-                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 100
-        } ?: serviceInfo
-        Log.d(TAG, "Accessibility service connected flags=${serviceInfo?.flags}")
+            // typeAllMask equivalent — match accessibility_service_config.xml
+            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.notificationTimeout = 100
+            setServiceInfo(info)
+            Log.i(
+                TAG,
+                "setServiceInfo($why) flags $before→${serviceInfo?.flags}",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "setServiceInfo($why) failed: ${e.message}")
+        }
+    }
+
+    /** UiAutomator refreshes roots before dump — Compose/RN often need this. */
+    private fun refreshRoot(root: AccessibilityNodeInfo): Int {
+        return try {
+            root.refresh()
+            root.childCount
+        } catch (_: Exception) {
+            try {
+                root.childCount
+            } catch (_: Exception) {
+                0
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -237,6 +311,29 @@ class MobilerunAccessibilityService : AccessibilityService() {
 
     fun pressRecents(): Boolean = performGlobalAction(GLOBAL_ACTION_RECENTS)
 
+    /** IME Enter / editor action on the focused input (API 30+). */
+    fun pressEnter(): Boolean {
+        // ACTION_IME_ENTER = 0x100 — not always visible on older compile stubs
+        val actionImeEnter = 0x00000100
+        val root = rootInActiveWindow ?: return false
+        val focused =
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        if (focused != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val ok = focused.performAction(actionImeEnter)
+            focused.recycle()
+            if (ok) return true
+        } else {
+            focused?.recycle()
+        }
+        // Fallback: KEYCODE_ENTER via shell (best-effort)
+        return try {
+            Runtime.getRuntime().exec(arrayOf("input", "keyevent", "66")).waitFor() == 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun activePackageName(): String? {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return activePackageNameOnMain()
@@ -256,9 +353,50 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     private fun activePackageNameOnMain(): String? {
-        rootInActiveWindow?.packageName?.toString()?.let { return it }
-        windows?.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            ?.root?.packageName?.toString()?.let { return it }
+        val self = packageName
+        val hint = preferredPkgHint
+        val active = rootInActiveWindow?.packageName?.toString()
+        if (!active.isNullOrBlank() && !isIgnoredOverlayPackage(active)) {
+            if (hint.isNullOrBlank() || packageMatchesHint(active, hint)) return active
+        }
+        // Prefer target APPLICATION window; never report spay/systemui as FG
+        val apps = windows
+            ?.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            ?.sortedByDescending {
+                (if (it.isFocused) 2 else 0) + (if (it.isActive) 1 else 0)
+            }
+            .orEmpty()
+        if (!hint.isNullOrBlank()) {
+            for (w in apps) {
+                val pkg = try {
+                    w.root?.packageName?.toString()
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                if (packageMatchesHint(pkg, hint) && !isIgnoredOverlayPackage(pkg)) {
+                    return pkg
+                }
+            }
+        }
+        for (w in apps) {
+            val pkg = try {
+                w.root?.packageName?.toString()
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            if (!isIgnoredOverlayPackage(pkg) && pkg != self) return pkg
+        }
+        // a11y stuck on launcher — UsageStats may still see the target FG
+        // (Taimi/Hinge FLAG_SECURE / delayed window attach).
+        val usage = ForegroundResolver.usageForegroundPackage(
+            this,
+            preferHint = hint,
+            selfPkg = self,
+        )
+        if (!usage.isNullOrBlank() && !ForegroundResolver.isLauncherOrChrome(usage)) {
+            Log.i(TAG, "activePackageName UsageStats fallback=$usage")
+            return usage
+        }
         return null
     }
 
@@ -298,7 +436,45 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 }
             }
             if (anrOnly) return false
+            // Foreign overlay (Samsung Pay / SystemUI / Edge) while a dating
+            // job has a preferred package — Back / Close, never payment CTAs.
+            val hint = preferredPkgHint
+            if (!hint.isNullOrBlank() && isIgnoredOverlayPackage(pkg) &&
+                !packageMatchesHint(pkg, hint)
+            ) {
+                val safeClose = findNodeByText(
+                    root,
+                    listOf(
+                        "Close", "Not now", "No thanks", "Maybe later",
+                        "Dismiss", "Cancel", "Got it", "Got it!", "OK", "Okay",
+                    ),
+                )
+                if (safeClose != null) {
+                    val label = safeClose.text?.toString()
+                        ?: safeClose.contentDescription?.toString()
+                    val low = (label ?: "").lowercase()
+                    val payment = listOf(
+                        "pay", "boost", "buy", "purchase", "card", "premium",
+                    ).any { it in low }
+                    if (!payment) {
+                        val tapped = safeClose.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Log.i(
+                            TAG,
+                            "foreign overlay dismiss: tapped '$label' ok=$tapped " +
+                                "pkg=$pkg hint=$hint",
+                        )
+                        return tapped
+                    }
+                }
+                val backed = performGlobalAction(GLOBAL_ACTION_BACK)
+                Log.i(
+                    TAG,
+                    "foreign overlay dismiss: BACK ok=$backed pkg=$pkg hint=$hint",
+                )
+                return backed
+            }
             // Permission / consent popups — prefer the least-restrictive positive action
+            // Never "Allow payment" / Pay / Boost / Buy.
             val positives = listOf(
                 "While using the app",
                 "Only this time",
@@ -316,6 +492,14 @@ class MobilerunAccessibilityService : AccessibilityService() {
             val node = findNodeByText(root, positives)
             if (node != null) {
                 val label = node.text?.toString() ?: node.contentDescription?.toString()
+                val low = (label ?: "").lowercase()
+                if (
+                    "payment" in low || "pay " in low || low == "pay" ||
+                    "boost" in low || "buy" in low || "purchase" in low
+                ) {
+                    Log.w(TAG, "popup dismiss: refusing payment/paid label='$label'")
+                    return false
+                }
                 val tapped = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 Log.i(TAG, "popup dismiss: tapped '$label' ok=$tapped pkg=$pkg")
                 return tapped
@@ -482,7 +666,15 @@ class MobilerunAccessibilityService : AccessibilityService() {
      * off-main dumps hang ~5s and return empty on real devices and emulators).
      * Soft deadline returns a partial tree within ~3s rather than nothing.
      */
-    fun getUITreeDetailed(allowCache: Boolean = true): TreeResult {
+    fun getUITreeDetailed(
+        allowCache: Boolean = true,
+        preferredPackage: String? = null,
+    ): TreeResult {
+        refreshPreferredPackageHint()
+        if (!preferredPackage.isNullOrBlank()) {
+            setPreferredPackageHint(preferredPackage.trim())
+        }
+        val hint = preferredPkgHint
         val gen = contentGeneration.get()
         if (allowCache) {
             synchronized(cacheLock) {
@@ -490,7 +682,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 if (
                     hit != null &&
                     cachedGeneration == gen &&
-                    SystemClock.elapsedRealtime() - cachedAtMs < CACHE_TTL_MS
+                    SystemClock.elapsedRealtime() - cachedAtMs < CACHE_TTL_MS &&
+                    // Prefer matching cache; never require empty when hint mismatches
+                    (
+                        hint.isNullOrBlank() ||
+                            packageMatchesHint(hit.packageName, hint) ||
+                            !hit.empty
+                        )
                 ) {
                     return hit.copy(cached = true, buildMs = 0)
                 }
@@ -661,29 +859,98 @@ class MobilerunAccessibilityService : AccessibilityService() {
         return if (result.empty) preferStaleNonEmpty(result) else result
     }
 
+    /** True for home-screen launchers — real UI with icons, NOT system chrome. */
+    private fun isLauncherPackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        if (p.isEmpty()) return false
+        return p.contains("android.launcher") ||
+            p.endsWith(".launcher") ||
+            p.contains("nexuslauncher") ||
+            p.contains("launcher3") ||
+            p == "com.miui.home" ||
+            p.contains("com.sec.android.app.launcher")
+    }
+
+    /**
+     * SystemUI / IME / edge panels — never count as dating *or* home content.
+     * Launchers are intentionally excluded (APK 540: home had 38 nodes but
+     * app_nodes=0 empty=true because `.launcher` was treated as chrome).
+     */
+    private fun isSystemChromePackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        if (p.isEmpty()) return false
+        if (isLauncherPackage(p)) return false
+        return p.contains("systemui") ||
+            p.contains("permissioncontroller") ||
+            p.contains("inputmethod") ||
+            p.contains("navigationbar") ||
+            p.contains("edgepanels") ||
+            p.contains("samsung.android.app.cocktailbarservice")
+    }
+
+    /** Overlays / quick-access that must never be treated as the dating FG tree. */
+    private fun isIgnoredOverlayPackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        if (p.isEmpty()) return true
+        // Launcher is a real home screen — emit + count nodes (not an overlay)
+        if (isLauncherPackage(p)) return false
+        if (isSystemChromePackage(p)) return true
+        if (p == packageName || p.contains("mobilerun.selfhosted")) return true
+        return p.contains("spay") ||
+            p.contains("samsung.android.spay") ||
+            p.contains("samsungpay") ||
+            p.contains("bixby") ||
+            p.contains("smartcapture") ||
+            p.contains("easyaccess") ||
+            p.contains("com.samsung.android.app.routines") ||
+            p.contains("com.samsung.android.honeyboard") ||
+            p.contains("com.google.android.apps.accessibility")
+    }
+
+    private fun packageMatchesHint(pkg: String, hint: String?): Boolean =
+        PreferredPackagePolicy.packageMatchesHint(pkg, hint)
+
     private fun dumpUITreeCompact(deadlineMs: Long): TreeResult {
         // First pass: compact (interactive / text / desc). If too thin for the
-        // foreground app, immediately re-walk in full mode (no interesting filter).
+        // *app* window (exclude SystemUI bars), re-walk in full mode.
         val compact = dumpUITreeWalk(deadlineMs, fullMode = false)
-        if (compact.nodes >= MIN_USEFUL_NODES || compact.empty) {
+        val appUseful = compact.appNodes
+        if (appUseful >= MIN_USEFUL_NODES || compact.empty) {
             return compact
         }
         val remaining = deadlineMs - SystemClock.elapsedRealtime()
         if (remaining < 400) {
-            Log.w(TAG, "thin tree nodes=${compact.nodes}; no budget left for full re-dump")
+            Log.w(
+                TAG,
+                "thin app tree appNodes=$appUseful total=${compact.nodes}; " +
+                    "no budget left for full re-dump",
+            )
             return compact.copy(partial = true)
         }
-        Log.i(TAG, "thin tree nodes=${compact.nodes}; re-dumping uncompacted")
+        Log.i(
+            TAG,
+            "thin app tree appNodes=$appUseful total=${compact.nodes}; re-dumping uncompacted",
+        )
         val full = dumpUITreeWalk(deadlineMs, fullMode = true)
-        return if (full.nodes >= compact.nodes) full.copy(partial = true) else compact.copy(partial = true)
+        return if (full.appNodes >= compact.appNodes) {
+            full.copy(partial = true)
+        } else {
+            compact.copy(partial = true)
+        }
     }
 
     private fun dumpUITreeWalk(deadlineMs: Long, fullMode: Boolean): TreeResult {
+        // Re-apply flags every dump — rebind/toggle can drop interactive-windows
+        ensureInteractiveServiceFlags("dumpUITreeWalk")
         val sb = StringBuilder(8192)
         val counter = intArrayOf(0)
+        val appCounter = intArrayOf(0)
+        val textCounter = intArrayOf(0)
         val pkgs = linkedSetOf<String>()
         var windowCount = 0
         var partial = false
+        // On-device diag: type/pkg/kids per window (Mac: Taimi nodes=0 vs uiautomator)
+        val winDiag = mutableListOf<String>()
 
         fun pastDeadline(): Boolean {
             if (SystemClock.elapsedRealtime() >= deadlineMs) {
@@ -693,30 +960,296 @@ class MobilerunAccessibilityService : AccessibilityService() {
             return false
         }
 
-        fun emitWindow(id: String, type: String, focused: Int, root: AccessibilityNodeInfo) {
+        fun emitWindow(id: String, type: String, focused: Int, root: AccessibilityNodeInfo): Int {
+            val kidsBefore = refreshRoot(root)
             windowCount++
             val pkg = root.packageName?.toString().orEmpty()
             if (pkg.isNotEmpty()) pkgs.add(pkg)
-            sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\">\n")
+            val countApp = !isSystemChromePackage(pkg)
+            val nodesBefore = counter[0]
+            sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\" kids=\"$kidsBefore\">\n")
             buildCompactNodes(
                 root, " ", sb, counter, 0, deadlineMs, fullMode,
-            ) { partial = true }
+                markPartial = { partial = true },
+                appCounter = if (countApp) appCounter else null,
+                textCounter = textCounter,
+            )
             sb.append("</w>\n")
+            val emitted = counter[0] - nodesBefore
+            winDiag.add("$type:$pkg:kids=$kidsBefore:nodes=$emitted")
+            Log.i(
+                TAG,
+                "emitWindow id=$id type=$type pkg=$pkg kids=$kidsBefore nodes=$emitted",
+            )
+            return emitted
         }
 
-        // Prefer active root first
+        // Prefer TYPE_APPLICATION window whose package == target (hint from
+        // open_app / get_ui_tree). Hint is a SCORE BOOST only — never refuse a
+        // live window (sticky hint + launcher → empty tree was the APK 532 bug).
+        val selfPkg = packageName
+        val hint = preferredPkgHint
         var activeEmitted = false
-        val active = try {
+        var preferredActiveRoot: AccessibilityNodeInfo? = null
+        var preferredActivePkg = ""
+        var preferredActiveFromWindows = false
+        val emittedPkgs = mutableSetOf<String>()
+
+        data class WinCand(
+            val window: AccessibilityWindowInfo?,
+            val root: AccessibilityNodeInfo,
+            val pkg: String,
+            val score: Int,
+            val childCount: Int,
+            val isIgnoredOverlay: Boolean = false,
+        )
+
+        fun scoreWindow(
+            w: AccessibilityWindowInfo?,
+            pkg: String,
+            fromRootInActive: Boolean,
+            childCount: Int,
+        ): Int {
+            var s = PreferredPackagePolicy.scoreWindow(
+                pkg = pkg,
+                hint = hint,
+                fromRootInActive = fromRootInActive,
+                focused = w?.isFocused == true,
+                active = w?.isActive == true,
+                isApplication = w == null || w.type == AccessibilityWindowInfo.TYPE_APPLICATION,
+            )
+            // Prefer richer roots — rootInActiveWindow is often empty/stale for
+            // Compose / FLAG_SECURE while getWindows() TYPE_APPLICATION has nodes
+            // (Taimi: uiautomator 214 nodes, our dump nodes=0 via empty rootInActive).
+            if (w != null && w.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                s += 30
+            }
+            if (childCount > 0) s += 40 + minOf(childCount, 20)
+            return s
+        }
+
+        fun safeChildCount(root: AccessibilityNodeInfo): Int = try {
+            root.childCount
+        } catch (_: Exception) {
+            0
+        }
+
+        val candidates = mutableListOf<WinCand>()
+        // Keep launcher/system root aside for empty-tree fallback only
+        var fallbackRoot: AccessibilityNodeInfo? = null
+        var fallbackPkg = ""
+
+        // Prefer getWindows() TYPE_APPLICATION first (uiautomator-style), then
+        // rootInActiveWindow as a fallback candidate — never the other way around
+        // when both exist for the same package with unequal richness.
+        // Probe ALL window types for diag (Mac: compare vs uiautomator).
+        val winListProbe = try {
+            windows?.toList()
+        } catch (e: Exception) {
+            Log.w(TAG, "windows() failed: ${e.message}")
+            null
+        }
+        if (!winListProbe.isNullOrEmpty()) {
+            for (w in winListProbe) {
+                val probeRoot = try {
+                    w.root
+                } catch (_: Exception) {
+                    null
+                }
+                val probePkg = probeRoot?.packageName?.toString().orEmpty()
+                val probeKids = if (probeRoot != null) refreshRoot(probeRoot) else -1
+                winDiag.add(
+                    "probe:t=${w.type}:pkg=$probePkg:kids=$probeKids:" +
+                        "f=${if (w.isFocused) 1 else 0}:a=${if (w.isActive) 1 else 0}",
+                )
+                if (probeRoot != null && w.type != AccessibilityWindowInfo.TYPE_APPLICATION) {
+                    try {
+                        probeRoot.recycle()
+                    } catch (_: Exception) {
+                    }
+                    continue
+                }
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val root = probeRoot ?: continue
+                val pkg = probePkg
+                if (isIgnoredOverlayPackage(pkg)) {
+                    try {
+                        root.recycle()
+                    } catch (_: Exception) {
+                    }
+                    continue
+                }
+                val kids = probeKids.coerceAtLeast(0)
+                val existingIdx = candidates.indexOfFirst { it.pkg == pkg }
+                if (existingIdx >= 0) {
+                    val existing = candidates[existingIdx]
+                    if (kids > existing.childCount) {
+                        try {
+                            existing.root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        candidates[existingIdx] = WinCand(
+                            window = w,
+                            root = root,
+                            pkg = pkg,
+                            score = scoreWindow(w, pkg, fromRootInActive = false, kids),
+                            childCount = kids,
+                        )
+                    } else {
+                        try {
+                            root.recycle()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    continue
+                }
+                candidates.add(
+                    WinCand(
+                        window = w,
+                        root = root,
+                        pkg = pkg,
+                        score = scoreWindow(w, pkg, fromRootInActive = false, kids),
+                        childCount = kids,
+                    ),
+                )
+            }
+        }
+        val rawActive = try {
             rootInActiveWindow
         } catch (e: Exception) {
             Log.w(TAG, "rootInActiveWindow failed: ${e.message}")
             null
         }
-        if (active != null && !pastDeadline()) {
-            emitWindow("active", "active", 1, active)
+        if (rawActive != null) {
+            val pkg = rawActive.packageName?.toString().orEmpty()
+            if (!isIgnoredOverlayPackage(pkg)) {
+                val kids = refreshRoot(rawActive)
+                winDiag.add("rootInActive:pkg=$pkg:kids=$kids")
+                val existingIdx = candidates.indexOfFirst { it.pkg == pkg }
+                if (existingIdx >= 0) {
+                    val existing = candidates[existingIdx]
+                    // Keep windows() root when it is richer or equal — rootInActive
+                    // for Taimi/Hinge often reports the package with 0 children.
+                    if (kids > existing.childCount) {
+                        try {
+                            existing.root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        candidates[existingIdx] = WinCand(
+                            window = null,
+                            root = rawActive,
+                            pkg = pkg,
+                            score = scoreWindow(null, pkg, fromRootInActive = true, kids),
+                            childCount = kids,
+                        )
+                    } else {
+                        Log.i(
+                            TAG,
+                            "prefer windows() root pkg=$pkg kids=${existing.childCount} " +
+                                "over rootInActive kids=$kids",
+                        )
+                        try {
+                            rawActive.recycle()
+                        } catch (_: Exception) {
+                        }
+                    }
+                } else {
+                    candidates.add(
+                        WinCand(
+                            window = null,
+                            root = rawActive,
+                            pkg = pkg,
+                            score = scoreWindow(null, pkg, fromRootInActive = true, kids),
+                            childCount = kids,
+                        ),
+                    )
+                }
+            } else {
+                // Spay/SystemUI: never preferred. Launcher: keep as last-resort
+                // fallback so home dumps are never windows=0.
+                val isSpayOrUi = pkg.lowercase().let {
+                    it.contains("spay") || it.contains("systemui") ||
+                        it.contains("mobilerun.selfhosted") || it == selfPkg
+                }
+                if (!isSpayOrUi && PreferredPackagePolicy.fallbackRoot(pkg, true)) {
+                    fallbackRoot = rawActive
+                    fallbackPkg = pkg
+                    Log.i(TAG, "keep rootInActiveWindow pkg=$pkg as empty-tree fallback")
+                } else {
+                    Log.i(TAG, "skip rootInActiveWindow pkg=$pkg (overlay/system)")
+                    try {
+                        rawActive.recycle()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+        // Prefer hint via score; NEVER filter away a non-matching best.
+        val policyCands = candidates.map {
+            PreferredPackagePolicy.Cand(
+                pkg = it.pkg,
+                score = it.score,
+                fromRootInActive = it.window == null,
+                isIgnoredOverlay = it.isIgnoredOverlay,
+            )
+        }
+        val selectedPkg = PreferredPackagePolicy.selectPreferred(policyCands, hint)?.pkg
+        val best = candidates.firstOrNull { it.pkg == selectedPkg }
+            ?: candidates.maxByOrNull { it.score }
+        if (best != null) {
+            preferredActiveRoot = best.root
+            preferredActivePkg = best.pkg
+            preferredActiveFromWindows = best.window != null
+            if (!hint.isNullOrBlank() && !packageMatchesHint(best.pkg, hint)) {
+                Log.i(
+                    TAG,
+                    "hint=$hint unmatched; emitting live window pkg=${best.pkg} " +
+                        "(prefer-not-filter)",
+                )
+            }
+            for (c in candidates) {
+                if (c.root !== best.root) {
+                    try {
+                        c.root.recycle()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            // Drop unused fallback
+            if (fallbackRoot != null && fallbackRoot !== best.root) {
+                try {
+                    fallbackRoot.recycle()
+                } catch (_: Exception) {
+                }
+                fallbackRoot = null
+            }
+        } else if (fallbackRoot != null) {
+            // Launcher-only / chrome-only: still emit so tree is never empty
+            preferredActiveRoot = fallbackRoot
+            preferredActivePkg = fallbackPkg
+            preferredActiveFromWindows = false
+            Log.i(
+                TAG,
+                "no app window for hint=${hint ?: "-"}; " +
+                    "fallback rootInActiveWindow pkg=$fallbackPkg",
+            )
+            fallbackRoot = null
+        }
+        if (preferredActiveRoot != null && !pastDeadline()) {
+            Log.i(
+                TAG,
+                "active window pkg=$preferredActivePkg hint=${hint ?: "-"} " +
+                    "fromWindows=$preferredActiveFromWindows",
+            )
+            val n = emitWindow("active", "active", 1, preferredActiveRoot)
+            // Only skip re-walk of same pkg when we actually emitted nodes —
+            // Taimi/Compose often returns kids=0 until a second getWindows root.
+            if (n > 0 && preferredActivePkg.isNotBlank()) {
+                emittedPkgs.add(preferredActivePkg)
+            }
             activeEmitted = true
             try {
-                active.recycle()
+                preferredActiveRoot.recycle()
             } catch (_: Exception) {
             }
         }
@@ -724,7 +1257,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         // Always walk interactive windows — WhatsApp often parks the list /
         // compose field in a non-active application window on One UI / S21+.
         if (!pastDeadline()) {
-            val winList = try {
+            val winList = winListProbe ?: try {
                 windows?.toList()
             } catch (e: Exception) {
                 Log.w(TAG, "windows() failed: ${e.message}")
@@ -741,14 +1274,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 }
                 for (window in ordered) {
                     if (pastDeadline() || counter[0] >= MAX_NODES || sb.length >= MAX_TREE_CHARS) break
-                    // Skip the active window we already emitted as "active"
-                    if (window.isActive && activeEmitted) continue
-                    // Prefer application + IME; skip pure wallpaper/split décor
                     if (
                         window.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
-                        window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD &&
-                        window.type != AccessibilityWindowInfo.TYPE_SYSTEM
+                        window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
                     ) {
+                        // Skip SYSTEM chrome — never dump as app content
                         continue
                     }
                     val root = try {
@@ -756,18 +1286,36 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     } catch (_: Exception) {
                         null
                     } ?: continue
+                    val pkg = root.packageName?.toString().orEmpty()
+                    if (isIgnoredOverlayPackage(pkg) &&
+                        window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD
+                    ) {
+                        try {
+                            root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        continue
+                    }
+                    if (pkg.isNotBlank() && pkg in emittedPkgs) {
+                        try {
+                            root.recycle()
+                        } catch (_: Exception) {
+                        }
+                        continue
+                    }
                     val title = try {
                         window.title?.toString().orEmpty()
                     } catch (_: Exception) {
                         ""
                     }
                     val typeLabel = "${window.type}" + if (title.isNotEmpty()) ":${title.take(24)}" else ""
-                    emitWindow(
+                    val n = emitWindow(
                         id = "${window.id}",
                         type = typeLabel,
                         focused = if (window.isFocused) 1 else 0,
                         root = root,
                     )
+                    if (n > 0 && pkg.isNotBlank()) emittedPkgs.add(pkg)
                     try {
                         root.recycle()
                     } catch (_: Exception) {
@@ -777,9 +1325,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
 
         val body = sb.toString()
+        val diagAttr = xmlEsc(winDiag.take(24).joinToString("|"))
+        Log.i(TAG, "win_diag=$diagAttr nodes=${counter[0]} text=${textCounter[0]}")
         if (body.isBlank()) {
             return TreeResult(
-                tree = """<hierarchy windows="0" nodes="0" empty="true"/>""",
+                tree = """<hierarchy windows="0" nodes="0" empty="true" text_nodes="0" needs_vision="true" win_diag="$diagAttr"/>""",
                 packageName = "",
                 empty = true,
                 chars = 0,
@@ -790,6 +1340,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 bytes = 0,
                 treeGzB64 = null,
                 anrDismissed = false,
+                appNodes = 0,
+                textNodes = 0,
+                needsVision = true,
             )
         }
         val truncated = body.length >= MAX_TREE_CHARS || counter[0] >= MAX_NODES || partial
@@ -798,13 +1351,34 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } else {
             body
         }
-        val primaryPkg = pkgs.firstOrNull().orEmpty()
+        // Prefer target hint, else first non-overlay app package
+        val hintPkg = preferredPkgHint
+        val primaryPkg = pkgs.firstOrNull { packageMatchesHint(it, hintPkg) }
+            ?: pkgs.firstOrNull { !isIgnoredOverlayPackage(it) }
+            ?: pkgs.firstOrNull().orEmpty()
         val nodeCount = counter[0]
-        val isEmpty = nodeCount == 0
+        val appNodeCount = appCounter[0]
+        val textNodeCount = textCounter[0]
+        // Launcher nodes count as app_nodes (home is not SystemUI chrome).
+        val effectiveAppNodes = if (
+            appNodeCount == 0 && nodeCount > 0 && pkgs.any { isLauncherPackage(it) }
+        ) {
+            nodeCount
+        } else {
+            appNodeCount
+        }
+        // Empty only when nothing useful — SystemUI-only dumps stay empty;
+        // launcher home with icons is NOT empty.
+        // Hinge: containers with 0 text still count as non-empty → vision path.
+        val isEmpty = nodeCount == 0 || effectiveAppNodes == 0
+        val needsVision = isEmpty || textNodeCount == 0
         val mode = if (fullMode) "full" else "compact"
         val tree = buildString {
             append("<hierarchy windows=\"$windowCount\" nodes=\"$nodeCount\" ")
+            append("app_nodes=\"$effectiveAppNodes\" text_nodes=\"$textNodeCount\" ")
+            append("needs_vision=\"$needsVision\" ")
             append("partial=\"$truncated\" empty=\"$isEmpty\" mode=\"$mode\" ")
+            append("win_diag=\"$diagAttr\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
             append("</hierarchy>")
@@ -821,6 +1395,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
             bytes = tree.toByteArray(Charsets.UTF_8).size,
             treeGzB64 = null,
             anrDismissed = false,
+            appNodes = effectiveAppNodes,
+            textNodes = textNodeCount,
+            needsVision = needsVision,
         )
     }
 
@@ -866,7 +1443,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
     /**
      * Emit interactive / text-bearing nodes with short keys:
      * t=text, d=desc, h=hint, i=id, c=clickable, e=editable, s=scrollable,
-     * xy=center, b=bounds. Never drop EditText or clickable=true.
+     * v=0 when not visibleToUser, xy=center, b=bounds.
+     * Never prune subtrees on isVisibleToUser=false (Hinge/Taimi OEM quirk).
      */
     private fun buildCompactNodes(
         node: AccessibilityNodeInfo?,
@@ -877,6 +1455,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         deadlineMs: Long,
         fullMode: Boolean,
         markPartial: () -> Unit,
+        appCounter: IntArray? = null,
+        textCounter: IntArray? = null,
     ) {
         if (node == null || counter[0] >= MAX_NODES || depth > MAX_DEPTH) return
         if (sb.length >= MAX_TREE_CHARS) return
@@ -921,16 +1501,18 @@ class MobilerunAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             true
         }
-        // Keep clickable/editable even if isVisibleToUser is flaky on OEM skins
+        // Keep clickable/editable even if isVisibleToUser is flaky on OEM skins.
+        // IMPORTANT: do NOT return early on !visible — still walk children
+        // (Hinge Discover / Taimi park useful nodes under invisible parents).
         val mustKeep = node.isClickable || node.isEditable || node.isCheckable ||
             node.isLongClickable
-        if (!visible && !mustKeep) return
 
         val interactive = mustKeep || node.isScrollable
         val hasLabel = text.isNotEmpty() || contentDesc.isNotEmpty() || hint.isNotEmpty()
+        // Invisible alone is not enough to emit — but we still recurse children below
         val interesting = interactive || hasLabel || fullMode
 
-        // Skip inert wrappers; still recurse into visible children
+        // Skip inert wrappers; always recurse into children (even if parent invisible)
         if (!interesting) {
             val childCount = node.childCount
             for (i in 0 until childCount) {
@@ -945,7 +1527,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     null
                 }
                 buildCompactNodes(
-                    child, indent, sb, counter, depth + 1, deadlineMs, fullMode, markPartial,
+                    child, indent, sb, counter, depth + 1, deadlineMs, fullMode,
+                    markPartial, appCounter, textCounter,
                 )
                 try {
                     child?.recycle()
@@ -963,6 +1546,10 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
 
         counter[0]++
+        appCounter?.let { it[0]++ }
+        if (text.isNotEmpty() || contentDesc.isNotEmpty() || hint.isNotEmpty()) {
+            textCounter?.let { it[0]++ }
+        }
         val bounds = android.graphics.Rect()
         node.getBoundsInScreen(bounds)
         val cx = (bounds.left + bounds.right) / 2
@@ -980,6 +1567,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (node.isFocused) sb.append(" f=\"1\"")
         if (node.isCheckable) sb.append(" k=\"${if (node.isChecked) 1 else 0}\"")
         if (node.isScrollable) sb.append(" s=\"1\"")
+        if (!visible) sb.append(" v=\"0\"")
         sb.append(" xy=\"$cx,$cy\"")
         sb.append(" b=\"${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}\"")
         sb.append("/>\n")
@@ -998,7 +1586,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 null
             }
             buildCompactNodes(
-                child, indent, sb, counter, depth + 1, deadlineMs, fullMode, markPartial,
+                child, indent, sb, counter, depth + 1, deadlineMs, fullMode,
+                markPartial, appCounter, textCounter,
             )
             try {
                 child?.recycle()
@@ -1029,55 +1618,239 @@ class MobilerunAccessibilityService : AccessibilityService() {
             .replace("\n", " ")
             .take(120)
 
+    /**
+     * Capture JPEG base64 via AccessibilityService.takeScreenshot (API 30+).
+     * Requires android:canTakeScreenshot="true" in accessibility_service_config.xml
+     * and a rebound service after install. Never hangs past the latch; returns
+     * null with logged error codes (incl. INTERVAL_TIME_SHORT / FLAG_SECURE black).
+     */
     fun takeScreenshotJpegBase64(maxWidth: Int = 720, quality: Int = 45): String? {
-        if (Build.VERSION.SDK_INT < 30) {
-            Log.w(TAG, "takeScreenshot requires API 30+")
-            return null
-        }
-        val latch = CountDownLatch(1)
-        val result = AtomicReference<String?>(null)
-        try {
-            takeScreenshot(
-                Display.DEFAULT_DISPLAY,
-                screenshotExecutor,
-                object : TakeScreenshotCallback {
-                    override fun onSuccess(screenshot: ScreenshotResult) {
-                        try {
-                            val hw = screenshot.hardwareBuffer
-                            val colorSpace = screenshot.colorSpace
-                            val bitmap = Bitmap.wrapHardwareBuffer(hw, colorSpace)
-                            hw.close()
-                            if (bitmap == null) {
-                                latch.countDown()
-                                return
-                            }
-                            val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                            bitmap.recycle()
-                            val scaled = scaleBitmap(software, maxWidth)
-                            if (scaled !== software) software.recycle()
-                            val baos = ByteArrayOutputStream()
-                            scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
-                            scaled.recycle()
-                            result.set(Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
-                        } catch (e: Exception) {
-                            Log.e(TAG, "screenshot encode failed", e)
-                        } finally {
-                            latch.countDown()
-                        }
-                    }
+        val detail = takeScreenshotJpegBase64Detailed(maxWidth, quality)
+        return detail["data"] as? String
+    }
 
-                    override fun onFailure(errorCode: Int) {
-                        Log.w(TAG, "takeScreenshot failed code=$errorCode")
-                        latch.countDown()
-                    }
-                },
+    fun takeScreenshotJpegBase64Detailed(
+        maxWidth: Int = 720,
+        quality: Int = 45,
+    ): Map<String, Any?> {
+        val detail = takeScreenshotJpegDetailed(maxWidth, quality)
+        val jpeg = detail["jpeg"] as? ByteArray
+        if (jpeg != null && jpeg.isNotEmpty()) {
+            val b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+            return detail.filterKeys { it != "jpeg" } + mapOf(
+                "ok" to true,
+                "data" to b64,
+                "bytes" to jpeg.size,
+                "b64_chars" to b64.length,
             )
-        } catch (e: Exception) {
-            Log.e(TAG, "takeScreenshot threw", e)
-            return null
         }
-        latch.await(6, TimeUnit.SECONDS)
-        return result.get()
+        return detail.filterKeys { it != "jpeg" }
+    }
+
+    /**
+     * Capture JPEG bytes for S3 upload (avoid WS base64 blowing 32KB frames).
+     * Returns map with ``jpeg`` ByteArray on success + ``source`` / ``bytes``.
+     */
+    fun takeScreenshotJpegDetailed(
+        maxWidth: Int = 720,
+        quality: Int = 45,
+    ): Map<String, Any?> {
+        // 1) AccessibilityService.takeScreenshot (API 30+) — short latch so the
+        //    RPC never sits past the cloud timeout when Samsung stalls.
+        if (Build.VERSION.SDK_INT >= 30) {
+            // Respect Android's ~1/sec rate limit before calling again
+            val since = SystemClock.elapsedRealtime() - lastScreenshotAtMs
+            if (lastScreenshotAtMs > 0L && since < 1100L) {
+                try {
+                    Thread.sleep(1100L - since)
+                } catch (_: InterruptedException) {
+                }
+            }
+            var attempt = 0
+            while (attempt < 2) {
+                attempt++
+                val latch = CountDownLatch(1)
+                val jpegRef = AtomicReference<ByteArray?>(null)
+                val err = AtomicReference<String?>(null)
+                val errCode = AtomicReference<Int?>(null)
+                try {
+                    // Callback must run on a live executor — never block the main
+                    // looper; screenshotExecutor is a dedicated daemon thread.
+                    takeScreenshot(
+                        Display.DEFAULT_DISPLAY,
+                        screenshotExecutor,
+                        object : TakeScreenshotCallback {
+                            override fun onSuccess(screenshot: ScreenshotResult) {
+                                try {
+                                    val hw = screenshot.hardwareBuffer
+                                    val colorSpace = screenshot.colorSpace
+                                    val bitmap = Bitmap.wrapHardwareBuffer(hw, colorSpace)
+                                    hw.close()
+                                    if (bitmap == null) {
+                                        err.set("wrapHardwareBuffer_null")
+                                        return
+                                    }
+                                    val software = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                                    bitmap.recycle()
+                                    if (software == null) {
+                                        err.set("copy_software_null")
+                                        return
+                                    }
+                                    // FLAG_SECURE (Badoo chat etc.) → mostly black
+                                    if (isMostlyBlackBitmap(software)) {
+                                        err.set("secure_window_or_black")
+                                        software.recycle()
+                                        Log.w(
+                                            TAG,
+                                            "takeScreenshot black/FLAG_SECURE frame — skip",
+                                        )
+                                        return
+                                    }
+                                    val scaled = scaleBitmap(software, maxWidth)
+                                    if (scaled !== software) software.recycle()
+                                    val baos = ByteArrayOutputStream()
+                                    scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                                    scaled.recycle()
+                                    jpegRef.set(baos.toByteArray())
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "screenshot encode failed", e)
+                                    err.set(e.message)
+                                } finally {
+                                    latch.countDown()
+                                }
+                            }
+
+                            override fun onFailure(errorCode: Int) {
+                                val name = screenshotErrorName(errorCode)
+                                Log.w(
+                                    TAG,
+                                    "takeScreenshot failed code=$errorCode ($name)",
+                                )
+                                errCode.set(errorCode)
+                                err.set("code_${errorCode}_$name")
+                                latch.countDown()
+                            }
+                        },
+                    )
+                    lastScreenshotAtMs = SystemClock.elapsedRealtime()
+                    val ok = latch.await(3, TimeUnit.SECONDS)
+                    if (!ok) {
+                        Log.w(TAG, "takeScreenshot latch timeout 3s — returning error")
+                        err.set(err.get() ?: "latch_timeout_3s")
+                    }
+                    val jpeg = jpegRef.get()
+                    if (jpeg != null && jpeg.isNotEmpty()) {
+                        Log.i(
+                            TAG,
+                            "takeScreenshot ok source=a11y bytes=${jpeg.size} " +
+                                "maxWidth=$maxWidth quality=$quality",
+                        )
+                        return mapOf(
+                            "ok" to true,
+                            "jpeg" to jpeg,
+                            "bytes" to jpeg.size,
+                            "source" to "a11y",
+                        )
+                    }
+                    val code = errCode.get()
+                    // ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT = 3 — wait + retry
+                    if (code == 3 && attempt < 2) {
+                        Log.i(TAG, "takeScreenshot rate-limited; sleep 1100ms + retry")
+                        try {
+                            Thread.sleep(1100L)
+                        } catch (_: InterruptedException) {
+                        }
+                        continue
+                    }
+                    Log.w(TAG, "takeScreenshot empty err=${err.get()}")
+                    // Fall through to MediaProjection; keep error for response
+                    val a11yErr = err.get()
+                    val mp = ScreenCaptureService.lastJpegBase64()?.let {
+                        Base64.decode(it, Base64.DEFAULT)
+                    }
+                    if (mp != null && mp.isNotEmpty()) {
+                        Log.i(
+                            TAG,
+                            "screenshot fallback MediaProjection bytes=${mp.size}",
+                        )
+                        return mapOf(
+                            "ok" to true,
+                            "jpeg" to mp,
+                            "bytes" to mp.size,
+                            "source" to "media_projection",
+                            "a11y_error" to a11yErr,
+                        )
+                    }
+                    return mapOf(
+                        "ok" to false,
+                        "error" to (a11yErr ?: "screenshot unavailable"),
+                        "error_code" to code,
+                        "a11y" to true,
+                        "media_projection" to ScreenCaptureService.isStreaming(),
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "takeScreenshot threw", e)
+                    err.set(e.message)
+                }
+            }
+        } else {
+            Log.w(TAG, "takeScreenshot requires API 30+")
+        }
+        // 2) MediaProjection live-view last frame (no new consent)
+        val mp = ScreenCaptureService.lastJpegBase64()?.let {
+            Base64.decode(it, Base64.DEFAULT)
+        }
+        if (mp != null && mp.isNotEmpty()) {
+            Log.i(TAG, "screenshot fallback MediaProjection bytes=${mp.size}")
+            return mapOf(
+                "ok" to true,
+                "jpeg" to mp,
+                "bytes" to mp.size,
+                "source" to "media_projection",
+            )
+        }
+        Log.w(TAG, "screenshot unavailable (a11y+MediaProjection)")
+        return mapOf(
+            "ok" to false,
+            "error" to "screenshot unavailable",
+            "a11y" to (Build.VERSION.SDK_INT >= 30),
+            "media_projection" to ScreenCaptureService.isStreaming(),
+        )
+    }
+
+    private fun screenshotErrorName(code: Int): String = when (code) {
+        1 -> "INTERNAL_ERROR"
+        2 -> "NO_ACCESSIBILITY_ACCESS"
+        3 -> "INTERVAL_TIME_SHORT"
+        4 -> "INVALID_DISPLAY"
+        5 -> "INVALID_WINDOW"
+        else -> "UNKNOWN"
+    }
+
+    /** FLAG_SECURE / black frames — sample grid; >92% near-black → treat as unusable. */
+    private fun isMostlyBlackBitmap(bmp: Bitmap): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        if (w < 2 || h < 2) return true
+        var dark = 0
+        var total = 0
+        val stepX = (w / 8).coerceAtLeast(1)
+        val stepY = (h / 8).coerceAtLeast(1)
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                val c = bmp.getPixel(x, y)
+                val r = (c shr 16) and 0xff
+                val g = (c shr 8) and 0xff
+                val b = c and 0xff
+                if (r < 18 && g < 18 && b < 18) dark++
+                total++
+                x += stepX
+            }
+            y += stepY
+        }
+        return total > 0 && dark * 100 / total >= 92
     }
 
     private fun scaleBitmap(src: Bitmap, maxWidth: Int): Bitmap {

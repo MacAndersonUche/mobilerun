@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("mobilerun.cloud_agent")
 
 SYSTEM_PROMPT = """You are MobileRun, controlling an Android phone via accessibility.
-Given the goal and a compressed UI tree (and optional screenshot), pick ONE next action as JSON only:
+Given the goal, a set-of-marks indexed UI tree, and optional screenshot, pick ONE next action as JSON only:
 {"action":"tap","x":123,"y":456,"reason":"..."}
 {"action":"swipe","x1":100,"y1":800,"x2":100,"y2":200,"reason":"..."}
 {"action":"type","text":"...","reason":"..."}
@@ -33,15 +33,19 @@ Rules:
   the app label — never hunt launcher icons or swipe the home screen.
 - NEVER call open_app again once RECENT ACTIONS already show Opened X / open_ok, or
   the UI tree package already matches the target. Move on (search, tap, type, send).
-- Prefer clickable/text nodes with center=(x,y) from the tree. Never invent coordinates.
-- If the tree is empty/thin (<15 nodes) but a screenshot is provided, use VISION:
+- Indexed elements look like [i] label @ (x,y) — tap those centers. Never invent coords.
+- If the tree is empty/thin but a screenshot is provided, use VISION:
   estimate tap coordinates from the image (screen origin top-left; x,y in pixels).
-  Prefer labeled icons (Search, Send, Messages, Inbox) visible in the screenshot.
+  Prefer labeled icons (Search, Send, Messages, Inbox, Chats) visible in the screenshot.
+- Navigate freely: tabs, Back, vertical scroll, open chat rows, dismiss paywalls/overlays.
+- NEVER tap paid elements (Boost, Rose, Super Like, Crush, Buy, Subscribe, Premium, credits).
 - HARD RULE — MESSAGE TEXT: Never invent, rewrite, paraphrase, or “improve” a
   message body. AI/vision is for NAVIGATION only (open chat, dismiss prompts,
   focus the compose field). When typing a message, the "text" field MUST be the
   exact user-provided phrase from the GOAL (e.g. after “say …”) or a verbatim
   message-bank / template entry. Contact/search queries may use names/numbers.
+- Profile names must look like "Name" or "Name, 28" — never section labels
+  (Intentions, Education, Health and Fitness, Looking for, Height, …).
 - Do NOT repeat the same swipe. If stuck, use open_app (once), back, or fail.
 - Do NOT repeat the same tap (same x,y) when the UI did not change. If NO PROGRESS is
   noted, change strategy: different node, swipe, back, type, done, or fail.
@@ -52,12 +56,39 @@ Rules:
 - Reply with JSON only.
 """
 
+BULK_DRY_RUN_LLM_HINT = """
+DRY-RUN CONSTRAINTS (must obey):
+- NEVER type into a chat composer (no "typing…" to peers). Verifying an editable
+  message/comment field is SUCCESS for that chat — call done or back out.
+- NEVER horizontal swipe / like / pass / VoteYes / VoteNo on dating decks.
+  Vertical scroll to read a profile is OK.
+- NEVER tap paid CTAs (Boost, Rose, Super Like, Crush, Buy, Subscribe, credits).
+- Reply goal: open distinct existing chats and confirm editable input each time.
+- New-contact goal: open distinct new profiles' message/comment input; dismiss paywalls.
+- SWIPE GOAL SUCCESS (dry-run): as soon as you see ONE real profile name on screen
+  ("Name" or "Name, 28" — NOT section labels like Intentions / Health and Fitness),
+  call done immediately:
+  {"action":"done","reason":"[DRY RUN] identified card Name; would like/pass",
+   "dry_run_verified":true}
+  Do NOT swipe, like, or pass — identifying the name IS the goal. N=1 is enough.
+"""
+
+# r25: hand off to LLM when bulk heuristics make no verified progress for this long
+BULK_STALL_HANDOFF_S = int(os.environ.get("BULK_STALL_HANDOFF_S") or "20")
+# Live-test mode default cap (likes / real sends) per app / job
+LIVE_TEST_DEFAULT_MAX_N = int(os.environ.get("LIVE_TEST_MAX_N") or "3")
+
 # Wall-clock timeout for a cloud agent job (seconds). Default 15 min so a
 # 10–20 step messaging flow is not killed by tree/LLM latency alone.
 TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "900")
 # Fail only when no step progress for this long (still progressing → keep going
 # until TASK_TIMEOUT_S).
 TASK_IDLE_TIMEOUT_S = int(os.environ.get("AGENT_IDLE_TIMEOUT_S") or "240")
+# True no-progress wall: last UI change / successful goal step (not busywork taps).
+# External cancel was ~7 min; fail server-side ~90s without UI progress.
+NO_PROGRESS_TIMEOUT_S = int(os.environ.get("AGENT_NO_PROGRESS_TIMEOUT_S") or "90")
+# Same planner decision (action+reason+coords) repeating → fail
+MAX_SAME_DECISION = int(os.environ.get("AGENT_MAX_SAME_DECISION") or "3")
 # Launcher-only swipe loops: require this many unchanged swipes on a launcher package
 MAX_LAUNCHER_SWIPE_LOOPS = 3
 # Legacy alias (tests) — in-app swipes must NOT trip this; use launcher guard instead
@@ -66,6 +97,39 @@ MAX_SWIPE_LOOPS = MAX_LAUNCHER_SWIPE_LOOPS
 MAX_NO_PROGRESS = 2
 # Same tap coords with unchanged tree → force strategy change
 MAX_SAME_TAP = 2
+# Absolute consecutive same-coord taps (tree fp may jitter) → fail fast
+MAX_SAME_COORD_ANY = 3
+# Intentional policy / safety fails — do NOT escalate stuck_recovery over them.
+# Per-app heuristics + tap firewall own these; generic recovery is fallback-only.
+_POLICY_FAIL_NO_STUCK = (
+    "refuse",
+    "refusing",
+    "tap firewall",
+    "paid",
+    "crush",
+    "super like",
+    "superswipe",
+    "rose",
+    "boost",
+    "gold",
+    "message-bank",
+    "no message text",
+    "coord guess",
+    "dry_run",
+    "wrong foreground app",
+    "never typed",
+    "firewall",
+)
+
+
+def _is_policy_fail_no_stuck(reason: str) -> bool:
+    """True when fail is intentional safety/policy — honor it, don't recover."""
+    low = (reason or "").lower()
+    if not low:
+        return False
+    return any(t in low for t in _POLICY_FAIL_NO_STUCK)
+
+
 # Known launcher package fragments (Samsung One UI, Pixel, AOSP, OEM)
 _LAUNCHER_PKG_MARKERS = (
     "launcher",
@@ -134,6 +198,115 @@ def _compress_tree(tree: str, limit: int = 8000) -> str:
     if len(compact) <= limit:
         return compact
     return compact[:limit] + "\n...[truncated]"
+
+
+def _som_indexed_tree(tree: str, *, limit: int = 6000) -> str:
+    """Set-of-marks style index list for LLM: [i] label @ (x,y) flags."""
+    try:
+        from dm_heuristics import _parse_compact_nodes
+    except ImportError:
+        from backend.dm_heuristics import _parse_compact_nodes  # type: ignore
+
+    nodes = _parse_compact_nodes(tree or "")
+    if not nodes:
+        return _compress_tree(tree, limit=limit)
+    lines: List[str] = ["SET-OF-MARKS (tap these centers):"]
+    idx = 0
+    for n in nodes:
+        lab = (
+            (n.get("text") or n.get("label") or n.get("desc") or n.get("hint") or "")
+            .strip()
+        )
+        x = int(n.get("x") or 0)
+        y = int(n.get("y") or 0)
+        if x <= 0 and y <= 0 and not lab:
+            continue
+        if not (
+            n.get("clickable")
+            or n.get("editable")
+            or lab
+            or str(n.get("id") or "").strip()
+        ):
+            continue
+        flags = []
+        if n.get("clickable"):
+            flags.append("c")
+        if n.get("editable"):
+            flags.append("e")
+        if n.get("focused"):
+            flags.append("f")
+        nid = str(n.get("id") or "").strip()
+        id_bit = f" id={nid.split('/')[-1]}" if nid else ""
+        flag_bit = f" [{','.join(flags)}]" if flags else ""
+        label = lab[:48] if lab else (nid.split("/")[-1] if nid else "node")
+        lines.append(f"[{idx}] {label} @ ({x},{y}){flag_bit}{id_bit}")
+        idx += 1
+        if idx >= 80:
+            break
+    if idx == 0:
+        return _compress_tree(tree, limit=limit)
+    body = "\n".join(lines)
+    raw = _compress_tree(tree, limit=max(800, limit - len(body) - 20))
+    out = f"{body}\n\nRAW:\n{raw}"
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+
+def _bulk_progress_signature(state: Optional[Dict[str, Any]]) -> Optional[tuple]:
+    """Snapshot of verified bulk progress (done / names / verified flags)."""
+    if not isinstance(state, dict):
+        return None
+    for key in ("bulk_swipe", "bulk_message", "bulk_message_new"):
+        b = state.get(key)
+        if isinstance(b, dict):
+            names = tuple(str(x) for x in (b.get("done_names") or [])[-5:])
+            return (
+                key,
+                int(b.get("done") or 0),
+                names,
+                bool(b.get("dry_run_verified")),
+                str(b.get("last_name") or b.get("current") or ""),
+                bool(b.get("chat_list_verified")),
+            )
+    return None
+
+
+def _bulk_action_is_verified_fastpath(action: Dict[str, Any]) -> bool:
+    """Keep working per-app wins — never block these behind LLM stall.
+
+    Recover/reopen/wait loops are NOT verified — they count toward the
+    2-step stall so LLM can take over. Only proven progress fast paths
+    (done+verified, nothing-to-reply, open-from-home, Badoo chats, …).
+    """
+    kind = str(action.get("action") or "").lower()
+    reason = (action.get("reason") or "").lower()
+    step = str(
+        action.get("fastpath_step") or action.get("_fastpath_step") or ""
+    ).lower()
+    if kind == "done" and (
+        action.get("dry_run_verified")
+        or action.get("stopped_reason") == "nothing_to_reply"
+        or "nothing to reply" in reason
+        or ("evaluated" in reason and "would like/pass" in reason)
+    ):
+        return True
+    # Initial open-from-home only — not empty-tree recover reopen loops
+    if kind == "open_app" and step in ("", "open_app", "bulk_open_app"):
+        if "re-open" in reason or "recover" in reason or "empty" in reason:
+            return False
+        return True
+    if step in (
+        "bulk_nothing_to_reply",
+        "bulk_dry_run_skip_like",
+        "bulk_message_done",
+        "bulk_dry_run_skip_send",
+        "open_app",
+        "bulk_open_app",
+        "badoo_open_chats_tab",
+        "bulk_open_chats",
+        "bulk_open_match",
+    ):
+        return True
+    return False
 
 
 def _gemini_models() -> List[str]:
@@ -435,6 +608,232 @@ def _action_looks_like_send(action: Dict[str, Any], kind: str = "") -> bool:
     return False
 
 
+# Like / pass control tokens — NEVER match planner reason text alone.
+_LIKE_ID_TOKENS = (
+    "actionbutton_like",
+    "gamepad_like",
+    "btn_like",
+    "likebtn",
+    "voteyes",
+    "buttonvoteyes",
+    "encounters_profile_voting_buttonvoteyes",
+    "encounter_like",
+)
+_PASS_ID_TOKENS = (
+    "actionbutton_skip",
+    "actionbutton_pass",
+    "gamepad_pass",
+    "btn_pass",
+    "passbtn",
+    "voteno",
+    "buttonvoteno",
+    "encounter_pass",
+    "encounters_profile_voting_buttonvoteno",
+)
+_LIKE_LABELS = frozenset(
+    {
+        "like",
+        "heart",
+        "yes",
+        "voteyes",
+        "vote yes",
+        "thumbs up",
+        "thumbsup",
+        "send like",
+        "send like anyway",
+    }
+)
+_PASS_LABELS = frozenset(
+    {
+        "pass",
+        "skip",
+        "no",
+        "voteno",
+        "vote no",
+        "x",
+        "close",
+        "dislike",
+        "nope",
+        "reject",
+    }
+)
+_BILLING_TERMS_TAP_BLOCK = (
+    "recurring billing",
+    "terms of service",
+    "terms of use",
+    "privacy policy",
+    "subscription terms",
+    "billing terms",
+    "auto-renew",
+    "auto renew",
+    "cancel anytime",
+    "by continuing you agree",
+    "elite pack",
+    "see who added you",
+)
+
+
+def _action_control_blob(action: Dict[str, Any]) -> str:
+    """Node id / label / desc only — never planner reason text."""
+    return " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in (
+            "label",
+            "text",
+            "desc",
+            "content_desc",
+            "contentDescription",
+            "id",
+            "resource_id",
+            "resourceId",
+            "element",
+            "target",
+        )
+    ).strip()
+
+
+def _action_is_like_control(action: Dict[str, Any], kind: str) -> bool:
+    """True only for like-control taps / right-swipes (element/position class).
+
+    NEVER uses planner reason text — ``Liking`` / ``would like`` must not
+    count toward the live like cap (r28 Badoo ~25 likes with cap 5).
+    """
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if (action or {}).get("_free_like") or (action or {}).get("_live_like_control"):
+        return True
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    if any(
+        tok in fp
+        for tok in (
+            "bulk_like",
+            "bulk_like_swipe",
+            "like_swipe",
+            "bumble_like",
+            "yubo_like",
+            "hily_like",
+            "blk_like",
+            "taimi_like",
+            "badoo_like",
+            "tagged_like",
+        )
+    ):
+        return True
+    # Pass / open / scroll fastpaths are never likes
+    if any(
+        tok in fp
+        for tok in (
+            "bulk_pass",
+            "pass_swipe",
+            "bulk_open",
+            "bulk_scroll",
+            "bulk_focus",
+            "bulk_type",
+            "open_chats",
+            "open_matches",
+        )
+    ):
+        return False
+    blob = _action_control_blob(action)
+    id_blob = " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in ("id", "resource_id", "resourceId", "element", "target")
+    )
+    if any(tok in id_blob or tok in blob.replace(" ", "") for tok in _LIKE_ID_TOKENS):
+        # Exclude super-like / paid variants
+        if "super" in blob or "crush" in blob or "rose" in blob:
+            return False
+        return True
+    # Exact label match (avoid "likely" / reason "Liking")
+    fields = [
+        str((action or {}).get(k) or "").strip().lower()
+        for k in ("label", "text", "desc", "content_desc", "contentDescription")
+    ]
+    if any(f in _LIKE_LABELS for f in fields if f):
+        return True
+    if k == "swipe":
+        try:
+            x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+            x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+        except (TypeError, ValueError):
+            return False
+        # Right-swipe = like (large +dx, small dy)
+        return (x2 - x1) >= 200 and abs(y2 - y1) < abs(x2 - x1)
+    # Bottom-right action-row tap with empty label: treat as like only when
+    # explicitly marked or id matched above — never by reason or bare coords.
+    return False
+
+
+def _action_is_pass_control(action: Dict[str, Any], kind: str) -> bool:
+    """True for X / close / pass / skip / VoteNo / left-swipe controls."""
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if (action or {}).get("_pass_control") or (action or {}).get("_free_pass"):
+        return True
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    if any(
+        tok in fp
+        for tok in (
+            "bulk_pass",
+            "pass_swipe",
+            "bumble_pass",
+            "yubo_pass",
+            "hily_pass",
+            "taimi_pass",
+            "badoo_pass",
+            "blk_pass",
+        )
+    ):
+        return True
+    blob = _action_control_blob(action)
+    id_blob = " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in ("id", "resource_id", "resourceId", "element", "target")
+    )
+    if any(tok in id_blob or tok in blob.replace(" ", "") for tok in _PASS_ID_TOKENS):
+        return True
+    fields = [
+        str((action or {}).get(k) or "").strip().lower()
+        for k in ("label", "text", "desc", "content_desc", "contentDescription")
+    ]
+    if any(f in _PASS_LABELS for f in fields if f):
+        return True
+    # BLK / deck bottom-left X: short "x" already covered; left-swipe = pass
+    if k == "swipe":
+        try:
+            x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+            x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+        except (TypeError, ValueError):
+            return False
+        return (x1 - x2) >= 200 and abs(y2 - y1) < abs(x1 - x2)
+    # Bottom-left action row with no label — BLK X zone (x≲280, y≳1700 on 1080)
+    if k == "tap" and not blob.strip():
+        try:
+            x, y = int(action.get("x") or 0), int(action.get("y") or 0)
+        except (TypeError, ValueError):
+            return False
+        if x and y and x <= 320 and y >= 1650:
+            return True
+    return False
+
+
+def _action_is_billing_or_terms_tap(action: Dict[str, Any], kind: str) -> bool:
+    """True for taps on billing / Terms / Elite Pack small-print (never tap)."""
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k not in ("tap", "click"):
+        return False
+    blob = _action_control_blob(action)
+    reason = str((action or {}).get("reason") or "").lower()
+    hay = f"{blob} {reason}"
+    return any(tok in hay for tok in _BILLING_TERMS_TAP_BLOCK)
+
+
 def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
     """True for swipe gestures and like/pass/vote taps (dating deck mutations).
 
@@ -444,6 +843,8 @@ def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
     """
     k = (kind or str((action or {}).get("action") or "")).lower()
     if k == "swipe":
+        return True
+    if _action_is_like_control(action, kind) or _action_is_pass_control(action, kind):
         return True
     fp = str(
         (action or {}).get("fastpath_step")
@@ -495,10 +896,7 @@ def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
     ):
         return True
     # Target node label / text / content-desc only
-    blob = " ".join(
-        str((action or {}).get(k) or "").lower()
-        for k in ("label", "text", "desc", "content_desc", "contentDescription")
-    )
+    blob = _action_control_blob(action)
     if not blob.strip():
         return False
     if any(
@@ -539,6 +937,8 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "boost",
         "super like",
         "crush",
+        "major crush",
+        "message before match",
         "spotlight",
         "buy credits",
         "subscribe",
@@ -546,8 +946,20 @@ def _action_looks_like_paid(action: Dict[str, Any], kind: str) -> bool:
         "blast",
         "yubucks",
         "instant chat",
-        "major crush",
         "send a super like",
+        "rose",
+        "send a rose",
+        "preferred",
+        "hingex",
+        "hinge x",
+        "hinge+",
+        "hingeone",
+        "super boost",
+        "dating intent",
+        "send superswipe",
+        "superswipe",
+        "tagged premium",
+        "rewind",
     )
     return any(t in blob for t in paid_toks)
 
@@ -577,6 +989,236 @@ def _is_chat_list_scroll_swipe(action: Dict[str, Any], kind: str) -> bool:
         return False
     # Vertical list fling (large dy, small dx)
     return abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 200
+
+
+def apply_live_test_guard(
+    *,
+    live_test: bool,
+    action: Dict[str, Any],
+    kind: str,
+    reason: str,
+    state: Optional[Dict[str, Any]] = None,
+    max_n: int = LIVE_TEST_DEFAULT_MAX_N,
+    like_job: bool = True,
+) -> tuple:
+    """LIVE test mode: likes OK (capped by control class), never pass/paid.
+
+    Cap counts EVERY like-control tap (element/position class — NEVER reason
+    text like ``Liking``). ``live_likes_done`` only advances after the card
+    name changes (see ``verify_pending_live_like``).
+    """
+    if not live_test:
+        return kind, reason, action
+    st = state if isinstance(state, dict) else {}
+    cap = int(st.get("live_test_max_n") or max_n or LIVE_TEST_DEFAULT_MAX_N)
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k in ("open_app", "launch", "wait", "fail", "done", "back", "home"):
+        return kind, reason, action
+
+    reason_l = (reason or str((action or {}).get("reason") or "")).lower()
+    label_blob = _action_control_blob(action)
+
+    # Never tap billing / Terms / Elite Pack small print
+    if _action_is_billing_or_terms_tap(action, kind):
+        new_reason = (
+            f"[LIVE TEST] blocked billing/terms tap — Back instead ({reason})"
+        )
+        logger.info("%s", new_reason)
+        return (
+            "press_button",
+            new_reason,
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": new_reason,
+                "live_test": True,
+                "live_test_blocked_billing": True,
+            },
+        )
+
+    paid_hit = _action_looks_like_paid(action, kind) or any(
+        tok in reason_l or tok in label_blob
+        for tok in (
+            "super like",
+            "superswipe",
+            "super swipe",
+            "crush",
+            "boost",
+            "rose",
+            "premium",
+            "subscribe",
+            "buy credits",
+            "spotlight",
+            "yubucks",
+            "instant chat",
+            "hingex",
+            "hinge+",
+            "elite pack",
+        )
+    )
+    if paid_hit:
+        new_reason = f"[LIVE TEST] blocked paid/super-like — skipped ({reason})"
+        logger.info("%s", new_reason)
+        return (
+            "wait",
+            new_reason,
+            {
+                **action,
+                "action": "wait",
+                "seconds": 0.4,
+                "reason": new_reason,
+                "live_test": True,
+                "live_test_blocked_paid": True,
+            },
+        )
+
+    # Like jobs: never tap pass / X / close (r28 BLK tapped bottom-left X)
+    is_pass = _action_is_pass_control(action, kind)
+    if like_job and is_pass:
+        new_reason = (
+            f"[LIVE TEST] blocked pass/X in like job — skipped ({reason})"
+        )
+        logger.info("%s", new_reason)
+        return (
+            "wait",
+            new_reason,
+            {
+                "action": "wait",
+                "seconds": 0.35,
+                "reason": new_reason,
+                "live_test": True,
+                "live_test_blocked_pass": True,
+            },
+        )
+
+    # Count ONLY like-control taps / right-swipes — never reason text
+    is_like = _action_is_like_control(action, kind)
+    is_send = bool(_action_looks_like_send(action, kind) or k == "ime_send")
+    if is_like:
+        issued = int(st.get("live_likes_issued") or 0)
+        done_n = int(st.get("live_likes_done") or 0)
+        pending = 1 if st.get("_pending_live_like") else 0
+        if issued >= cap or done_n >= cap or (issued + pending) >= cap:
+            new_reason = (
+                f"[LIVE TEST] like cap reached "
+                f"(issued={issued} done={done_n}/{cap}) — stop"
+            )
+            return (
+                "done",
+                new_reason,
+                {
+                    "action": "done",
+                    "reason": new_reason,
+                    "live_test": True,
+                    "live_test_verified": True,
+                    "dry_run_verified": True,
+                },
+            )
+        # Cap before execute: issue the tap, verify card change later
+        st["live_likes_issued"] = issued + 1
+        st["_pending_live_like"] = True
+        action = {
+            **action,
+            "live_test": True,
+            "_live_like_control": True,
+            "_live_like_n": issued + 1,
+            "_pending_live_like": True,
+        }
+    if is_send:
+        done_m = int(st.get("live_messages_done") or 0)
+        if done_m >= cap:
+            new_reason = (
+                f"[LIVE TEST] message cap reached ({done_m}/{cap}) — stop"
+            )
+            return (
+                "done",
+                new_reason,
+                {
+                    "action": "done",
+                    "reason": new_reason,
+                    "live_test": True,
+                    "live_test_verified": True,
+                    "dry_run_verified": True,
+                },
+            )
+        st["live_messages_done"] = done_m + 1
+        action = {**action, "live_test": True, "_live_msg_n": done_m + 1}
+    return kind, reason, action
+
+
+def verify_pending_live_like(
+    state: Dict[str, Any],
+    *,
+    ui_tree: str,
+    app: str = "",
+    before_name: Optional[str] = None,
+) -> bool:
+    """After a like tap: count only when the card name changes.
+
+    Returns True when ``live_likes_done`` was incremented.
+    """
+    if not isinstance(state, dict) or not state.get("_pending_live_like"):
+        return False
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+
+    prev = before_name or state.get("_live_like_before_name")
+    bulk = state.get("bulk_swipe") if isinstance(state.get("bulk_swipe"), dict) else {}
+    if not prev:
+        prev = (bulk or {}).get("last_name")
+    now_name = deck_card_name(app, ui_tree or "") if app else None
+    if now_name and not _card_name_is_real_profile(now_name):
+        now_name = None
+    state.pop("_pending_live_like", None)
+    state.pop("_live_like_before_name", None)
+    if prev and now_name and str(now_name).strip() != str(prev).strip():
+        done_n = int(state.get("live_likes_done") or 0) + 1
+        state["live_likes_done"] = done_n
+        if isinstance(bulk, dict):
+            bulk["last_name"] = now_name
+            bulk["done"] = max(int(bulk.get("done") or 0), done_n)
+            state["bulk_swipe"] = bulk
+        logger.info(
+            "live like verified by card change %s → %s done=%s",
+            prev,
+            now_name,
+            done_n,
+        )
+        return True
+    logger.info(
+        "live like NOT verified (card unchanged) prev=%s now=%s issued=%s",
+        prev,
+        now_name,
+        state.get("live_likes_issued"),
+    )
+    return False
+
+
+def snapshot_live_like_card_name(
+    state: Dict[str, Any], *, ui_tree: str, app: str = ""
+) -> None:
+    """Store pre-tap card name so verify_pending_live_like can compare."""
+    if not isinstance(state, dict) or not state.get("_pending_live_like"):
+        return
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+
+    name = deck_card_name(app, ui_tree or "") if app else None
+    if name and _card_name_is_real_profile(name):
+        state["_live_like_before_name"] = name
+        bulk = state.setdefault("bulk_swipe", {})
+        if isinstance(bulk, dict) and not bulk.get("last_name"):
+            bulk["last_name"] = name
 
 
 def apply_dry_run_send_guard(
@@ -618,10 +1260,35 @@ def apply_dry_run_send_guard(
     elif _action_looks_like_paid(action, kind):
         blocked = True
         would = "paid tap"
+    elif k in ("type", "input_text", "set_text"):
+        # Never type into a real thread in dry_run (shows "typing…" to peer).
+        # Empty clear-only was previously used; now we refuse all composer type.
+        text = str((action or {}).get("text") or "")
+        # Allow contact-search typing only when explicitly marked
+        if (action or {}).get("search") or (action or {}).get("type_contact"):
+            return kind, reason, action
+        if text.strip() or bool((action or {}).get("clear")):
+            blocked = True
+            would = f"type '{text[:40]}'" if text.strip() else "type/clear composer"
     elif k == "swipe" and _is_chat_list_scroll_swipe(action, kind):
         # Non-mutating chat-list scrolls are allowed in dry_run; deck swipes are not.
         return kind, reason, action
+    elif k == "swipe" and (action or {}).get("_dry_run_vertical_scroll"):
+        # Optional vertical profile scroll only (never horizontal pass/like).
+        try:
+            x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+            x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+        except (TypeError, ValueError):
+            blocked = True
+            would = "swipe"
+        else:
+            if abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 150:
+                return kind, reason, action
+            blocked = True
+            would = "swipe"
     elif k == "swipe" or _action_looks_like_swipe_or_like(action, kind):
+        # r23: NEVER allow dry-run pass/like/horizontal advance — real gestures
+        # passed live Yubo profiles. Identify + report only.
         blocked = True
         would = "swipe" if k == "swipe" else "like/pass tap"
 
@@ -645,13 +1312,316 @@ def apply_dry_run_send_guard(
 PHONE_LOCKED_ERROR = "phone locked / systemui in foreground - unlock phone"
 MAX_STEPS_UNMET_ERROR = "max_steps reached, goal not met"
 
+# r28: FLAG_SECURE / empty-tree apps — fail fast instead of burning steps
+UNSUPPORTED_AGENT_APPS: Dict[str, str] = {
+    "taimi": (
+        "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
+        "Fail fast — do not burn steps."
+    ),
+    "hinge": (
+        "Hinge is unsupported: a11y tree is empty / unusable for automation. "
+        "Fail fast — do not burn steps."
+    ),
+}
+
+_TERMINAL_JOB_STATUSES = frozenset(
+    {"stopped", "cancelled", "canceled", "failed", "completed", "paused"}
+)
+
+
+def _job_status_is_terminal(status: Any) -> bool:
+    return str(status or "").lower().strip() in _TERMINAL_JOB_STATUSES
+
+
+def refresh_job_cancel_status(job: Dict[str, Any]) -> bool:
+    """Re-read job from storage; if cancelled/stopped, sync and return True.
+
+    Never overwrite a cancelled status with completed later.
+    """
+    jid = str(job.get("job_id") or "").strip()
+    if not jid:
+        return _job_status_is_terminal(job.get("status"))
+    try:
+        try:
+            from storage import get_job
+        except ImportError:
+            from backend.storage import get_job  # type: ignore
+
+        fresh = get_job(jid)
+    except Exception as e:
+        logger.warning("cancel status refresh failed: %s", e)
+        return _job_status_is_terminal(job.get("status"))
+    if not isinstance(fresh, dict):
+        return _job_status_is_terminal(job.get("status"))
+    fresh_status = str(fresh.get("status") or "").lower().strip()
+    if fresh_status in _TERMINAL_JOB_STATUSES and fresh_status != "running":
+        # Preserve cancel/stop — never let a racing step mark completed
+        job["status"] = fresh.get("status") or fresh_status
+        if fresh.get("error"):
+            job["error"] = fresh.get("error")
+        if fresh_status in ("stopped", "cancelled", "canceled"):
+            job.setdefault("result", "Cancelled")
+            st = job.setdefault("state", {})
+            if isinstance(st, dict):
+                st["cancelled"] = True
+                st["last_action"] = "cancelled"
+        return True
+    return _job_status_is_terminal(job.get("status"))
+
+
+def _preserve_terminal_status(job: Dict[str, Any]) -> bool:
+    """True when job is already terminal — callers must not overwrite status."""
+    if refresh_job_cancel_status(job):
+        return True
+    return _job_status_is_terminal(job.get("status"))
+
+
+def unsupported_app_fail_action(
+    instruction: str, *, package: str = ""
+) -> Optional[Dict[str, Any]]:
+    """Fail fast (<30s) for Taimi / Hinge instead of burning max_steps."""
+    try:
+        from dm_heuristics import detect_dm_app
+    except ImportError:
+        from backend.dm_heuristics import detect_dm_app  # type: ignore
+
+    app = detect_dm_app(instruction or "") or ""
+    pkg = (package or "").lower()
+    if not app:
+        if "takimi" in pkg or "taimi" in pkg:
+            app = "taimi"
+        elif "hinge" in pkg:
+            app = "hinge"
+    msg = UNSUPPORTED_AGENT_APPS.get(app or "")
+    if not msg:
+        return None
+    return {
+        "action": "fail",
+        "reason": msg,
+        "planner": "unsupported_app",
+        "llm_provider": None,
+        "dry_run_verified": False,
+        "unsupported_app": app,
+    }
+
+
+def _instruction_is_like_or_swipe_job(
+    instruction: str, job: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True for like/swipe bulk or live_test like jobs (no typing allowed)."""
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+    except ImportError:
+        from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+
+    g = parse_bulk_goal(instruction or "")
+    if isinstance(g, dict) and g.get("kind") == "swipe":
+        return True
+    low = (instruction or "").lower()
+    if re.search(r"\blike\s+\d+\s+profiles?", low):
+        return True
+    if "auto-swipe" in low or "auto swipe" in low:
+        return True
+    j = job if isinstance(job, dict) else {}
+    if j.get("live_test") and (
+        "like" in low or "swipe" in low or (isinstance(g, dict) and g.get("kind") == "swipe")
+    ):
+        return True
+    return False
+
+
+def apply_like_job_no_type_guard(
+    *,
+    action: Dict[str, Any],
+    kind: str,
+    reason: str,
+    instruction: str,
+    job: Optional[Dict[str, Any]] = None,
+    package: str = "",
+) -> tuple:
+    """Block all typing in like/swipe jobs; rewrite launcher search → open_app.
+
+    Open-from-home fallback may type the app name into the launcher search only.
+    Never type inside an app.
+    """
+    if not _instruction_is_like_or_swipe_job(instruction, job):
+        return kind, reason, action
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k not in ("type", "type_text", "input_text", "set_text"):
+        return kind, reason, action
+    text = str((action or {}).get("text") or "").strip()
+    pkg = (package or "").lower()
+    launcher = any(
+        tok in pkg
+        for tok in (
+            "launcher",
+            "nexuslauncher",
+            "microsoft.launcher",
+            "touchwiz",
+            "honeyboard",
+            "android.systemui",  # sometimes search overlay
+        )
+    ) or pkg in ("", "null")
+    # Allowed: typing the target app name into launcher search only
+    app_name = ""
+    try:
+        from dm_heuristics import detect_dm_app, DM_APP_PROFILES
+    except ImportError:
+        from backend.dm_heuristics import detect_dm_app, DM_APP_PROFILES  # type: ignore
+
+    app_key = detect_dm_app(instruction or "") or ""
+    if app_key and app_key in DM_APP_PROFILES:
+        app_name = str(
+            DM_APP_PROFILES[app_key].get("open_label") or app_key
+        ).strip()
+    if (
+        launcher
+        and text
+        and app_name
+        and text.lower() == app_name.lower()
+        and (
+            (action or {}).get("search")
+            or (action or {}).get("type_contact")
+            or "launcher" in (reason or "").lower()
+            or "search" in (reason or "").lower()
+        )
+    ):
+        # Still prefer open_app by package/intent over typed search
+        new_reason = (
+            f"[LIKE JOB] rewrite launcher type '{text}' → open_app({app_name})"
+        )
+        return (
+            "open_app",
+            new_reason,
+            {
+                "action": "open_app",
+                "app": app_name,
+                "reason": new_reason,
+                "planner": (action or {}).get("planner") or "like_job_open",
+                "llm_provider": None,
+            },
+        )
+    new_reason = (
+        f"[LIKE JOB] blocked typing '{text[:40]}' — use open_app/package "
+        f"(never type in like/swipe jobs) ({reason})"
+    )
+    logger.info("%s", new_reason)
+    if app_name:
+        return (
+            "open_app",
+            new_reason,
+            {
+                "action": "open_app",
+                "app": app_name,
+                "reason": new_reason,
+                "planner": "like_job_open",
+                "llm_provider": None,
+            },
+        )
+    return (
+        "wait",
+        new_reason,
+        {
+            "action": "wait",
+            "seconds": 0.3,
+            "reason": new_reason,
+            "like_job_blocked_type": True,
+        },
+    )
+
+
+def is_yubo_reactions_or_elite_paywall(tree: str) -> bool:
+    """True for Yubo blurred Reactions list / Elite Pack / See who added you."""
+    try:
+        from dating_deck import is_yubo_reactions_or_elite_paywall as _y
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            is_yubo_reactions_or_elite_paywall as _y,
+        )
+    return bool(_y(tree))
+
+
+def yubo_paywall_back_action(
+    tree: str, *, planner: str = "yubo_paywall"
+) -> Optional[Dict[str, Any]]:
+    """Back out of Yubo Reactions / Elite Pack paywall pages entirely."""
+    try:
+        from dating_deck import yubo_paywall_back_action as _y
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            yubo_paywall_back_action as _y,
+        )
+    return _y(tree, planner=planner)
+
 
 def _is_lock_screen_package(package: str) -> bool:
-    """True when foreground is SystemUI / keyguard (lock screen), not the app."""
+    """True when foreground is keyguard / lock screen — not permission dialogs.
+
+    ``com.android.permissioncontroller`` and notification/permission sheets
+    ride on SystemUI chrome but are NOT a locked phone.
+    """
     p = (package or "").lower().strip()
     if not p:
         return False
-    return "systemui" in p or "keyguard" in p
+    if "permissioncontroller" in p or "permission" in p:
+        return False
+    if "keyguard" in p:
+        return True
+    # Bare systemui alone is ambiguous; require lock/keyguard signals
+    if "systemui" in p and ("keyguard" in p or "lock" in p):
+        return True
+    return False
+
+
+def _is_permission_dialog_package(package: str) -> bool:
+    p = (package or "").lower().strip()
+    return "permissioncontroller" in p or p.endswith(".permissioncontroller")
+
+
+def permission_dialog_action(
+    tree: str,
+    package: str = "",
+    planner: str = "permission_heuristic",
+) -> Optional[Dict[str, Any]]:
+    """Tap Don't allow / Deny on notification permission dialogs (free, reversible)."""
+    pkg = (package or "").lower()
+    blob = (tree or "").lower()
+    if not (
+        _is_permission_dialog_package(pkg)
+        or "allow.*notifications" in blob
+        or "notification" in blob
+        and ("don't allow" in blob or "dont allow" in blob or "deny" in blob)
+    ):
+        # Still match common labels even without package
+        if "don't allow" not in blob and "dont allow" not in blob:
+            if "deny" not in blob or "permission" not in blob:
+                return None
+    try:
+        from dm_heuristics import _tree_node_center, _fp
+    except ImportError:
+        from backend.dm_heuristics import _tree_node_center, _fp  # type: ignore
+
+    deny = _tree_node_center(
+        tree, "Don't allow", "Dont allow", "Don't Allow"
+    ) or _tree_node_center(tree, "Deny", "No thanks", "No Thanks")
+    if not deny:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": deny[0],
+            "y": deny[1],
+            "reason": f"Dismiss permission dialog — Don't allow ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "permission_dont_allow",
+    )
+
+
+def _is_selfhosted_package(fg_package: str) -> bool:
+    fg = (fg_package or "").lower().strip()
+    return "mobilerun.selfhosted" in fg or fg.endswith(".selfhosted")
 
 
 def _fg_matches_open_target(app_name: str, fg_package: str) -> bool:
@@ -661,6 +1631,13 @@ def _fg_matches_open_target(app_name: str, fg_package: str) -> bool:
     if not fg or not app_l:
         return False
     if _is_lock_screen_package(fg):
+        return False
+    # Our overlay/app stealing FG is never a successful open of a dating app
+    if (
+        _is_selfhosted_package(fg)
+        and "mobilerun" not in app_l
+        and "selfhosted" not in app_l
+    ):
         return False
     if app_l.startswith("com.") or app_l.startswith("ai."):
         if app_l == fg or app_l in fg:
@@ -697,6 +1674,23 @@ def _verify_open_app_result(
     app_l = (app_name or "").lower().strip()
     tree_l = (tree or "").lower()
     prior = int(prior_lock_retries or 0)
+
+    # Permission dialogs ride on SystemUI chrome — not a locked phone
+    if _is_permission_dialog_package(fg) or (
+        "permission" in (tree or "").lower()
+        and (
+            "don't allow" in (tree or "").lower()
+            or "dont allow" in (tree or "").lower()
+        )
+    ):
+        return {
+            "opened": False,
+            "verify_msg": f"permission_dialog package={fg!r}",
+            "lock_retries": prior,
+            "fail_locked": False,
+            "error": None,
+            "permission_dialog": True,
+        }
 
     if _is_lock_screen_package(fg):
         # First lock sighting → allow one retry; second → fail fast
@@ -974,6 +1968,21 @@ def _same_tap_key(action: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _planner_decision_key(action: Dict[str, Any]) -> Optional[str]:
+    """Stable key for identical planner decisions (reason stem + coords)."""
+    kind = str(action.get("action") or "").lower()
+    if not kind or kind in ("done", "fail", "wait"):
+        # Wait with same reason still counts as a repeated decision
+        if kind != "wait":
+            return None
+    reason = str(action.get("reason") or "")
+    # Strip planner suffix / volatile ids
+    stem = re.sub(r"\s*\([^)]*\)\s*$", "", reason).strip().lower()
+    stem = re.sub(r"\s+", " ", stem)[:80]
+    tap = _same_tap_key(action) or kind
+    return f"{tap}|{stem}" if stem or tap else None
+
+
 def plan_next_action(
     instruction: str,
     ui_tree: str,
@@ -997,27 +2006,43 @@ def plan_next_action(
     # Lazy: only parse bulk when the instruction looks like a bench goal so
     # prod Lambda (no catalog.json) never pays the import cost on normal DMs.
     instr_l = (instruction or "").lower()
-    maybe_bulk = any(
-        tok in instr_l
-        for tok in (
-            "swipe ",
-            "auto-swipe",
-            "bulk ",
-            "50 profiles",
-            "message 50",
-            "fake-chats",
-            "fake chats",
-            "auto-message",
-            "auto message",
-            "existing chats",
-            "existing matches",
-            "existing chat",
+    maybe_bulk = (
+        any(
+            tok in instr_l
+            for tok in (
+                "swipe ",
+                "auto-swipe",
+                "bulk ",
+                "50 profiles",
+                "message 50",
+                "fake-chats",
+                "fake chats",
+                "auto-message",
+                "auto message",
+                "existing chats",
+                "existing matches",
+                "existing chat",
+                "new profiles",
+                "new people",
+                "new matches",
+                "new contacts",
+            )
         )
-    ) or bool(
-        re.search(
-            r"(?:message|reply(?:\s+to)?)\s+(?:\d+|[\"'][^\"']+[\"'])\s+"
-            r"(?:to\s+\d+\s+)?(?:existing\s+)?(?:matches?|people|contacts?|chats?)",
-            instr_l,
+        or bool(
+            re.search(
+                r"(?:message|reply(?:\s+to)?|send|auto[- ]?message)\s+"
+                r"(?:\d+|[\"'][^\"']+[\"'])\s+"
+                r"(?:to\s+\d+\s+)?(?:existing\s+|new\s+)?"
+                r"(?:profiles?|matches?|people|contacts?|chats?)",
+                instr_l,
+            )
+        )
+        or bool(
+            re.search(
+                r"(?:message|send|auto[- ]?message)\s+[\"'][^\"']+[\"']\s+"
+                r"to\s+\d+\s+new\s+(?:profiles?|people|matches?|contacts?)",
+                instr_l,
+            )
         )
     )
     bulk_goal = None
@@ -1062,6 +2087,11 @@ def plan_next_action(
     def _guard(action: Dict[str, Any]) -> Dict[str, Any]:
         return _enforce_msg(action, instruction, history=history)
 
+    # Notification / runtime permission sheets — never treat as phone locked
+    perm = permission_dialog_action(ui_tree, package=package)
+    if perm:
+        return perm
+
     # Fake-chats bulk bench + Secure Folder path — before single-DM path
     if bulk_goal or secure_folder_goal:
         try:
@@ -1069,33 +2099,253 @@ def plan_next_action(
         except ImportError:
             from backend.bulk_bench_heuristics import plan_bulk_bench  # type: ignore
 
-        bulk_act = plan_bulk_bench(
+        st_bulk = agent_state if isinstance(agent_state, dict) else {}
+        # Honor queued dismiss from firewall upsell soft-recover
+        pending = st_bulk.pop("_pending_dismiss", None)
+        if isinstance(pending, dict) and pending.get("action"):
+            pending.setdefault("planner", "pending_dismiss")
+            return _guard(pending)
+
+        # r28: once handed off to LLM, stay there for the rest of the job.
+        # Never let heuristics reclaim the turn (Yubo/BLK/Badoo/Hily bug).
+        if st_bulk.get("_bulk_llm_handoff"):
+            # Dry swipe only: identifying a real name is still verified success
+            if (
+                dry_run
+                and isinstance(bulk_goal, dict)
+                and bulk_goal.get("kind") == "swipe"
+            ):
+                named = _visible_dry_swipe_card_name(
+                    instruction, ui_tree, st_bulk
+                )
+                if named:
+                    return _guard(
+                        {
+                            "action": "done",
+                            "reason": (
+                                f"[DRY RUN] identified card '{named}'; would "
+                                f"like/pass (dry success, no swipe)"
+                            ),
+                            "planner": "bulk_swipe_heuristic",
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "dry_run_verified": True,
+                            "last_name": named,
+                            "fastpath_step": "bulk_dry_run_skip_like",
+                            "_fastpath_step": "bulk_dry_run_skip_like",
+                        }
+                    )
+            # Fall through to LLM / other planners — skip plan_bulk_bench
+            bulk_act = None
+        else:
+            bulk_act = None
+            try:
+                bulk_act = plan_bulk_bench(
+                    instruction,
+                    ui_tree,
+                    history,
+                    state=st_bulk,
+                    package=package,
+                    dry_run=dry_run,
+                )
+            except Exception as bulk_err:
+                # r26: never raise out of heuristics — hand off to LLM
+                logger.warning(
+                    "plan_bulk_bench raised → LLM handoff: %s", bulk_err
+                )
+                st_bulk["_bulk_llm_handoff"] = True
+                return _guard(
+                    {
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
+                        "reason": (
+                            f"Heuristic exception — hand off to LLM "
+                            f"({bulk_err})"
+                        ),
+                        "planner": "bulk_llm_handoff",
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
+                        "dry_run": bool(dry_run),
+                    }
+                )
+        if bulk_act:
+            # Heuristic "fail" that isn't a safety refuse → LLM handoff
+            bak = str(bulk_act.get("action") or "").lower()
+            br = (bulk_act.get("reason") or "").lower()
+            if bak == "fail" and not _is_policy_fail_no_stuck(
+                str(bulk_act.get("reason") or "")
+            ):
+                st_bulk["_bulk_llm_handoff"] = True
+                logger.info(
+                    "bulk fail → LLM handoff: %s",
+                    (bulk_act.get("reason") or "")[:120],
+                )
+                return _guard(
+                    {
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
+                        "reason": (
+                            f"Heuristic fail — hand off to LLM "
+                            f"({bulk_act.get('reason') or 'fail'})"
+                        ),
+                        "planner": "bulk_llm_handoff",
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
+                        "dry_run": bool(dry_run),
+                    }
+                )
+            if bulk_act.get("_bulk_llm_handoff") or bulk_act.get(
+                "fastpath_step"
+            ) == "bulk_compose_not_found_handoff":
+                st_bulk["_bulk_llm_handoff"] = True
+            now_ts = time.time()
+            # Dry swipe: identifying a real card name is already success —
+            # never let handoff/LLM swipe past a verified name on screen.
+            if dry_run and isinstance(bulk_goal, dict) and bulk_goal.get("kind") == "swipe":
+                named = _visible_dry_swipe_card_name(
+                    instruction, ui_tree, st_bulk
+                )
+                if named and str(bulk_act.get("action") or "").lower() != "done":
+                    bulk_act = {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] identified card '{named}'; would "
+                            f"like/pass (dry success, no swipe)"
+                        ),
+                        "planner": "bulk_swipe_heuristic",
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "last_name": named,
+                        "fastpath_step": "bulk_dry_run_skip_like",
+                        "_fastpath_step": "bulk_dry_run_skip_like",
+                    }
+                    st_bulk.setdefault("bulk_swipe", {})
+                    if isinstance(st_bulk["bulk_swipe"], dict):
+                        st_bulk["bulk_swipe"]["last_name"] = named
+                        st_bulk["bulk_swipe"]["done"] = max(
+                            int(st_bulk["bulk_swipe"].get("done") or 0), 1
+                        )
+                        st_bulk["bulk_swipe"]["dry_run_verified"] = True
+
+            # Always honor verified fast paths (nothing-to-reply, dry evaluate,
+            # open_app, Badoo chats open, …) — never block them behind LLM.
+            # r28: do NOT clear _bulk_llm_handoff — once handed off, stay in LLM
+            # for the rest of the job (except these terminal verified wins).
+            if _bulk_action_is_verified_fastpath(bulk_act):
+                st_bulk["bulk_stall_n"] = 0
+                st_bulk["_bulk_progress_sig"] = _bulk_progress_signature(st_bulk)
+                st_bulk["bulk_last_progress_at"] = now_ts
+                bulk_act["_stall_n"] = 0
+                return _guard(bulk_act)
+
+            # r24/r25: hand off after 2 no-progress steps OR 20s without
+            # verified progress — so open→stall does not sit until the 90s wall.
+            sig = _bulk_progress_signature(st_bulk)
+            prev_sig = st_bulk.get("_bulk_progress_sig")
+            stall = int(st_bulk.get("bulk_stall_n") or 0)
+            if prev_sig is not None and sig == prev_sig:
+                stall += 1
+            elif prev_sig is not None and sig != prev_sig:
+                stall = 0  # verified progress advanced
+                st_bulk["bulk_last_progress_at"] = now_ts
+            else:
+                stall = max(stall, 1)  # first bulk action counts toward stall
+            st_bulk["bulk_stall_n"] = stall
+            st_bulk["_bulk_progress_sig"] = sig
+            if not st_bulk.get("bulk_last_progress_at"):
+                # Seed after open/first action so the 20s clock starts
+                st_bulk["bulk_last_progress_at"] = now_ts
+            last_prog = float(st_bulk.get("bulk_last_progress_at") or now_ts)
+            timed_stall = (now_ts - last_prog) >= float(BULK_STALL_HANDOFF_S)
+
+            wants_vis = bool(
+                bulk_act.get("_force_vision") or bulk_act.get("needs_vision")
+            )
+            bulk_kind = str(bulk_act.get("action") or "").lower()
+            handoff = (
+                bool(st_bulk.get("_bulk_llm_handoff"))
+                or stall >= 2
+                or timed_stall
+            )
+            defer_to_vision = bool(image_b64) and (
+                handoff
+                or (wants_vis and bulk_kind in ("wait", "fail"))
+            )
+            if handoff and not image_b64:
+                # Ask outer step loop to fetch screenshot + replan via LLM
+                st_bulk["_bulk_llm_handoff"] = True
+                why = (
+                    f"timed {int(now_ts - last_prog)}s"
+                    if timed_stall
+                    else f"stall ×{stall}"
+                )
+                act = {
+                    "action": "wait",
+                    "seconds": 0.35,
+                    "delay_s": 0.35,
+                    "reason": (
+                        f"Heuristic {why} — hand off to LLM "
+                        f"agent loop (screenshot + SoM tree)"
+                    ),
+                    "planner": "bulk_llm_handoff",
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                    "_bulk_llm_handoff": True,
+                    "_stall_n": stall,
+                    "dry_run": bool(dry_run),
+                }
+                logger.info(
+                    "step_decision ts=%.3f phase=handoff stall=%s timed=%s reason=%s",
+                    now_ts,
+                    stall,
+                    timed_stall,
+                    act["reason"][:120],
+                )
+                return _guard(act)
+            if defer_to_vision:
+                st_bulk["_bulk_llm_handoff"] = True
+                logger.info(
+                    "bulk deferred to LLM (stall=%s timed=%s): %s",
+                    stall,
+                    timed_stall,
+                    (bulk_act.get("reason") or "")[:120],
+                )
+                # Fall through to LLM below — do not return bulk_act
+            else:
+                bulk_act["_stall_n"] = stall
+                return _guard(bulk_act)
+
+    # When bulk handed off to LLM, skip other heuristics so the general
+    # agent loop (screenshot + SoM) owns navigation.
+    bulk_llm = bool(
+        isinstance(agent_state, dict) and agent_state.get("_bulk_llm_handoff")
+    )
+
+    # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
+    if not bulk_llm:
+        msg_heur = _heuristic_messaging_send(
+            instruction, ui_tree, history, package
+        )
+        if msg_heur:
+            return _guard(msg_heur)
+
+        # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, …)
+        dm_heur = _heuristic_dm_send(
             instruction,
             ui_tree,
             history,
-            state=agent_state if isinstance(agent_state, dict) else {},
-            package=package,
+            package,
             dry_run=dry_run,
+            agent_state=agent_state if isinstance(agent_state, dict) else None,
         )
-        if bulk_act:
-            return _guard(bulk_act)
-
-    # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
-    msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
-    if msg_heur:
-        return _guard(msg_heur)
-
-    # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, Tinder, …)
-    dm_heur = _heuristic_dm_send(
-        instruction,
-        ui_tree,
-        history,
-        package,
-        dry_run=dry_run,
-        agent_state=agent_state if isinstance(agent_state, dict) else None,
-    )
-    if dm_heur:
-        return _guard(dm_heur)
+        if dm_heur:
+            return _guard(dm_heur)
 
     open_target = _trivial_open_app_target(instruction)
     hist_blob = " ".join(history).lower()
@@ -1150,11 +2400,19 @@ def plan_next_action(
             f"coordinates/node, swipe, back, type, done (if the answer is "
             f"already in the tree), or fail.{ban}\n"
         )
+    dry_hint = ""
+    if dry_run and (bulk_llm or bulk_goal):
+        dry_hint = BULK_DRY_RUN_LLM_HINT + "\n"
+    # Set-of-marks indexes when screenshot/handoff — matches original agent loop
+    use_som = bool(image_b64 or bulk_llm)
+    tree_block = (
+        _som_indexed_tree(ui_tree) if use_som else _compress_tree(ui_tree)
+    )
     user = (
         f"GOAL: {instruction}\n\n"
         f"RECENT ACTIONS:\n{hist}\n\n"
-        f"{tree_note}{open_hint}{progress_hint}"
-        f"UI TREE:\n{_compress_tree(ui_tree)}\n\n"
+        f"{tree_note}{open_hint}{progress_hint}{dry_hint}"
+        f"{'SET-OF-MARKS + ' if use_som else ''}UI TREE:\n{tree_block}\n\n"
         "JSON action:"
     )
     raw = None
@@ -1213,8 +2471,49 @@ def plan_next_action(
     action = _parse_action_json(raw)
     action["planner"] = "llm"
     action["llm_provider"] = provider_used
+    # r25 dry swipe: if LLM tries swipe/like/pass but a real name is visible,
+    # rewrite to verified done — identifying the name IS success.
+    if dry_run and bulk_goal and isinstance(bulk_goal, dict):
+        if bulk_goal.get("kind") == "swipe":
+            ak = str(action.get("action") or "").lower()
+            if ak in ("swipe", "tap", "done") or action.get("dry_run_verified"):
+                named = _visible_dry_swipe_card_name(
+                    instruction, ui_tree, agent_state if isinstance(agent_state, dict) else None
+                )
+                if named and (
+                    ak in ("swipe",)
+                    or _action_looks_like_swipe_or_like(action, ak)
+                    or (ak == "done" and not action.get("dry_run_verified"))
+                ):
+                    action = {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] identified card '{named}'; would "
+                            f"like/pass (LLM — no swipe needed)"
+                        ),
+                        "planner": "llm",
+                        "llm_provider": provider_used,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "last_name": named,
+                    }
     # Hard rule: never let the LLM invent message body text
-    return _guard(action)
+    guarded = _guard(action)
+    _log_step_decision(
+        job_id=str(
+            (agent_state or {}).get("job_id")
+            if isinstance(agent_state, dict)
+            else ""
+        ),
+        step=int(
+            (agent_state or {}).get("steps") or 0
+            if isinstance(agent_state, dict)
+            else 0
+        ),
+        action=guarded if isinstance(guarded, dict) else action,
+        phase="plan_return",
+    )
+    return guarded
 
 
 def _tree_node_center(tree: str, *needles: str) -> Optional[tuple]:
@@ -1594,8 +2893,43 @@ def _parse_action_json(raw: str) -> Dict[str, Any]:
     return json.loads(m.group(0))
 
 
+def _tree_attr_int(tree: str, name: str) -> int:
+    m = re.search(rf'\b{re.escape(name)}="(\d+)"', tree or "", re.I)
+    return int(m.group(1)) if m else 0
+
+
+def _tree_attr_str(tree: str, name: str) -> str:
+    m = re.search(rf'\b{re.escape(name)}="([^"]*)"', tree or "", re.I)
+    return m.group(1) if m else ""
+
+
+def _tree_reported_package(tree: str, fallback: str = "") -> str:
+    """Prefer active window package, else packages= list first entry."""
+    fb = (fallback or "").strip()
+    if fb:
+        return fb
+    m = re.search(
+        r'<w\b[^>]*\bid="active"[^>]*\bp="([^"]+)"',
+        tree or "",
+        re.I,
+    )
+    if m:
+        return m.group(1).strip()
+    m = re.search(r'\bpackages="([^"]+)"', tree or "", re.I)
+    if m:
+        first = m.group(1).split(",")[0].strip()
+        if first:
+            return first
+    return ""
+
+
 def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
-    """APK may return a plain string or {tree, package, empty, chars, timing, tree_gz}."""
+    """APK may return a plain string or {tree, package, empty, chars, timing, tree_gz}.
+
+    APK 540 bug: launcher trees set empty=\"true\" / app_nodes=0 even with
+    dozens of home-screen nodes. Backend must treat launcher+nodes as non-empty
+    so jobs can open_app instead of looping empty recovery.
+    """
     timing: Dict[str, Any] = {}
     if isinstance(raw, dict):
         tree = raw.get("tree") or raw.get("result") or ""
@@ -1615,27 +2949,183 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
             tree = json.dumps(tree)
         if isinstance(raw.get("timing"), dict):
             timing = dict(raw["timing"])
+        pkg = _tree_reported_package(tree, str(raw.get("package") or ""))
+        nodes = int(raw.get("nodes") or 0) or _tree_attr_int(tree, "nodes")
+        empty = bool(raw.get("empty") or 'empty="true"' in tree or len(tree) < 80)
+        # Launcher / home with nodes is NEVER empty (works with APK 540 installed)
+        if empty and nodes > 0 and _is_launcher_package(pkg):
+            logger.info(
+                "normalize: launcher tree nodes=%s pkg=%s — forcing empty=false",
+                nodes,
+                pkg,
+            )
+            empty = False
+        # App window with counted app_nodes, or launcher home — never empty
+        if empty and nodes > 0 and pkg and not _is_lock_screen_package(pkg):
+            app_nodes = _tree_attr_int(tree, "app_nodes")
+            if app_nodes > 0 or _is_launcher_package(pkg):
+                logger.info(
+                    "normalize: non-empty override nodes=%s app_nodes=%s pkg=%s",
+                    nodes,
+                    app_nodes,
+                    pkg,
+                )
+                empty = False
         return {
             "tree": tree,
-            "package": str(raw.get("package") or ""),
-            "empty": bool(raw.get("empty") or 'empty="true"' in tree or len(tree) < 80),
+            "package": pkg,
+            "empty": empty,
             "chars": int(raw.get("chars") or len(tree)),
-            "nodes": int(raw.get("nodes") or 0),
+            "nodes": nodes,
             "partial": bool(raw.get("partial") or raw.get("truncated")),
             "anr_dismissed": bool(raw.get("anr_dismissed")),
             "timing": timing,
+            "package_source": str(raw.get("package_source") or ""),
+            "a11y_package": str(raw.get("a11y_package") or ""),
+            "fg_inferred": bool(raw.get("fg_inferred")),
+            "needs_vision": bool(raw.get("needs_vision")),
+            "text_nodes": int(
+                raw.get("text_nodes") or _tree_attr_int(tree, "text_nodes")
+            ),
+            "win_diag": str(
+                raw.get("win_diag") or _tree_attr_str(tree, "win_diag") or ""
+            ),
         }
     tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
+    pkg = _tree_reported_package(tree, "")
+    nodes = _tree_attr_int(tree, "nodes")
+    empty = (not tree) or 'empty="true"' in tree or len(tree) < 80
+    if empty and nodes > 0 and _is_launcher_package(pkg):
+        empty = False
     return {
         "tree": tree,
-        "package": "",
-        "empty": (not tree) or 'empty="true"' in tree or len(tree) < 80,
+        "package": pkg,
+        "empty": empty,
         "chars": len(tree),
-        "nodes": 0,
+        "nodes": nodes,
         "partial": False,
         "anr_dismissed": False,
         "timing": {},
     }
+
+
+def _open_label_for_package(pkg: str) -> str:
+    """Human open_app label for a dating/social package."""
+    p = (pkg or "").lower().strip()
+    if not p:
+        return ""
+    try:
+        from dm_heuristics import DM_APP_PROFILES
+    except ImportError:
+        from backend.dm_heuristics import DM_APP_PROFILES  # type: ignore
+
+    for key, prof in DM_APP_PROFILES.items():
+        want = str(prof.get("package") or "").lower()
+        if want and (want == p or want in p or p in want):
+            return str(prof.get("open_label") or key)
+    return p
+
+
+def _launcher_open_target_action(
+    prefer_pkg: str,
+    fg_package: str,
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    instruction: str = "",
+) -> Optional[Dict[str, Any]]:
+    """If FG is home/launcher and prefer_pkg is a dating target, open it now.
+
+    Backend-only fix for APK 540: do not plan (or Back) on the launcher —
+    emit open_app for the job target immediately (universal_open ladder).
+    """
+    want = (prefer_pkg or "").strip()
+    fg = (fg_package or "").strip()
+    if not want or not fg:
+        return None
+    if not _is_launcher_package(fg):
+        return None
+    if _fg_matches_open_target(want, fg):
+        return None
+    st = state if isinstance(state, dict) else {}
+    # a11y still on launcher after open, but UsageStats/lastOpened inferred
+    # the target — do NOT re-open (restarts the app). Prefer vision.
+    if st.get("fg_inferred") or (
+        st.get("last_open_at")
+        and (int(time.time()) - int(st.get("last_open_at") or 0)) < 25
+    ):
+        try:
+            from universal_open import open_cycles_exhausted, open_exhausted_fail_action
+        except ImportError:
+            from backend.universal_open import (  # type: ignore
+                open_cycles_exhausted,
+                open_exhausted_fail_action,
+            )
+
+        if open_cycles_exhausted(st):
+            return open_exhausted_fail_action(want, fg_package=fg, state=st)
+        st["force_vision_once"] = True
+        st["needs_vision"] = True
+        return None
+    try:
+        from universal_open import (
+            open_cycles_exhausted,
+            open_exhausted_fail_action,
+            plan_universal_open,
+        )
+    except ImportError:
+        from backend.universal_open import (  # type: ignore
+            open_cycles_exhausted,
+            open_exhausted_fail_action,
+            plan_universal_open,
+        )
+
+    if open_cycles_exhausted(st):
+        return open_exhausted_fail_action(want, fg_package=fg, state=st)
+    act = plan_universal_open(
+        want,
+        instruction=instruction,
+        state=st,
+        fg_package=fg,
+        reason_prefix=f"Home/launcher FG ({fg})",
+    )
+    act["planner"] = "launcher_open_target"
+    return act
+
+
+def _instruction_target_package(
+    instruction: str, state: Optional[Dict[str, Any]] = None
+) -> str:
+    """Best-effort dating/social package for a11y window selection."""
+    st = state if isinstance(state, dict) else {}
+    cached = str(st.get("target_package") or "").strip()
+    if cached:
+        return cached
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+        from dm_heuristics import DM_APP_PROFILES
+    except ImportError:
+        try:
+            from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+            from backend.dm_heuristics import DM_APP_PROFILES  # type: ignore
+        except ImportError:
+            return ""
+    goal = parse_bulk_goal(instruction or "")
+    app = ""
+    if isinstance(goal, dict):
+        app = str(goal.get("app") or "").lower()
+    if not app:
+        low = (instruction or "").lower()
+        for key, prof in DM_APP_PROFILES.items():
+            aliases = tuple(prof.get("aliases") or ()) + (key,)
+            if any(a and a.lower() in low for a in aliases):
+                app = key
+                break
+    pkg = ""
+    if app and app in DM_APP_PROFILES:
+        pkg = str(DM_APP_PROFILES[app].get("package") or "")
+    if pkg and isinstance(state, dict):
+        state["target_package"] = pkg
+    return pkg
 
 
 def _fetch_ui_tree_retry(
@@ -1643,6 +3133,7 @@ def _fetch_ui_tree_retry(
     call_device,
     *,
     attempts: int = 4,
+    preferred_package: str = "",
 ) -> Dict[str, Any]:
     """Fetch a UI tree; retry on empty/timeout/offline so the planner never
     plans on a blank hierarchy after a WS drop or a11y blip."""
@@ -1656,6 +3147,9 @@ def _fetch_ui_tree_retry(
         "anr_dismissed": False,
         "timing": {},
     }
+    params: Dict[str, Any] = {}
+    if preferred_package:
+        params["preferred_package"] = preferred_package
     for attempt in range(max(1, attempts)):
         wait_reconnect = 20.0 if attempt == 0 else 45.0
         timeout_s = 8.0 if attempt == 0 else 12.0
@@ -1664,7 +3158,7 @@ def _fetch_ui_tree_retry(
                 call_device(
                     device_id,
                     "get_ui_tree",
-                    {},
+                    params,
                     timeout_s=timeout_s,
                     wait_reconnect_s=wait_reconnect,
                 )
@@ -1745,6 +3239,55 @@ def _renew_job_lease(job: Optional[Dict[str, Any]]) -> None:
         logger.warning("lease renew failed job=%s: %s", jid, e)
 
 
+def _presign_screenshot_put(
+    job_id: str,
+) -> tuple:
+    """Return (upload_url, s3_key) or (None, None) when bucket unset."""
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    jid = (job_id or "").strip() or "anon"
+    if not bucket:
+        return None, None
+    try:
+        import uuid
+
+        import boto3
+
+        key = f"tasks/{jid}/live_{uuid.uuid4().hex[:12]}.jpg"
+        url = boto3.client("s3").generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "ContentType": "image/jpeg",
+            },
+            ExpiresIn=180,
+            HttpMethod="PUT",
+        )
+        return url, key
+    except Exception as e:
+        logger.warning("screenshot presign failed: %s", e)
+        return None, None
+
+
+def _download_screenshot_b64(s3_key: str) -> Optional[str]:
+    bucket = os.environ.get("SCREENSHOT_BUCKET") or ""
+    if not bucket or not s3_key:
+        return None
+    try:
+        import base64
+
+        import boto3
+
+        body = boto3.client("s3").get_object(Bucket=bucket, Key=s3_key)["Body"].read()
+        if not body:
+            return None
+        logger.info("screenshot downloaded s3_key=%s bytes=%s", s3_key, len(body))
+        return base64.b64encode(body).decode("ascii")
+    except Exception as e:
+        logger.warning("screenshot S3 get failed key=%s: %s", s3_key, e)
+        return None
+
+
 def _fetch_screenshot_b64(
     device_id: str, *, job: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
@@ -1754,17 +3297,58 @@ def _fetch_screenshot_b64(
     except ImportError:
         from backend.device_rpc import call_device  # type: ignore
 
-    try:
-        raw = call_device(device_id, "screenshot", {}, timeout_s=15)
-    except Exception as e:
-        logger.warning("screenshot rpc failed: %s", e)
-        return None
-    if isinstance(raw, dict):
-        if raw.get("ok") and raw.get("data"):
-            return str(raw["data"])
-        return None
-    if isinstance(raw, str) and len(raw) > 100:
-        return raw
+    jid = str((job or {}).get("job_id") or "")
+    # Prefer S3 upload so JPEG never rides WS (API GW ~32KB frame / 128KB msg)
+    upload_url, s3_key = _presign_screenshot_put(jid)
+    params: Dict[str, Any] = {"max_width": 720, "quality": 42}
+    if upload_url and s3_key:
+        params["upload_url"] = upload_url
+        params["s3_key"] = s3_key
+
+    # Samsung One UI a11y takeScreenshot can be slow; allow headroom + one retry
+    for attempt, timeout_s in enumerate((22.0, 28.0)):
+        try:
+            raw = call_device(
+                device_id,
+                "screenshot",
+                params,
+                timeout_s=timeout_s,
+                wait_reconnect_s=12.0,
+            )
+        except Exception as e:
+            logger.warning("screenshot rpc failed attempt=%s: %s", attempt + 1, e)
+            continue
+        if isinstance(raw, dict):
+            if raw.get("ok") and raw.get("s3_key"):
+                b64 = _download_screenshot_b64(str(raw["s3_key"]))
+                if b64:
+                    logger.info(
+                        "screenshot via s3 bytes=%s source=%s",
+                        raw.get("bytes"),
+                        raw.get("source"),
+                    )
+                    return b64
+            if raw.get("ok") and s3_key and raw.get("encoding") == "s3":
+                b64 = _download_screenshot_b64(s3_key)
+                if b64:
+                    return b64
+            if raw.get("ok") and raw.get("data"):
+                data = str(raw["data"])
+                logger.info(
+                    "screenshot via ws-inline b64_chars=%s bytes=%s",
+                    len(data),
+                    raw.get("bytes"),
+                )
+                return data
+            logger.warning(
+                "screenshot unavailable attempt=%s err=%s bytes=%s",
+                attempt + 1,
+                raw.get("error"),
+                raw.get("bytes"),
+            )
+            continue
+        if isinstance(raw, str) and len(raw) > 100:
+            return raw
     return None
 
 
@@ -1881,12 +3465,80 @@ def _maybe_restore_ime(job: Dict[str, Any], device_id: str, call_device) -> None
         logger.warning("restore_ime failed: %s", e)
 
 
+def _back_to_root_before_home(
+    job: Dict[str, Any], device_id: str, call_device, *, max_backs: int = 3
+) -> None:
+    """Close sheets/viewers/open chat threads before HOME / job start."""
+    try:
+        for _ in range(max_backs):
+            info = _fetch_ui_tree_retry(device_id, call_device, attempts=1)
+            tree = str(info.get("tree") or "")
+            pkg = str(info.get("package") or "").lower()
+            try:
+                from dm_heuristics import (
+                    app_overlay_present,
+                    detect_dm_app,
+                    hily_on_photo_viewer,
+                    hily_on_profile_sheet,
+                    keyboard_likely_up,
+                    open_chat_thread_present,
+                )
+            except ImportError:
+                from backend.dm_heuristics import (  # type: ignore
+                    app_overlay_present,
+                    detect_dm_app,
+                    hily_on_photo_viewer,
+                    hily_on_profile_sheet,
+                    keyboard_likely_up,
+                    open_chat_thread_present,
+                )
+            app = detect_dm_app(str(job.get("instruction") or ""))
+            if not app:
+                try:
+                    from dm_heuristics import DM_APP_PROFILES as _DAP
+                except ImportError:
+                    from backend.dm_heuristics import DM_APP_PROFILES as _DAP  # type: ignore
+
+                for key, prof in _DAP.items():
+                    p = str(prof.get("package") or "").lower()
+                    if p and p in pkg:
+                        app = key
+                        break
+            if not app:
+                app = detect_dm_app(tree)
+            overlay = app_overlay_present(app, tree)
+            need_back = bool(
+                keyboard_likely_up(tree)
+                or open_chat_thread_present(app, tree)
+                or overlay
+                in (
+                    "open_chat_thread",
+                    "keyboard",
+                    "hily_photo_viewer",
+                    "hily_profile_sheet",
+                    "hily_mbm",
+                    "bumble_photo_browser",
+                    "blk_streaks_sheet",
+                )
+                or hily_on_photo_viewer(tree)
+                or hily_on_profile_sheet(tree)
+                or "major crush" in tree.lower()
+                or "message before match" in tree.lower()
+            )
+            if not need_back:
+                break
+            call_device(device_id, "press_button", {"button": "back"}, timeout_s=8)
+    except Exception as e:
+        logger.warning("back-to-root before HOME failed: %s", e)
+
+
 def _press_home_end_job(job: Dict[str, Any], device_id: str, call_device) -> None:
     """Always return to HOME at the end of a job (dry-run or live)."""
     state = job.setdefault("state", {}) if isinstance(job.get("state"), dict) else {}
     if state.get("went_home"):
         return
     try:
+        _back_to_root_before_home(job, device_id, call_device)
         call_device(device_id, "press_button", {"button": "home"}, timeout_s=10)
         state["went_home"] = True
         hist = list(state.get("history") or [])
@@ -1897,20 +3549,66 @@ def _press_home_end_job(job: Dict[str, Any], device_id: str, call_device) -> Non
         logger.warning("end-of-job HOME failed: %s", e)
 
 
+def _set_device_job_busy(device_id: str, call_device, busy: bool) -> None:
+    """Hide/show overlay bubble for the whole job (not per-step)."""
+    try:
+        call_device(
+            device_id,
+            "job_busy" if busy else "job_idle",
+            {},
+            timeout_s=5,
+        )
+    except Exception as e:
+        logger.warning("job_%s notify failed: %s", "busy" if busy else "idle", e)
+
+
 def _end_job_cleanup(job: Dict[str, Any], device_id: str, call_device) -> None:
-    """IME restore + HOME after every terminal job status."""
+    """IME restore + bubble idle + HOME after every terminal job status."""
+    state = job.setdefault("state", {}) if isinstance(job.get("state"), dict) else {}
+    if state.get("job_cleanup_done"):
+        return
     try:
         _maybe_restore_ime(job, device_id, call_device)
+    except Exception:
+        pass
+    try:
+        _set_device_job_busy(device_id, call_device, False)
     except Exception:
         pass
     try:
         _press_home_end_job(job, device_id, call_device)
     except Exception:
         pass
+    state["job_cleanup_done"] = True
+    job["state"] = state
+
+
+def _dry_run_goal_kind(instruction: str, state: Optional[Dict[str, Any]] = None) -> str:
+    """swipe | message | message_new | other — from instruction / state."""
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+    except ImportError:
+        from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+
+    g = parse_bulk_goal(instruction or "")
+    if isinstance(g, dict) and g.get("kind"):
+        return str(g["kind"])
+    st = state if isinstance(state, dict) else {}
+    if isinstance(st.get("bulk_swipe"), dict):
+        return "swipe"
+    if isinstance(st.get("bulk_message_new"), dict):
+        return "message_new"
+    if isinstance(st.get("bulk_message"), dict):
+        return "message"
+    return "other"
 
 
 def _dry_run_done_is_verified(
-    action: Dict[str, Any], reason: str, state: Dict[str, Any]
+    action: Dict[str, Any],
+    reason: str,
+    state: Dict[str, Any],
+    *,
+    instruction: str = "",
 ) -> bool:
     """True when a dry-run done actually proved the expected UI elements."""
     if action.get("dry_run_verified") is True:
@@ -1918,11 +3616,30 @@ def _dry_run_done_is_verified(
     if state.get("dry_run_verified") is True:
         return True
     low = (reason or "").lower()
-    # Explicit verified markers from heuristics
+    goal_kind = _dry_run_goal_kind(instruction, state)
+    # Explicit verified markers from heuristics / LLM
     if "deck verified" in low or "compose verified" in low:
+        return True
+    # LLM reported compose focus (Bumble Tosin / Tagged Hannah)
+    if (
+        "confirmed editable" in low
+        or "editable input" in low
+        or "composer verified" in low
+        or "compose field" in low
+        or "focused editable" in low
+    ):
+        # Count distinct chat toward N when messaging
+        if goal_kind in ("message", "message_new"):
+            _record_dry_chat_verified(state, action, reason)
         return True
     if "dry_run_verified" in low:
         return True
+    # Card identify is ONLY success for swipe goals — never messaging
+    # (tagged_new3 falsely completed on 'identified card').
+    if "identified card" in low or "identified profile" in low:
+        return goal_kind == "swipe"
+    if "evaluated" in low and "would like/pass" in low:
+        return goal_kind == "swipe"
     # A bare skip without verification is NOT success
     if "[dry run] would" in low and "skipped" in low:
         return False
@@ -1931,6 +3648,260 @@ def _dry_run_done_is_verified(
     if "would open" in low and "verified" not in low:
         return False
     return bool(action.get("dry_run_verified"))
+
+
+def _record_dry_chat_verified(
+    state: Dict[str, Any], action: Dict[str, Any], reason: str
+) -> None:
+    """Bump distinct-chat dry progress when compose/editable is confirmed."""
+    if not isinstance(state, dict):
+        return
+    name = (
+        str(action.get("contact") or action.get("last_name") or action.get("name") or "")
+        .strip()
+    )
+    if not name:
+        # Try to pull a name from the reason: "… for Tosin" / "chat with Hannah"
+        m = re.search(
+            r"(?:chat(?:\s+with)?|for|contact|thread)\s+['\"]?([A-Za-z][\w'\-.]*)",
+            reason or "",
+            re.I,
+        )
+        if m:
+            name = m.group(1).strip()
+    bulk_key = (
+        "bulk_message_new"
+        if isinstance(state.get("bulk_message_new"), dict)
+        else "bulk_message"
+    )
+    bulk = state.setdefault(bulk_key, {})
+    if not isinstance(bulk, dict):
+        return
+    names = list(bulk.get("done_names") or [])
+    if name and name.lower() not in {str(x).lower() for x in names}:
+        names.append(name)
+        bulk["done_names"] = names
+        bulk["done"] = max(int(bulk.get("done") or 0), len(names))
+    elif not name:
+        bulk["done"] = max(int(bulk.get("done") or 0), 1)
+    bulk["dry_run_verified"] = True
+    state["dry_run_verified"] = True
+    state[bulk_key] = bulk
+
+
+def _bulk_swipe_app_from_instruction(instruction: str) -> Optional[str]:
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+    except ImportError:
+        from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+
+    g = parse_bulk_goal(instruction or "")
+    if isinstance(g, dict) and g.get("kind") == "swipe":
+        return str(g.get("app") or "") or None
+    return None
+
+
+def _visible_dry_swipe_card_name(
+    instruction: str, ui_tree: str, state: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """Real profile name already on screen / in bulk state (dry swipe success)."""
+    st = state if isinstance(state, dict) else {}
+    bulk = st.get("bulk_swipe") if isinstance(st.get("bulk_swipe"), dict) else {}
+    for cand in (
+        bulk.get("last_name"),
+        bulk.get("current"),
+        st.get("current_profile_name"),
+    ):
+        if cand and str(cand).strip():
+            try:
+                from bulk_bench_heuristics import _card_name_is_real_profile
+            except ImportError:
+                from backend.bulk_bench_heuristics import (  # type: ignore
+                    _card_name_is_real_profile,
+                )
+            if _card_name_is_real_profile(str(cand).strip()):
+                return str(cand).strip().split(",")[0].strip()
+    app = _bulk_swipe_app_from_instruction(instruction)
+    if not app:
+        return None
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+    name = deck_card_name(app, ui_tree or "")
+    if name and _card_name_is_real_profile(name):
+        return name.split(",")[0].strip()
+    return None
+
+
+def _salvage_dry_swipe_done(
+    *,
+    instruction: str,
+    ui_tree: str,
+    state: Dict[str, Any],
+    action: Dict[str, Any],
+    reason: str,
+) -> Optional[Dict[str, Any]]:
+    """If dry swipe was blocked or LLM tried to swipe, succeed on a real name."""
+    name = _visible_dry_swipe_card_name(instruction, ui_tree, state)
+    if not name:
+        return None
+    new_reason = (
+        f"[DRY RUN] identified card '{name}'; would like/pass "
+        f"(no swipe needed) — {reason}"
+    )[:240]
+    return {
+        **action,
+        "action": "done",
+        "reason": new_reason,
+        "dry_run": True,
+        "dry_run_verified": True,
+        "last_name": name,
+        "planner": action.get("planner") or "dry_swipe_identify",
+    }
+
+
+def _log_step_decision(
+    *,
+    job_id: str,
+    step: int,
+    action: Dict[str, Any],
+    phase: str = "plan",
+) -> None:
+    """Server-side timestamped decision log (r25: find open→stall gaps)."""
+    kind = str((action or {}).get("action") or "")
+    reason = str((action or {}).get("reason") or "")[:160]
+    planner = str((action or {}).get("planner") or "")
+    logger.info(
+        "step_decision ts=%.3f job=%s step=%s phase=%s planner=%s action=%s "
+        "reason=%s stall=%s handoff=%s",
+        time.time(),
+        job_id,
+        step,
+        phase,
+        planner,
+        kind,
+        reason,
+        (action or {}).get("_stall_n")
+        or "",
+        bool((action or {}).get("_bulk_llm_handoff")),
+    )
+
+
+# Every planner-emitted action kind the step runner can execute (keep in sync
+# with execute_action branches). Internal markers like _vision_retry excluded.
+RUNNER_EXECUTABLE_ACTIONS = frozenset(
+    {
+        "tap",
+        "swipe",
+        "type",
+        "type_text",
+        "input_text",
+        "ime_send",
+        "ime_action",
+        "ensure_ime",
+        "switch_ime",
+        "restore_ime",
+        "back",
+        "home",
+        "press_button",
+        "wait",
+        "noop",
+        "open_app",
+        "start_app",
+        "done",
+        "fail",
+    }
+)
+
+
+def runner_can_execute(action_or_kind: Any) -> bool:
+    """True if execute_action knows this planner action kind."""
+    if isinstance(action_or_kind, dict):
+        kind = str(action_or_kind.get("action") or "").lower()
+    else:
+        kind = str(action_or_kind or "").lower()
+    return kind in RUNNER_EXECUTABLE_ACTIONS
+
+
+def _resolve_internal_planner_action(
+    action: Dict[str, Any],
+    *,
+    instruction: str,
+    ui_tree: str,
+    history: List[str],
+    state: Dict[str, Any],
+    package: str = "",
+    dry_run: bool = False,
+    image_b64: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Turn internal markers (_vision_retry / _reconnect_wait) into real actions.
+
+    r26: stuck recovery emitted `_vision_retry` which then hit execute_action
+    → RuntimeError 'Unknown action: _vision_retry' and left the lease held.
+    """
+    if not isinstance(action, dict):
+        return {"action": "wait", "seconds": 0.3, "reason": "invalid action"}
+    kind = str(action.get("action") or "").lower()
+    if kind == "_reconnect_wait":
+        return {
+            "action": "wait",
+            "seconds": 1.0,
+            "delay_s": 1.0,
+            "reason": action.get("reason") or "Wait for a11y/WS reconnect",
+            "planner": action.get("planner") or "recovery",
+            "needs_vision": True,
+            "_force_vision": True,
+        }
+    if kind != "_vision_retry":
+        return action
+    # Re-plan with vision / LLM — never pass _vision_retry to the device
+    state["_bulk_llm_handoff"] = True
+    state["force_vision_once"] = True
+    try:
+        planned = plan_next_action(
+            instruction,
+            ui_tree,
+            history,
+            image_b64=image_b64,
+            no_progress_streak=int(state.get("no_progress_streak") or 0),
+            last_tap_key=state.get("last_tap_key"),
+            package=package,
+            dry_run=dry_run,
+            agent_state=state,
+        )
+        if isinstance(planned, dict) and str(planned.get("action") or "").lower() not in (
+            "",
+            "_vision_retry",
+            "_reconnect_wait",
+        ):
+            if planned.get("action") == "tap":
+                planned["_vision_confirmed_label"] = str(
+                    planned.get("label")
+                    or planned.get("text")
+                    or planned.get("reason")
+                    or "vision"
+                )
+            return planned
+    except Exception as e:
+        logger.warning("vision_retry replan failed: %s", e)
+    return {
+        "action": "wait",
+        "seconds": 0.4,
+        "delay_s": 0.4,
+        "reason": (
+            f"Vision retry → LLM handoff "
+            f"({action.get('reason') or 'stuck'})"
+        ),
+        "planner": "bulk_llm_handoff",
+        "needs_vision": True,
+        "_force_vision": True,
+        "_bulk_llm_handoff": True,
+        "dry_run": bool(dry_run),
+    }
 
 
 def execute_action(device_id: str, action: Dict[str, Any]) -> str:
@@ -1944,8 +3915,54 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         from backend.agent_humanize import jitter_tap  # type: ignore
 
     kind = str(action.get("action") or "").lower()
+    # Defense in depth — never send internal markers to the device
+    if kind in ("_vision_retry", "_reconnect_wait"):
+        logger.warning(
+            "execute_action got internal marker %s — converting to wait", kind
+        )
+        return str(action.get("reason") or f"skipped internal {kind}")
     if kind == "tap":
         ox, oy = int(action["x"]), int(action["y"])
+        # Runner-level tap firewall: fresh tree → topmost node at point
+        dry_run = bool(action.get("dry_run") or action.get("_dry_run"))
+        try:
+            from tap_firewall import guard_tap_action
+        except ImportError:
+            from backend.tap_firewall import guard_tap_action  # type: ignore
+
+        fresh_tree = str(action.get("_fresh_tree") or "")
+        if not fresh_tree:
+            try:
+                info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                fresh_tree = str(info.get("tree") or "")
+                action["_fresh_tree_pkg"] = str(info.get("package") or "")
+            except Exception as e:
+                logger.warning("tap firewall tree fetch failed: %s", e)
+                fresh_tree = ""
+        guarded = guard_tap_action(
+            action,
+            fresh_tree,
+            dry_run=dry_run,
+            vision_confirmed_label=str(action.get("_vision_confirmed_label") or ""),
+        )
+        if str(guarded.get("action") or "").lower() == "fail":
+            # Propagate soft-recover flag for upsell/unresolved (don't kill job)
+            if guarded.get("_soft_recover"):
+                action["_soft_recover"] = True
+            if guarded.get("_resolved_label"):
+                action["_resolved_label"] = guarded.get("_resolved_label")
+            raise RuntimeError(str(guarded.get("reason") or "tap firewall"))
+        action.update(
+            {
+                k: guarded[k]
+                for k in (
+                    "_resolved_label",
+                    "_resolved_id",
+                    "_tap_firewall",
+                )
+                if k in guarded
+            }
+        )
         bounds = action.get("bounds") or action.get("b")
         b_tuple = None
         if isinstance(bounds, (list, tuple)) and len(bounds) == 4:
@@ -2162,6 +4179,19 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     if kind == "home":
         call_device(device_id, "press_button", {"button": "home"})
         return "Went home"
+    if kind == "press_button":
+        # Planners emit press_button{button}; device RPC is the same command.
+        button = str(action.get("button") or "").lower().strip()
+        if button not in ("back", "home", "enter"):
+            raise RuntimeError(
+                f"press_button only allows back/home/enter, got {button!r}"
+            )
+        call_device(device_id, "press_button", {"button": button}, timeout_s=10)
+        if button == "back":
+            return "Went back (GLOBAL_ACTION_BACK)"
+        if button == "home":
+            return "Went home"
+        return "Pressed enter"
     if kind in ("wait", "noop"):
         delay = float(action.get("seconds") or action.get("delay_s") or 0.05)
         if delay > 0:
@@ -2169,10 +4199,20 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         return str(action.get("reason") or "Waited")
     if kind in ("open_app", "start_app"):
         app = str(action.get("app") or action.get("package") or "")
+        open_params: Dict[str, Any] = {
+            "app": app,
+            "package": action.get("package"),
+        }
+        # Universal open ladder (APK drawer search / icon scroll fallbacks)
+        mode = action.get("open_mode") or action.get("_universal_open")
+        if mode:
+            open_params["open_mode"] = str(mode)
+        if action.get("fallback"):
+            open_params["fallback"] = True
         raw = call_device(
             device_id,
             "open_app",
-            {"app": app, "package": action.get("package")},
+            open_params,
             # Secure Folder fingerprint wait can take ~75s on device
             timeout_s=90,
             wait_reconnect_s=90,
@@ -2334,6 +4374,56 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     steps_detail: List[Dict[str, Any]] = list(state.get("steps_detail") or [])
     now = int(time.time())
     created = int(job.get("created_at") or now)
+    state["job_id"] = str(job.get("job_id") or "")
+    # Seed UI-progress clock once so the 90s watchdog has a baseline
+    state.setdefault("last_ui_progress_at", created)
+    state.setdefault("last_progress_at", created)
+    logger.info(
+        "step_decision ts=%.3f job=%s step=%s phase=step_start "
+        "last_ui=%s stall=%s handoff=%s dry=%s live_test=%s",
+        time.time(),
+        job.get("job_id"),
+        step,
+        state.get("last_ui_progress_at"),
+        state.get("bulk_stall_n"),
+        bool(state.get("_bulk_llm_handoff")),
+        bool(job.get("dry_run") or state.get("dry_run")),
+        bool(job.get("live_test") or state.get("live_test")),
+    )
+
+    # r28: honor cancel before every step — never overwrite cancelled
+    if refresh_job_cancel_status(job):
+        status_l = str(job.get("status") or "").lower()
+        if status_l in ("stopped", "cancelled", "canceled"):
+            state["last_action"] = "cancelled"
+            job["state"] = state
+            job.setdefault("result", "Cancelled")
+            logger.info(
+                "step skipped — job already %s job=%s",
+                status_l,
+                job.get("job_id"),
+            )
+            return job
+        if status_l in ("failed", "completed"):
+            return job
+
+    # r28: Taimi / Hinge unsupported — fail fast (<30s) instead of burning steps
+    if not state.get("_unsupported_checked"):
+        state["_unsupported_checked"] = True
+        unsup = unsupported_app_fail_action(instruction)
+        if unsup:
+            job["status"] = "failed"
+            job["error"] = str(unsup.get("reason") or "unsupported app")
+            job["result"] = job["error"]
+            state["last_action"] = "unsupported_app"
+            job["state"] = state
+            job["completed_at"] = now
+            logger.info(
+                "unsupported app fail-fast job=%s: %s",
+                job.get("job_id"),
+                job["error"][:120],
+            )
+            return job
     # Renew at step start — covers slow tree dump + screenshot below
     _renew_job_lease(job)
 
@@ -2345,6 +4435,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["status"] = "failed"
         job["error"] = "No instruction on job"
         return job
+
+    # Hide Connected bubble for the whole job (not per-step) — restore in cleanup
+    if not state.get("job_busy_sent"):
+        try:
+            _set_device_job_busy(device_id, call_device, True)
+            state["job_busy_sent"] = True
+        except Exception as e:
+            logger.warning("job_busy at start failed: %s", e)
+
+    # Job-start back-to-root: close leftover threads / sheets / photo viewers
+    if not state.get("job_start_root_done"):
+        try:
+            _back_to_root_before_home(job, device_id, call_device, max_backs=5)
+            state["job_start_root_done"] = True
+            history.append("job-start back-to-root")
+            state["history"] = history[-40:]
+        except Exception as e:
+            logger.warning("job-start back-to-root failed: %s", e)
+            state["job_start_root_done"] = True
 
     # Own keyboard: switch to Mobilerun IME once per messaging job (restore on done)
     try:
@@ -2390,6 +4499,26 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["last_action"] = "idle_timeout"
         job["state"] = state
         job["completed_at"] = now
+        return job
+    # True no-progress wall: busywork taps/settles keep last_progress_at fresh
+    # but UI never changes — fail ~90s (r21/r23: hangs sat 209–583s).
+    last_ui = int(state.get("last_ui_progress_at") or created)
+    # Also fail when wall exceeded from job start even before first step lands
+    # (r23: steps>=1 gate let first long step burn past 90s unchecked).
+    if now - last_ui > NO_PROGRESS_TIMEOUT_S and (
+        int(state.get("steps") or 0) >= 1 or now - created > NO_PROGRESS_TIMEOUT_S
+    ):
+        job["status"] = "failed"
+        job["error"] = (
+            f"No UI progress for {NO_PROGRESS_TIMEOUT_S}s "
+            f"(last_ui_progress_at={last_ui}; refuse hung 7 min job)"
+        )
+        state["last_action"] = "no_progress_timeout"
+        job["state"] = state
+        job["completed_at"] = now
+        _attach_failure_artifacts(
+            job, device_id, str(state.get("last_tree") or ""), call_device=call_device
+        )
         return job
     if not device_is_reachable(device_id):
         # Brief wait — phone often reconnects within seconds mid-task
@@ -2495,8 +4624,109 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
     step_t0 = time.time()
     try:
-        tree_info = _fetch_ui_tree_retry(device_id, call_device)
+        prefer_pkg = _instruction_target_package(instruction, state)
+        tree_info = _fetch_ui_tree_retry(
+            device_id, call_device, preferred_package=prefer_pkg
+        )
         ui_tree = tree_info["tree"]
+        force_open_from_launcher = False
+        # Home/launcher + dating target → open_app immediately (APK 540:
+        # empty-flag + Back-on-launcher left jobs stuck with 0 open_app).
+        fg_home = str(tree_info.get("package") or "")
+        launcher_open_act = _launcher_open_target_action(
+            prefer_pkg,
+            fg_home,
+            state=state,
+            instruction=instruction,
+        )
+        if launcher_open_act:
+            force_open_from_launcher = True
+            state["_force_open_from_launcher"] = True
+            job["state"] = state
+            logger.info(
+                "launcher FG → open_app(%s) job=%s pkg=%s",
+                launcher_open_act.get("app"),
+                job.get("job_id"),
+                prefer_pkg,
+            )
+        # Mac's rule: auto-dismiss any non-target overlay/window (spay, SystemUI,
+        # edge panels, …) via Back / Close / tap-outside — never fail for overlays.
+        # Skip when on launcher — Back does not help; open_app owns the next step.
+        if prefer_pkg and not force_open_from_launcher:
+            try:
+                from overlay_dismiss import dismiss_foreign_overlays_before_plan
+            except ImportError:
+                from backend.overlay_dismiss import (  # type: ignore
+                    dismiss_foreign_overlays_before_plan,
+                )
+
+            def _refetch_tree():
+                return _fetch_ui_tree_retry(
+                    device_id,
+                    call_device,
+                    attempts=2,
+                    preferred_package=prefer_pkg,
+                )
+
+            ui_tree, tree_info, history = dismiss_foreign_overlays_before_plan(
+                device_id=device_id,
+                call_device=call_device,
+                execute_action=execute_action,
+                fetch_tree=_refetch_tree,
+                ui_tree=ui_tree,
+                tree_info=tree_info,
+                target_package=prefer_pkg,
+                history=history,
+                state=state,
+                max_attempts=3,
+            )
+            job["history"] = history
+            job["state"] = state
+        dating_paywall_act = None
+        # FALLBACK only: foreign billing FG (Play / Spay / Wallet). In-app
+        # upsells stay with per-app interrupt maps + bulk dating_deck path —
+        # do not preempt working Badoo/BLK/Hily popup handlers here.
+        if prefer_pkg and not force_open_from_launcher:
+            fg_pay = str(tree_info.get("package") or "").lower()
+            foreign_billing = any(
+                x in fg_pay
+                for x in (
+                    "spay",
+                    "samsungpay",
+                    "vending",
+                    "android.gms",
+                    "billing",
+                    "samsung.android.spay",
+                )
+            )
+            if foreign_billing:
+                try:
+                    try:
+                        from dating_deck import dismiss_paywall_action as _pay_dismiss
+                    except ImportError:
+                        from backend.dating_deck import (  # type: ignore
+                            dismiss_paywall_action as _pay_dismiss,
+                        )
+
+                    dating_paywall_act = _pay_dismiss(
+                        ui_tree,
+                        package=fg_pay,
+                        planner="dating_paywall",
+                    )
+                except Exception as pay_err:
+                    logger.warning("dating paywall check failed: %s", pay_err)
+                    dating_paywall_act = None
+        # If FG is still wrong after dismiss attempts, prefer vision — but do NOT
+        # hard-fail; keep running so the next step can dismiss again.
+        fg_now = str(tree_info.get("package") or "").lower()
+        if prefer_pkg and fg_now and prefer_pkg.lower() not in fg_now:
+            if "spay" in fg_now or "selfhosted" in fg_now or "systemui" in fg_now:
+                state["force_vision_once"] = True
+                logger.warning(
+                    "wrong FG package=%s want=%s after overlay dismiss — vision retry",
+                    fg_now,
+                    prefer_pkg,
+                )
         # Auto-dismiss System UI ANR overlays before planning
         tree_l = (ui_tree or "").lower()
         if (
@@ -2513,7 +4743,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     timeout_s=8,
                     wait_reconnect_s=10,
                 )
-                tree_info = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                tree_info = _fetch_ui_tree_retry(
+                    device_id,
+                    call_device,
+                    attempts=2,
+                    preferred_package=prefer_pkg,
+                )
                 ui_tree = tree_info["tree"]
             except Exception as anr_err:
                 logger.warning("dismiss_anr failed: %s", anr_err)
@@ -2531,13 +4766,32 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 tree_looks_blocked,
             )
 
-        if tree_info.get("empty"):
+        # Launcher home + dating target: open_app immediately (skip empty/plan)
+        if force_open_from_launcher and prefer_pkg:
+            action = launcher_open_act or _launcher_open_target_action(
+                prefer_pkg,
+                fg_home,
+                state=state,
+                instruction=instruction,
+            )
+            assert action is not None
+            kind = "open_app"
+            reason = str(action["reason"])
+            planner = "launcher_open_target"
+            llm_provider = None
+            image_b64 = None
+            use_vision = False
+            _skip_plan = True
+            state.pop("_force_open_from_launcher", None)
+            job["state"] = state
+        elif tree_info.get("empty"):
             empty_n = int(state.get("empty_tree_streak") or 0) + 1
             state["empty_tree_streak"] = empty_n
             job["state"] = state
             job["result"] = f"Recovering empty UI tree ({empty_n})"
-            if empty_n <= 2:
-                # Best-effort a11y rebind + brief wait — stay running
+            # One rebind only — then vision MUST run (r21: Taimi nodes=0 sat
+            # rebinding while uiautomator had 195 nodes; needs_vision ignored).
+            if empty_n <= 1:
                 try:
                     call_device(
                         device_id,
@@ -2551,14 +4805,63 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["next_run_at"] = int(time.time())
                 _kick_self(job.get("job_id"), job=job)
                 return job
-            # Rotate distinct recoveries instead of hard-failing
-            action = recovery_action(
-                state,
-                instruction,
-                ui_tree,
-                str(tree_info.get("package") or ""),
-                prefer=["dismiss_dialogs", "redump_tree", "vision", "reconnect_wait"],
-            )
+            # Force screenshot + vision on empty tree (verify S3 upload in logs)
+            image_b64 = None
+            use_vision = False
+            try:
+                image_b64 = _fetch_screenshot_b64(device_id, job=job)
+                use_vision = bool(image_b64)
+                logger.info(
+                    "empty-tree vision job=%s shot=%s win_diag=%s nodes=%s",
+                    job.get("job_id"),
+                    "ok" if use_vision else "fail",
+                    tree_info.get("win_diag") or "",
+                    tree_info.get("nodes"),
+                )
+            except Exception as shot_err:
+                logger.warning("empty-tree screenshot failed: %s", shot_err)
+            if use_vision:
+                try:
+                    action = plan_next_action(
+                        instruction,
+                        ui_tree,
+                        history,
+                        image_b64=image_b64,
+                        no_progress_streak=int(state.get("no_progress_streak") or 0),
+                        last_tap_key=state.get("last_tap_key"),
+                        package=str(tree_info.get("package") or ""),
+                        dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+                        agent_state=state,
+                    )
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or "empty-tree vision")
+                    planner = action.get("planner") or "llm"
+                    llm_provider = action.get("llm_provider")
+                    if action.get("action") == "tap":
+                        action["_vision_confirmed_label"] = str(
+                            action.get("label")
+                            or action.get("text")
+                            or action.get("reason")
+                            or "vision"
+                        )
+                    _skip_plan = True
+                except Exception as plan_err:
+                    logger.warning("empty-tree vision plan failed: %s", plan_err)
+                    use_vision = False
+            if not use_vision:
+                # Rotate distinct recoveries instead of hard-failing
+                action = recovery_action(
+                    state,
+                    instruction,
+                    ui_tree,
+                    str(tree_info.get("package") or ""),
+                    prefer=[
+                        "dismiss_dialogs",
+                        "redump_tree",
+                        "vision",
+                        "reconnect_wait",
+                    ],
+                )
             if action.get("action") == "_reconnect_wait":
                 if should_hard_fail(state):
                     job["status"] = "failed"
@@ -2576,17 +4879,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             kind = str(action.get("action") or "").lower()
             reason = str(action.get("reason") or "")
             planner = action.get("planner") or "recovery"
-            llm_provider = None
-            image_b64 = None
-            use_vision = False
-            if action.get("_force_vision"):
+            llm_provider = action.get("llm_provider")
+            if action.get("_force_vision") and not image_b64:
                 try:
                     image_b64 = _fetch_screenshot_b64(device_id, job=job)
                     use_vision = bool(image_b64)
                 except Exception:
                     use_vision = False
             if kind == "_vision_retry":
-                # Re-plan with vision if possible; else dismiss/tap fallback
+                # Re-plan with vision if possible; else stop safely (no blind tap)
                 if use_vision:
                     try:
                         action = plan_next_action(
@@ -2606,26 +4907,39 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                         reason = str(action.get("reason") or "")
                         planner = action.get("planner") or "llm"
                         llm_provider = action.get("llm_provider")
+                        # Propagate vision confirmation for empty-tree firewall
+                        if action.get("action") == "tap":
+                            action["_vision_confirmed_label"] = str(
+                                action.get("label")
+                                or action.get("text")
+                                or action.get("reason")
+                                or "vision"
+                            )
                     except Exception:
                         action = {
-                            "action": "tap",
-                            "x": 540,
-                            "y": 1395,
-                            "reason": "Vision unavailable — tap Wait/Allow",
+                            "action": "fail",
+                            "reason": (
+                                "Vision planner failed on empty tree — "
+                                "stop safely (no post-failure recovery tap)"
+                            ),
                             "planner": "recovery:vision",
+                            "llm_provider": None,
                         }
-                        kind = "tap"
+                        kind = "fail"
                         reason = action["reason"]
                         planner = "recovery:vision"
                 else:
                     action = {
-                        "action": "tap",
-                        "x": 540,
-                        "y": 1395,
-                        "reason": "No screenshot — tap Wait/Allow",
+                        "action": "fail",
+                        "reason": (
+                            "Empty/sparse tree and no screenshot — "
+                            "stop safely (no Wait/Allow mid-screen tap)"
+                        ),
                         "planner": "recovery:vision",
+                        "llm_provider": None,
+                        "needs_vision": True,
                     }
-                    kind = "tap"
+                    kind = "fail"
                     reason = action["reason"]
                     planner = "recovery:vision"
             # Skip normal planning — jump to action execution via flag
@@ -2633,6 +4947,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         else:
             state["empty_tree_streak"] = 0
             _skip_plan = False
+
+        # Apply dating paywall dismiss after empty/launcher flags settle
+        if dating_paywall_act and not _skip_plan:
+            logger.info(
+                "dating paywall dismiss job=%s reason=%s",
+                job.get("job_id"),
+                dating_paywall_act.get("reason"),
+            )
+            action = dating_paywall_act
+            kind = str(action.get("action") or "").lower()
+            reason = str(action.get("reason") or "")
+            planner = "dating_paywall"
+            llm_provider = None
+            image_b64 = None
+            use_vision = False
+            _skip_plan = True
 
         # Auto-dismiss permission / ANR style blockers even on non-empty trees
         if (not _skip_plan) and tree_looks_blocked(ui_tree):
@@ -2663,7 +4993,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Always bind before any path that may skip plan_next_action — recovery
         # empty-tree fallthrough used to hit UnboundLocalError on np_streak.
         np_streak = int(state.get("no_progress_streak") or 0)
-        job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
+        # live_test disables dry_run so likes/sends can execute under caps
+        job_dry_run = bool(job.get("dry_run") or state.get("dry_run")) and not bool(
+            job.get("live_test") or state.get("live_test")
+        )
         if not _skip_plan:
             image_b64 = None
             # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
@@ -2672,32 +5005,107 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             except ImportError:
                 from backend.dm_heuristics import tree_is_sparse  # type: ignore
 
-            sparse_tree = tree_info.get("empty") or tree_is_sparse(
-                ui_tree, tree_info.get("nodes")
+            fg_pkg = str(tree_info.get("package") or "").lower()
+            wrong_fg = _is_selfhosted_package(fg_pkg)
+            fg_inferred = bool(tree_info.get("fg_inferred") or state.get("fg_inferred"))
+            text_nodes = int(tree_info.get("text_nodes") or 0)
+            if text_nodes <= 0 and ui_tree:
+                try:
+                    text_nodes = _tree_attr_int(ui_tree, "text_nodes")
+                except Exception:
+                    text_nodes = 0
+            # Hinge: container-only dump (0 text) → screenshot+vision always
+            zero_text = (
+                bool(tree_info.get("needs_vision"))
+                or ('needs_vision="true"' in (ui_tree or ""))
+                or (
+                    int(tree_info.get("nodes") or 0) > 0
+                    and text_nodes == 0
+                    and not tree_info.get("empty")
+                )
             )
-            force_vision = bool(state.get("force_vision_once"))
+            needs_vision_hint = bool(
+                tree_info.get("needs_vision") or state.get("needs_vision") or zero_text
+            )
+            sparse_tree = (
+                tree_info.get("empty")
+                or tree_is_sparse(ui_tree, tree_info.get("nodes"))
+                or wrong_fg
+                or (fg_inferred and int(tree_info.get("nodes") or 0) < 8)
+                or zero_text
+            )
+            force_vision = bool(state.get("force_vision_once")) or needs_vision_hint
             if force_vision:
                 state["force_vision_once"] = False
+                state.pop("needs_vision", None)
             try:
-                if sparse_tree or force_vision or np_streak >= 2:
+                if (
+                    sparse_tree
+                    or force_vision
+                    or np_streak >= 2
+                    or wrong_fg
+                    or fg_inferred
+                    or zero_text
+                ):
                     image_b64 = _fetch_screenshot_b64(device_id, job=job)
             except Exception as shot_err:
                 logger.warning("screenshot skipped: %s", shot_err)
                 image_b64 = None
             use_vision = bool(image_b64) and (
-                sparse_tree or force_vision or np_streak >= 2
+                sparse_tree
+                or force_vision
+                or np_streak >= 2
+                or wrong_fg
+                or fg_inferred
+                or zero_text
             )
-            if use_vision:
+            if sparse_tree or force_vision or wrong_fg or fg_inferred or zero_text:
+                if image_b64:
+                    state["vision_fallback"] = True
+                    state["tree_sparse"] = bool(sparse_tree)
+                    logger.info(
+                        "vision fallback job=%s nodes=%s empty=%s fg=%s",
+                        job.get("job_id"),
+                        tree_info.get("nodes"),
+                        tree_info.get("empty"),
+                        fg_pkg or "?",
+                    )
+                else:
+                    # Sparse tree MUST attempt vision — log failure so Mac sees
+                    # it (APK 532/534: 52 screenshot timeouts, 0 vision lines).
+                    state["force_vision_once"] = True
+                    state["tree_sparse"] = bool(sparse_tree)
+                    logger.warning(
+                        "vision required but screenshot unavailable "
+                        "job=%s nodes=%s empty=%s fg=%s sparse=%s",
+                        job.get("job_id"),
+                        tree_info.get("nodes"),
+                        tree_info.get("empty"),
+                        fg_pkg or "?",
+                        sparse_tree,
+                    )
+            elif use_vision:
                 state["vision_fallback"] = True
                 state["tree_sparse"] = bool(sparse_tree)
                 logger.info(
-                    "vision fallback job=%s nodes=%s empty=%s",
+                    "vision fallback job=%s nodes=%s empty=%s fg=%s",
                     job.get("job_id"),
                     tree_info.get("nodes"),
                     tree_info.get("empty"),
+                    fg_pkg or "?",
                 )
 
             try:
+                logger.info(
+                    "step_decision ts=%.3f job=%s step=%s phase=before_plan "
+                    "pkg=%s tree_chars=%s vision=%s",
+                    time.time(),
+                    job.get("job_id"),
+                    step,
+                    tree_info.get("package"),
+                    len(ui_tree or ""),
+                    bool(use_vision),
+                )
                 action = plan_next_action(
                     instruction,
                     ui_tree,
@@ -2709,6 +5117,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     dry_run=job_dry_run,
                     agent_state=state,
                 )
+                if isinstance(action, dict):
+                    _log_step_decision(
+                        job_id=str(job.get("job_id") or ""),
+                        step=step,
+                        action=action,
+                        phase="after_plan",
+                    )
             except RuntimeError as plan_err:
                 # Recover instead of failing when possible
                 if should_hard_fail(state) and not _llm_keys_present():
@@ -2736,6 +5151,52 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     _kick_self(job.get("job_id"), job=job)
                     return job
                 logger.warning("planner failed → recovery: %s", plan_err)
+            # Heuristic asked for vision (empty/sparse target tree) but we planned
+            # without a screenshot — fetch + replan once so vision actually runs.
+            if (
+                isinstance(action, dict)
+                and (
+                    action.get("_force_vision")
+                    or action.get("needs_vision")
+                    or wrong_fg
+                )
+                and not use_vision
+            ):
+                try:
+                    image_b64 = _fetch_screenshot_b64(device_id, job=job)
+                except Exception as shot_err:
+                    logger.warning("needs_vision screenshot skipped: %s", shot_err)
+                    image_b64 = None
+                if image_b64:
+                    use_vision = True
+                    state["vision_fallback"] = True
+                    state["force_vision_once"] = False
+                    logger.info(
+                        "vision fallback (needs_vision) job=%s fg=%s",
+                        job.get("job_id"),
+                        fg_pkg or "?",
+                    )
+                    try:
+                        action = plan_next_action(
+                            instruction,
+                            ui_tree,
+                            history,
+                            image_b64=image_b64,
+                            no_progress_streak=np_streak,
+                            last_tap_key=state.get("last_tap_key"),
+                            package=str(tree_info.get("package") or ""),
+                            dry_run=job_dry_run,
+                            agent_state=state,
+                        )
+                    except Exception as replan_err:
+                        logger.warning("vision replan failed: %s", replan_err)
+                        state["force_vision_once"] = True
+                else:
+                    state["force_vision_once"] = True
+            elif isinstance(action, dict) and (
+                action.get("_force_vision") or action.get("needs_vision")
+            ):
+                state["force_vision_once"] = True
             kind = str(action.get("action") or "").lower()
             reason = str(action.get("reason") or "")
             planner = action.get("planner") or "llm"
@@ -2772,13 +5233,54 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = f"App already open ({fg0 or trivial_target})"
                 action = {"action": "done", "reason": reason}
 
-        # Same tap/swipe/scroll + unchanged UI → fail after 2 identical actions
+        # Same planner decision repeating (any action) → fail fast
+        decision_key = _planner_decision_key(action)
+        if decision_key and decision_key == state.get("last_decision_key"):
+            state["same_decision_n"] = int(state.get("same_decision_n") or 0) + 1
+        else:
+            state["same_decision_n"] = 1 if decision_key else 0
+            state["last_decision_key"] = decision_key
+        if (
+            decision_key
+            and int(state.get("same_decision_n") or 0) >= MAX_SAME_DECISION
+            and kind not in ("done", "fail")
+        ):
+            # r26: hand off to LLM instead of hard-fail (Hily liked-you loop)
+            state["_bulk_llm_handoff"] = True
+            state["force_vision_once"] = True
+            state["same_decision_n"] = 0
+            state["last_decision_key"] = None
+            kind = "wait"
+            reason = (
+                f"same planner decision repeated ×{MAX_SAME_DECISION} "
+                f"({decision_key[:80]}) — hand off to LLM"
+            )
+            action = {
+                "action": "wait",
+                "seconds": 0.35,
+                "delay_s": 0.35,
+                "reason": reason,
+                "planner": "bulk_llm_handoff",
+                "needs_vision": True,
+                "_force_vision": True,
+                "_bulk_llm_handoff": True,
+            }
+            logger.info(
+                "same-decision → LLM handoff job=%s key=%s",
+                job.get("job_id"),
+                decision_key[:80],
+            )
+
+        # Same tap/swipe coords → fail fast. Tree fingerprint can jitter while the
+        # screen is unchanged (Yubo chats tab tap(342,2194) ×N for 7 min) — so we
+        # trip on (a) no-progress + same coords OR (b) absolute consecutive repeats.
         pending_tap = _same_tap_key(action)
+        same_coord_n = int(state.get("same_tap_streak") or 0)
         if (
             kind in ("tap", "swipe")
             and pending_tap
             and pending_tap == state.get("last_tap_key")
-            and np_streak >= 1
+            and (np_streak >= 1 or same_coord_n >= MAX_SAME_TAP)
         ):
             sat = _goal_satisfied_from_tree(
                 instruction,
@@ -2794,18 +5296,52 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 logger.info(
                     "no-progress: goal visible, forcing done job=%s", job.get("job_id")
                 )
-            elif int(state.get("same_tap_streak") or 0) >= MAX_SAME_TAP - 1:
-                kind = "fail"
-                reason = (
-                    "same action repeated with no screen change — aborting "
-                    "(heuristic loop guard)"
-                )
-                action = {"action": "fail", "reason": reason}
-                logger.info(
-                    "no-progress: failing after repeated %s job=%s",
-                    kind,
-                    job.get("job_id"),
-                )
+            elif (
+                same_coord_n >= MAX_SAME_COORD_ANY - 1
+                or same_coord_n >= MAX_SAME_TAP - 1
+            ):
+                # Fail fast after 2–3 same taps + at most 1 vision alt (was 6 →
+                # 7 min hangs on Yubo chats tab). Absolute coord repeats catch
+                # fingerprint jitter that kept np_streak at 0.
+                alt_n = int(state.get("same_tap_alt_n") or 0)
+                state["same_tap_alt_n"] = alt_n + 1
+                state["same_tap_streak"] = 0
+                # Keep last_tap_key so a re-emitted same coord still matches
+                state["last_tree_fp"] = None
+                # One vision alt only — then fail (r21: any repeat must cap)
+                if alt_n < 1:
+                    action = {
+                        "action": "wait",
+                        "seconds": 0.8,
+                        "reason": (
+                            "Loop guard — vision locate alternate control "
+                            f"(repeated {pending_tap})"
+                        ),
+                        "needs_vision": True,
+                        "_force_vision": True,
+                    }
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or "")
+                    logger.info(
+                        "no-progress: vision recovery #%s job=%s → %s",
+                        alt_n + 1,
+                        job.get("job_id"),
+                        kind,
+                    )
+                else:
+                    kind = "fail"
+                    reason = (
+                        f"same action repeated ({pending_tap}) "
+                        f"×{same_coord_n + 1} — fail fast after "
+                        f"{alt_n + 1} loop-guard attempts "
+                        f"(refuse hung 7 min tap loop)"
+                    )
+                    action = {"action": "fail", "reason": reason}
+                    logger.info(
+                        "no-progress: failing after repeated %s job=%s",
+                        pending_tap,
+                        job.get("job_id"),
+                    )
 
         # Do not re-open once open_ok / Opened already in history or FG matches
         if kind in ("open_app", "start_app"):
@@ -2888,8 +5424,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     fg or "?",
                 )
 
-        # Hard-stop after too many no-progress steps (same tree forever)
-        if np_streak >= MAX_NO_PROGRESS + 1 and kind not in ("done", "fail", "back"):
+        # No-progress → escalate stuck recovery (never die stuck on one screen)
+        if np_streak >= MAX_NO_PROGRESS and kind not in ("done", "fail"):
             sat = _goal_satisfied_from_tree(
                 instruction,
                 ui_tree,
@@ -2902,12 +5438,71 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 reason = sat
                 action = {"action": "done", "reason": reason}
             else:
-                kind = "fail"
-                reason = (
-                    f"No UI progress after {np_streak} actions "
-                    "(same screen/tree hash) — changing strategy failed"
-                )
-                action = {"action": "fail", "reason": reason}
+                try:
+                    from stuck_recovery import (
+                        next_stuck_action,
+                        should_hard_fail_stuck,
+                    )
+                except ImportError:
+                    from backend.stuck_recovery import (  # type: ignore
+                        next_stuck_action,
+                        should_hard_fail_stuck,
+                    )
+
+                if should_hard_fail_stuck(state):
+                    kind = "fail"
+                    reason = (
+                        f"No UI progress after {np_streak} actions "
+                        f"+ {state.get('stuck_step')} stuck recoveries"
+                    )
+                    action = {"action": "fail", "reason": reason}
+                else:
+                    action = next_stuck_action(
+                        state,
+                        instruction=instruction,
+                        ui_tree=ui_tree,
+                        package=str(tree_info.get("package") or ""),
+                        prefer_pkg=prefer_pkg or "",
+                    )
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or "")
+                    planner = action.get("planner") or "stuck"
+                    if action.get("_force_vision"):
+                        state["force_vision_once"] = True
+                    # Resolve _vision_retry before it can reach execute_action
+                    if kind in ("_vision_retry", "_reconnect_wait"):
+                        try:
+                            if not locals().get("image_b64"):
+                                image_b64 = _fetch_screenshot_b64(
+                                    device_id, job=job
+                                )
+                        except Exception:
+                            image_b64 = None
+                        action = _resolve_internal_planner_action(
+                            action,
+                            instruction=instruction,
+                            ui_tree=ui_tree,
+                            history=history,
+                            state=state,
+                            package=str(tree_info.get("package") or ""),
+                            dry_run=bool(
+                                job.get("dry_run") or state.get("dry_run")
+                            ),
+                            image_b64=image_b64,
+                        )
+                        kind = str(action.get("action") or "").lower()
+                        reason = str(action.get("reason") or reason)
+                        planner = action.get("planner") or planner
+                    history.append(f"stuck:{state.get('stuck_stage')} → {kind}")
+                    state["history"] = history[-40:]
+                    state["no_progress_streak"] = 0
+                    state["last_tree_fp"] = None
+                    job["state"] = state
+                    logger.info(
+                        "no-progress → stuck recovery %s job=%s",
+                        kind,
+                        job.get("job_id"),
+                    )
 
         # Block swipe when tree empty — force open_app or fail
         if kind == "swipe" and tree_info["empty"]:
@@ -2970,20 +5565,131 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 str(job.get("job_id") or ""), step + 1, image_b64
             )
 
+        # r28: re-check cancel right before mutating / completing
+        if refresh_job_cancel_status(job):
+            status_l = str(job.get("status") or "").lower()
+            if status_l in ("stopped", "cancelled", "canceled"):
+                state["last_action"] = "cancelled"
+                job["state"] = state
+                job.setdefault("result", "Cancelled")
+                return job
+
+        # r28: Yubo Reactions / Elite Pack — Back out entirely (never count as likes)
+        yubo_back = yubo_paywall_back_action(
+            ui_tree, planner=str((action or {}).get("planner") or "yubo_paywall")
+        )
+        if yubo_back and kind not in ("done", "fail", "back", "press_button"):
+            # Also block stuck-recovery billing taps
+            if (
+                _action_is_billing_or_terms_tap(action if isinstance(action, dict) else {}, kind)
+                or is_yubo_reactions_or_elite_paywall(ui_tree)
+            ):
+                action = yubo_back
+                kind = "press_button"
+                reason = str(yubo_back.get("reason") or reason)
+
+        # r28: no typing in like/swipe jobs (Hily typed 'Hily' into launcher)
+        kind, reason, action = apply_like_job_no_type_guard(
+            action=action if isinstance(action, dict) else {},
+            kind=kind,
+            reason=reason,
+            instruction=instruction,
+            job=job,
+            package=str(tree_info.get("package") or ""),
+        )
+
+        # Block billing/terms taps even outside live_test (stuck recovery)
+        if _action_is_billing_or_terms_tap(
+            action if isinstance(action, dict) else {}, kind
+        ):
+            new_reason = (
+                f"Blocked billing/terms tap — Back instead ({reason})"
+            )
+            action = {
+                "action": "press_button",
+                "button": "back",
+                "reason": new_reason,
+                "_billing_terms_block": True,
+            }
+            kind = "press_button"
+            reason = new_reason
+
+        # live_test: likes OK (capped by control class), never pass/paid
+        is_live_test = bool(job.get("live_test") or state.get("live_test"))
+        if is_live_test:
+            kind, reason, action = apply_live_test_guard(
+                live_test=True,
+                action=action if isinstance(action, dict) else {},
+                kind=kind,
+                reason=reason,
+                state=state,
+                max_n=int(
+                    job.get("live_test_max_n")
+                    or state.get("live_test_max_n")
+                    or LIVE_TEST_DEFAULT_MAX_N
+                ),
+                like_job=_instruction_is_like_or_swipe_job(instruction, job),
+            )
+            # Snapshot card name before like tap for post-verify
+            if state.get("_pending_live_like"):
+                app_for_like = _bulk_swipe_app_from_instruction(instruction) or ""
+                snapshot_live_like_card_name(
+                    state, ui_tree=ui_tree, app=app_for_like
+                )
+            _log_step_decision(
+                job_id=str(job.get("job_id") or ""),
+                step=step,
+                action=action if isinstance(action, dict) else {},
+                phase="live_test_guard",
+            )
+
         # dry_run: never send. Use fp_step / element heuristics — NEVER reassign
         # the int `step` counter (PR #54 regression: step+1 TypeError).
+        is_dry = bool(job.get("dry_run") or state.get("dry_run"))
         kind, reason, action = apply_dry_run_send_guard(
-            dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+            dry_run=is_dry and not is_live_test,
             action=action if isinstance(action, dict) else {},
             kind=kind,
             reason=reason,
         )
+        # r25: LLM/heuristics that emit swipe in dry mode → if a real card
+        # name is already visible, that IS dry-swipe success (do not fail).
+        if (
+            is_dry
+            and kind == "done"
+            and not _dry_run_done_is_verified(
+                action if isinstance(action, dict) else {},
+                reason,
+                state,
+                instruction=instruction,
+            )
+            and (
+                "would swipe" in (reason or "").lower()
+                or "would like/pass" in (reason or "").lower()
+            )
+        ):
+            salvaged = _salvage_dry_swipe_done(
+                instruction=instruction,
+                ui_tree=ui_tree,
+                state=state,
+                action=action if isinstance(action, dict) else {},
+                reason=reason,
+            )
+            if salvaged:
+                action = salvaged
+                kind = "done"
+                reason = str(salvaged.get("reason") or reason)
+                logger.info(
+                    "step_decision ts=%.3f job=%s phase=dry_swipe_salvage reason=%s",
+                    time.time(),
+                    job.get("job_id"),
+                    reason[:120],
+                )
 
         if kind == "done":
             # Always capture a final screenshot for dry-run compose verification
             if not shot_key and (
-                bool(job.get("dry_run") or state.get("dry_run"))
-                or action.get("screenshot")
+                is_dry or action.get("screenshot")
             ):
                 try:
                     final_b64 = _fetch_screenshot_b64(device_id, job=job)
@@ -3009,7 +5715,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job.get("dry_run") or state.get("dry_run") or action.get("dry_run")
             )
             verified = _dry_run_done_is_verified(
-                action if isinstance(action, dict) else {}, reason, state
+                action if isinstance(action, dict) else {},
+                reason,
+                state,
+                instruction=instruction,
             )
             if is_dry and not verified:
                 _record_step(f"done: {reason}", ok=False, screenshot_key=shot_key)
@@ -3030,6 +5739,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["dry_run_verified"] = True
             _record_step(f"done: {reason}", screenshot_key=shot_key)
             job["state"] = state
+            # r28: never overwrite cancelled/stopped with completed
+            if refresh_job_cancel_status(job):
+                status_l = str(job.get("status") or "").lower()
+                if status_l in ("stopped", "cancelled", "canceled"):
+                    job.setdefault("result", "Cancelled")
+                    _end_job_cleanup(job, device_id, call_device)
+                    return job
             job["status"] = "completed"
             job["result"] = reason or "Goal completed"
             if stats.get("p50_ms") is not None:
@@ -3046,11 +5762,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             return job
         if kind == "fail":
             low_reason = (reason or "").lower()
+            # Intentional policy/safety fails from per-app rules / tap firewall —
+            # honor them. stuck_recovery must NOT replace working refuse paths.
+            if _is_policy_fail_no_stuck(reason):
+                pass  # fall through to hard-fail below
             # Planner often fails on transient/contact/no-send states — convert
             # to a real recovery action instead of spinning on empty returns.
             # Use a dedicated streak (not empty_tree_streak) so non-empty trees
             # do not reset the counter every tick.
-            if any(
+            elif any(
                 t in low_reason
                 for t in (
                     "ui tree is empty",
@@ -3089,16 +5809,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             "text message",
                         )
                     )
-                    anr_wait = {"action": "tap", "x": 540, "y": 1395}
                     if sms_goal:
-                        # Rotate recovery actions so we actually move the UI forward.
-                        # If we left Messages (SystemUI/launcher), open_app first;
-                        # then focus compose, type marker, tap Send. Never Back.
+                        # SMS E2E: recover without blind mid-screen Wait/Allow taps.
                         pkg_l = str(tree_info.get("package") or "").lower()
                         off_messages = "messaging" not in pkg_l and "sms" not in pkg_l
                         recoveries = (
                             (
-                                anr_wait,
                                 {"action": "open_app", "app": "messages"},
                                 {"action": "tap", "x": 845, "y": 2200},
                                 {"action": "tap", "x": 540, "y": 400},
@@ -3121,58 +5837,77 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                                     "text": "hello from macai uitree recovery test",
                                 },
                                 {"action": "tap", "x": 1000, "y": 2280},
-                                anr_wait,
                                 {"action": "open_app", "app": "messages"},
                                 {"action": "tap", "x": 540, "y": 2100},
                             )
                         )
                         action = recoveries[(fail_n - 1) % len(recoveries)]
+                        kind = str(action.get("action") or "").lower()
+                        history.append(
+                            f"hint: planner fail ({reason[:60]}) → recovery {kind} "
+                            f"(streak={fail_n})"
+                        )
+                        state["history"] = history[-40:]
+                        state["last_action"] = f"recovery:{kind}"
+                        job["state"] = state
+                        job["result"] = (
+                            f"Recovering after planner fail ({fail_n}): {kind}"
+                        )
+                        # Fall through to execute_action below
                     else:
-                        # Dating / fake-chats / generic: dismiss ANR, back, re-open
-                        # the instruction's app — never hijack into SMS Messages.
-                        dm_app = None
-                        open_label = None
+                        # Dating / social: escalate stuck recovery (never die
+                        # stuck on home / one page). Never blind mid-screen taps.
                         try:
-                            from dm_heuristics import (
-                                DM_APP_PROFILES as _DAP,
-                                detect_dm_app as _dda,
+                            from stuck_recovery import (
+                                next_stuck_action,
+                                should_hard_fail_stuck,
                             )
                         except ImportError:
-                            from backend.dm_heuristics import (  # type: ignore
-                                DM_APP_PROFILES as _DAP,
-                                detect_dm_app as _dda,
+                            from backend.stuck_recovery import (  # type: ignore
+                                next_stuck_action,
+                                should_hard_fail_stuck,
                             )
-                        try:
-                            dm_app = _dda(instruction)
-                        except Exception:
-                            dm_app = None
-                        if dm_app:
-                            open_label = str(
-                                (_DAP.get(dm_app) or {}).get("open_label") or dm_app
+
+                        if should_hard_fail_stuck(state):
+                            state["steps"] = step + 1
+                            state["last_progress_at"] = int(time.time())
+                            state["last_action"] = f"fail: {reason}"
+                            history.append(f"fail after stuck cap: {reason}")
+                            state["history"] = history
+                            _record_step(
+                                f"fail: {reason}", ok=False, screenshot_key=shot_key
                             )
-                        reopen = (
-                            {"action": "open_app", "app": open_label}
-                            if open_label
-                            else anr_wait
+                            job["state"] = state
+                            job["status"] = "failed"
+                            job["error"] = reason or "Agent could not complete the goal"
+                            job["completed_at"] = int(time.time())
+                            _attach_failure_artifacts(
+                                job, device_id, ui_tree, call_device=call_device
+                            )
+                            _end_job_cleanup(job, device_id, call_device)
+                            return job
+                        action = next_stuck_action(
+                            state,
+                            instruction=instruction,
+                            ui_tree=ui_tree,
+                            package=str(tree_info.get("package") or ""),
+                            prefer_pkg=prefer_pkg or "",
                         )
-                        recoveries = (
-                            anr_wait,
-                            {"action": "back"},
-                            reopen,
-                            {"action": "tap", "x": 950, "y": 2200},
-                            {"action": "tap", "x": 540, "y": 1500},
+                        kind = str(action.get("action") or "").lower()
+                        reason = str(action.get("reason") or reason)
+                        if action.get("_force_vision"):
+                            state["force_vision_once"] = True
+                        history.append(
+                            f"hint: planner fail → stuck:{state.get('stuck_stage')} "
+                            f"{kind} (streak={fail_n})"
                         )
-                        action = recoveries[(fail_n - 1) % len(recoveries)]
-                    kind = str(action.get("action") or "").lower()
-                    history.append(
-                        f"hint: planner fail ({reason[:60]}) → recovery {kind} "
-                        f"(streak={fail_n})"
-                    )
-                    state["history"] = history[-40:]
-                    state["last_action"] = f"recovery:{kind}"
-                    job["state"] = state
-                    job["result"] = f"Recovering after planner fail ({fail_n}): {kind}"
-                    # Fall through to execute_action below
+                        state["history"] = history[-40:]
+                        state["last_action"] = f"stuck:{kind}"
+                        job["state"] = state
+                        job["result"] = (
+                            f"Stuck recovery ({state.get('stuck_step')}): {kind}"
+                        )
+                        # Fall through to execute_action below
                 else:
                     state["steps"] = step + 1
                     state["last_progress_at"] = int(time.time())
@@ -3246,6 +5981,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         # Stamp instruction/job for message-text guard inside execute_action
         action["_instruction"] = instruction
+        action["_dry_run"] = bool(job.get("dry_run") or state.get("dry_run"))
+        action["dry_run"] = bool(action.get("dry_run") or action["_dry_run"])
         action["_job"] = {
             k: job.get(k)
             for k in (
@@ -3261,7 +5998,216 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if job.get(k) is not None
         }
         action["_history"] = list(history[-16:])
-        summary = execute_action(device_id, action)
+        # r26: never execute internal markers — resolve to LLM/wait first
+        if str(action.get("action") or "").lower() in (
+            "_vision_retry",
+            "_reconnect_wait",
+        ):
+            try:
+                if not locals().get("image_b64"):
+                    image_b64 = _fetch_screenshot_b64(device_id, job=job)
+            except Exception:
+                image_b64 = None
+            action = _resolve_internal_planner_action(
+                action,
+                instruction=instruction,
+                ui_tree=ui_tree,
+                history=history,
+                state=state,
+                package=str(tree_info.get("package") or ""),
+                dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+                image_b64=image_b64,
+            )
+            kind = str(action.get("action") or "").lower()
+            reason = str(action.get("reason") or reason)
+            planner = action.get("planner") or planner
+            _log_step_decision(
+                job_id=str(job.get("job_id") or ""),
+                step=step,
+                action=action,
+                phase="resolve_internal",
+            )
+        try:
+            summary = execute_action(device_id, action)
+        except RuntimeError as e:
+            # Tap firewall / message guard
+            err = str(e)
+            err_l = err.lower()
+            soft_recover = (
+                "tap target unresolved" in err_l
+                or "could not resolve topmost" in err_l
+                or "they liked you" in err_l
+                or "find out who" in err_l
+                or "dialogtag_liked" in err_l
+                or "not the intended target" in err_l
+                or "near you" in err_l
+                or bool(action.get("_soft_recover"))
+            )
+            if soft_recover and (
+                "tap firewall" in err_l
+                or "tap target unresolved" in err_l
+                or "could not resolve" in err_l
+                or "not the intended target" in err_l
+            ):
+                # Soft: skip this tap, record, re-plan — do NOT kill the job
+                logger.warning("tap soft-recover (no job fail): %s", err)
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"tap_soft_recover: {err}"
+                state["same_tap_streak"] = 0
+                state["last_tap_key"] = None
+                state["last_tree_fp"] = None
+                state["force_vision_once"] = True
+                # Remember skipped upsell so planners pick next chat row
+                skipped = list(state.get("skipped_tap_labels") or [])
+                lab = str(
+                    action.get("_resolved_label")
+                    or action.get("label")
+                    or action.get("text")
+                    or ""
+                ).strip()
+                if lab and lab.lower() not in {s.lower() for s in skipped}:
+                    skipped.append(lab[:80])
+                    state["skipped_tap_labels"] = skipped[-20:]
+                history.append(f"tap_soft_recover: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "running"
+                job["next_run_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                _kick_self(job.get("job_id"), job=job)
+                return job
+            # r26: Super Like upsell / They liked you / paid refuse → dismiss
+            # + LLM handoff, never hard-fail the job (lease used to stick).
+            upsell_refuse = any(
+                tok in err_l
+                for tok in (
+                    "super like",
+                    "upgrade your like",
+                    "they liked you",
+                    "find out who",
+                    "crush",
+                    "boost",
+                    "rose",
+                    "paid label",
+                    "paid",
+                )
+            )
+            if "tap firewall" in err_l and upsell_refuse:
+                logger.warning(
+                    "tap firewall upsell → dismiss/handoff (no job fail): %s", err
+                )
+                dismiss = None
+                try:
+                    from dm_heuristics import blk_dismiss_popup
+                except ImportError:
+                    from backend.dm_heuristics import blk_dismiss_popup  # type: ignore
+                try:
+                    dismiss = blk_dismiss_popup(
+                        ui_tree, planner="tap_firewall_upsell"
+                    )
+                except Exception:
+                    dismiss = None
+                if not dismiss:
+                    # Generic close / back for Hily liked-you tile etc.
+                    close = _tree_node_center(
+                        ui_tree,
+                        "No thanks",
+                        "Not now",
+                        "Close",
+                        "Maybe later",
+                        "Cancel",
+                        "Got it",
+                    )
+                    if close:
+                        dismiss = {
+                            "action": "tap",
+                            "x": close[0],
+                            "y": close[1],
+                            "reason": "Dismiss paid upsell after firewall refuse",
+                            "planner": "tap_firewall_upsell",
+                            "label": "Close",
+                        }
+                    else:
+                        dismiss = {
+                            "action": "press_button",
+                            "button": "back",
+                            "reason": "Back — dismiss paid upsell after firewall",
+                            "planner": "tap_firewall_upsell",
+                        }
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"upsell_dismiss: {err}"
+                state["force_vision_once"] = True
+                state["_bulk_llm_handoff"] = True
+                state["same_tap_streak"] = 0
+                state["same_decision_n"] = 0
+                state["last_tap_key"] = None
+                history.append(f"upsell_dismiss: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "running"
+                # Execute dismiss once in-process when it's a safe back/close
+                try:
+                    if str(dismiss.get("action") or "") in (
+                        "press_button",
+                        "back",
+                        "wait",
+                    ):
+                        execute_action(device_id, dismiss)
+                        history.append(
+                            f"dismissed: {dismiss.get('reason') or dismiss.get('action')}"
+                        )
+                        state["history"] = history[-40:]
+                    else:
+                        # Queue dismiss as next action via state hint
+                        state["_pending_dismiss"] = dismiss
+                except Exception as de:
+                    logger.warning("upsell dismiss exec failed: %s", de)
+                job["next_run_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                _log_step_decision(
+                    job_id=str(job.get("job_id") or ""),
+                    step=step,
+                    action=dismiss,
+                    phase="upsell_handoff",
+                )
+                _kick_self(job.get("job_id"), job=job)
+                return job
+            if "tap firewall" in err_l or "message text guard" in err_l:
+                # Other firewall refuses → LLM handoff (never raise / never hold lease)
+                logger.warning(
+                    "safety refuse → LLM handoff (no hard fail): %s", err
+                )
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"firewall_handoff: {err}"
+                state["_bulk_llm_handoff"] = True
+                state["force_vision_once"] = True
+                state["same_decision_n"] = 0
+                history.append(f"firewall_handoff: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "running"
+                job["error"] = None
+                job["next_run_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                _kick_self(job.get("job_id"), job=job)
+                return job
+            # Unknown execute errors → hand off, don't re-raise into lease leak
+            logger.warning("execute RuntimeError → handoff: %s", err)
+            state["steps"] = step + 1
+            state["last_action"] = f"exec_handoff: {err}"
+            state["_bulk_llm_handoff"] = True
+            state["force_vision_once"] = True
+            history.append(f"exec_handoff: {err}")
+            state["history"] = history[-40:]
+            job["state"] = state
+            job["status"] = "running"
+            job["next_run_at"] = int(time.time())
+            job["updated_at"] = int(time.time())
+            _kick_self(job.get("job_id"), job=job)
+            return job
         # Secure Folder (Samsung user 150): main-profile a11y often cannot see
         # Folder windows — force screenshot+vision on the next plan tick.
         if action.get("_secure_folder") or action.get("_a11y_cross_user_limited"):
@@ -3277,15 +6223,116 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             after = _fetch_ui_tree_retry(device_id, call_device, attempts=3)
             if kind in ("open_app", "start_app"):
                 app_name = str(action.get("app") or action.get("package") or "")
+                after_tree = str(after.get("tree") or "")
+                after_pkg = str(after.get("package") or "")
+                # Permission sheet after open — Don't allow (not phone locked)
+                if ov_perm := permission_dialog_action(after_tree, package=after_pkg):
+                    try:
+                        call_device(
+                            device_id,
+                            "tap",
+                            {"x": ov_perm["x"], "y": ov_perm["y"]},
+                            timeout_s=8,
+                        )
+                        verify_msg = "permission_dont_allow"
+                        history.append("Dismissed permission dialog — Don't allow")
+                        state["history"] = history[-40:]
+                        after = _fetch_ui_tree_retry(device_id, call_device, attempts=2)
+                        after_tree = str(after.get("tree") or "")
+                        after_pkg = str(after.get("package") or "")
+                    except Exception as e:
+                        logger.warning("permission dismiss after open failed: %s", e)
                 ov = _verify_open_app_result(
                     app_name=app_name,
-                    fg_package=str(after.get("package") or ""),
-                    tree=str(after.get("tree") or ""),
+                    fg_package=after_pkg,
+                    tree=after_tree,
                     rpc_pkg=rpc_pkg,
                     prior_lock_retries=int(state.get("lock_screen_open_retries") or 0),
                 )
                 state["lock_screen_open_retries"] = int(ov.get("lock_retries") or 0)
-                verify_msg = str(ov.get("verify_msg") or "")
+                verify_msg = str(ov.get("verify_msg") or verify_msg or "")
+                # Track open timestamp so stuck_recovery never Backs after open
+                state["last_open_at"] = int(time.time())
+                # Prefer inferred FG (UsageStats / lastOpened) over stale launcher
+                if after.get("fg_inferred") and after_pkg:
+                    ov_opened = bool(ov.get("opened"))
+                    if not ov_opened and prefer_pkg:
+                        # Trust APK-inferred FG when it matches the target
+                        pl = after_pkg.lower()
+                        pref = prefer_pkg.lower()
+                        if pref in pl or pl in pref or app_name.lower() in pl:
+                            ov["opened"] = True
+                            ov["verify_msg"] = (
+                                f"open_ok inferred package={after_pkg} "
+                                f"src={after.get('package_source') or '?'}"
+                            )
+                            verify_msg = str(ov["verify_msg"])
+                if after.get("needs_vision") or after.get("fg_inferred"):
+                    state["force_vision_once"] = True
+                    state["fg_inferred"] = bool(after.get("fg_inferred"))
+                    state["needs_vision"] = True
+                # Advance universal-open stage when FG still wrong
+                if not ov.get("opened"):
+                    try:
+                        from universal_open import (
+                            advance_open_stage,
+                            open_cycles_exhausted,
+                            open_exhausted_fail_action,
+                            should_escalate_open,
+                        )
+                    except ImportError:
+                        from backend.universal_open import (  # type: ignore
+                            advance_open_stage,
+                            open_cycles_exhausted,
+                            open_exhausted_fail_action,
+                            should_escalate_open,
+                        )
+
+                    want = str(action.get("package") or prefer_pkg or app_name or "")
+                    if should_escalate_open(
+                        want_package=want,
+                        fg_package=after_pkg,
+                        state=state,
+                        open_ok=bool(ov.get("opened")),
+                    ):
+                        if open_cycles_exhausted(state):
+                            fail_act = open_exhausted_fail_action(
+                                want or app_name,
+                                fg_package=after_pkg,
+                                state=state,
+                            )
+                            state["steps"] = step + 1
+                            state["last_action"] = fail_act["reason"]
+                            history.append(fail_act["reason"])
+                            state["history"] = history[-40:]
+                            job["state"] = state
+                            job["status"] = "failed"
+                            job["error"] = fail_act["reason"]
+                            job["result"] = fail_act["reason"]
+                            job["completed_at"] = int(time.time())
+                            _attach_failure_artifacts(
+                                job,
+                                device_id,
+                                str(after.get("tree") or ui_tree),
+                                call_device=call_device,
+                            )
+                            return job
+                        advance_open_stage(state)
+                        history.append(
+                            f"universal_open escalate → {state.get('open_stage')} "
+                            f"cycle={state.get('open_cycle') or 0} "
+                            f"(fg={after_pkg or '?'})"
+                        )
+                        state["history"] = history[-40:]
+                else:
+                    try:
+                        from universal_open import reset_open_stage
+                    except ImportError:
+                        from backend.universal_open import (  # type: ignore
+                            reset_open_stage,
+                        )
+
+                    reset_open_stage(state)
                 if ov.get("fail_locked"):
                     # Fail fast after open + 1 retry still on lock screen
                     state["steps"] = step + 1
@@ -3320,6 +6367,37 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # Track tree fingerprint — same hash after an action = no progress
             after_tree = str(after.get("tree") or "")
             after_pkg = str(after.get("package") or "")
+            # r28: verify live likes only when the card name changes
+            if is_live_test and state.get("_pending_live_like"):
+                app_for_like = _bulk_swipe_app_from_instruction(instruction) or ""
+                if verify_pending_live_like(
+                    state, ui_tree=after_tree, app=app_for_like
+                ):
+                    verify_msg = (
+                        (verify_msg or "") + " · live_like_verified"
+                    ).strip(" ·")
+                    # Cap reached after verified like → complete
+                    cap_n = int(
+                        job.get("live_test_max_n")
+                        or state.get("live_test_max_n")
+                        or LIVE_TEST_DEFAULT_MAX_N
+                    )
+                    if int(state.get("live_likes_done") or 0) >= cap_n:
+                        if not refresh_job_cancel_status(job):
+                            job["status"] = "completed"
+                            job["result"] = (
+                                f"[LIVE TEST] likes done "
+                                f"{state.get('live_likes_done')}/{cap_n}"
+                            )
+                            job["completed_at"] = int(time.time())
+                            state["last_action"] = "live_like_cap_done"
+                            job["state"] = state
+                            _end_job_cleanup(job, device_id, call_device)
+                            return job
+                else:
+                    verify_msg = (
+                        (verify_msg or "") + " · live_like_unverified"
+                    ).strip(" ·")
             # Deterministic post-action checks for type / send (no vision)
             if kind in ("type", "type_text", "input_text"):
                 typed = str(action.get("text") or "")
@@ -3375,7 +6453,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 verify_msg = (verify_msg + " · no_progress").strip(" ·")
             else:
                 state["no_progress_streak"] = 0
+                state["last_ui_progress_at"] = int(time.time())
+                try:
+                    from stuck_recovery import reset_stuck
+                except ImportError:
+                    from backend.stuck_recovery import reset_stuck  # type: ignore
+
+                reset_stuck(state)
             state["last_tree_fp"] = fp
+            state["last_tree"] = after_tree[:8000]
             # Launcher swipe loop: only abort after ≥3 unchanged launcher swipes
             if _launcher_swipe_abort(
                 state,
@@ -3400,14 +6486,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 return job
             tap_key = _same_tap_key(action)
             if tap_key:
-                if tap_key == state.get("last_tap_key") and state.get(
-                    "no_progress_streak"
-                ):
+                # Count consecutive same coords even when tree fp jitters
+                # (r21: hang cap must catch any repeat, not only no_progress).
+                if tap_key == state.get("last_tap_key"):
                     state["same_tap_streak"] = (
                         int(state.get("same_tap_streak") or 0) + 1
                     )
                 else:
                     state["same_tap_streak"] = 1
+                    state["same_tap_alt_n"] = 0
                 state["last_tap_key"] = tap_key
             else:
                 state["same_tap_streak"] = 0
@@ -3509,6 +6596,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         # Multi-step goals: if the answer is now on screen, complete
         if sat_after and kind not in ("fail",):
+            if refresh_job_cancel_status(job):
+                status_l = str(job.get("status") or "").lower()
+                if status_l in ("stopped", "cancelled", "canceled"):
+                    job.setdefault("result", "Cancelled")
+                    _end_job_cleanup(job, device_id, call_device)
+                    return job
             job["status"] = "completed"
             job["result"] = sat_after
             if verify_msg:
@@ -3679,3 +6772,4 @@ def _kick_self(job_id: Optional[str], job: Optional[Dict[str, Any]] = None) -> N
         )
     except Exception as e:
         logger.warning("kick step worker failed: %s", e)
+

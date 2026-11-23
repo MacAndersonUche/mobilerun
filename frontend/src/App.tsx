@@ -1,22 +1,22 @@
+import { useEffect, useState } from 'react';
 import {
   BrowserRouter,
   NavLink,
   Route,
   Routes,
   Navigate,
+  Link,
   useLocation,
 } from 'react-router-dom';
 import {
-  Home,
-  MessageSquare,
-  Smartphone,
   Heart,
-  MessageCircle,
-  AlertTriangle,
-  MonitorPlay,
+  Smartphone,
   Settings,
   History,
-  Users,
+  MessageCircle,
+  Menu,
+  X,
+  User,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth';
 import LoginPage from './pages/LoginPage';
@@ -30,15 +30,78 @@ import DatingPage from './pages/DatingPage';
 import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
-import NeedsYouPage from './pages/NeedsYouPage';
-import MatchesPage from './pages/MatchesPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import PairPage from './pages/PairPage';
 import { cn } from './lib/cn';
 
+function MobileMenu({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const location = useLocation();
+  useEffect(() => {
+    onClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  if (!open) return null;
+  const links = [
+    { to: '/social', icon: MessageCircle, label: 'Social' },
+    { to: '/account', icon: User, label: 'Account' },
+    { to: '/chat', icon: MessageCircle, label: 'Chat' },
+    { to: '/tasks', icon: History, label: 'Tasks' },
+    { to: '/live', icon: Smartphone, label: 'Live view' },
+  ];
+  return (
+    <div
+      className="fixed inset-0 z-50 md:hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Menu"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/60"
+        aria-label="Close menu backdrop"
+        onClick={onClose}
+      />
+      <div className="absolute inset-x-0 top-0 border-b border-line bg-canvas-elev px-4 pb-4 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-sheet">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-base font-semibold">Menu</p>
+          <button
+            type="button"
+            className="tap-target inline-flex items-center justify-center rounded-xl text-mute hover:text-white"
+            aria-label="Close menu"
+            onClick={onClose}
+          >
+            <X size={22} />
+          </button>
+        </div>
+        <nav className="space-y-1">
+          {links.map((l) => (
+            <Link
+              key={l.to}
+              to={l.to}
+              className="tap-target flex items-center gap-3 rounded-xl px-3 text-sm text-white hover:bg-surface"
+              onClick={onClose}
+            >
+              <l.icon size={18} />
+              {l.label}
+            </Link>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
   const { token } = useAuth();
-  const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
   // Cognito redirect + HTTPS pairing landing must render without a token
   if (
     typeof window !== 'undefined' &&
@@ -57,14 +120,11 @@ function Shell() {
   }
   if (!token) return <LoginPage />;
 
-  const hideMobileNav = location.pathname === '/chat';
-
   const tabs = [
-    { to: '/', icon: Home, label: 'Home', end: true },
-    { to: '/chat', icon: MessageSquare, label: 'Chat' },
+    { to: '/dating', icon: Heart, label: 'Run' },
     { to: '/devices', icon: Smartphone, label: 'Devices' },
-    { to: '/needs-you', icon: AlertTriangle, label: 'Needs' },
-    { to: '/settings', icon: Settings, label: 'More' },
+    { to: '/history', icon: History, label: 'History' },
+    { to: '/settings', icon: Settings, label: 'Settings' },
   ];
 
   return (
@@ -72,25 +132,17 @@ function Shell() {
       <div className="mx-auto flex min-h-screen max-w-6xl">
         {/* Desktop sidebar */}
         <aside className="hidden w-60 shrink-0 border-r border-line bg-canvas-elev/80 p-4 md:block">
-          <div className="mb-8 px-2">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">MacAI</p>
-            <p className="text-lg font-semibold tracking-tight">MobileRun</p>
-          </div>
+          <Link to="/" className="mb-8 block px-2 hover:opacity-90">
+            <p className="text-lg font-semibold tracking-tight">MacMobileRun</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">
+              Dating & social
+            </p>
+          </Link>
           <nav className="space-y-0.5">
-            {[
-              ...tabs,
-              { to: '/live', icon: MonitorPlay, label: 'Live' },
-              { to: '/dating', icon: Heart, label: 'Dating' },
-              { to: '/matches', icon: Users, label: 'Matches' },
-              { to: '/social', icon: MessageCircle, label: 'Social' },
-              { to: '/tasks', icon: Smartphone, label: 'Tasks' },
-              { to: '/history', icon: History, label: 'Activity' },
-              { to: '/account', icon: Settings, label: 'Account' },
-            ].map((t) => (
+            {tabs.map((t) => (
               <NavLink
                 key={t.to}
                 to={t.to}
-                end={'end' in t ? t.end : false}
                 className={({ isActive }) =>
                   cn(
                     'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition',
@@ -104,23 +156,55 @@ function Shell() {
                 {t.label}
               </NavLink>
             ))}
+            {/* Social stays secondary under Run */}
+            <Link
+              to="/social"
+              className="ml-8 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-mute hover:bg-surface hover:text-white"
+            >
+              <MessageCircle size={14} />
+              Social
+            </Link>
           </nav>
         </aside>
 
-        <main className="relative min-w-0 flex-1">
+        <main className="relative min-w-0 flex-1 overflow-x-clip">
+          {/* Mobile top bar — brand + hamburger */}
+          <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur md:hidden pt-[max(0.5rem,env(safe-area-inset-top))]">
+            <Link to="/" className="min-w-0">
+              <p className="truncate text-base font-semibold tracking-tight">
+                MacMobileRun
+              </p>
+              <p className="text-[10px] uppercase tracking-[0.18em] text-mute">
+                Dating & social
+              </p>
+            </Link>
+            <button
+              type="button"
+              className="tap-target inline-flex items-center justify-center rounded-xl border border-line bg-surface text-white"
+              aria-label="Open menu"
+              aria-expanded={menuOpen}
+              data-testid="mobile-menu-button"
+              onClick={() => setMenuOpen(true)}
+            >
+              <Menu size={22} />
+            </button>
+          </header>
+
           <Routes>
             <Route path="/" element={<HomePage />} />
-            <Route path="/chat" element={<ChatPage />} />
-            <Route path="/devices" element={<DevicesPage />} />
-            <Route path="/live" element={<LiveViewPage />} />
-            <Route path="/tasks" element={<TasksPage />} />
             <Route path="/dating" element={<DatingPage />} />
-            <Route path="/matches" element={<MatchesPage />} />
-            <Route path="/social" element={<SocialPage />} />
-            <Route path="/needs-you" element={<NeedsYouPage />} />
+            <Route path="/devices" element={<DevicesPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/social" element={<SocialPage />} />
+            {/* Kept for job-run / live-view / pairing deep links; not in primary nav */}
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+            <Route path="/live" element={<LiveViewPage />} />
             <Route path="/account" element={<AccountPage />} />
+            {/* Legacy Needs you / Matches URLs → Run */}
+            <Route path="/needs-you" element={<Navigate to="/dating" replace />} />
+            <Route path="/matches" element={<Navigate to="/dating" replace />} />
             <Route path="/pair" element={<PairPage />} />
             <Route path="/p/:code" element={<PairPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -128,29 +212,32 @@ function Shell() {
         </main>
       </div>
 
-      {/* Mobile bottom nav — hidden on chat so sticky Ask input owns the bottom */}
-      {!hideMobileNav && (
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden">
-          <div className="mx-auto flex max-w-content justify-around px-1 pb-[env(safe-area-inset-bottom)]">
-            {tabs.map((t) => (
-              <NavLink
-                key={t.to}
-                to={t.to}
-                end={'end' in t ? t.end : false}
-                className={({ isActive }) =>
-                  cn(
-                    'flex flex-1 flex-col items-center gap-1 py-2 text-[10px]',
-                    isActive ? 'text-accent' : 'text-mute'
-                  )
-                }
-              >
-                <t.icon size={20} />
-                {t.label}
-              </NavLink>
-            ))}
-          </div>
-        </nav>
-      )}
+      <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} />
+
+      {/* Mobile bottom nav — ≥44px tap targets, no horizontal scroll */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden"
+        data-testid="mobile-bottom-nav"
+        aria-label="Primary"
+      >
+        <div className="mx-auto flex max-w-content justify-around px-1 pb-[env(safe-area-inset-bottom)]">
+          {tabs.map((t) => (
+            <NavLink
+              key={t.to}
+              to={t.to}
+              className={({ isActive }) =>
+                cn(
+                  'tap-target flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] leading-tight',
+                  isActive ? 'text-accent' : 'text-mute'
+                )
+              }
+            >
+              <t.icon size={22} aria-hidden />
+              <span className="truncate">{t.label}</span>
+            </NavLink>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }

@@ -1,0 +1,14 @@
+<hierarchy windows="1" nodes="12" empty="false" packages="com.hily.app">
+ <w id="active" t="1" p="com.hily.app" f="1">
+  <!-- Bottom nav still in tree underneath the sheet -->
+  <n t="Discover" xy="140,2190" c="1" b="40,2120,240,2260"/>
+  <n t="Chats" i="com.hily.app:id/bottomNavTab_2" xy="341,2190" c="1" b="250,2120,430,2260"/>
+  <n t="Feed" xy="540,2190" c="1" b="450,2120,630,2260"/>
+  <!-- Profile sheet covering the screen with Crush CTA at bottom -->
+  <n t="Jess, 24" xy="540,400"/>
+  <n t="Major crush" xy="540,2050" c="1" b="200,1980,880,2120"/>
+  <!-- Bounds cover chats-tab xy (~341,2190) so a Chats tap hits Crush — the incident -->
+  <n t="Crush" i="com.hily.app:id/ActionButton_CRUSH" xy="400,2160" c="1" b="320,2110,480,2220"/>
+  <n t="Like" i="com.hily.app:id/ActionButton_LIKE" xy="750,1959" c="1" b="700,1900,800,2020"/>
+ </w>
+</hierarchy>
