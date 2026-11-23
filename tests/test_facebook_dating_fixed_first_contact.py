@@ -1,13 +1,20 @@
-"""Facebook Dating first-contact: no free Discover composer; never Crush/Spotlight."""
+"""Facebook Dating first-contact: photo comment is the like; never Spotlight/Crush."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from backend.bulk_bench_heuristics import parse_bulk_goal, plan_bulk_bench
 from backend.facebook_dating_fixed_first_contact import (
     DAILY_CAP,
     LIKE_XY,
+    PHOTO_COMMENT_TEXT,
+    PHOTO_XY,
+    SEND_XY,
     plan_facebook_dating_fixed_first_contact,
 )
+
+FIX = Path(__file__).resolve().parent / "fixtures" / "dm"
 
 
 def test_parse_first_contact_facebook_dating():
@@ -16,54 +23,90 @@ def test_parse_first_contact_facebook_dating():
     assert g["kind"] == "message_new"
     assert g["count"] == 2
     assert g["app"] == "facebook"
-    assert g["first_contact"] is True
     assert DAILY_CAP == 50
+    assert PHOTO_COMMENT_TEXT == "hi miss you look beautiful"
 
 
-def test_profile_like_pass_only_stops_without_taps():
-    tree = (
-        '<hierarchy><w p="com.facebook.katana" f="1">'
-        '<n d="Profile picture, Ellie, 21" c="1"/>'
-        '<n d="No, Thanks" c="1" xy="340,2116"/>'
-        '<n d="Like" c="1" xy="739,2116"/>'
-        '<n t="Liked you"/>'
-        "</w></hierarchy>"
-    )
+def test_dry_comment_sheet_uses_mac_text_never_types():
+    tree = (FIX / "fb_dating_comment_sheet.xml").read_text(encoding="utf-8")
     act = plan_bulk_bench(
         "send 2 first contact messages on Facebook Dating",
         tree,
-        ["Opened Facebook Dating"],
+        ["Opened Facebook Dating", "Tap Facebook Dating profile photo"],
         state={},
         package="com.facebook.katana",
-        dry_run=False,
+        dry_run=True,
     )
     assert act is not None
     assert act.get("action") == "done"
-    assert act.get("stopped_reason") == "no_free_first_contact"
-    assert (act.get("x"), act.get("y")) != LIKE_XY
-    assert not act.get("needs_vision")
+    assert act.get("dry_run_verified") is True
+    assert act.get("would_send_text") == PHOTO_COMMENT_TEXT
 
 
-def test_explore_does_not_tap_crush_or_spotlight():
-    tree = (
-        '<hierarchy><w p="com.facebook.katana" f="1">'
-        '<n t="Explore"/>'
-        '<n t="Spotlight" c="1"/>'
-        '<n t="Crush" c="1"/>'
-        "</w></hierarchy>"
-    )
+def test_live_types_mac_text_then_sends_not_heart():
+    tree = (FIX / "fb_dating_comment_sheet.xml").read_text(encoding="utf-8")
+    st = {"bulk_message_new": {"done": 0, "typed": False}}
     act = plan_facebook_dating_fixed_first_contact(
         "send 2 first contact messages on Facebook Dating",
         tree,
         ["Opened Facebook Dating"],
-        state={},
+        state=st,
         dry_run=False,
-        message="hey how are you",
+        message=PHOTO_COMMENT_TEXT,
         target=2,
     )
     assert act is not None
-    assert act.get("action") == "done"
-    assert act.get("stopped_reason") == "no_free_first_contact"
+    assert act.get("action") == "type"
+    assert act.get("text") == "hi miss you look beautiful"
+
+    act2 = plan_facebook_dating_fixed_first_contact(
+        "send 2 first contact messages on Facebook Dating",
+        tree,
+        ["Type photo comment"],
+        state=st,
+        dry_run=False,
+        message=PHOTO_COMMENT_TEXT,
+        target=2,
+    )
+    assert act2 is not None
+    assert act2.get("action") == "tap"
+    assert (act2.get("x"), act2.get("y")) == SEND_XY
+    assert (act2.get("x"), act2.get("y")) != LIKE_XY
+    assert st["bulk_message_new"]["done"] == 1
+
+
+def test_profile_taps_photo_not_like_or_pass():
+    tree = (FIX / "fb_dating_profile_ellie.xml").read_text(encoding="utf-8")
+    act = plan_facebook_dating_fixed_first_contact(
+        "send 2 first contact messages on Facebook Dating",
+        tree,
+        ["Opened Facebook Dating", "Tap Facebook Dating card photo"],
+        state={"bulk_message_new": {"done": 0}},
+        dry_run=False,
+        message=PHOTO_COMMENT_TEXT,
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == PHOTO_XY
+    assert (act.get("x"), act.get("y")) != LIKE_XY
+    assert "photo" in (act.get("reason") or "").lower()
+
+
+def test_explore_backs_out_not_spotlight_or_crush():
+    tree = (FIX / "fb_dating_explore.xml").read_text(encoding="utf-8")
+    act = plan_facebook_dating_fixed_first_contact(
+        "send 2 first contact messages on Facebook Dating",
+        tree,
+        ["Opened Facebook Dating"],
+        state={"bulk_message_new": {"done": 0}},
+        dry_run=False,
+        message=PHOTO_COMMENT_TEXT,
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "press_button"
+    assert act.get("button") == "back"
     reason = (act.get("reason") or "").lower()
     assert "spotlight" in reason or "crush" in reason
     assert act.get("x") is None
