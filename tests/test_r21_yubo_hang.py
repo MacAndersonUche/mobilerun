@@ -72,10 +72,7 @@ def test_yubo_reply_does_not_retap_chat_tab_forever():
     assert act.get("action") == "wait"
     assert act.get("needs_vision") or act.get("_force_vision")
     assert "vision" in (act.get("reason") or "").lower()
-    assert not (
-        act.get("action") == "tap"
-        and int(act.get("y") or 0) >= 2100
-    )
+    assert not (act.get("action") == "tap" and int(act.get("y") or 0) >= 2100)
 
     # Second call: fail fast — still no chat list
     state["bulk_message"]["_chats_vision_n"] = 1

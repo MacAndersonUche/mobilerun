@@ -2880,21 +2880,21 @@ def plan_bulk_message(
             bulk["_chats_tab_taps"] = int(bulk.get("_chats_tab_taps") or 0) + 1
             st["bulk_message"] = bulk
             return open_tab
-        opened_hist = any(
-            "open chats" in str(h).lower()
-            or "open matches" in str(h).lower()
-            or "bulk_open_chats" in str(h).lower()
-            or "chats/messages tab" in str(h).lower()
-            or "matches tab" in str(h).lower()
-            # Yubo reason is "Open Yubo Chat tab by index" — not "open chats"
-            or "yubo chat tab" in str(h).lower()
-            or "chat tab by index" in str(h).lower()
-            or (
-                "vision locate" in str(h).lower()
-                and "chat" in str(h).lower()
+        opened_hist = (
+            any(
+                "open chats" in str(h).lower()
+                or "open matches" in str(h).lower()
+                or "bulk_open_chats" in str(h).lower()
+                or "chats/messages tab" in str(h).lower()
+                or "matches tab" in str(h).lower()
+                # Yubo reason is "Open Yubo Chat tab by index" — not "open chats"
+                or "yubo chat tab" in str(h).lower()
+                or "chat tab by index" in str(h).lower()
+                or ("vision locate" in str(h).lower() and "chat" in str(h).lower())
+                for h in history[-8:]
             )
-            for h in history[-8:]
-        ) or int(bulk.get("_chats_tab_taps") or 0) >= 1
+            or int(bulk.get("_chats_tab_taps") or 0) >= 1
+        )
         # Retry once after a short settle — real apps animate the list in.
         # Cap at 1 settle; never re-wait (BLK reply hung 7 min on settle loop).
         settle_n = int(bulk.get("_chats_settle_n") or 0)
