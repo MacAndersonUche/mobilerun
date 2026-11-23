@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import random
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     from fake_chats_catalog import bulk_counts, swipe_keys
@@ -55,6 +55,7 @@ try:
         hily_first_grid_tile_center,
         hily_like_action,
         hily_back_from_photo_viewer,
+        hily_on_chats_list,
         hily_on_finder,
         hily_on_mbm,
         hily_on_photo_viewer,
@@ -137,6 +138,7 @@ except ImportError:
         hily_first_grid_tile_center,
         hily_like_action,
         hily_back_from_photo_viewer,
+        hily_on_chats_list,
         hily_on_finder,
         hily_on_mbm,
         hily_on_photo_viewer,
@@ -521,6 +523,19 @@ def _visible_chat_list_rows(
             if t0.startswith("hidden"):
                 hidden_y = int(n0.get("y") or 0)
                 break
+    # r30: Hily "Message before match" / Start Chat rows are not existing
+    # chats (and may be paid). Skip any name whose y falls in those rows.
+    mbm_y_ranges: List[Tuple[int, int]] = []
+    if app_l == "hily":
+        for n0 in _parse_compact_nodes(ui_tree):
+            t0 = (n0.get("text") or n0.get("label") or "").strip().lower()
+            if "message before match" in t0:
+                y1, y2 = n0.get("y1"), n0.get("y2")
+                if y1 is not None and y2 is not None:
+                    mbm_y_ranges.append((int(y1), int(y2)))
+                else:
+                    y = int(n0.get("y") or 0)
+                    mbm_y_ranges.append((y - 80, y + 120))
     for n in _parse_compact_nodes(ui_tree):
         label = (n.get("text") or n.get("label") or n.get("desc") or "").strip()
         if not label:
@@ -639,6 +654,12 @@ def _visible_chat_list_rows(
             or "liked you!" in low
             or "find out who they are" in low
         ):
+            continue
+        # r30: Message before match / Start Chat is not an existing thread
+        if "message before match" in low or low == "start chat":
+            continue
+        ny = int(n.get("y") or 0)
+        if any(y1 <= ny <= y2 for y1, y2 in mbm_y_ranges):
             continue
         # r28: reply-paywall rows — never treat as real conversation
         # Yubo "ADDED YOU", Hily "They liked you", BLK Discover "Send a message"
@@ -2129,8 +2150,13 @@ def plan_bulk_swipe(
             },
             "hily_profile_sheet_back",
         )
-    # Hily Top picks / Discover grid → go to Finder deck (never Crush tiles)
-    if app == "hily" and hily_on_top_picks_grid(ui_tree):
+    # Hily Top picks / Discover grid OR chats inbox → Finder deck
+    # (r30: dry swipe false-passed on chats-list name 'Paige').
+    if app == "hily" and not hily_on_finder(ui_tree, _log=False) and (
+        hily_on_top_picks_grid(ui_tree) or hily_on_chats_list(ui_tree)
+    ):
+        from_chats = hily_on_chats_list(ui_tree)
+        surface = "Chats" if from_chats else "Top picks"
         tries = int(bulk.get("_hily_finder_nav_n") or 0)
         if tries < 3:
             bulk["_hily_finder_nav"] = True
@@ -2150,7 +2176,7 @@ def plan_bulk_swipe(
                     "x": int(xy[0]),
                     "y": int(xy[1]),
                     "reason": (
-                        f"Leave Hily Top picks → Finder deck tab "
+                        f"Leave Hily {surface} → Finder deck tab "
                         f"({tries + 1}/3) ({planner})"
                     ),
                     "planner": planner,
@@ -2164,7 +2190,7 @@ def plan_bulk_swipe(
             {
                 "action": "fail",
                 "reason": (
-                    f"Hily still on Top picks grid after Finder nav — "
+                    f"Hily still on {surface} after Finder nav — "
                     f"refuse Crush tile loop ({planner})"
                 ),
                 "planner": planner,
@@ -4850,22 +4876,17 @@ def plan_bulk_bench(
     goal = parse_bulk_goal(instruction)
     if not goal:
         return None
-    # r28: Taimi / Hinge unsupported — fail fast under 30s
+    # r28/r30: Taimi only — FLAG_SECURE hides a11y + screencap. Hinge is
+    # attempted (it sent real messages on 22 Nov); do not fail before launch.
     app0 = str(goal.get("app") or "")
-    if app0 in ("taimi", "hinge"):
-        msg = (
-            "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
-            "Fail fast — do not burn steps."
-            if app0 == "taimi"
-            else (
-                "Hinge is unsupported: a11y tree is empty / unusable. "
-                "Fail fast — do not burn steps."
-            )
-        )
+    if app0 == "taimi":
         return _fp(
             {
                 "action": "fail",
-                "reason": msg,
+                "reason": (
+                    "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
+                    "Fail fast — do not burn steps."
+                ),
                 "planner": "unsupported_app",
                 "llm_provider": None,
                 "dry_run_verified": False,

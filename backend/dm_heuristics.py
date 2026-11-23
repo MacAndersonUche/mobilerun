@@ -3169,9 +3169,13 @@ def hily_back_from_photo_viewer(
 
 def hily_deck_card_name(tree: str) -> Optional[str]:
     """Best-effort Finder card name — id first, then name±age mid-screen text."""
+    # r30: chats-list userNameField (Paige) must never count as a Finder card.
+    if hily_on_chats_list(tree):
+        return None
     for n in _parse_compact_nodes(tree):
         nid = str(n.get("id") or "").lower()
-        if "usernameagefield" not in nid and "username" not in nid:
+        # userNameAgeField / finderCardUser only — not userNameField (inbox).
+        if "usernameagefield" not in nid and "findercarduser" not in nid:
             continue
         text = (n.get("text") or "").strip()
         if text and "," in text:

@@ -1318,10 +1318,6 @@ UNSUPPORTED_AGENT_APPS: Dict[str, str] = {
         "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
         "Fail fast — do not burn steps."
     ),
-    "hinge": (
-        "Hinge is unsupported: a11y tree is empty / unusable for automation. "
-        "Fail fast — do not burn steps."
-    ),
 }
 
 _TERMINAL_JOB_STATUSES = frozenset(
@@ -1379,7 +1375,7 @@ def _preserve_terminal_status(job: Dict[str, Any]) -> bool:
 def unsupported_app_fail_action(
     instruction: str, *, package: str = ""
 ) -> Optional[Dict[str, Any]]:
-    """Fail fast (<30s) for Taimi / Hinge instead of burning max_steps."""
+    """Fail fast (<30s) for Taimi (FLAG_SECURE) instead of burning max_steps."""
     try:
         from dm_heuristics import detect_dm_app
     except ImportError:
@@ -4407,7 +4403,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if status_l in ("failed", "completed"):
             return job
 
-    # r28: Taimi / Hinge unsupported — fail fast (<30s) instead of burning steps
+    # r28/r30: Taimi unsupported — fail fast (<30s) instead of burning steps
     if not state.get("_unsupported_checked"):
         state["_unsupported_checked"] = True
         unsup = unsupported_app_fail_action(instruction)
