@@ -1,0 +1,13 @@
+<hierarchy windows="1" nodes="10" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Activity" xy="200,160"/>
+ <n t="Likes" xy="160,265"/>
+ <n t="Visitors" xy="540,265"/>
+ <n t="Likes sent" xy="900,265"/>
+ <n t="Shann" i="center_name" xy="200,1000"/>
+ <n d="chat_request" c="1" xy="445,925" b="380,860,510,990"/>
+ <n t="Charlotte" i="center_name" xy="750,1000"/>
+ <n d="chat_request" c="1" xy="972,925" b="907,860,1037,990"/>
+ <n i="bottomNavTab_4" d="Activity" c="1" xy="740,2190"/>
+</w>
+</hierarchy>
