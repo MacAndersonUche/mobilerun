@@ -136,3 +136,35 @@ def test_dating_stats_summary():
         assert summary["apps"][0]["targets"]["opener_target"] == 80
         assert summary["apps"][0]["targets"]["opener_progress"] == 1
         assert summary["apps"][0]["inbox"]["unread"] == 3
+
+
+def test_display_name_for_package_fallback():
+    from mobilerun.dating.config import display_name_for_package
+
+    assert display_name_for_package("co.hinge.app", "Hinge") == "Hinge"
+    assert display_name_for_package("co.hinge.app", "") == "Hinge"
+    assert display_name_for_package("com.bumble.app", "   ") == "Bumble"
+    assert display_name_for_package("com.facebook.katana", None) == "Facebook"
+    assert display_name_for_package("com.example.unknownapp", "") == "Unknownapp"
+
+
+def test_summary_fills_empty_stored_app_name():
+    """Portal cards read summary name; stored stats may have a blank app_name."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        stats_file = Path(tmpdir) / "stats.json"
+        stats = DatingStats(app_stats={}, stats_file=stats_file)
+        stats.app_stats["co.hinge.app"] = AppStats(
+            app_name="", package_name="co.hinge.app", swipes_today=2
+        )
+        stats.app_stats["com.bumble.app"] = AppStats(
+            app_name="   ", package_name="com.bumble.app"
+        )
+
+        summary = stats.get_summary()
+        by_pkg = {row["package"]: row["name"] for row in summary["apps"]}
+        assert by_pkg["co.hinge.app"] == "Hinge"
+        assert by_pkg["com.bumble.app"] == "Bumble"
+
+        # Recording against an existing blank row should backfill the name.
+        stats.record_swipe("co.hinge.app", "", liked=True)
+        assert stats.app_stats["co.hinge.app"].app_name == "Hinge"

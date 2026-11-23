@@ -58,6 +58,65 @@ interface AppConfig {
 
 type OpenerMode = 'templates' | 'ai';
 
+const DATING_APP_NAMES: Record<string, string> = {
+  'com.takimi.android': 'Taimi',
+  'com.bumble.app': 'Bumble',
+  'co.yellw.yellowapp': 'Yubo',
+  'com.badoo.mobile': 'Badoo',
+  'com.affinityapps.blk': 'BLK',
+  'com.hily.app': 'Hily',
+  'co.hinge.app': 'Hinge',
+  'com.taggedapp': 'Tagged',
+  'com.whatsapp': 'WhatsApp',
+  'com.facebook.katana': 'Facebook',
+  'com.snapchat.android': 'Snapchat',
+  'com.instagram.android': 'Instagram',
+};
+
+function datingAppDisplayName(
+  packageName: string | undefined,
+  appName?: string | null
+): string {
+  const named = (appName || '').trim();
+  if (named) return named;
+  const pkg = (packageName || '').trim();
+  if (DATING_APP_NAMES[pkg]) return DATING_APP_NAMES[pkg];
+  const parts = pkg
+    .split('.')
+    .filter((p) => p && !['app', 'android', 'mobile'].includes(p.toLowerCase()));
+  const tail = parts[parts.length - 1] || pkg;
+  return tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : 'Unknown';
+}
+
+function cardsForDatingApps(
+  apps: AppStats[],
+  configApps: AppConfig[]
+): AppStats[] {
+  const blank = (): Omit<AppStats, 'name' | 'package'> => ({
+    today: { swipes: 0, likes: 0, openers: 0, replies: 0, total_messages: 0 },
+    targets: { opener_target: 75, opener_progress: 0 },
+    total: { swipes: 0, openers: 0, replies: 0, messages: 0, matches: 0 },
+    inbox: { unread: 0, new_matches: 0 },
+    last_active: null,
+  });
+  const byPkg = new Map<string, AppStats>();
+  for (const a of configApps) {
+    byPkg.set(a.package_name, {
+      ...blank(),
+      name: datingAppDisplayName(a.package_name, a.name),
+      package: a.package_name,
+    });
+  }
+  for (const a of apps) {
+    const prev = byPkg.get(a.package);
+    byPkg.set(a.package, {
+      ...a,
+      name: datingAppDisplayName(a.package, a.name || prev?.name),
+    });
+  }
+  return Array.from(byPkg.values());
+}
+
 interface OpenerTemplate {
   id: string;
   text: string;
@@ -626,22 +685,14 @@ export default function DatingPage() {
 
       {/* Per-app stats */}
       <div className="grid md:grid-cols-2 gap-4">
-        {(apps.length ? apps : configApps.map((a) => ({
-          name: a.name,
-          package: a.package_name,
-          today: { swipes: 0, likes: 0, openers: 0, replies: 0, total_messages: 0 },
-          targets: { opener_target: 75, opener_progress: 0 },
-          total: { swipes: 0, openers: 0, replies: 0, messages: 0, matches: 0 },
-          inbox: { unread: 0, new_matches: 0 },
-          last_active: null,
-        }))).map((app) => (
+        {cardsForDatingApps(apps, configApps).map((app) => (
           <div
             key={app.package}
             className="bg-surface border border-line rounded-lg p-4 space-y-3"
           >
             <div className="flex justify-between items-start">
               <div>
-                <h4 className="font-semibold text-lg">{app.name}</h4>
+                <h4 className="font-semibold text-lg text-white">{app.name}</h4>
                 <p className="text-xs text-mute">{app.package}</p>
               </div>
               <div className="text-right text-sm text-mute">
@@ -726,10 +777,10 @@ export default function DatingPage() {
                 className={`px-3 py-1 rounded text-sm border ${
                   app.enabled
                     ? 'bg-rose-900/50 border-rose-600 text-rose-200'
-                    : 'bg-surface border-line text-mute'
+                    : 'bg-surface border-line text-white'
                 }`}
               >
-                {app.name}
+                {datingAppDisplayName(app.package_name, app.name)}
               </button>
               <div className="flex overflow-hidden rounded-lg border border-line text-xs">
                 <button

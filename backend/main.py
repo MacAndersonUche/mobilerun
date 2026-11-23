@@ -2745,7 +2745,10 @@ def _save_date_flow(mgr, auth: Optional[dict] = None) -> None:
 @app.get("/api/dating/config")
 async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode configuration."""
-    from mobilerun.dating.config import DatingModeConfig as ConfigModel
+    from mobilerun.dating.config import (
+        DatingModeConfig as ConfigModel,
+        display_name_for_package,
+    )
 
     _load_dating_runtime(auth)
     config = ConfigModel()
@@ -2759,7 +2762,7 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
     return {
         "apps": [
             {
-                "name": app.name,
+                "name": display_name_for_package(app.package_name, app.name),
                 "package_name": app.package_name,
                 "enabled": app.enabled,
                 "daily_swipe_cap": app.daily_swipe_cap,
