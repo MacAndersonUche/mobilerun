@@ -4450,6 +4450,28 @@ def plan_bulk_message_new(
         if fixed:
             return fixed
 
+    if app in ("facebook", "facebook_dating"):
+        try:
+            from facebook_dating_fixed_first_contact import (
+                plan_facebook_dating_fixed_first_contact,
+            )
+        except ImportError:
+            from backend.facebook_dating_fixed_first_contact import (  # type: ignore
+                plan_facebook_dating_fixed_first_contact,
+            )
+        fixed = plan_facebook_dating_fixed_first_contact(
+            instruction,
+            ui_tree,
+            history,
+            state=st,
+            package=package,
+            dry_run=dry_run,
+            message=message,
+            target=target,
+        )
+        if fixed:
+            return fixed
+
     # Apps with no reliable free new-message surface → like FALLBACK only after
     # we fail to find Matches/Connections/composer (never hard-replace).
     like_fallback_apps = {
