@@ -2130,12 +2130,10 @@ def plan_next_action(
                 named = _visible_dry_swipe_card_name(
                     instruction, ui_tree, st_bulk
                 )
-                if (
-                    not named
-                    and image_b64
-                    and _bulk_swipe_app_from_instruction(instruction) == "hinge"
-                ):
-                    named = _maybe_vision_hinge_card_name(image_b64, st_bulk)
+                if not named and image_b64:
+                    named = _maybe_vision_swipe_card_name(
+                        instruction, image_b64, st_bulk
+                    )
                 if named:
                     return _guard(
                         {
@@ -2254,12 +2252,10 @@ def plan_next_action(
                 named = _visible_dry_swipe_card_name(
                     instruction, ui_tree, st_bulk
                 )
-                if (
-                    not named
-                    and image_b64
-                    and _bulk_swipe_app_from_instruction(instruction) == "hinge"
-                ):
-                    named = _maybe_vision_hinge_card_name(image_b64, st_bulk)
+                if not named and image_b64:
+                    named = _maybe_vision_swipe_card_name(
+                        instruction, image_b64, st_bulk
+                    )
                 if named and str(bulk_act.get("action") or "").lower() != "done":
                     bulk_act = {
                         "action": "done",
@@ -3862,6 +3858,53 @@ def _maybe_vision_hinge_card_name(
     return name
 
 
+
+def _maybe_vision_bumble_card_name(
+    image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """One screenshot ask for the Bumble People-card first name (sparse a11y)."""
+    st = state if isinstance(state, dict) else {}
+    cached = st.get("_bumble_vision_name")
+    if cached:
+        return str(cached)
+    if st.get("_bumble_vision_name_tried") or not image_b64:
+        return None
+    st["_bumble_vision_name_tried"] = True
+    prompt = (
+        "This is a screenshot of the Bumble dating app. "
+        "Reply with ONLY the first name of the person on the People "
+        "profile card (for example Kalia), or NONE if this is the owner's "
+        "own Profile tab, a Liked You / Chats / Discover screen, a paywall "
+        "(SuperSwipe, Spotlight, premium), the Android launcher, or no card "
+        "is visible. Never reply with MacAnderson, Profile, Discover, "
+        "People, Liked You, Chats, or Filters."
+    )
+    try:
+        raw = _call_openai(prompt, image_b64=image_b64)
+    except Exception as exc:
+        logger.warning("bumble vision card name failed: %s", exc)
+        return None
+    name = hinge_name_from_vision_reply(raw or "")
+    if name:
+        st["_bumble_vision_name"] = name
+        st["current_profile_name"] = name
+    return name
+
+
+def _maybe_vision_swipe_card_name(
+    instruction: str,
+    image_b64: Optional[str],
+    state: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Vision card-name for swipe apps whose a11y tree omits the name."""
+    app = _bulk_swipe_app_from_instruction(instruction)
+    if app == "bumble":
+        return _maybe_vision_bumble_card_name(image_b64, state)
+    if app == "hinge":
+        return _maybe_vision_hinge_card_name(image_b64, state)
+    return None
+
+
 def _maybe_vision_hinge_composer(
     image_b64: Optional[str], state: Optional[Dict[str, Any]] = None
 ) -> bool:
@@ -3898,9 +3941,12 @@ def _salvage_dry_swipe_done(
     state: Dict[str, Any],
     action: Dict[str, Any],
     reason: str,
+    image_b64: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """If dry swipe was blocked or LLM tried to swipe, succeed on a real name."""
     name = _visible_dry_swipe_card_name(instruction, ui_tree, state)
+    if not name and image_b64:
+        name = _maybe_vision_swipe_card_name(instruction, image_b64, state)
     if not name:
         return None
     new_reason = (
@@ -5822,12 +5868,20 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 or "would like/pass" in (reason or "").lower()
             )
         ):
+            salvage_b64 = locals().get("image_b64")
+            if not salvage_b64:
+                try:
+                    salvage_b64 = _fetch_screenshot_b64(device_id, job=job)
+                except Exception as se:
+                    logger.warning("dry swipe salvage screenshot failed: %s", se)
+                    salvage_b64 = None
             salvaged = _salvage_dry_swipe_done(
                 instruction=instruction,
                 ui_tree=ui_tree,
                 state=state,
                 action=action if isinstance(action, dict) else {},
                 reason=reason,
+                image_b64=salvage_b64,
             )
             if salvaged:
                 action = salvaged

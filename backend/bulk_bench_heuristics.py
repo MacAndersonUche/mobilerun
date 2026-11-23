@@ -2122,7 +2122,19 @@ def _card_name_is_real_profile(name: Optional[str]) -> bool:
         return False
     # r28/r30: Social / Chats / home-folder chrome (Jobs, Notes, …)
     low = raw.lower().split(",")[0].strip()
-    if low in ("social", "chats", "chat", "messages", "inbox", "people", "discover"):
+    if low in (
+        "social",
+        "chats",
+        "chat",
+        "messages",
+        "inbox",
+        "people",
+        "discover",
+        "liked you",
+        "filters",
+        "profile",
+        "bumble",
+    ):
         return False
     if is_launcher_home_label(raw):
         return False

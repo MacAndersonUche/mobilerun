@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Owner Profile tab must never be read as a swipe card -->
+<hierarchy>
+  <w p="com.bumble.app" a="1" f="1">
+    <n t="MacAnderson, 30" xy="200,1800" b="[40,1720][500,1880]"/>
+    <n t="Profile" xy="108,2197" b="[0,2100][216,2294]" c="1"/>
+    <n t="People" xy="540,2197" b="[432,2100][648,2294]"/>
+  </w>
+</hierarchy>

@@ -1964,6 +1964,39 @@ def bumble_collapsed_older_chats_center(tree: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _bumble_card_name_ok(name: str) -> bool:
+    """Reject owner chrome (MacAnderson) and tab/filter labels."""
+    raw = (name or "").strip()
+    if not raw or re.match(r"^profile[_\s]?\d+$", raw, re.I):
+        return False
+    low = raw.lower().split(",")[0].strip()
+    if low in {
+        "profile",
+        "discover",
+        "people",
+        "liked you",
+        "chats",
+        "filters",
+        "filter",
+        "bumble",
+        "macanderson",
+        "mac anderson",
+        "superswipe",
+        "spotlight",
+    }:
+        return False
+    try:
+        from bulk_bench_heuristics import _card_name_is_owner, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            _card_name_is_owner,
+            _card_name_is_real_profile,
+        )
+    if _card_name_is_owner(raw):
+        return False
+    return bool(_card_name_is_real_profile(raw))
+
+
 def bumble_deck_card_name(tree: str) -> Optional[str]:
     """Real profile name from the Bumble card (never invent profile_N)."""
     for n in _bumble_nodes(tree) or _parse_compact_nodes(tree):
@@ -1972,14 +2005,14 @@ def bumble_deck_card_name(tree: str) -> Optional[str]:
             continue
         if re.search(r",\s*\d{2}\s*$", text) and int(n.get("y") or 0) > 1400:
             name = text.split(",")[0].strip()
-            if name and not re.match(r"^profile[_\s]?\d+$", name, re.I):
+            if _bumble_card_name_ok(name):
                 return name
     for n in _bumble_nodes(tree) or _parse_compact_nodes(tree):
         desc = (n.get("desc") or "").strip()
         m = re.match(r"(.+?)['\u2019]s main photo", desc, re.I)
         if m:
             name = m.group(1).strip()
-            if name and not re.match(r"^profile[_\s]?\d+$", name, re.I):
+            if _bumble_card_name_ok(name):
                 return name
     return None
 
