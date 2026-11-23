@@ -4984,3 +4984,4 @@ def _kick_self(job_id: Optional[str], job: Optional[Dict[str, Any]] = None) -> N
         )
     except Exception as e:
         logger.warning("kick step worker failed: %s", e)
+
