@@ -86,3 +86,37 @@ def test_salvage_uses_cached_vision_name_when_tree_is_sparse():
     assert out.get("dry_run_verified") is True
     assert "Kalia" in (out.get("reason") or "")
     assert "MacAnderson" not in (out.get("reason") or "")
+
+
+def test_dry_guard_blocks_tapping_profile_list_to_start_liking():
+    kind, reason, out = apply_dry_run_send_guard(
+        dry_run=True,
+        action={
+            "action": "tap",
+            "x": 545,
+            "y": 1173,
+            "reason": "Tapping on the profile list to start liking profiles.",
+        },
+        kind="tap",
+        reason="Tapping on the profile list to start liking profiles.",
+    )
+    assert kind == "done"
+    assert out.get("dry_run_verified") is not True
+
+
+def test_photo_browser_override_backs_out_never_superswipe():
+    from backend.cloud_agent import _bumble_photo_browser_override
+    from backend.dm_heuristics import bumble_on_photo_browser
+
+    tree = _load("bumble_photo_browser_superswipe.xml")
+    assert bumble_on_photo_browser(tree)
+    out = _bumble_photo_browser_override(
+        instruction=INSTR,
+        ui_tree=tree,
+        package="com.bumble.app",
+        action={"action": "tap", "x": 896, "y": 2016, "reason": "tap star"},
+    )
+    assert out is not None
+    assert str(out.get("action")).lower() in {"press_button", "back"}
+    assert "superswipe" in str(out.get("reason") or "").lower()
+    assert out.get("button") == "back"

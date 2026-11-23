@@ -1302,7 +1302,10 @@ def apply_dry_run_send_guard(
             r"to like (?:it|the profile|this profile|them)|"
             r"send (?:a )?like|press like|"
             r"pass the profile|tap the pass|"
-            r"swipe (?:left|right) to (?:like|pass))",
+            r"swipe (?:left|right) to (?:like|pass)|"
+            r"liking profiles|start liking|"
+            r"on the profile (?:list )?to (?:start )?lik|"
+            r"tapping on the profile)",
             rblob,
         ):
             blocked = True
@@ -3964,6 +3967,39 @@ def _salvage_dry_swipe_done(
     }
 
 
+
+def _bumble_photo_browser_override(
+    *,
+    instruction: str,
+    ui_tree: str,
+    package: str = "",
+    action: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """If Bumble full-screen photo browser is up, Back — never SuperSwipe."""
+    blob = f"{instruction} {package}".lower()
+    if "bumble" not in blob and "com.bumble.app" not in blob:
+        return None
+    try:
+        from dm_heuristics import (
+            bumble_on_photo_browser,
+            bumble_back_from_photo_browser,
+        )
+    except ImportError:
+        from backend.dm_heuristics import (  # type: ignore
+            bumble_on_photo_browser,
+            bumble_back_from_photo_browser,
+        )
+    if not bumble_on_photo_browser(ui_tree or ""):
+        return None
+    act = action if isinstance(action, dict) else {}
+    if str(act.get("action") or "").lower() in (
+        "press_button",
+        "back",
+    ) and str(act.get("button") or "back").lower() == "back":
+        return None
+    return bumble_back_from_photo_browser(planner="bumble_firewall")
+
+
 def _log_step_decision(
     *,
     job_id: str,
@@ -5893,6 +5929,25 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     job.get("job_id"),
                     reason[:120],
                 )
+
+        # Bumble photo browser is SuperSwipe-only — Back, never end the dry job
+        # here or tap the star.
+        _fg_pkg = str(
+            (tree_info or {}).get("package")
+            or (state or {}).get("target_package")
+            or ""
+        )
+        if "bumble" in str(instruction).lower() or "com.bumble.app" in _fg_pkg.lower():
+            override = _bumble_photo_browser_override(
+                instruction=instruction,
+                ui_tree=ui_tree,
+                package=_fg_pkg,
+                action=action if isinstance(action, dict) else {},
+            )
+            if override:
+                action = override
+                kind = str(override.get("action") or "press_button")
+                reason = str(override.get("reason") or reason)
 
         if kind == "done":
             # Always capture a final screenshot for dry-run compose verification
