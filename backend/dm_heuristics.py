@@ -245,6 +245,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "id/encountersGridItem_summaryContainer",
         ),
         "deck_name_hint": "Name, Age",  # TextView near bottom of card
+        # CA-4: coordinate like-swipe is opt-in via instruction/state mode "fixed".
+        "fixed_swipe": False,
         # Verified swipe recipe (adb input swipe timings)
         "like_swipe": (250, 1000, 1050, 1050, 300),
         "pass_swipe": (850, 1000, 30, 1050, 300),

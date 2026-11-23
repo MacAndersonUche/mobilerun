@@ -2379,6 +2379,31 @@ def plan_bulk_swipe(
     if recover:
         return recover
 
+    # CA-4: Bumble fixed-spot like swipe (no per-card LLM / vision).
+    if app == "bumble":
+        try:
+            from bumble_fixed_swipe import (
+                bumble_fixed_swipe_enabled,
+                plan_bumble_fixed_swipe,
+            )
+        except ImportError:
+            from backend.bumble_fixed_swipe import (  # type: ignore
+                bumble_fixed_swipe_enabled,
+                plan_bumble_fixed_swipe,
+            )
+        if bumble_fixed_swipe_enabled(instruction, st):
+            fixed = plan_bumble_fixed_swipe(
+                instruction,
+                ui_tree,
+                history,
+                state=st,
+                package=package,
+                dry_run=dry_run,
+                planner="bumble_fixed",
+            )
+            if fixed:
+                return fixed
+
     deck_visible = _deck_visible(app, ui_tree)
     # Bumble photo browser (SuperSwipe only) — back out before deck checks
     if app == "bumble" and bumble_on_photo_browser(ui_tree):
