@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Message Before Match" i="userInfoBlockTitle" xy="540,160"/>
+ <n t="Send Major Crush as a special like with a message to Amy" i="userInfoBlockDescription" xy="540,840"/>
+ <n i="textInput" e="1" f="1" xy="540,1344" b="21,1281,1059,1408" h="Your reply..."/>
+ <n i="closeButton" c="1" d="Close button" xy="74,160"/>
+ <n d="button  0" xy="996,160" b="935,107,1057,212"/>
+</w>
+</hierarchy>
