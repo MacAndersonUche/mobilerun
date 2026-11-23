@@ -263,3 +263,22 @@ def test_enabled_by_instruction_or_state():
     assert bumble_fixed_swipe_enabled(
         "like 5 profiles on Bumble", {"bulk_swipe": {"mode": "fixed"}}
     )
+
+
+def test_real_s21_people_card_is_deck_not_photo_browser():
+    """Live S21+ People card: star is labelled Send SuperSwipe but is the badge."""
+    tree = (FIXTURES / "bumble_people_kalia_s21.xml").read_text()
+    assert bumble_fixed_guard(tree) is None
+    assert bumble_fixed_on_deck(tree)
+    act = plan_bumble_fixed_swipe(
+        "like 5 profiles on Bumble (fixed)",
+        tree,
+        [],
+        state={"bulk_swipe": {"done": 0, "target": 5}},
+        package="com.bumble.app",
+        dry_run=True,
+    )
+    assert act["action"] == "done"
+    assert act["dry_run_verified"] is True
+    assert act["like_swipe"]["x1"] == 250
+    assert act["like_swipe"]["x2"] == 1050

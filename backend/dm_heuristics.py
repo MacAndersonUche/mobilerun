@@ -1739,7 +1739,12 @@ def bumble_on_photo_browser(tree: str) -> bool:
     """
     for n in _bumble_nodes(tree):
         nid = str(n.get("id") or "").lower()
-        if "photobrowser" in nid.replace("_", ""):
+        nid_f = nid.replace("_", "")
+        # Real S21+ People cards label the star "Send SuperSwipe" with this id.
+        # That is the on-card badge, not the full-screen photo browser.
+        if "badgesuperswipe" in nid_f or "profiledetailsbadgesuper" in nid_f:
+            continue
+        if "photobrowser" in nid_f:
             return True
         lab = (n.get("label") or n.get("text") or n.get("desc") or "").strip().lower()
         if lab == "send superswipe" or "send superswipe" in lab:
