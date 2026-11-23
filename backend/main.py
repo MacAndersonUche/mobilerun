@@ -1580,23 +1580,46 @@ async def get_task_status(
                 )
                 timed_out = True
             else:
-                # Idle timeout on read path (matches cloud_agent tick)
+                # Idle + no-UI-progress walls on read path (r23: hung jobs
+                # stayed running until Mac cancelled — StepWorker missed them).
                 try:
-                    from cloud_agent import TASK_IDLE_TIMEOUT_S
+                    from cloud_agent import (
+                        NO_PROGRESS_TIMEOUT_S,
+                        TASK_IDLE_TIMEOUT_S,
+                    )
                 except ImportError:
-                    from backend.cloud_agent import TASK_IDLE_TIMEOUT_S  # type: ignore
+                    from backend.cloud_agent import (  # type: ignore
+                        NO_PROGRESS_TIMEOUT_S,
+                        TASK_IDLE_TIMEOUT_S,
+                    )
 
                 st_job = job.get("state") or {}
-                last_p = st_job.get("last_progress_at") or created
-                if isinstance(last_p, (int, float)) and (
-                    time.time() - float(last_p) > TASK_IDLE_TIMEOUT_S
+                last_ui = st_job.get("last_ui_progress_at") or created
+                steps_n = int(st_job.get("steps") or 0)
+                if (
+                    isinstance(last_ui, (int, float))
+                    and steps_n >= 1
+                    and (time.time() - float(last_ui) > NO_PROGRESS_TIMEOUT_S)
                 ):
                     status = "failed"
                     job["status"] = "failed"
                     job["error"] = job.get("error") or (
-                        f"Task idle for {TASK_IDLE_TIMEOUT_S}s with no step progress"
+                        f"No UI progress for {NO_PROGRESS_TIMEOUT_S}s "
+                        f"(read-path hard wall)"
                     )
                     timed_out = True
+                else:
+                    last_p = st_job.get("last_progress_at") or created
+                    if isinstance(last_p, (int, float)) and (
+                        time.time() - float(last_p) > TASK_IDLE_TIMEOUT_S
+                    ):
+                        status = "failed"
+                        job["status"] = "failed"
+                        job["error"] = job.get("error") or (
+                            f"Task idle for {TASK_IDLE_TIMEOUT_S}s "
+                            f"with no step progress"
+                        )
+                        timed_out = True
             if timed_out:
                 try:
                     from storage import put_job as _put

@@ -683,13 +683,22 @@ def apply_dry_run_send_guard(
     elif k == "swipe" and _is_chat_list_scroll_swipe(action, kind):
         # Non-mutating chat-list scrolls are allowed in dry_run; deck swipes are not.
         return kind, reason, action
-    elif (action or {}).get("_dry_run_advance") and (
-        k == "swipe" or _action_looks_like_swipe_or_like(action, kind)
-    ):
-        # Dry-run card advance: pass/left-swipe (or pass tap) to step through
-        # N distinct cards without liking / sending / paid taps (r22).
-        return kind, reason, action
+    elif k == "swipe" and (action or {}).get("_dry_run_vertical_scroll"):
+        # Optional vertical profile scroll only (never horizontal pass/like).
+        try:
+            x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+            x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+        except (TypeError, ValueError):
+            blocked = True
+            would = "swipe"
+        else:
+            if abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 150:
+                return kind, reason, action
+            blocked = True
+            would = "swipe"
     elif k == "swipe" or _action_looks_like_swipe_or_like(action, kind):
+        # r23: NEVER allow dry-run pass/like/horizontal advance — real gestures
+        # passed live Yubo profiles. Identify + report only.
         blocked = True
         would = "swipe" if k == "swipe" else "like/pass tap"
 
@@ -3095,9 +3104,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["completed_at"] = now
         return job
     # True no-progress wall: busywork taps/settles keep last_progress_at fresh
-    # but UI never changes — fail ~90s (r21: every hang sat until 7 min cancel).
+    # but UI never changes — fail ~90s (r21/r23: hangs sat 209–583s).
     last_ui = int(state.get("last_ui_progress_at") or created)
-    if now - last_ui > NO_PROGRESS_TIMEOUT_S and int(state.get("steps") or 0) >= 1:
+    # Also fail when wall exceeded from job start even before first step lands
+    # (r23: steps>=1 gate let first long step burn past 90s unchecked).
+    if now - last_ui > NO_PROGRESS_TIMEOUT_S and (
+        int(state.get("steps") or 0) >= 1 or now - created > NO_PROGRESS_TIMEOUT_S
+    ):
         job["status"] = "failed"
         job["error"] = (
             f"No UI progress for {NO_PROGRESS_TIMEOUT_S}s "

@@ -4760,6 +4760,10 @@ def app_overlay_present(app: Optional[str], tree: str) -> Optional[str]:
         return None
     if keyboard_likely_up(tree):
         return "keyboard"
+    # Hinge like/comment sheet before generic thread (editable + Send Like
+    # was misclassified as open_chat_thread → Back — r23 hinge_new3).
+    if app_l == "hinge" and hinge_on_like_sheet(tree):
+        return "hinge_like_sheet"
     if open_chat_thread_present(app_l, tree):
         return "open_chat_thread"
     if app_l == "bumble" and bumble_on_photo_browser(tree):
@@ -4771,8 +4775,6 @@ def app_overlay_present(app: Optional[str], tree: str) -> Optional[str]:
             return "hily_photo_viewer"
         if hily_on_profile_sheet(tree):
             return "hily_profile_sheet"
-    if app_l == "hinge" and hinge_on_like_sheet(tree):
-        return "hinge_like_sheet"
     if app_l == "yubo":
         blob = (tree or "").lower()
         if "blast" in blob and ("direct" in blob or "send a message" in blob):

@@ -45,6 +45,79 @@ except ImportError:
 logger = logging.getLogger("mobilerun.step")
 logger.setLevel(logging.INFO)
 
+# Hard walls (r23: jobs sat 209–583s past last progress; entry-only 90s check missed).
+try:
+    from cloud_agent import NO_PROGRESS_TIMEOUT_S as _NP_S
+    from cloud_agent import TASK_TIMEOUT_S as _TASK_WALL_S
+except ImportError:
+    try:
+        from backend.cloud_agent import (  # type: ignore
+            NO_PROGRESS_TIMEOUT_S as _NP_S,
+            TASK_TIMEOUT_S as _TASK_WALL_S,
+        )
+    except ImportError:
+        _NP_S = 90
+        _TASK_WALL_S = 900
+
+# Per StepWorker invoke / single-step wall (default = no-progress 90s)
+STEP_WALL_S = int(os.environ.get("AGENT_STEP_WALL_S") or str(_NP_S))
+# Job-level hard cap (tighter than TASK_TIMEOUT for bulk; env override)
+JOB_WALL_S = int(os.environ.get("AGENT_JOB_WALL_S") or "180")
+
+
+def _fail_job_timeout(
+    job: Dict[str, Any], *, error: str, last_action: str
+) -> Dict[str, Any]:
+    state = job.setdefault("state", {})
+    if not isinstance(state, dict):
+        state = {}
+        job["state"] = state
+    now = int(time.time())
+    job["status"] = "failed"
+    job["error"] = error
+    job["completed_at"] = now
+    job["updated_at"] = now
+    state["last_action"] = last_action
+    job["state"] = state
+    logger.warning(
+        "step_worker timeout job=%s action=%s err=%s",
+        job.get("job_id"),
+        last_action,
+        error,
+    )
+    return job
+
+
+def enforce_job_wall_clock(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Hard wall-clock fail-fast for StepWorker (per-job + no-UI-progress).
+
+    Returns a failed job dict when the wall is exceeded, else None.
+    """
+    now = int(time.time())
+    created = int(job.get("created_at") or now)
+    state = job.get("state") if isinstance(job.get("state"), dict) else {}
+    # Absolute job wall (r23: refuse 7+ min hangs)
+    wall = min(int(JOB_WALL_S), int(_TASK_WALL_S))
+    if now - created > wall:
+        return _fail_job_timeout(
+            job,
+            error=f"Job wall-clock exceeded ({wall}s)",
+            last_action="job_wall_timeout",
+        )
+    # No UI progress wall — use last_ui_progress_at (not busywork last_progress_at)
+    last_ui = int(state.get("last_ui_progress_at") or created)
+    steps = int(state.get("steps") or 0)
+    if now - last_ui > int(STEP_WALL_S) and steps >= 1:
+        return _fail_job_timeout(
+            job,
+            error=(
+                f"No UI progress for {STEP_WALL_S}s "
+                f"(last_ui_progress_at={last_ui}; StepWorker hard wall)"
+            ),
+            last_action="no_progress_timeout",
+        )
+    return None
+
 
 def _to_plain(obj: Any) -> Any:
     if isinstance(obj, list):
@@ -410,6 +483,11 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         job["updated_at"] = int(time.time())
         return job
 
+    # Hard wall BEFORE any RPC/LLM (r23: 90s check only inside cloud_agent was late)
+    timed = enforce_job_wall_clock(job)
+    if timed:
+        return timed
+
     try:
         from cloud_agent import run_one_agent_step
     except ImportError:
@@ -417,6 +495,7 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
     # Suppress per-step Lambda self-kicks while chaining in-process — one kick
     # after the chain if still running (avoids 6 workers racing one job).
+    invoke_t0 = time.time()
     job["_suppress_kick"] = True
     updated = run_one_agent_step(job)
     # Chain several agent steps in one invoke so wall-clock stays ≪ EventBridge
@@ -426,6 +505,18 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     lease_jid = str(job.get("job_id") or "")
     for _ in range(max(0, chain_budget - 1)):
         if updated.get("status") != "running":
+            break
+        # Per-invoke wall + no-progress re-check between chained steps
+        if time.time() - invoke_t0 > float(STEP_WALL_S):
+            updated = _fail_job_timeout(
+                updated,
+                error=f"StepWorker invoke exceeded {STEP_WALL_S}s wall",
+                last_action="step_invoke_wall_timeout",
+            )
+            break
+        timed = enforce_job_wall_clock(updated)
+        if timed:
+            updated = timed
             break
         nra = int(updated.get("next_run_at") or 0)
         # Respect intentional backoff (rate-limit / offline waits)
@@ -681,6 +772,14 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     # Propagate owner so step code can renew before slow screenshot/RPC calls
     job["_lease_owner"] = owner
     job["lease_owner"] = owner
+    # Fail hung jobs before dispatch (dating/social/agent all share walls)
+    timed = enforce_job_wall_clock(job)
+    if timed:
+        try:
+            save_job_progress(_to_plain(timed), owner=owner)
+        except Exception:
+            pass
+        return
     try:
         if kind == "dating":
             updated = run_dating_step(job)

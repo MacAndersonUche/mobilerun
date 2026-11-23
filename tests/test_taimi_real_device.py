@@ -267,7 +267,7 @@ def test_taimi_bulk_zero_left_done():
 
 def test_taimi_bulk_dry_run_skips_like():
     deck = _load("taimi_people.xml")
-    st: dict = {}
+    st: dict = {"bulk_swipe": {"_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "taimi auto-swipe 5 profiles",
         deck,
@@ -277,11 +277,8 @@ def test_taimi_bulk_dry_run_skips_like():
         dry_run=True,
     )
     assert act and act.get("dry_run") is True
-    assert act.get("action") != "done"
-    assert act.get("_dry_run_advance") is True or act.get("action") in (
-        "swipe",
-        "tap",
-        "wait",
-    )
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
-    assert "alex" in reason or "advance" in reason
+    assert "alex" in reason
+    assert "would like/pass 5" in reason

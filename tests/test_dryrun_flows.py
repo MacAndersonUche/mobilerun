@@ -217,7 +217,7 @@ def test_dry_run_swipe_taps_nav_then_simulates_likes():
 
 def test_dry_run_swipe_logs_n_would_like_pass():
     deck = _load("bumble_deck.xml")
-    st: dict = {"bulk_swipe": {"done": 0, "target": 2}}
+    st: dict = {"bulk_swipe": {"done": 0, "target": 2, "_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "bumble auto-swipe 2 profiles",
         deck,
@@ -226,14 +226,14 @@ def test_dry_run_swipe_logs_n_would_like_pass():
         package="com.bumble.app",
         dry_run=True,
     )
-    # First distinct card → pass-advance (not premature done)
     assert act and act.get("dry_run") is True
-    assert act.get("action") != "done"
-    assert act.get("_dry_run_advance") is True
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
     assert "alex" in reason
+    assert "would like/pass 2" in reason
     assert st["bulk_swipe"]["done"] == 1
-    assert st["bulk_swipe"].get("awaiting_verify") is True
+    assert act.get("dry_run_verified") is True
 
 
 def test_dry_run_allows_chat_list_scroll_blocks_deck_swipe():

@@ -166,7 +166,7 @@ def test_badoo_bulk_uses_voteyes_not_y2000_filter():
 
 def test_bulk_swipe_dry_run_skips_like():
     deck = _load("bumble_deck.xml")
-    st: dict = {}
+    st: dict = {"bulk_swipe": {"_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "bumble auto-swipe 5 profiles",
         deck,
@@ -175,18 +175,14 @@ def test_bulk_swipe_dry_run_skips_like():
         package="com.bumble.app",
         dry_run=True,
     )
-    # r22: pass-advance through cards — never like, never one-card done
+    # r23: identify card + done — never like/pass/horizontal swipe
     assert act and act.get("dry_run") is True
-    assert act.get("_dry_run_advance") is True or act.get("action") in (
-        "swipe",
-        "tap",
-        "wait",
-    )
-    assert act.get("action") != "done"
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
-    assert "alex" in reason or "advance" in reason
-    assert "like" not in reason or "no like" in reason
-    assert st.get("bulk_swipe", {}).get("done") == 1
+    assert "alex" in reason
+    assert "would like/pass 5" in reason
+    assert act.get("bulk_swipe_evaluated") == 1
 
 
 def test_bulk_message_dry_run_stops_before_send():

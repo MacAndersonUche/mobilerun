@@ -162,7 +162,7 @@ def test_connections_not_vetoed_by_deck_and_expands_older():
 
 def test_dry_run_swipe_logs_n_once_with_real_name():
     deck = _load("bumble_deck.xml")
-    st: dict = {"bulk_swipe": {"done": 0, "target": 5}}
+    st: dict = {"bulk_swipe": {"done": 0, "target": 5, "_dry_vscroll_done": True}}
     act = plan_bulk_swipe(
         "bumble auto-swipe 5 profiles",
         deck,
@@ -171,12 +171,12 @@ def test_dry_run_swipe_logs_n_once_with_real_name():
         package="com.bumble.app",
         dry_run=True,
     )
-    # r22: first real card → pass-advance (not premature done / invent)
     assert act and act.get("dry_run") is True
-    assert act.get("action") != "done"
-    assert act.get("_dry_run_advance") is True
+    assert act.get("action") == "done"
+    assert act.get("_dry_run_advance") is not True
     reason = (act.get("reason") or "").lower()
     assert "alex" in reason
+    assert "evaluated 1 card" in reason
     assert "profile_1" not in reason
     assert "profile_2" not in reason
     assert st["bulk_swipe"]["done"] == 1
