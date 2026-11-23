@@ -231,13 +231,16 @@ def test_hily_bulk_dry_run_skips_like():
         package="com.hily.app",
         dry_run=True,
     )
-    # One verified card → done; never taps Like
-    assert act and act.get("action") == "done"
-    assert act.get("dry_run") is True
+    # r22: pass-advance through 5 cards — never Like / never one-card done
+    assert act and act.get("dry_run") is True
+    assert act.get("action") != "done"
+    assert act.get("_dry_run_advance") is True or act.get("action") in (
+        "swipe",
+        "tap",
+        "wait",
+    )
     reason = (act.get("reason") or "").lower()
-    assert "evaluated 1 card" in reason
-    assert "would like/pass 5" in reason
-    assert act.get("action") != "tap"
+    assert "like" not in reason or "no like" in reason
 
 
 # --- BLK ---

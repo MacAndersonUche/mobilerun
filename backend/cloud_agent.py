@@ -683,6 +683,12 @@ def apply_dry_run_send_guard(
     elif k == "swipe" and _is_chat_list_scroll_swipe(action, kind):
         # Non-mutating chat-list scrolls are allowed in dry_run; deck swipes are not.
         return kind, reason, action
+    elif (action or {}).get("_dry_run_advance") and (
+        k == "swipe" or _action_looks_like_swipe_or_like(action, kind)
+    ):
+        # Dry-run card advance: pass/left-swipe (or pass tap) to step through
+        # N distinct cards without liking / sending / paid taps (r22).
+        return kind, reason, action
     elif k == "swipe" or _action_looks_like_swipe_or_like(action, kind):
         blocked = True
         would = "swipe" if k == "swipe" else "like/pass tap"
@@ -1262,7 +1268,24 @@ def plan_next_action(
             dry_run=dry_run,
         )
         if bulk_act:
-            return _guard(bulk_act)
+            # When a screenshot is attached and bulk only asks for vision /
+            # cannot locate rows/tabs, fall through to LLM vision instead of
+            # short-circuiting with another wait (r22 empty-tree / Badoo settle).
+            wants_vis = bool(
+                bulk_act.get("_force_vision") or bulk_act.get("needs_vision")
+            )
+            bulk_kind = str(bulk_act.get("action") or "").lower()
+            defer_to_vision = bool(image_b64) and wants_vis and bulk_kind in (
+                "wait",
+                "fail",
+            )
+            if defer_to_vision:
+                logger.info(
+                    "bulk deferred to vision: %s",
+                    (bulk_act.get("reason") or "")[:120],
+                )
+            else:
+                return _guard(bulk_act)
 
     # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
     msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)

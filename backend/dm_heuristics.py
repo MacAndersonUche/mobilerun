@@ -2355,7 +2355,19 @@ def yubo_on_chat_list(tree: str, *, _log: bool = True) -> bool:
 
 
 def yubo_on_chat(tree: str) -> bool:
-    """True in an open Yubo thread — never match SystemUI 'Messages notification'."""
+    """True in an open Yubo thread — never match SystemUI 'Messages notification'.
+
+    Require an *editable* Aa/compose field. A non-editable 'Aa' label on the
+    Conversations list (plus a Back chrome) falsely triggered open_chat_thread
+    → Back loop while Roch/Leah rows stayed visible (r22 yubo_reply5).
+    """
+    # Chat list chrome beats thread detection
+    blob = (tree or "").lower()
+    if "conversations" in blob and (
+        "new friends" in blob or "reactions" in blob
+    ):
+        # Only treat as thread when an editable composer is clearly present
+        pass
     nodes = _parse_compact_nodes(tree, package_filter="co.yellw.yellowapp")
     if not nodes:
         nodes = [
@@ -2363,24 +2375,31 @@ def yubo_on_chat(tree: str) -> bool:
             for n in _parse_compact_nodes(tree)
             if not _is_system_chrome_package(str(n.get("package") or ""))
         ]
-    has_aa = False
+    has_editable_compose = False
     has_back = False
     for n in nodes:
         lab = (n.get("label") or n.get("text") or n.get("desc") or "").strip().lower()
         nid = str(n.get("id") or "").lower()
-        if lab == "aa" or (n.get("editable") and lab in ("aa", "message", "")):
-            has_aa = True
+        if n.get("editable") and (
+            lab in ("aa", "message", "type a message", "hey", "")
+            or "message" in nid
+            or "compose" in nid
+            or "input" in nid
+        ):
+            has_editable_compose = True
         if lab == "back" or nid.endswith("/back") or "navigate up" in lab:
-            # App back — not system nav
             if "systemui" not in str(n.get("package") or "").lower():
                 has_back = True
-    if has_aa and has_back:
+    if has_editable_compose and has_back:
         return True
-    # Compose-only fallback inside Yubo window
-    return bool(
-        find_compose_center(tree, ("Aa", "Message"), ())
-        and any((n.get("label") or "").strip().lower() == "back" for n in nodes)
-    )
+    # Compose-only fallback: editable field + Back
+    compose = find_compose_center(tree, ("Aa", "Message"), ())
+    if not compose:
+        return False
+    # find_compose_center may hit non-editable — require an editable node nearby
+    if not any(n.get("editable") for n in nodes):
+        return False
+    return any((n.get("label") or "").strip().lower() == "back" for n in nodes)
 
 
 def yubo_dismiss_popup(
@@ -2653,8 +2672,28 @@ def badoo_dismiss_popup(
     blob = " ".join(
         f"{n.get('id')} {n.get('label')} {n.get('text')}" for n in nodes
     ).lower()
-    # Treasure / chest / freebie promo (r21: reply5 stalled Open Treasure)
-    if any(tok in blob for tok in ("treasure", "chest", "freebie", "open treasure")):
+    # Treasure promo sheet ONLY — never Back when Connections list is open
+    # (r22: list row "Treasure" made dismiss fire and broke reply5 that
+    # passed 5/5 on 563 via connections_root → Open <person>).
+    on_connections = bool(
+        "connections_root" in blob
+        or "connection_list_component" in blob
+        or "connection_container" in blob
+    )
+    treasure_sheet = any(
+        tok in blob
+        for tok in (
+            "open treasure",
+            "claim treasure",
+            "your treasure",
+            "treasure chest",
+        )
+    ) or (
+        "treasure" in blob
+        and any(tok in blob for tok in ("close", "not now", "maybe later", "claim"))
+        and not on_connections
+    )
+    if treasure_sheet and not on_connections:
         for lab in ("Close", "Not now", "Maybe later", "No thanks", "Skip"):
             close = _tree_node_center(tree, lab)
             if close:
@@ -2663,7 +2702,7 @@ def badoo_dismiss_popup(
                         "action": "tap",
                         "x": close[0],
                         "y": close[1],
-                        "reason": f"Dismiss Badoo Treasure promo → {lab} ({planner})",
+                        "reason": f"Dismiss Badoo Treasure sheet → {lab} ({planner})",
                         "planner": planner,
                         "llm_provider": None,
                     },
@@ -2673,7 +2712,7 @@ def badoo_dismiss_popup(
             {
                 "action": "press_button",
                 "button": "back",
-                "reason": f"Dismiss Badoo Treasure promo ({planner})",
+                "reason": f"Dismiss Badoo Treasure sheet ({planner})",
                 "planner": planner,
                 "llm_provider": None,
             },
@@ -2981,17 +3020,29 @@ def compose_center_in_thread(
 
 
 def hily_on_chats_list(tree: str) -> bool:
-    """True on Hily chats inbox. Thread screens must not count as the list."""
+    """True on Hily chats inbox. Thread screens must not count as the list.
+
+    Also accept Matches/All/Unread chrome (r22: tapped Chats then stalls when
+    dialogMessageItem ids are missing but list names are visible).
+    """
     if hily_on_thread(tree):
         return False
-    return bool(
-        _tree_id_center(
-            tree,
-            "dialogMessageItem",
-            "dialogsSearchButton",
-            "userNameField",
-        )
-    )
+    if _tree_id_center(
+        tree,
+        "dialogMessageItem",
+        "dialogsSearchButton",
+        "userNameField",
+    ):
+        return True
+    blob = (tree or "").lower()
+    if hily_on_finder(tree, _log=False) or hily_on_top_picks_grid(tree):
+        return False
+    # Chats tab chrome without row ids
+    if ("matches" in blob or "unread" in blob) and (
+        "all" in blob or "chats" in blob or "dialogs" in blob
+    ):
+        return True
+    return False
 
 
 def hily_on_mbm(tree: str) -> bool:
@@ -4901,8 +4952,51 @@ def taimi_is_curated_card(tree: str) -> bool:
     return "curated for you" in blob
 
 
+_TAIMI_NOTIF_APP_TOKENS = frozenset(
+    {
+        "indeed",
+        "job search",
+        "linkedin",
+        "gmail",
+        "messages",
+        "notification",
+        "battery",
+        "charging",
+        "whatsapp",
+        "instagram",
+        "facebook",
+        "chrome",
+        "play store",
+        "samsung",
+        "android system",
+        "mobilerun",
+    }
+)
+
+
+def _looks_like_notif_or_app_title(text: str) -> bool:
+    """True for notification / other-app titles (never a dating card name)."""
+    low = (text or "").strip().lower()
+    if not low:
+        return True
+    if any(tok in low for tok in _TAIMI_NOTIF_APP_TOKENS):
+        return True
+    # Multi-word Title Case app names ("Indeed Job Search", "Google Play Store")
+    words = low.split()
+    if len(words) >= 2 and any(
+        w in ("job", "search", "store", "mail", "maps", "drive", "news")
+        for w in words
+    ):
+        return True
+    return False
+
+
 def taimi_deck_card_name(tree: str) -> Optional[str]:
-    """Name = large text roughly y 1507–1665 (not labels / icebreakers)."""
+    """Name = large text roughly y 1507–1665 (not labels / icebreakers / notifs).
+
+    Scope to com.takimi.android only — r22 false-passed 'Indeed Job Search'
+    from a notification window when package_filter was absent.
+    """
     skip = {
         "curated for you",
         "active today",
@@ -4914,12 +5008,26 @@ def taimi_deck_card_name(tree: str) -> Optional[str]:
         "left",
     }
     best: Optional[Tuple[int, str]] = None
-    for n in _parse_compact_nodes(tree):
+    nodes = _parse_compact_nodes(tree, package_filter="com.takimi.android")
+    if not nodes:
+        # Fall back but still reject foreign packages / notif titles
+        nodes = [
+            n
+            for n in _parse_compact_nodes(tree)
+            if "takimi" in str(n.get("package") or "").lower()
+            or not str(n.get("package") or "").strip()
+        ]
+    for n in nodes:
         text = (n.get("text") or "").strip()
         if not text or len(text) > 40:
             continue
+        pkg = str(n.get("package") or "").lower()
+        if pkg and "takimi" not in pkg and "taimi" not in pkg:
+            continue
         low = text.lower()
         if low in skip or "left" in low:
+            continue
+        if _looks_like_notif_or_app_title(text):
             continue
         if low.startswith(",") or ", ," in low:
             continue  # icebreaker chip

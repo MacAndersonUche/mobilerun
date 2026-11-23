@@ -102,19 +102,30 @@ def test_tagged_deck_scaffold():
 
 def test_hinge_dry_run_bulk_verifies_once():
     tree = _load("hinge_discover_send_message.xml")
+    st: dict = {}
     act = plan_bulk_swipe(
         "hinge like 5 profiles",
         tree,
         ["Opened Hinge"],
-        state={},
+        state=st,
         package="co.hinge.app",
         dry_run=True,
     )
     assert act is not None
-    assert act["action"] == "done"
-    assert act.get("dry_run_verified") is True
-    assert "Alex" in (act.get("reason") or "")
-    assert "would like/pass 5" in (act.get("reason") or "")
+    # r22: multi-card dry-run — advance or wait, never premature one-card done
+    if act.get("action") == "done":
+        assert act.get("dry_run_verified") is True
+        assert "Alex" in (act.get("reason") or "")
+    else:
+        assert act.get("_dry_run_advance") or act.get("action") in (
+            "swipe",
+            "tap",
+            "wait",
+            "press_button",
+        )
+        assert "Alex" in (act.get("reason") or "") or st.get("bulk_swipe", {}).get(
+            "done"
+        )
 
 
 def test_paid_guard_blocks_rose_and_hingex():

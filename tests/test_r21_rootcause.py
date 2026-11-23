@@ -126,6 +126,19 @@ def test_badoo_treasure_dismiss_and_not_a_row():
     assert "treasure" in (pop.get("reason") or "").lower()
 
 
+def test_badoo_connections_treasure_row_no_dismiss():
+    """List row named Treasure must not Back off Connections (r22)."""
+    tree = (
+        '<hierarchy><w p="com.badoo.mobile" f="1">'
+        '<n i="id/connections_root" xy="540,1000"/>'
+        '<n i="id/connection_container" xy="540,1200"/>'
+        '<n t="Treasure" xy="337,1718" c="1"/>'
+        '<n t="Ada" xy="300,900"/>'
+        "</w></hierarchy>"
+    )
+    assert badoo_dismiss_popup(tree) is None
+
+
 def test_yubo_social_not_card_name():
     tree = (
         '<hierarchy><w p="co.yellw.yellowapp" f="1">'

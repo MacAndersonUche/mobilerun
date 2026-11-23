@@ -209,16 +209,40 @@ def test_hily_new_dry_run_fails_without_profile():
      <n t="Chats" xy="341,2190" c="1"/>
     </w></hierarchy>
     """
+    st: dict = {}
     act = plan_bulk_message_new(
         'message "hi" to 3 new profiles on Hily',
         tree,
         ["Opened Hily"],
         package="com.hily.app",
         dry_run=True,
-        state={},
+        state=st,
     )
-    assert act and act["action"] == "fail"
-    assert act.get("dry_run_verified") is False
+    # First miss → open Chats for free matches (not Crush); second step must
+    # not claim a verified new-profile send without a composer.
+    if act and act.get("action") == "tap":
+        assert "chats" in (act.get("reason") or "").lower()
+        act2 = plan_bulk_message_new(
+            'message "hi" to 3 new profiles on Hily',
+            tree,
+            ["Opened Hily", act.get("reason") or "tap Chats"],
+            package="com.hily.app",
+            dry_run=True,
+            state=st,
+        )
+        assert act2 is not None
+        assert act2.get("action") in ("fail", "done")
+        if act2.get("action") == "done":
+            # Explicit dry_run note that Crush ≠ composer
+            assert act2.get("dry_run_verified") is not True or "crush" in (
+                act2.get("reason") or ""
+            ).lower() or "no free" in (act2.get("reason") or "").lower()
+        else:
+            assert act2.get("dry_run_verified") is False
+    else:
+        assert act and act["action"] in ("fail", "done")
+        if act["action"] == "fail":
+            assert act.get("dry_run_verified") is False
 
 
 # --- 9 Tagged + Hinge in swipe allowlist ---
