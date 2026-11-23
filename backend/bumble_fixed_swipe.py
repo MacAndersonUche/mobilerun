@@ -1,7 +1,8 @@
-"""Bumble fixed-spot (coordinate) like-swipe — no per-card LLM or vision.
+"""Fixed-spot like-swipe for Bumble and Badoo — no per-card LLM or vision.
 
-Uses the verified S21+ like-swipe recipe scaled to the current screen size.
-Before every swipe, a cheap UI-text guard aborts on paid / match wording.
+Verified S21+ mid-height right-swipe, scaled to screen size
+(1080x2400: 200,1200 -> 980,1200 @300ms). Paid-text guard before each
+swipe; if the dump fails, just swipe. Badoo match sheets: Back.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ try:
         DM_APP_PROFILES,
         _fp,
         _parse_compact_nodes,
+        badoo_on_encounters,
         bumble_dismiss_popup,
         bumble_on_photo_browser,
     )
@@ -22,6 +24,7 @@ except ImportError:  # pragma: no cover
         DM_APP_PROFILES,
         _fp,
         _parse_compact_nodes,
+        badoo_on_encounters,
         bumble_dismiss_popup,
         bumble_on_photo_browser,
     )
@@ -29,8 +32,8 @@ except ImportError:  # pragma: no cover
 
 REF_W = 1080
 REF_H = 2400
-# Verified like gesture on SM-G996B (right swipe across the card).
-LIKE_SWIPE_REF = (250, 1000, 1050, 1050, 300)
+# Verified S21+ mid-height right-swipe (r34): input swipe 200 1200 980 1200 300
+LIKE_SWIPE_REF = (200, 1200, 980, 1200, 300)
 
 # Task word list, but "Get" / "Super" / "Buy" only as CTAs — not bio verbs.
 # The deck's SuperSwipe *badge* is always on a People card; ignore that node
@@ -52,6 +55,8 @@ _PAID_PHRASES = (
     "subscribe",
     "boost",
     "premium",
+    "badoo premium",
+    "buy credits",
 )
 _MATCH_PHRASES = (
     "it's a match",
@@ -109,11 +114,12 @@ def _tab_name(lab: str) -> Optional[str]:
     return None
 
 
-def bumble_fixed_swipe_enabled(
+def fixed_swipe_enabled(
     instruction: str = "",
     state: Optional[Dict[str, Any]] = None,
+    app: str = "bumble",
 ) -> bool:
-    """True when the Bumble planner should use coordinate swipe (no LLM)."""
+    """True when the planner should use coordinate swipe (no LLM)."""
     inst = (instruction or "").lower()
     if "fixed" in inst:
         return True
@@ -123,7 +129,41 @@ def bumble_fixed_swipe_enabled(
     bulk = st.get("bulk_swipe") if isinstance(st.get("bulk_swipe"), dict) else {}
     if str(bulk.get("mode") or "").lower() == "fixed":
         return True
-    return bool(DM_APP_PROFILES.get("bumble", {}).get("fixed_swipe"))
+    app = (app or "bumble").lower()
+    return bool(DM_APP_PROFILES.get(app, {}).get("fixed_swipe"))
+
+
+def bumble_fixed_swipe_enabled(
+    instruction: str = "",
+    state: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when the Bumble planner should use coordinate swipe (no LLM)."""
+    return fixed_swipe_enabled(instruction, state, app="bumble")
+
+
+def dump_failed(tree: str) -> bool:
+    """True when there is no usable UI dump — skip the paid check and swipe."""
+    if not (tree or "").strip():
+        return True
+    low = tree.lower()
+    if "could not get idle" in low and "<n" not in low and "<node" not in low:
+        return True
+    try:
+        return len(_visible_nodes(tree)) == 0
+    except Exception:
+        return True
+
+
+def badoo_matches_sheet(tree: str) -> bool:
+    """True on Badoo's 'You have N new matches' sheet — dismiss with Back."""
+    blob = visible_ui_text(tree).lower()
+    if "see my matches" in blob:
+        return True
+    if "new matches" in blob and (
+        "maybe later" in blob or "you have" in blob or "liked you back" in blob
+    ):
+        return True
+    return False
 
 
 def _visible_nodes(tree: str) -> List[Dict[str, Any]]:
@@ -383,6 +423,27 @@ def _done(
     return _fp(act, "bumble_fixed_done")
 
 
+def badoo_fixed_on_deck(tree: str) -> bool:
+    """True on the Badoo Encounters card deck."""
+    if not (tree or "").strip():
+        return False
+    if badoo_matches_sheet(tree):
+        return False
+    if bumble_fixed_guard(tree):
+        return False
+    try:
+        if badoo_on_encounters(tree, _log=False):
+            return True
+    except Exception:
+        pass
+    blob = visible_ui_text(tree).lower()
+    if "encounters" in blob and (
+        "like" in blob or "voteyes" in blob or "send a crush" in blob
+    ):
+        return True
+    return False
+
+
 def plan_bumble_fixed_swipe(
     instruction: str,
     ui_tree: str,
@@ -395,6 +456,34 @@ def plan_bumble_fixed_swipe(
     live_test_max_n: int = 5,
 ) -> Optional[Dict[str, Any]]:
     """Plan one fixed-spot Bumble like, or abort. Never calls LLM/vision."""
+    return plan_fixed_swipe(
+        instruction,
+        ui_tree,
+        history,
+        state=state,
+        package=package,
+        dry_run=dry_run,
+        planner=planner,
+        live_test_max_n=live_test_max_n,
+        app="bumble",
+    )
+
+
+def plan_fixed_swipe(
+    instruction: str,
+    ui_tree: str,
+    history: Optional[List[str]] = None,
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    package: str = "",
+    dry_run: bool = False,
+    planner: str = "bumble_fixed",
+    live_test_max_n: int = 5,
+    app: str = "bumble",
+) -> Optional[Dict[str, Any]]:
+    """Plan one mid-height right-swipe for Bumble or Badoo. No LLM/vision."""
+    app = (app or "bumble").lower()
+    label = "Bumble" if app == "bumble" else "Badoo"
     st = state if isinstance(state, dict) else {}
     bulk = st.setdefault(
         "bulk_swipe",
@@ -411,16 +500,17 @@ def plan_bumble_fixed_swipe(
     done = int(bulk.get("done") or 0)
     hist = history or []
     hist_l = " | ".join(hist[-12:]).lower()
+    failed_dump = dump_failed(ui_tree)
 
     # Count a completed swipe when the previous step was our like swipe
-    # and we did not land on a paid/match screen.
+    # and we did not land on a paid/match screen. A failed dump still counts.
     if (
         not dry_run
         and bulk.get("awaiting_verify")
-        and "bumble fixed like swipe" in hist_l
+        and "fixed like swipe" in hist_l
     ):
         bulk["awaiting_verify"] = False
-        hit = bumble_fixed_guard(ui_tree)
+        hit = None if failed_dump else bumble_fixed_guard(ui_tree)
         if hit is None:
             done += 1
             bulk["done"] = done
@@ -431,48 +521,122 @@ def plan_bumble_fixed_swipe(
                 done += 1
                 bulk["done"] = done
             return _fail(
-                f"Bumble fixed swipe aborted after swipe: {hit} ({planner})",
+                f"{label} fixed swipe aborted after swipe: {hit} ({planner})",
                 planner,
                 dry_run,
             )
         if done >= target:
             return _done(
-                f"Bumble fixed swipe finished {done}/{target} likes ({planner})",
+                f"{label} fixed swipe finished {done}/{target} likes ({planner})",
                 planner,
                 dry_run,
                 done=done,
             )
-
-    blocked = bumble_fixed_guard(ui_tree)
-    if blocked:
-        return _fail(
-            f"Bumble fixed swipe aborted: {blocked} — no tap ({planner})",
-            planner,
-            dry_run,
-        )
-
-    popup = _harmless_popup_action(ui_tree, planner)
-    if popup:
-        return popup
 
     sw, sh = screen_size_from_tree(ui_tree)
     st_w = st.get("screen_w") or st.get("screen_width")
     st_h = st.get("screen_h") or st.get("screen_height")
     if st_w and st_h:
         sw, sh = int(st_w), int(st_h)
+    if failed_dump and not (st_w and st_h):
+        sw, sh = REF_W, REF_H
     coords = scale_like_swipe(sw, sh)
-    coord_s = f"{coords[0]},{coords[1]} -> {coords[2]},{coords[3]} ({coords[4]}ms) on {sw}x{sh}"
+    coord_s = (
+        f"{coords[0]},{coords[1]} -> {coords[2]},{coords[3]} "
+        f"({coords[4]}ms) on {sw}x{sh}"
+    )
 
-    if not bumble_fixed_on_deck(ui_tree):
+    def _swipe_action(reason: str) -> Dict[str, Any]:
+        bulk["awaiting_verify"] = True
+        st["bulk_swipe"] = bulk
+        return _fp(
+            {
+                "action": "swipe",
+                "x1": coords[0],
+                "y1": coords[1],
+                "x2": coords[2],
+                "y2": coords[3],
+                "duration_ms": coords[4],
+                "reason": reason,
+                "planner": planner,
+                "llm_provider": None,
+                "_no_llm_handoff": True,
+            },
+            f"{app}_fixed_like_swipe",
+        )
+
+    # If the dump fails, skip the paid check and just swipe (live) / report (dry).
+    if failed_dump:
+        if dry_run:
+            return _done(
+                f"{label} fixed swipe dry check: dump failed, would swipe "
+                f"{coord_s} — no swipe ({planner})",
+                planner,
+                dry_run,
+                verified=True,
+                coords=coords,
+                done=0,
+            )
+        if done >= target:
+            return _done(
+                f"{label} fixed swipe finished {done}/{target} likes ({planner})",
+                planner,
+                dry_run,
+                coords=coords,
+                done=done,
+            )
+        return _swipe_action(
+            f"{label} fixed like swipe {done + 1}/{target} {coord_s} "
+            f"(dump failed, swipe anyway) ({planner})"
+        )
+
+    blocked = bumble_fixed_guard(ui_tree)
+    if blocked:
+        return _fail(
+            f"{label} fixed swipe aborted: {blocked} — no tap ({planner})",
+            planner,
+            dry_run,
+        )
+
+    if app == "badoo" and badoo_matches_sheet(ui_tree):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (
+                    f"Badoo fixed swipe: dismiss matches sheet with Back "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "dry_run": bool(dry_run),
+                "_no_llm_handoff": True,
+            },
+            "badoo_fixed_matches_back",
+        )
+
+    popup = _harmless_popup_action(ui_tree, planner)
+    if popup:
+        return popup
+
+    on_deck = (
+        bumble_fixed_on_deck(ui_tree)
+        if app == "bumble"
+        else badoo_fixed_on_deck(ui_tree)
+    )
+    if not on_deck:
         already = bool(bulk.get("_fixed_back_once"))
         if not already:
             bulk["_fixed_back_once"] = True
+            surface = (
+                "People/Discover deck" if app == "bumble" else "Encounters deck"
+            )
             return _fp(
                 {
                     "action": "press_button",
                     "button": "back",
                     "reason": (
-                        f"Bumble fixed swipe: not on People/Discover deck "
+                        f"{label} fixed swipe: not on {surface} "
                         f"— Back once ({planner})"
                     ),
                     "planner": planner,
@@ -480,19 +644,21 @@ def plan_bumble_fixed_swipe(
                     "dry_run": bool(dry_run),
                     "_no_llm_handoff": True,
                 },
-                "bumble_fixed_back",
+                f"{app}_fixed_back",
             )
+        surface = (
+            "People/Discover deck" if app == "bumble" else "Encounters deck"
+        )
         return _fail(
-            f"Bumble fixed swipe: still not on People/Discover deck after Back "
+            f"{label} fixed swipe: still not on {surface} after Back "
             f"— stop ({planner})",
             planner,
             dry_run,
         )
 
-    # On the deck, guard already passed.
     if dry_run:
         return _done(
-            f"Bumble fixed swipe dry check: guard clear, like swipe {coord_s} "
+            f"{label} fixed swipe dry check: guard clear, like swipe {coord_s} "
             f"— no swipe ({planner})",
             planner,
             dry_run,
@@ -503,27 +669,13 @@ def plan_bumble_fixed_swipe(
 
     if done >= target:
         return _done(
-            f"Bumble fixed swipe finished {done}/{target} likes ({planner})",
+            f"{label} fixed swipe finished {done}/{target} likes ({planner})",
             planner,
             dry_run,
             coords=coords,
             done=done,
         )
 
-    bulk["awaiting_verify"] = True
-    st["bulk_swipe"] = bulk
-    return _fp(
-        {
-            "action": "swipe",
-            "x1": coords[0],
-            "y1": coords[1],
-            "x2": coords[2],
-            "y2": coords[3],
-            "duration_ms": coords[4],
-            "reason": f"Bumble fixed like swipe {done + 1}/{target} {coord_s} ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-            "_no_llm_handoff": True,
-        },
-        "bumble_fixed_like_swipe",
+    return _swipe_action(
+        f"{label} fixed like swipe {done + 1}/{target} {coord_s} ({planner})"
     )

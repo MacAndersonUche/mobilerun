@@ -419,6 +419,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         ),
         "like_xy": (855, 1982),
         "pass_xy": (225, 1982),
+        # CA-4: coordinate like-swipe is opt-in via instruction/state mode "fixed".
+        "fixed_swipe": False,
         "like_swipe": (250, 1100, 1050, 1150, 300),
         "pass_swipe": (850, 1100, 30, 1150, 300),
         "inbox_labels": ("Chats", "Connections", "Messages", "Inbox"),

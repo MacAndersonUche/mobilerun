@@ -8,8 +8,11 @@ from backend.bumble_fixed_swipe import (
     LIKE_SWIPE_REF,
     bumble_fixed_guard,
     bumble_fixed_on_deck,
+    badoo_matches_sheet,
     bumble_fixed_swipe_enabled,
+    dump_failed,
     plan_bumble_fixed_swipe,
+    plan_fixed_swipe,
     scale_like_swipe,
     screen_size_from_tree,
     visible_ui_text,
@@ -140,8 +143,9 @@ def test_not_on_deck_when_chats_or_liked_you_selected():
 
 def test_scale_like_swipe_identity_and_1440():
     assert scale_like_swipe(1080, 2400) == LIKE_SWIPE_REF
+    assert LIKE_SWIPE_REF == (200, 1200, 980, 1200, 300)
     x1, y1, x2, y2, dur = scale_like_swipe(1440, 3200)
-    assert (x1, y1, x2, y2, dur) == (333, 1333, 1400, 1400, 300)
+    assert (x1, y1, x2, y2, dur) == (267, 1600, 1307, 1600, 300)
 
 
 def test_screen_size_from_kalia_is_s21():
@@ -163,7 +167,8 @@ def test_dry_plan_returns_coords_and_does_not_swipe():
     assert act["action"] != "swipe"
     assert "no swipe" in act["reason"]
     swipe = act["like_swipe"]
-    assert swipe["x1"] == 250 and swipe["x2"] == 1050
+    assert swipe["x1"] == 200 and swipe["x2"] == 980
+    assert swipe["y1"] == 1200 and swipe["y2"] == 1200
     assert _bulk_action_is_verified_fastpath(act)
 
 
@@ -180,8 +185,8 @@ def test_live_plan_swipes_right_and_caps_at_five():
     )
     assert act is not None
     assert act["action"] == "swipe"
-    assert act["x1"] == 250 and act["x2"] == 1050
-    assert act["y1"] == 1000 and act["y2"] == 1050
+    assert act["x1"] == 200 and act["x2"] == 980
+    assert act["y1"] == 1200 and act["y2"] == 1200
     assert "1/5" in act["reason"]
     assert act["planner"] == "bumble_fixed"
     assert _bulk_action_is_verified_fastpath(act)
@@ -280,5 +285,87 @@ def test_real_s21_people_card_is_deck_not_photo_browser():
     )
     assert act["action"] == "done"
     assert act["dry_run_verified"] is True
-    assert act["like_swipe"]["x1"] == 250
-    assert act["like_swipe"]["x2"] == 1050
+    assert act["like_swipe"]["x1"] == 200
+    assert act["like_swipe"]["x2"] == 980
+    assert act["like_swipe"]["y1"] == 1200
+
+
+def test_dump_failed_live_just_swipes():
+    st = {"bulk_swipe": {"done": 0, "target": 5}}
+    act = plan_bumble_fixed_swipe(
+        "like 5 profiles on Bumble (fixed)",
+        "",
+        [],
+        state=st,
+        dry_run=False,
+    )
+    assert dump_failed("")
+    assert act["action"] == "swipe"
+    assert (act["x1"], act["y1"], act["x2"], act["y2"], act["duration_ms"]) == (
+        200,
+        1200,
+        980,
+        1200,
+        300,
+    )
+    assert "dump failed" in act["reason"]
+
+
+def test_badoo_matches_sheet_backs_out():
+    tree = (
+        '<hierarchy packages="com.badoo.mobile"><w p="com.badoo.mobile">'
+        '<n t="You have 10 new matches!" xy="540,1400" b="80,1300,1000,1500"/>'
+        '<n t="See my matches" c="1" xy="540,1800" b="80,1700,1000,1900"/>'
+        '<n t="Maybe later" c="1" xy="540,2050" b="80,2000,1000,2100"/>'
+        "</w></hierarchy>"
+    )
+    assert badoo_matches_sheet(tree)
+    act = plan_fixed_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [],
+        state={"bulk_swipe": {"done": 0, "target": 5}},
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
+    )
+    assert act["action"] == "press_button" and act["button"] == "back"
+    assert "matches sheet" in act["reason"].lower()
+    assert act.get("x") is None and act.get("x1") is None
+
+
+def test_badoo_encounters_live_swipes_mid_height():
+    tree = (FIXTURES / "badoo_encounters.xml").read_text()
+    st = {"bulk_swipe": {"done": 0, "target": 5}}
+    act = plan_fixed_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [],
+        state=st,
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
+    )
+    assert act["action"] == "swipe"
+    assert (act["x1"], act["y1"], act["x2"], act["y2"]) == (200, 1200, 980, 1200)
+    assert "1/5" in act["reason"]
+    assert act["planner"] == "badoo_fixed"
+
+
+def test_plan_bulk_swipe_badoo_fixed_branch():
+    tree = (FIXTURES / "badoo_encounters.xml").read_text()
+    act = plan_bulk_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [],
+        state={"bulk_swipe": {"done": 0, "target": 5}},
+        package="com.badoo.mobile",
+        dry_run=True,
+    )
+    assert act is not None
+    assert act["planner"] == "badoo_fixed"
+    assert act["action"] == "done"
+    assert act["dry_run_verified"] is True
+    assert act["like_swipe"]["y1"] == 1200
