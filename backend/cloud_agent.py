@@ -1291,6 +1291,19 @@ def apply_dry_run_send_guard(
         # passed live Yubo profiles. Identify + report only.
         blocked = True
         would = "swipe" if k == "swipe" else "like/pass tap"
+    elif k in ("tap", "click"):
+        # r30: Hinge empty-tree LLM taps mid-card with reason
+        # "Tapping to like the profile" have no like-control in the tree,
+        # so the control-class classifier misses them. Still skip in dry-run.
+        rblob = f"{reason or ''} {action.get('reason') or ''}".lower()
+        if re.search(
+            r"(tapping to like|tap to like|like the profile|"
+            r"like this profile|pass the profile|"
+            r"swipe (?:left|right) to (?:like|pass))",
+            rblob,
+        ):
+            blocked = True
+            would = "like/pass tap"
 
     if not blocked:
         return kind, reason, action

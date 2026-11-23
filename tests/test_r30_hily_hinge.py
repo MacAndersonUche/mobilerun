@@ -8,8 +8,8 @@ from backend.bulk_bench_heuristics import (
     plan_bulk_bench,
     plan_bulk_swipe,
 )
-from backend.cloud_agent import unsupported_app_fail_action
-from backend.dm_heuristics import hily_deck_card_name, hily_on_chats_list
+from backend.cloud_agent import apply_dry_run_send_guard, unsupported_app_fail_action
+from backend.dm_heuristics import hily_deck_card_name, hily_on_chats_list, hily_on_mbm
 from backend.tap_firewall import find_blocking_label_at, guard_tap_action
 
 FIXTURE = Path(__file__).parent / "fixtures" / "dm" / "hily_chats_r30.xml"
@@ -111,3 +111,55 @@ def test_hinge_is_not_instruction_fail_fast():
     if act:
         assert act.get("unsupported_app") != "hinge"
         assert "unsupported" not in (act.get("reason") or "").lower()
+
+
+def test_hily_on_mbm_false_on_chats_list_and_sparse_preview():
+    tree = _tree()
+    assert hily_on_mbm(tree) is False
+    # Sparse tree with the row phrase but no sheet chrome must not Back
+    sparse = """
+    <hierarchy packages="com.hily.app">
+     <w p="com.hily.app">
+      <n t="Chats" xy="131,149"/>
+      <n t="Paige" i="userNameField" xy="321,844"/>
+      <n t="Message before match" i="messageField" xy="508,961"/>
+     </w>
+    </hierarchy>
+    """
+    # userNameField makes this a chats list
+    assert hily_on_chats_list(sparse) is True
+    assert hily_on_mbm(sparse) is False
+
+
+def test_hily_on_mbm_true_only_with_sheet_chrome():
+    sheet = """
+    <hierarchy packages="com.hily.app">
+     <w p="com.hily.app">
+      <n t="Message before match" xy="540,400"/>
+      <n i="closeButton" xy="74,160" c="1"/>
+      <n i="allowanceCounter" t="3 left" xy="540,200"/>
+     </w>
+    </hierarchy>
+    """
+    assert hily_on_mbm(sheet) is True
+
+
+def test_dry_run_skips_hinge_like_intent_tap():
+    kind, reason, out = apply_dry_run_send_guard(
+        dry_run=True,
+        action={"action": "tap", "x": 534, "y": 979, "reason": "Tapping to like the profile."},
+        kind="tap",
+        reason="Tapping to like the profile.",
+    )
+    assert kind == "done"
+    assert "would like/pass" in (reason or out.get("reason") or "").lower() or "would like" in (reason or "").lower()
+    assert out.get("action") == "done"
+    # Opening a chat must still be allowed
+    kind2, _, out2 = apply_dry_run_send_guard(
+        dry_run=True,
+        action={"action": "tap", "x": 326, "y": 1102, "reason": "Open Tegan (bulk_message_heuristic)", "fastpath_step": "bulk_open_match"},
+        kind="tap",
+        reason="Open Tegan (bulk_message_heuristic)",
+    )
+    assert kind2 == "tap"
+    assert out2.get("action") == "tap"

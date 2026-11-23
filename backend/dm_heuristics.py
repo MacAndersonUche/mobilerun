@@ -3069,12 +3069,17 @@ def hily_on_mbm(tree: str) -> bool:
     must NOT trigger Back/close loops. Require sheet chrome (closeButton /
     allowanceCounter / majorCrush + title), or title without chats list.
     """
+    # r30: never treat the chats inbox as the MBM sheet — Paige's row
+    # previews 'Message before match', and a sparse tree of that list used
+    # to trip the title-only fallback and Back out of every open-chat tap.
+    if hily_on_chats_list(tree):
+        return False
     nodes = _parse_compact_nodes(tree)
     blob = " ".join(f"{n.get('id')} {n.get('label')}" for n in nodes).lower()
     has_phrase = "message before match" in blob or "majorcrush" in blob.replace("_", "")
     if not has_phrase:
         return False
-    # Sheet chrome ids
+    # Real MBM sheet chrome only — do not infer a sheet from the phrase alone.
     if _tree_id_center(
         tree,
         "closeButton",
@@ -3086,14 +3091,6 @@ def hily_on_mbm(tree: str) -> bool:
         "userInfoBlockTitle",
         "id/userInfoBlockTitle",
     ):
-        # If chats list chrome is also present and title is mid-list, it's a row
-        if hily_on_chats_list(tree) and not _tree_id_center(
-            tree, "closeButton", "id/closeButton", "allowanceCounter"
-        ):
-            return False
-        return True
-    # Title-only without chats list → sheet
-    if "message before match" in blob and not hily_on_chats_list(tree):
         return True
     return False
 
