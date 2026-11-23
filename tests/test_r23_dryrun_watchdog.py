@@ -137,7 +137,9 @@ def test_app_tree_empty_only_under_three_useful_nodes():
 def test_step_worker_wall_constants():
     assert NO_PROGRESS_TIMEOUT_S <= 120
     assert STEP_WALL_S <= 120
-    assert JOB_WALL_S <= 300
+    # r24: raised from 180→600 so LLM handoff can finish reply/new jobs
+    assert JOB_WALL_S >= 600
+    assert JOB_WALL_S <= 900
 
 
 def test_enforce_job_wall_clock_no_progress():

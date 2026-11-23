@@ -61,8 +61,9 @@ except ImportError:
 
 # Per StepWorker invoke / single-step wall (default = no-progress 90s)
 STEP_WALL_S = int(os.environ.get("AGENT_STEP_WALL_S") or str(_NP_S))
-# Job-level hard cap (tighter than TASK_TIMEOUT for bulk; env override)
-JOB_WALL_S = int(os.environ.get("AGENT_JOB_WALL_S") or "180")
+# Job-level hard cap. r24: 180s killed every reply/new before LLM could
+# navigate (~24 heuristic rounds). Default 600s; keep 90s no-UI-progress.
+JOB_WALL_S = int(os.environ.get("AGENT_JOB_WALL_S") or "600")
 
 
 def _fail_job_timeout(

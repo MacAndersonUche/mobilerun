@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("mobilerun.cloud_agent")
 
 SYSTEM_PROMPT = """You are MobileRun, controlling an Android phone via accessibility.
-Given the goal and a compressed UI tree (and optional screenshot), pick ONE next action as JSON only:
+Given the goal, a set-of-marks indexed UI tree, and optional screenshot, pick ONE next action as JSON only:
 {"action":"tap","x":123,"y":456,"reason":"..."}
 {"action":"swipe","x1":100,"y1":800,"x2":100,"y2":200,"reason":"..."}
 {"action":"type","text":"...","reason":"..."}
@@ -33,15 +33,19 @@ Rules:
   the app label — never hunt launcher icons or swipe the home screen.
 - NEVER call open_app again once RECENT ACTIONS already show Opened X / open_ok, or
   the UI tree package already matches the target. Move on (search, tap, type, send).
-- Prefer clickable/text nodes with center=(x,y) from the tree. Never invent coordinates.
-- If the tree is empty/thin (<15 nodes) but a screenshot is provided, use VISION:
+- Indexed elements look like [i] label @ (x,y) — tap those centers. Never invent coords.
+- If the tree is empty/thin but a screenshot is provided, use VISION:
   estimate tap coordinates from the image (screen origin top-left; x,y in pixels).
-  Prefer labeled icons (Search, Send, Messages, Inbox) visible in the screenshot.
+  Prefer labeled icons (Search, Send, Messages, Inbox, Chats) visible in the screenshot.
+- Navigate freely: tabs, Back, vertical scroll, open chat rows, dismiss paywalls/overlays.
+- NEVER tap paid elements (Boost, Rose, Super Like, Crush, Buy, Subscribe, Premium, credits).
 - HARD RULE — MESSAGE TEXT: Never invent, rewrite, paraphrase, or “improve” a
   message body. AI/vision is for NAVIGATION only (open chat, dismiss prompts,
   focus the compose field). When typing a message, the "text" field MUST be the
   exact user-provided phrase from the GOAL (e.g. after “say …”) or a verbatim
   message-bank / template entry. Contact/search queries may use names/numbers.
+- Profile names must look like "Name" or "Name, 28" — never section labels
+  (Intentions, Education, Health and Fitness, Looking for, Height, …).
 - Do NOT repeat the same swipe. If stuck, use open_app (once), back, or fail.
 - Do NOT repeat the same tap (same x,y) when the UI did not change. If NO PROGRESS is
   noted, change strategy: different node, swipe, back, type, done, or fail.
@@ -50,6 +54,19 @@ Rules:
 - If the tree shows a System UI ANR dialog ("isn't responding" / Wait / Close app),
   tap Wait (prefer) or Close app, then continue — do not fail the goal for an ANR.
 - Reply with JSON only.
+"""
+
+BULK_DRY_RUN_LLM_HINT = """
+DRY-RUN CONSTRAINTS (must obey):
+- NEVER type into a chat composer (no "typing…" to peers). Verifying an editable
+  message/comment field is SUCCESS for that chat — call done or back out.
+- NEVER horizontal swipe / like / pass / VoteYes / VoteNo on dating decks.
+  Vertical scroll to read a profile is OK.
+- NEVER tap paid CTAs (Boost, Rose, Super Like, Crush, Buy, Subscribe, credits).
+- Reply goal: open distinct existing chats and confirm editable input each time.
+- New-contact goal: open distinct new profiles' message/comment input; dismiss paywalls.
+- Swipe goal: identify a REAL profile name ("Name" / "Name, age") — section labels
+  (Intentions, Health and Fitness, Education, …) are NOT names. N=1 is OK in dry-run.
 """
 
 # Wall-clock timeout for a cloud agent job (seconds). Default 15 min so a
@@ -172,6 +189,115 @@ def _compress_tree(tree: str, limit: int = 8000) -> str:
     if len(compact) <= limit:
         return compact
     return compact[:limit] + "\n...[truncated]"
+
+
+def _som_indexed_tree(tree: str, *, limit: int = 6000) -> str:
+    """Set-of-marks style index list for LLM: [i] label @ (x,y) flags."""
+    try:
+        from dm_heuristics import _parse_compact_nodes
+    except ImportError:
+        from backend.dm_heuristics import _parse_compact_nodes  # type: ignore
+
+    nodes = _parse_compact_nodes(tree or "")
+    if not nodes:
+        return _compress_tree(tree, limit=limit)
+    lines: List[str] = ["SET-OF-MARKS (tap these centers):"]
+    idx = 0
+    for n in nodes:
+        lab = (
+            (n.get("text") or n.get("label") or n.get("desc") or n.get("hint") or "")
+            .strip()
+        )
+        x = int(n.get("x") or 0)
+        y = int(n.get("y") or 0)
+        if x <= 0 and y <= 0 and not lab:
+            continue
+        if not (
+            n.get("clickable")
+            or n.get("editable")
+            or lab
+            or str(n.get("id") or "").strip()
+        ):
+            continue
+        flags = []
+        if n.get("clickable"):
+            flags.append("c")
+        if n.get("editable"):
+            flags.append("e")
+        if n.get("focused"):
+            flags.append("f")
+        nid = str(n.get("id") or "").strip()
+        id_bit = f" id={nid.split('/')[-1]}" if nid else ""
+        flag_bit = f" [{','.join(flags)}]" if flags else ""
+        label = lab[:48] if lab else (nid.split("/")[-1] if nid else "node")
+        lines.append(f"[{idx}] {label} @ ({x},{y}){flag_bit}{id_bit}")
+        idx += 1
+        if idx >= 80:
+            break
+    if idx == 0:
+        return _compress_tree(tree, limit=limit)
+    body = "\n".join(lines)
+    raw = _compress_tree(tree, limit=max(800, limit - len(body) - 20))
+    out = f"{body}\n\nRAW:\n{raw}"
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+
+def _bulk_progress_signature(state: Optional[Dict[str, Any]]) -> Optional[tuple]:
+    """Snapshot of verified bulk progress (done / names / verified flags)."""
+    if not isinstance(state, dict):
+        return None
+    for key in ("bulk_swipe", "bulk_message", "bulk_message_new"):
+        b = state.get(key)
+        if isinstance(b, dict):
+            names = tuple(str(x) for x in (b.get("done_names") or [])[-5:])
+            return (
+                key,
+                int(b.get("done") or 0),
+                names,
+                bool(b.get("dry_run_verified")),
+                str(b.get("last_name") or b.get("current") or ""),
+                bool(b.get("chat_list_verified")),
+            )
+    return None
+
+
+def _bulk_action_is_verified_fastpath(action: Dict[str, Any]) -> bool:
+    """Keep working per-app wins — never block these behind LLM stall.
+
+    Recover/reopen/wait loops are NOT verified — they count toward the
+    2-step stall so LLM can take over. Only proven progress fast paths
+    (done+verified, nothing-to-reply, open-from-home, Badoo chats, …).
+    """
+    kind = str(action.get("action") or "").lower()
+    reason = (action.get("reason") or "").lower()
+    step = str(
+        action.get("fastpath_step") or action.get("_fastpath_step") or ""
+    ).lower()
+    if kind == "done" and (
+        action.get("dry_run_verified")
+        or action.get("stopped_reason") == "nothing_to_reply"
+        or "nothing to reply" in reason
+        or ("evaluated" in reason and "would like/pass" in reason)
+    ):
+        return True
+    # Initial open-from-home only — not empty-tree recover reopen loops
+    if kind == "open_app" and step in ("", "open_app", "bulk_open_app"):
+        if "re-open" in reason or "recover" in reason or "empty" in reason:
+            return False
+        return True
+    if step in (
+        "bulk_nothing_to_reply",
+        "bulk_dry_run_skip_like",
+        "bulk_message_done",
+        "bulk_dry_run_skip_send",
+        "open_app",
+        "bulk_open_app",
+        "badoo_open_chats_tab",
+        "bulk_open_chats",
+        "bulk_open_match",
+    ):
+        return True
+    return False
 
 
 def _gemini_models() -> List[str]:
@@ -1268,50 +1394,103 @@ def plan_next_action(
         except ImportError:
             from backend.bulk_bench_heuristics import plan_bulk_bench  # type: ignore
 
+        st_bulk = agent_state if isinstance(agent_state, dict) else {}
         bulk_act = plan_bulk_bench(
             instruction,
             ui_tree,
             history,
-            state=agent_state if isinstance(agent_state, dict) else {},
+            state=st_bulk,
             package=package,
             dry_run=dry_run,
         )
         if bulk_act:
-            # When a screenshot is attached and bulk only asks for vision /
-            # cannot locate rows/tabs, fall through to LLM vision instead of
-            # short-circuiting with another wait (r22 empty-tree / Badoo settle).
+            # Always honor verified fast paths (nothing-to-reply, dry evaluate,
+            # open_app, Badoo chats open, …) — never block them behind LLM.
+            if _bulk_action_is_verified_fastpath(bulk_act):
+                st_bulk["bulk_stall_n"] = 0
+                st_bulk["_bulk_progress_sig"] = _bulk_progress_signature(st_bulk)
+                st_bulk.pop("_bulk_llm_handoff", None)
+                return _guard(bulk_act)
+
+            # r24: after 2 heuristic steps without verified progress, hand off
+            # to the general LLM agent loop (screenshot + set-of-marks tree).
+            sig = _bulk_progress_signature(st_bulk)
+            prev_sig = st_bulk.get("_bulk_progress_sig")
+            stall = int(st_bulk.get("bulk_stall_n") or 0)
+            if prev_sig is not None and sig == prev_sig:
+                stall += 1
+            elif prev_sig is not None and sig != prev_sig:
+                stall = 0  # verified progress advanced
+            else:
+                stall = max(stall, 1)  # first bulk action counts toward stall
+            st_bulk["bulk_stall_n"] = stall
+            st_bulk["_bulk_progress_sig"] = sig
+
             wants_vis = bool(
                 bulk_act.get("_force_vision") or bulk_act.get("needs_vision")
             )
             bulk_kind = str(bulk_act.get("action") or "").lower()
-            defer_to_vision = bool(image_b64) and wants_vis and bulk_kind in (
-                "wait",
-                "fail",
+            handoff = bool(st_bulk.get("_bulk_llm_handoff")) or stall >= 2
+            defer_to_vision = bool(image_b64) and (
+                handoff
+                or (wants_vis and bulk_kind in ("wait", "fail"))
             )
+            if handoff and not image_b64:
+                # Ask outer step loop to fetch screenshot + replan via LLM
+                st_bulk["_bulk_llm_handoff"] = True
+                return _guard(
+                    {
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
+                        "reason": (
+                            f"Heuristic stall ×{stall} — hand off to LLM "
+                            f"agent loop (screenshot + SoM tree)"
+                        ),
+                        "planner": "bulk_llm_handoff",
+                        "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
+                        "dry_run": bool(dry_run),
+                    }
+                )
             if defer_to_vision:
+                st_bulk["_bulk_llm_handoff"] = True
                 logger.info(
-                    "bulk deferred to vision: %s",
+                    "bulk deferred to LLM (stall=%s): %s",
+                    stall,
                     (bulk_act.get("reason") or "")[:120],
                 )
+                # Fall through to LLM below — do not return bulk_act
             else:
                 return _guard(bulk_act)
 
-    # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
-    msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
-    if msg_heur:
-        return _guard(msg_heur)
-
-    # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, Tinder, …)
-    dm_heur = _heuristic_dm_send(
-        instruction,
-        ui_tree,
-        history,
-        package,
-        dry_run=dry_run,
-        agent_state=agent_state if isinstance(agent_state, dict) else None,
+    # When bulk handed off to LLM, skip other heuristics so the general
+    # agent loop (screenshot + SoM) owns navigation.
+    bulk_llm = bool(
+        isinstance(agent_state, dict) and agent_state.get("_bulk_llm_handoff")
     )
-    if dm_heur:
-        return _guard(dm_heur)
+
+    # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
+    if not bulk_llm:
+        msg_heur = _heuristic_messaging_send(
+            instruction, ui_tree, history, package
+        )
+        if msg_heur:
+            return _guard(msg_heur)
+
+        # Social/Dating DM fast-paths (WhatsApp, IG, Messenger, Telegram, …)
+        dm_heur = _heuristic_dm_send(
+            instruction,
+            ui_tree,
+            history,
+            package,
+            dry_run=dry_run,
+            agent_state=agent_state if isinstance(agent_state, dict) else None,
+        )
+        if dm_heur:
+            return _guard(dm_heur)
 
     open_target = _trivial_open_app_target(instruction)
     hist_blob = " ".join(history).lower()
@@ -1366,11 +1545,19 @@ def plan_next_action(
             f"coordinates/node, swipe, back, type, done (if the answer is "
             f"already in the tree), or fail.{ban}\n"
         )
+    dry_hint = ""
+    if dry_run and (bulk_llm or bulk_goal):
+        dry_hint = BULK_DRY_RUN_LLM_HINT + "\n"
+    # Set-of-marks indexes when screenshot/handoff — matches original agent loop
+    use_som = bool(image_b64 or bulk_llm)
+    tree_block = (
+        _som_indexed_tree(ui_tree) if use_som else _compress_tree(ui_tree)
+    )
     user = (
         f"GOAL: {instruction}\n\n"
         f"RECENT ACTIONS:\n{hist}\n\n"
-        f"{tree_note}{open_hint}{progress_hint}"
-        f"UI TREE:\n{_compress_tree(ui_tree)}\n\n"
+        f"{tree_note}{open_hint}{progress_hint}{dry_hint}"
+        f"{'SET-OF-MARKS + ' if use_som else ''}UI TREE:\n{tree_block}\n\n"
         "JSON action:"
     )
     raw = None

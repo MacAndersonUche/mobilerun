@@ -1,0 +1,10 @@
+<hierarchy windows="1" nodes="14" partial="false" empty="false" mode="compact" packages="com.affinityapps.blk">
+<w id="active" t="active" p="com.affinityapps.blk" f="1">
+ <n t="Aaliyah, 29" xy="300,1480" b="80,1440,520,1520"/>
+ <n t="Intentions" xy="300,1540" b="80,1500,520,1580"/>
+ <n t="Send a message" c="1" xy="300,1600" b="80,1560,520,1640"/>
+ <n d="Like Icon" c="1" xy="790,1735" b="749,1696,831,1774"/>
+ <n d="Discover" c="1" xy="135,2170" b="50,2120,220,2220"/>
+ <n d="Matches" c="1" xy="675,2170" b="590,2120,760,2220"/>
+</w>
+</hierarchy>

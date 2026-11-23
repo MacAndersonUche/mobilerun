@@ -1493,42 +1493,57 @@ def _recover_to_root_action(
 
 
 def deck_card_name(app: Optional[str], tree: str) -> Optional[str]:
-    """Top-card display name for swipe verification (real maps + fake-chats)."""
+    """Top-card display name for swipe verification (real maps + fake-chats).
+
+    Rejects profile section labels (Intentions, Health and Fitness, …).
+    Prefer elements that look like Name / Name, age.
+    """
     app = (app or "").lower()
+    raw: Optional[str] = None
     if app == "yubo":
-        return yubo_deck_card_name(tree)
-    if app == "bumble":
-        return bumble_deck_card_name(tree)
-    if app == "badoo":
+        raw = yubo_deck_card_name(tree)
+    elif app == "bumble":
+        raw = bumble_deck_card_name(tree)
+    elif app == "badoo":
         for n in _parse_compact_nodes(tree):
             nid = str(n.get("id") or "").lower()
             if "profileinfo_name" in nid:
                 text = (n.get("text") or n.get("label") or "").strip()
                 if text:
-                    return text.split(",")[0].strip()
+                    raw = text.split(",")[0].strip()
+                    break
                 desc = (n.get("desc") or "").strip()
                 m = re.match(r"(.+?),\s*\d+", desc)
                 if m:
-                    return m.group(1).strip()
+                    raw = m.group(1).strip()
+                    break
+    elif app == "hily":
+        raw = hily_deck_card_name(tree)
+    elif app == "blk":
+        raw = blk_deck_card_name(tree)
+    elif app == "taimi":
+        raw = taimi_deck_card_name(tree)
+    elif app == "hinge":
+        raw = hinge_deck_card_name(tree)
+    elif app == "tagged":
+        raw = tagged_deck_card_name(tree)
+    else:
+        # Fake-chats / generic: ProfileNN or first mid-card title
+        for n in _parse_compact_nodes(tree):
+            text = (n.get("text") or n.get("desc") or "").strip()
+            if re.match(r"Profile\d+", text, re.I):
+                raw = text
+                break
+            if re.match(r"Match\d+", text, re.I) and int(n.get("y") or 0) < 1200:
+                raw = text
+                break
+    if not raw:
         return None
-    if app == "hily":
-        return hily_deck_card_name(tree)
-    if app == "blk":
-        return blk_deck_card_name(tree)
-    if app == "taimi":
-        return taimi_deck_card_name(tree)
-    if app == "hinge":
-        return hinge_deck_card_name(tree)
-    if app == "tagged":
-        return tagged_deck_card_name(tree)
-    # Fake-chats / generic: ProfileNN or first mid-card title
-    for n in _parse_compact_nodes(tree):
-        text = (n.get("text") or n.get("desc") or "").strip()
-        if re.match(r"Profile\d+", text, re.I):
-            return text
-        if re.match(r"Match\d+", text, re.I) and int(n.get("y") or 0) < 1200:
-            return text
-    return None
+    if _card_name_is_foreign(raw) and not re.match(
+        r"^(?:Profile|Match)\d+$", raw, re.I
+    ):
+        return None
+    return raw
 
 
 def _deck_has_like_pass_controls(app: Optional[str], tree: str) -> bool:
@@ -1742,16 +1757,41 @@ def _real_pass_action(
 
 
 def _card_name_is_foreign(name: Optional[str]) -> bool:
-    """True for notification / other-app titles (never a dating card)."""
+    """True for notification / other-app titles / section labels (never a card)."""
     if not name:
         return True
     try:
-        from dm_heuristics import _looks_like_notif_or_app_title
+        from dm_heuristics import (
+            _looks_like_notif_or_app_title,
+            looks_like_section_label,
+        )
     except ImportError:
         from backend.dm_heuristics import (  # type: ignore
             _looks_like_notif_or_app_title,
+            looks_like_section_label,
         )
+    if looks_like_section_label(name):
+        return True
     return bool(_looks_like_notif_or_app_title(name))
+
+
+def _card_name_is_real_profile(name: Optional[str]) -> bool:
+    """True when name looks like 'Name' / 'Name, age' (not section labels)."""
+    if not name:
+        return False
+    raw = str(name).strip()
+    # Fake-chats ProfileN / MatchN and BLK age-only markers
+    if re.match(r"^(?:Profile|Match)\d+$", raw, re.I):
+        return True
+    if re.match(r"^age_\d{2}$", raw, re.I):
+        return True
+    if _card_name_is_foreign(raw):
+        return False
+    try:
+        from dm_heuristics import looks_like_profile_name
+    except ImportError:
+        from backend.dm_heuristics import looks_like_profile_name  # type: ignore
+    return bool(looks_like_profile_name(raw))
 
 
 def _fake_like_center(app: Optional[str], tree: str) -> Optional[tuple[int, int]]:
@@ -2825,16 +2865,36 @@ def plan_bulk_swipe(
                 {
                     "action": "fail",
                     "reason": (
-                        f"dry_run — rejected foreign/notification card name "
-                        f"'{card}' for {app or '?'} (require pkg==target) "
+                        f"dry_run — rejected foreign/section-label card name "
+                        f"'{card}' for {app or '?'} (need Name / Name, age) "
                         f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                     "dry_run": True,
                     "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
                 },
                 "bulk_dry_run_foreign_card",
+            )
+        if card and not _card_name_is_real_profile(card):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — rejected non-profile card name '{card}' "
+                        f"for {app or '?'} (section label / not Name, age) "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_dry_run_section_label",
             )
         if not card:
             if app == "badoo" and int(bulk.get("badoo_skeleton_waits") or 0) < 3:

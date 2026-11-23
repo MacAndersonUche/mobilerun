@@ -3540,8 +3540,11 @@ def blk_end_of_deck(tree: str) -> bool:
     )
 
 
-_BLK_FILTER_CHIP_WORDS = frozenset(
+# Profile section / category labels that must NEVER be treated as card names
+# (r24: BLK 'Intentions', Taimi 'Health and Fitness').
+_PROFILE_SECTION_LABELS = frozenset(
     {
+        "intentions",
         "education",
         "height",
         "looking for",
@@ -3557,6 +3560,30 @@ _BLK_FILTER_CHIP_WORDS = frozenset(
         "pets",
         "zodiac",
         "languages",
+        "health and fitness",
+        "health & fitness",
+        "fitness",
+        "interests",
+        "basics",
+        "more about me",
+        "about me",
+        "my vitals",
+        "vitals",
+        "prompts",
+        "essentials",
+        "lifestyle",
+        "work",
+        "job",
+        "school",
+        "hometown",
+        "location",
+        "gender",
+        "pronouns",
+        "sexuality",
+        "relationship type",
+        "relationship goals",
+        "causes and communities",
+        "virtual dating",
         "filters",
         "filter",
         "discover",
@@ -3567,25 +3594,48 @@ _BLK_FILTER_CHIP_WORDS = frozenset(
         "matches",
         "likes",
         "profile",
+        "curated for you",
+        "active today",
+        "people",
+        "trending",
+        "standouts",
+        "preferred",
     }
 )
 
+_BLK_FILTER_CHIP_WORDS = _PROFILE_SECTION_LABELS
 
-def _blk_looks_like_person_name(text: str) -> bool:
+
+def looks_like_section_label(text: str) -> bool:
+    """True for profile section/category labels (never a person name)."""
+    low = (text or "").strip().lower()
+    if not low:
+        return True
+    if low in _PROFILE_SECTION_LABELS:
+        return True
+    if any(w in low for w in _PROFILE_SECTION_LABELS if " " in w or "&" in w):
+        return True
+    return False
+
+
+def looks_like_profile_name(text: str) -> bool:
+    """True for 'Name' or 'Name, 28' — rejects section labels / chips."""
     t = (text or "").strip()
     if not t or len(t) > 40:
         return False
-    low = t.lower()
-    if low in _BLK_FILTER_CHIP_WORDS:
+    if looks_like_section_label(t):
         return False
-    if any(w in low for w in _BLK_FILTER_CHIP_WORDS if " " in w):
-        return False
-    # "Maya" / "Maya, 28" — not filter chips
+    # Prefer name, age; also accept plain first names
     if re.match(
-        r"^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2}(?:,\s*\d{2})?$", t
+        r"^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,2}(?:,\s*\d{2})?$",
+        t,
     ):
         return True
     return False
+
+
+def _blk_looks_like_person_name(text: str) -> bool:
+    return looks_like_profile_name(text)
 
 
 def blk_deck_card_name(tree: str) -> Optional[str]:
@@ -3950,7 +4000,7 @@ def hinge_on_thread(tree: str) -> bool:
 
 
 def hinge_deck_card_name(tree: str) -> Optional[str]:
-    """Profile / Discover name — never invent profile_N."""
+    """Profile / Discover name — never invent profile_N / section labels."""
     skip = {
         "send a message",
         "like",
@@ -3975,6 +4025,9 @@ def hinge_deck_card_name(tree: str) -> Optional[str]:
         "share",
         "enable for",
         "dismiss",
+        "intentions",
+        "education",
+        "health and fitness",
     }
     nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
     if not nodes:
@@ -3987,6 +4040,8 @@ def hinge_deck_card_name(tree: str) -> Optional[str]:
         low = t.lower()
         if low in skip or low.startswith("enable for"):
             continue
+        if looks_like_section_label(t):
+            continue
         if re.match(r"^profile\d+$", t, re.I):
             continue
         if re.match(r"^\d+$", t):
@@ -3995,10 +4050,10 @@ def hinge_deck_card_name(tree: str) -> Optional[str]:
         y = int(n.get("y1") if n.get("y1") is not None else n.get("y") or 0)
         if y > 1800:
             continue
+        if not looks_like_profile_name(t):
+            continue
         name = t.split(",")[0].strip()
         if len(name) < 2:
-            continue
-        if not re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,30}$", name):
             continue
         candidates.append((y, name))
     if not candidates:
@@ -5008,6 +5063,11 @@ def taimi_deck_card_name(tree: str) -> Optional[str]:
         "profile",
         "trending",
         "left",
+        "health and fitness",
+        "health & fitness",
+        "intentions",
+        "interests",
+        "basics",
     }
     best: Optional[Tuple[int, str]] = None
     nodes = _parse_compact_nodes(tree, package_filter="com.takimi.android")
@@ -5029,10 +5089,15 @@ def taimi_deck_card_name(tree: str) -> Optional[str]:
         low = text.lower()
         if low in skip or "left" in low:
             continue
+        if looks_like_section_label(text):
+            continue
         if _looks_like_notif_or_app_title(text):
             continue
         if low.startswith(",") or ", ," in low:
             continue  # icebreaker chip
+        # Require person-like name (Name / Name, age) — never categories
+        if not looks_like_profile_name(text):
+            continue
         y = int(n.get("y") or 0)
         y1 = int(n.get("y1") if n.get("y1") is not None else y)
         if not (1450 <= y <= 1750 or 1450 <= y1 <= 1750):
