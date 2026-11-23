@@ -306,6 +306,15 @@ def _bulk_action_is_verified_fastpath(action: Dict[str, Any]) -> bool:
         "bulk_open_match",
     ):
         return True
+    # CA-4: coordinate Bumble likes must never stall into an LLM call.
+    planner = str(action.get("planner") or "").lower()
+    if (
+        planner.endswith("_fixed")
+        or step.startswith("bumble_fixed")
+        or step.startswith("badoo_fixed")
+        or action.get("_no_llm_handoff")
+    ):
+        return True
     return False
 
 

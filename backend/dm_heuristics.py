@@ -245,6 +245,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "id/encountersGridItem_summaryContainer",
         ),
         "deck_name_hint": "Name, Age",  # TextView near bottom of card
+        # CA-4: coordinate like-swipe is opt-in via instruction/state mode "fixed".
+        "fixed_swipe": False,
         # Verified swipe recipe (adb input swipe timings)
         "like_swipe": (250, 1000, 1050, 1050, 300),
         "pass_swipe": (850, 1000, 30, 1050, 300),
@@ -417,6 +419,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         ),
         "like_xy": (855, 1982),
         "pass_xy": (225, 1982),
+        # CA-4: coordinate like-swipe is opt-in via instruction/state mode "fixed".
+        "fixed_swipe": False,
         "like_swipe": (250, 1100, 1050, 1150, 300),
         "pass_swipe": (850, 1100, 30, 1150, 300),
         "inbox_labels": ("Chats", "Connections", "Messages", "Inbox"),
@@ -1737,7 +1741,12 @@ def bumble_on_photo_browser(tree: str) -> bool:
     """
     for n in _bumble_nodes(tree):
         nid = str(n.get("id") or "").lower()
-        if "photobrowser" in nid.replace("_", ""):
+        nid_f = nid.replace("_", "")
+        # Real S21+ People cards label the star "Send SuperSwipe" with this id.
+        # That is the on-card badge, not the full-screen photo browser.
+        if "badgesuperswipe" in nid_f or "profiledetailsbadgesuper" in nid_f:
+            continue
+        if "photobrowser" in nid_f:
             return True
         lab = (n.get("label") or n.get("text") or n.get("desc") or "").strip().lower()
         if lab == "send superswipe" or "send superswipe" in lab:
