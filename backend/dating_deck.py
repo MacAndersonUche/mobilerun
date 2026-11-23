@@ -61,6 +61,13 @@ _PAYWALL_MARKERS: Tuple[str, ...] = (
     "samsung pay",
     "samsung wallet",
     "spay",
+    # r28: Yubo Reactions / Elite Pack / See who added you
+    "elite pack",
+    "see who added you",
+    "see who liked you",
+    "who added you",
+    "unlock reactions",
+    "reactions are blurred",
 )
 
 _PAID_CTA_NEVER: Tuple[str, ...] = (
@@ -220,6 +227,46 @@ def _is_paid_cta(label: str) -> bool:
     return any(p in low for p in _PAID_CTA_NEVER)
 
 
+def is_yubo_reactions_or_elite_paywall(tree: str) -> bool:
+    """True for Yubo blurred Reactions list / Elite Pack / See who added you."""
+    blob = (tree or "").lower()
+    if not blob:
+        return False
+    markers = (
+        "elite pack",
+        "see who added you",
+        "see who liked you",
+        "who added you",
+        "recurring billing",
+        "unlock reactions",
+        "reactions are blurred",
+    )
+    if any(m in blob for m in markers):
+        return True
+    if "reactions" in blob and (
+        "added you" in blob or "elite" in blob or "subscribe" in blob
+    ):
+        return True
+    return False
+
+
+def yubo_paywall_back_action(
+    tree: str, *, planner: str = "yubo_paywall"
+) -> Optional[Dict[str, Any]]:
+    """Back out of Yubo Reactions / Elite Pack paywall pages entirely."""
+    if not is_yubo_reactions_or_elite_paywall(tree):
+        return None
+    return {
+        "action": "press_button",
+        "button": "back",
+        "reason": f"Yubo Reactions/Elite Pack paywall — Back out ({planner})",
+        "planner": planner,
+        "llm_provider": None,
+        "_paywall_dismiss": True,
+        "_yubo_reactions_block": True,
+    }
+
+
 def dismiss_paywall_action(
     tree: str,
     *,
@@ -227,6 +274,9 @@ def dismiss_paywall_action(
     planner: str = "dating_deck",
 ) -> Optional[Dict[str, Any]]:
     """Close paywall / billing / Spay — safe dismiss or Back. Never paid CTA."""
+    yubo = yubo_paywall_back_action(tree, planner=planner)
+    if yubo:
+        return yubo
     if not is_paywall_or_billing(tree, package):
         # Per-app Taimi GOLD helper
         try:

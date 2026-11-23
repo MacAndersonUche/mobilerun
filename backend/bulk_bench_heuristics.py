@@ -640,6 +640,31 @@ def _visible_chat_list_rows(
             or "find out who they are" in low
         ):
             continue
+        # r28: reply-paywall rows — never treat as real conversation
+        # Yubo "ADDED YOU", Hily "They liked you", BLK Discover "Send a message"
+        if (
+            "added you" in low
+            or low == "added you"
+            or "elite pack" in low
+            or "see who added" in low
+            or low in ("send a message", "message", "say hello")
+            or "send a message" == low
+        ):
+            continue
+        # Paywall / promo row markers on the node id
+        nid_early = str(n.get("id") or "").lower()
+        if any(
+            tok in nid_early
+            for tok in (
+                "added_you",
+                "likedyou",
+                "liked_you",
+                "elite",
+                "premium_row",
+                "upsell",
+            )
+        ):
+            continue
         # r26: never treat Discover filter chips / section labels as chats
         try:
             from dm_heuristics import (
@@ -653,6 +678,8 @@ def _visible_chat_list_rows(
             )
         name_core = re.sub(r"[\W_]+$", "", name, flags=re.UNICODE).strip() or name
         if looks_like_section_label(name_core) or looks_like_section_label(label):
+            continue
+        if _card_name_is_owner(name_core) or _card_name_is_owner(name):
             continue
         # Person-name heuristic — Age / Notes / Junk never open as a thread.
         # Allow WA numbers, fake-chats ProfileN/MatchN, emoji-suffixed names.
@@ -1803,6 +1830,31 @@ def _card_name_is_foreign(name: Optional[str]) -> bool:
     return bool(_looks_like_notif_or_app_title(name))
 
 
+def _owner_profile_names() -> set:
+    """Device owner display names that must never count as a swipe card."""
+    names: set = set()
+    env = (os.environ.get("MOBILERUN_OWNER_NAMES") or "").strip()
+    for part in env.split(","):
+        p = part.strip()
+        if p:
+            names.add(p.lower())
+            # Also bare first token: "MacAnderson, 30" → macanderson
+            names.add(p.split(",")[0].strip().lower())
+    # Sensible default for this device owner's profile chrome
+    names.update({"macanderson", "mac anderson"})
+    return names
+
+
+def _card_name_is_owner(name: Optional[str]) -> bool:
+    """True when name matches the device owner's profile (reject as card)."""
+    if not name:
+        return False
+    raw = str(name).strip().lower()
+    core = raw.split(",")[0].strip()
+    owners = _owner_profile_names()
+    return raw in owners or core in owners
+
+
 def _card_name_is_real_profile(name: Optional[str]) -> bool:
     """True when name looks like 'Name' / 'Name, age' (not section labels)."""
     if not name:
@@ -1813,13 +1865,38 @@ def _card_name_is_real_profile(name: Optional[str]) -> bool:
         return True
     if re.match(r"^age_\d{2}$", raw, re.I):
         return True
+    if _card_name_is_owner(raw):
+        return False
     if _card_name_is_foreign(raw):
+        return False
+    # r28: Social / Chats / home-folder chrome
+    low = raw.lower().split(",")[0].strip()
+    if low in ("social", "chats", "chat", "messages", "inbox", "people", "discover"):
         return False
     try:
         from dm_heuristics import looks_like_profile_name
     except ImportError:
         from backend.dm_heuristics import looks_like_profile_name  # type: ignore
     return bool(looks_like_profile_name(raw))
+
+
+def _fg_pkg_matches_target(app: Optional[str], package: str) -> bool:
+    """Require foreground package == target app before identifying a card."""
+    if not app or app not in DM_APP_PROFILES:
+        return True  # unknown app — don't hard-block
+    want = str(DM_APP_PROFILES[app].get("package") or "").lower()
+    pkg = (package or "").lower()
+    if not want:
+        return True
+    if not pkg:
+        return False
+    markers = tuple(DM_APP_PROFILES[app].get("pkg_markers") or ()) + (
+        want.split(".")[-1],
+        app,
+    )
+    if want in pkg:
+        return True
+    return any(m and str(m).lower() in pkg for m in markers)
 
 
 def _fake_like_center(app: Optional[str], tree: str) -> Optional[tuple[int, int]]:
@@ -1991,6 +2068,18 @@ def plan_bulk_swipe(
         pay_f = _pay_foreign(ui_tree, package=package, planner=planner)
         if pay_f:
             return _fp(pay_f, "bulk_paywall_dismiss")
+
+    # r28: Yubo Reactions / Elite Pack — Back out (never count scrolls as likes)
+    if app == "yubo":
+        try:
+            from dating_deck import yubo_paywall_back_action as _yubo_back
+        except ImportError:
+            from backend.dating_deck import (  # type: ignore
+                yubo_paywall_back_action as _yubo_back,
+            )
+        yb = _yubo_back(ui_tree, planner=planner)
+        if yb:
+            return _fp(yb, "bulk_yubo_reactions_back")
 
     # ALWAYS verify FG package matches the named app before any swipe/tap.
     # (Previously skipped open_app when any deck was visible — swiped Bumble for Yubo.)
@@ -2887,15 +2976,35 @@ def plan_bulk_swipe(
                 },
                 "bulk_dry_run_no_deck_markers",
             )
-        card = deck_card_name(app, ui_tree)
-        if card and _card_name_is_foreign(card):
+        # r28: require FG package == target before identifying a card
+        # (home-screen "Social" folder was falsely identified as a card)
+        if not _fg_pkg_matches_target(app, package):
             return _fp(
                 {
                     "action": "fail",
                     "reason": (
-                        f"dry_run — rejected foreign/section-label card name "
-                        f"'{card}' for {app or '?'} (need Name / Name, age) "
-                        f"({planner})"
+                        f"dry_run — FG package '{package or '?'}' is not "
+                        f"{app or '?'} (refuse home-folder / wrong-app card "
+                        f"names) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": False,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                },
+                "bulk_dry_run_wrong_pkg",
+            )
+        card = deck_card_name(app, ui_tree)
+        if card and (_card_name_is_foreign(card) or _card_name_is_owner(card)):
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"dry_run — rejected non-profile card name "
+                        f"'{card}' for {app or '?'} (need Name / Name, age; "
+                        f"never Social/Chats/owner) ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -4741,6 +4850,29 @@ def plan_bulk_bench(
     goal = parse_bulk_goal(instruction)
     if not goal:
         return None
+    # r28: Taimi / Hinge unsupported — fail fast under 30s
+    app0 = str(goal.get("app") or "")
+    if app0 in ("taimi", "hinge"):
+        msg = (
+            "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
+            "Fail fast — do not burn steps."
+            if app0 == "taimi"
+            else (
+                "Hinge is unsupported: a11y tree is empty / unusable. "
+                "Fail fast — do not burn steps."
+            )
+        )
+        return _fp(
+            {
+                "action": "fail",
+                "reason": msg,
+                "planner": "unsupported_app",
+                "llm_provider": None,
+                "dry_run_verified": False,
+                "unsupported_app": app0,
+            },
+            "bulk_unsupported_app",
+        )
     if goal["kind"] == "swipe":
         # Only for swipe-capable apps when detected
         app = goal.get("app")

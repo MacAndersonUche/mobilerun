@@ -122,7 +122,7 @@ def test_timed_handoff_after_20s(monkeypatch):
 
 def test_live_test_blocks_paid_allows_like_cap():
     assert LIVE_TEST_DEFAULT_MAX_N >= 1
-    st: dict = {"live_likes_done": 0, "live_test_max_n": 2}
+    st: dict = {"live_likes_done": 0, "live_likes_issued": 0, "live_test_max_n": 2}
     kind, reason, action = apply_live_test_guard(
         live_test=True,
         action={"action": "tap", "x": 100, "y": 200, "reason": "Super Like"},
@@ -149,9 +149,11 @@ def test_live_test_blocks_paid_allows_like_cap():
         max_n=2,
     )
     assert kind2 == "tap"
-    assert st.get("live_likes_done") == 1
+    # r28: issued increments immediately; done waits for card-name verify
+    assert st.get("live_likes_issued") == 1
+    assert st.get("live_likes_done", 0) == 0
 
-    st["live_likes_done"] = 2
+    st["live_likes_issued"] = 2
     kind3, reason3, action3 = apply_live_test_guard(
         live_test=True,
         action={

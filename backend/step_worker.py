@@ -507,6 +507,15 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     for _ in range(max(0, chain_budget - 1)):
         if updated.get("status") != "running":
             break
+        # r28: honor cancel between chained steps — never continue after stop
+        try:
+            from cloud_agent import refresh_job_cancel_status
+        except ImportError:
+            from backend.cloud_agent import (  # type: ignore
+                refresh_job_cancel_status,
+            )
+        if refresh_job_cancel_status(updated):
+            break
         # Per-invoke wall + no-progress re-check between chained steps
         if time.time() - invoke_t0 > float(STEP_WALL_S):
             updated = _fail_job_timeout(

@@ -608,6 +608,232 @@ def _action_looks_like_send(action: Dict[str, Any], kind: str = "") -> bool:
     return False
 
 
+# Like / pass control tokens — NEVER match planner reason text alone.
+_LIKE_ID_TOKENS = (
+    "actionbutton_like",
+    "gamepad_like",
+    "btn_like",
+    "likebtn",
+    "voteyes",
+    "buttonvoteyes",
+    "encounters_profile_voting_buttonvoteyes",
+    "encounter_like",
+)
+_PASS_ID_TOKENS = (
+    "actionbutton_skip",
+    "actionbutton_pass",
+    "gamepad_pass",
+    "btn_pass",
+    "passbtn",
+    "voteno",
+    "buttonvoteno",
+    "encounter_pass",
+    "encounters_profile_voting_buttonvoteno",
+)
+_LIKE_LABELS = frozenset(
+    {
+        "like",
+        "heart",
+        "yes",
+        "voteyes",
+        "vote yes",
+        "thumbs up",
+        "thumbsup",
+        "send like",
+        "send like anyway",
+    }
+)
+_PASS_LABELS = frozenset(
+    {
+        "pass",
+        "skip",
+        "no",
+        "voteno",
+        "vote no",
+        "x",
+        "close",
+        "dislike",
+        "nope",
+        "reject",
+    }
+)
+_BILLING_TERMS_TAP_BLOCK = (
+    "recurring billing",
+    "terms of service",
+    "terms of use",
+    "privacy policy",
+    "subscription terms",
+    "billing terms",
+    "auto-renew",
+    "auto renew",
+    "cancel anytime",
+    "by continuing you agree",
+    "elite pack",
+    "see who added you",
+)
+
+
+def _action_control_blob(action: Dict[str, Any]) -> str:
+    """Node id / label / desc only — never planner reason text."""
+    return " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in (
+            "label",
+            "text",
+            "desc",
+            "content_desc",
+            "contentDescription",
+            "id",
+            "resource_id",
+            "resourceId",
+            "element",
+            "target",
+        )
+    ).strip()
+
+
+def _action_is_like_control(action: Dict[str, Any], kind: str) -> bool:
+    """True only for like-control taps / right-swipes (element/position class).
+
+    NEVER uses planner reason text — ``Liking`` / ``would like`` must not
+    count toward the live like cap (r28 Badoo ~25 likes with cap 5).
+    """
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if (action or {}).get("_free_like") or (action or {}).get("_live_like_control"):
+        return True
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    if any(
+        tok in fp
+        for tok in (
+            "bulk_like",
+            "bulk_like_swipe",
+            "like_swipe",
+            "bumble_like",
+            "yubo_like",
+            "hily_like",
+            "blk_like",
+            "taimi_like",
+            "badoo_like",
+            "tagged_like",
+        )
+    ):
+        return True
+    # Pass / open / scroll fastpaths are never likes
+    if any(
+        tok in fp
+        for tok in (
+            "bulk_pass",
+            "pass_swipe",
+            "bulk_open",
+            "bulk_scroll",
+            "bulk_focus",
+            "bulk_type",
+            "open_chats",
+            "open_matches",
+        )
+    ):
+        return False
+    blob = _action_control_blob(action)
+    id_blob = " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in ("id", "resource_id", "resourceId", "element", "target")
+    )
+    if any(tok in id_blob or tok in blob.replace(" ", "") for tok in _LIKE_ID_TOKENS):
+        # Exclude super-like / paid variants
+        if "super" in blob or "crush" in blob or "rose" in blob:
+            return False
+        return True
+    # Exact label match (avoid "likely" / reason "Liking")
+    fields = [
+        str((action or {}).get(k) or "").strip().lower()
+        for k in ("label", "text", "desc", "content_desc", "contentDescription")
+    ]
+    if any(f in _LIKE_LABELS for f in fields if f):
+        return True
+    if k == "swipe":
+        try:
+            x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+            x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+        except (TypeError, ValueError):
+            return False
+        # Right-swipe = like (large +dx, small dy)
+        return (x2 - x1) >= 200 and abs(y2 - y1) < abs(x2 - x1)
+    # Bottom-right action-row tap with empty label: treat as like only when
+    # explicitly marked or id matched above — never by reason or bare coords.
+    return False
+
+
+def _action_is_pass_control(action: Dict[str, Any], kind: str) -> bool:
+    """True for X / close / pass / skip / VoteNo / left-swipe controls."""
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if (action or {}).get("_pass_control") or (action or {}).get("_free_pass"):
+        return True
+    fp = str(
+        (action or {}).get("fastpath_step")
+        or (action or {}).get("_fastpath_step")
+        or ""
+    ).lower()
+    if any(
+        tok in fp
+        for tok in (
+            "bulk_pass",
+            "pass_swipe",
+            "bumble_pass",
+            "yubo_pass",
+            "hily_pass",
+            "taimi_pass",
+            "badoo_pass",
+            "blk_pass",
+        )
+    ):
+        return True
+    blob = _action_control_blob(action)
+    id_blob = " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in ("id", "resource_id", "resourceId", "element", "target")
+    )
+    if any(tok in id_blob or tok in blob.replace(" ", "") for tok in _PASS_ID_TOKENS):
+        return True
+    fields = [
+        str((action or {}).get(k) or "").strip().lower()
+        for k in ("label", "text", "desc", "content_desc", "contentDescription")
+    ]
+    if any(f in _PASS_LABELS for f in fields if f):
+        return True
+    # BLK / deck bottom-left X: short "x" already covered; left-swipe = pass
+    if k == "swipe":
+        try:
+            x1, y1 = int(action.get("x1") or 0), int(action.get("y1") or 0)
+            x2, y2 = int(action.get("x2") or 0), int(action.get("y2") or 0)
+        except (TypeError, ValueError):
+            return False
+        return (x1 - x2) >= 200 and abs(y2 - y1) < abs(x1 - x2)
+    # Bottom-left action row with no label — BLK X zone (x≲280, y≳1700 on 1080)
+    if k == "tap" and not blob.strip():
+        try:
+            x, y = int(action.get("x") or 0), int(action.get("y") or 0)
+        except (TypeError, ValueError):
+            return False
+        if x and y and x <= 320 and y >= 1650:
+            return True
+    return False
+
+
+def _action_is_billing_or_terms_tap(action: Dict[str, Any], kind: str) -> bool:
+    """True for taps on billing / Terms / Elite Pack small-print (never tap)."""
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k not in ("tap", "click"):
+        return False
+    blob = _action_control_blob(action)
+    reason = str((action or {}).get("reason") or "").lower()
+    hay = f"{blob} {reason}"
+    return any(tok in hay for tok in _BILLING_TERMS_TAP_BLOCK)
+
+
 def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
     """True for swipe gestures and like/pass/vote taps (dating deck mutations).
 
@@ -617,6 +843,8 @@ def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
     """
     k = (kind or str((action or {}).get("action") or "")).lower()
     if k == "swipe":
+        return True
+    if _action_is_like_control(action, kind) or _action_is_pass_control(action, kind):
         return True
     fp = str(
         (action or {}).get("fastpath_step")
@@ -668,10 +896,7 @@ def _action_looks_like_swipe_or_like(action: Dict[str, Any], kind: str) -> bool:
     ):
         return True
     # Target node label / text / content-desc only
-    blob = " ".join(
-        str((action or {}).get(k) or "").lower()
-        for k in ("label", "text", "desc", "content_desc", "contentDescription")
-    )
+    blob = _action_control_blob(action)
     if not blob.strip():
         return False
     if any(
@@ -774,11 +999,13 @@ def apply_live_test_guard(
     reason: str,
     state: Optional[Dict[str, Any]] = None,
     max_n: int = LIVE_TEST_DEFAULT_MAX_N,
+    like_job: bool = True,
 ) -> tuple:
-    """LIVE test mode: likes OK (capped), never super-like/paid; bank text only.
+    """LIVE test mode: likes OK (capped by control class), never pass/paid.
 
-    Message bodies are enforced separately by message_text_guard. This guard
-    blocks paid CTAs and enforces max N likes/sends per job.
+    Cap counts EVERY like-control tap (element/position class — NEVER reason
+    text like ``Liking``). ``live_likes_done`` only advances after the card
+    name changes (see ``verify_pending_live_like``).
     """
     if not live_test:
         return kind, reason, action
@@ -789,10 +1016,26 @@ def apply_live_test_guard(
         return kind, reason, action
 
     reason_l = (reason or str((action or {}).get("reason") or "")).lower()
-    label_blob = " ".join(
-        str((action or {}).get(k) or "").lower()
-        for k in ("label", "text", "desc", "content_desc", "id")
-    )
+    label_blob = _action_control_blob(action)
+
+    # Never tap billing / Terms / Elite Pack small print
+    if _action_is_billing_or_terms_tap(action, kind):
+        new_reason = (
+            f"[LIVE TEST] blocked billing/terms tap — Back instead ({reason})"
+        )
+        logger.info("%s", new_reason)
+        return (
+            "press_button",
+            new_reason,
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": new_reason,
+                "live_test": True,
+                "live_test_blocked_billing": True,
+            },
+        )
+
     paid_hit = _action_looks_like_paid(action, kind) or any(
         tok in reason_l or tok in label_blob
         for tok in (
@@ -810,6 +1053,7 @@ def apply_live_test_guard(
             "instant chat",
             "hingex",
             "hinge+",
+            "elite pack",
         )
     )
     if paid_hit:
@@ -828,26 +1072,36 @@ def apply_live_test_guard(
             },
         )
 
-    # Count likes / right-swipes toward cap
-    is_like = bool(
-        k == "swipe"
-        or _action_looks_like_swipe_or_like(action, kind)
-        or (
-            k == "tap"
-            and any(
-                tok in (reason or "").lower()
-                for tok in ("like", "voteyes", "heart", "right swipe")
-            )
-            and "super" not in (reason or "").lower()
-            and "pass" not in (reason or "").lower()
+    # Like jobs: never tap pass / X / close (r28 BLK tapped bottom-left X)
+    is_pass = _action_is_pass_control(action, kind)
+    if like_job and is_pass:
+        new_reason = (
+            f"[LIVE TEST] blocked pass/X in like job — skipped ({reason})"
         )
-    )
+        logger.info("%s", new_reason)
+        return (
+            "wait",
+            new_reason,
+            {
+                "action": "wait",
+                "seconds": 0.35,
+                "reason": new_reason,
+                "live_test": True,
+                "live_test_blocked_pass": True,
+            },
+        )
+
+    # Count ONLY like-control taps / right-swipes — never reason text
+    is_like = _action_is_like_control(action, kind)
     is_send = bool(_action_looks_like_send(action, kind) or k == "ime_send")
     if is_like:
+        issued = int(st.get("live_likes_issued") or 0)
         done_n = int(st.get("live_likes_done") or 0)
-        if done_n >= cap:
+        pending = 1 if st.get("_pending_live_like") else 0
+        if issued >= cap or done_n >= cap or (issued + pending) >= cap:
             new_reason = (
-                f"[LIVE TEST] like cap reached ({done_n}/{cap}) — stop"
+                f"[LIVE TEST] like cap reached "
+                f"(issued={issued} done={done_n}/{cap}) — stop"
             )
             return (
                 "done",
@@ -857,11 +1111,19 @@ def apply_live_test_guard(
                     "reason": new_reason,
                     "live_test": True,
                     "live_test_verified": True,
-                    "dry_run_verified": True,  # treat as verified completion
+                    "dry_run_verified": True,
                 },
             )
-        st["live_likes_done"] = done_n + 1
-        action = {**action, "live_test": True, "_live_like_n": done_n + 1}
+        # Cap before execute: issue the tap, verify card change later
+        st["live_likes_issued"] = issued + 1
+        st["_pending_live_like"] = True
+        action = {
+            **action,
+            "live_test": True,
+            "_live_like_control": True,
+            "_live_like_n": issued + 1,
+            "_pending_live_like": True,
+        }
     if is_send:
         done_m = int(st.get("live_messages_done") or 0)
         if done_m >= cap:
@@ -882,6 +1144,81 @@ def apply_live_test_guard(
         st["live_messages_done"] = done_m + 1
         action = {**action, "live_test": True, "_live_msg_n": done_m + 1}
     return kind, reason, action
+
+
+def verify_pending_live_like(
+    state: Dict[str, Any],
+    *,
+    ui_tree: str,
+    app: str = "",
+    before_name: Optional[str] = None,
+) -> bool:
+    """After a like tap: count only when the card name changes.
+
+    Returns True when ``live_likes_done`` was incremented.
+    """
+    if not isinstance(state, dict) or not state.get("_pending_live_like"):
+        return False
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+
+    prev = before_name or state.get("_live_like_before_name")
+    bulk = state.get("bulk_swipe") if isinstance(state.get("bulk_swipe"), dict) else {}
+    if not prev:
+        prev = (bulk or {}).get("last_name")
+    now_name = deck_card_name(app, ui_tree or "") if app else None
+    if now_name and not _card_name_is_real_profile(now_name):
+        now_name = None
+    state.pop("_pending_live_like", None)
+    state.pop("_live_like_before_name", None)
+    if prev and now_name and str(now_name).strip() != str(prev).strip():
+        done_n = int(state.get("live_likes_done") or 0) + 1
+        state["live_likes_done"] = done_n
+        if isinstance(bulk, dict):
+            bulk["last_name"] = now_name
+            bulk["done"] = max(int(bulk.get("done") or 0), done_n)
+            state["bulk_swipe"] = bulk
+        logger.info(
+            "live like verified by card change %s → %s done=%s",
+            prev,
+            now_name,
+            done_n,
+        )
+        return True
+    logger.info(
+        "live like NOT verified (card unchanged) prev=%s now=%s issued=%s",
+        prev,
+        now_name,
+        state.get("live_likes_issued"),
+    )
+    return False
+
+
+def snapshot_live_like_card_name(
+    state: Dict[str, Any], *, ui_tree: str, app: str = ""
+) -> None:
+    """Store pre-tap card name so verify_pending_live_like can compare."""
+    if not isinstance(state, dict) or not state.get("_pending_live_like"):
+        return
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+
+    name = deck_card_name(app, ui_tree or "") if app else None
+    if name and _card_name_is_real_profile(name):
+        state["_live_like_before_name"] = name
+        bulk = state.setdefault("bulk_swipe", {})
+        if isinstance(bulk, dict) and not bulk.get("last_name"):
+            bulk["last_name"] = name
 
 
 def apply_dry_run_send_guard(
@@ -974,6 +1311,247 @@ def apply_dry_run_send_guard(
 
 PHONE_LOCKED_ERROR = "phone locked / systemui in foreground - unlock phone"
 MAX_STEPS_UNMET_ERROR = "max_steps reached, goal not met"
+
+# r28: FLAG_SECURE / empty-tree apps — fail fast instead of burning steps
+UNSUPPORTED_AGENT_APPS: Dict[str, str] = {
+    "taimi": (
+        "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
+        "Fail fast — do not burn steps."
+    ),
+    "hinge": (
+        "Hinge is unsupported: a11y tree is empty / unusable for automation. "
+        "Fail fast — do not burn steps."
+    ),
+}
+
+_TERMINAL_JOB_STATUSES = frozenset(
+    {"stopped", "cancelled", "canceled", "failed", "completed", "paused"}
+)
+
+
+def _job_status_is_terminal(status: Any) -> bool:
+    return str(status or "").lower().strip() in _TERMINAL_JOB_STATUSES
+
+
+def refresh_job_cancel_status(job: Dict[str, Any]) -> bool:
+    """Re-read job from storage; if cancelled/stopped, sync and return True.
+
+    Never overwrite a cancelled status with completed later.
+    """
+    jid = str(job.get("job_id") or "").strip()
+    if not jid:
+        return _job_status_is_terminal(job.get("status"))
+    try:
+        try:
+            from storage import get_job
+        except ImportError:
+            from backend.storage import get_job  # type: ignore
+
+        fresh = get_job(jid)
+    except Exception as e:
+        logger.warning("cancel status refresh failed: %s", e)
+        return _job_status_is_terminal(job.get("status"))
+    if not isinstance(fresh, dict):
+        return _job_status_is_terminal(job.get("status"))
+    fresh_status = str(fresh.get("status") or "").lower().strip()
+    if fresh_status in _TERMINAL_JOB_STATUSES and fresh_status != "running":
+        # Preserve cancel/stop — never let a racing step mark completed
+        job["status"] = fresh.get("status") or fresh_status
+        if fresh.get("error"):
+            job["error"] = fresh.get("error")
+        if fresh_status in ("stopped", "cancelled", "canceled"):
+            job.setdefault("result", "Cancelled")
+            st = job.setdefault("state", {})
+            if isinstance(st, dict):
+                st["cancelled"] = True
+                st["last_action"] = "cancelled"
+        return True
+    return _job_status_is_terminal(job.get("status"))
+
+
+def _preserve_terminal_status(job: Dict[str, Any]) -> bool:
+    """True when job is already terminal — callers must not overwrite status."""
+    if refresh_job_cancel_status(job):
+        return True
+    return _job_status_is_terminal(job.get("status"))
+
+
+def unsupported_app_fail_action(
+    instruction: str, *, package: str = ""
+) -> Optional[Dict[str, Any]]:
+    """Fail fast (<30s) for Taimi / Hinge instead of burning max_steps."""
+    try:
+        from dm_heuristics import detect_dm_app
+    except ImportError:
+        from backend.dm_heuristics import detect_dm_app  # type: ignore
+
+    app = detect_dm_app(instruction or "") or ""
+    pkg = (package or "").lower()
+    if not app:
+        if "takimi" in pkg or "taimi" in pkg:
+            app = "taimi"
+        elif "hinge" in pkg:
+            app = "hinge"
+    msg = UNSUPPORTED_AGENT_APPS.get(app or "")
+    if not msg:
+        return None
+    return {
+        "action": "fail",
+        "reason": msg,
+        "planner": "unsupported_app",
+        "llm_provider": None,
+        "dry_run_verified": False,
+        "unsupported_app": app,
+    }
+
+
+def _instruction_is_like_or_swipe_job(
+    instruction: str, job: Optional[Dict[str, Any]] = None
+) -> bool:
+    """True for like/swipe bulk or live_test like jobs (no typing allowed)."""
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+    except ImportError:
+        from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+
+    g = parse_bulk_goal(instruction or "")
+    if isinstance(g, dict) and g.get("kind") == "swipe":
+        return True
+    low = (instruction or "").lower()
+    if re.search(r"\blike\s+\d+\s+profiles?", low):
+        return True
+    if "auto-swipe" in low or "auto swipe" in low:
+        return True
+    j = job if isinstance(job, dict) else {}
+    if j.get("live_test") and (
+        "like" in low or "swipe" in low or (isinstance(g, dict) and g.get("kind") == "swipe")
+    ):
+        return True
+    return False
+
+
+def apply_like_job_no_type_guard(
+    *,
+    action: Dict[str, Any],
+    kind: str,
+    reason: str,
+    instruction: str,
+    job: Optional[Dict[str, Any]] = None,
+    package: str = "",
+) -> tuple:
+    """Block all typing in like/swipe jobs; rewrite launcher search → open_app.
+
+    Open-from-home fallback may type the app name into the launcher search only.
+    Never type inside an app.
+    """
+    if not _instruction_is_like_or_swipe_job(instruction, job):
+        return kind, reason, action
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k not in ("type", "type_text", "input_text", "set_text"):
+        return kind, reason, action
+    text = str((action or {}).get("text") or "").strip()
+    pkg = (package or "").lower()
+    launcher = any(
+        tok in pkg
+        for tok in (
+            "launcher",
+            "nexuslauncher",
+            "microsoft.launcher",
+            "touchwiz",
+            "honeyboard",
+            "android.systemui",  # sometimes search overlay
+        )
+    ) or pkg in ("", "null")
+    # Allowed: typing the target app name into launcher search only
+    app_name = ""
+    try:
+        from dm_heuristics import detect_dm_app, DM_APP_PROFILES
+    except ImportError:
+        from backend.dm_heuristics import detect_dm_app, DM_APP_PROFILES  # type: ignore
+
+    app_key = detect_dm_app(instruction or "") or ""
+    if app_key and app_key in DM_APP_PROFILES:
+        app_name = str(
+            DM_APP_PROFILES[app_key].get("open_label") or app_key
+        ).strip()
+    if (
+        launcher
+        and text
+        and app_name
+        and text.lower() == app_name.lower()
+        and (
+            (action or {}).get("search")
+            or (action or {}).get("type_contact")
+            or "launcher" in (reason or "").lower()
+            or "search" in (reason or "").lower()
+        )
+    ):
+        # Still prefer open_app by package/intent over typed search
+        new_reason = (
+            f"[LIKE JOB] rewrite launcher type '{text}' → open_app({app_name})"
+        )
+        return (
+            "open_app",
+            new_reason,
+            {
+                "action": "open_app",
+                "app": app_name,
+                "reason": new_reason,
+                "planner": (action or {}).get("planner") or "like_job_open",
+                "llm_provider": None,
+            },
+        )
+    new_reason = (
+        f"[LIKE JOB] blocked typing '{text[:40]}' — use open_app/package "
+        f"(never type in like/swipe jobs) ({reason})"
+    )
+    logger.info("%s", new_reason)
+    if app_name:
+        return (
+            "open_app",
+            new_reason,
+            {
+                "action": "open_app",
+                "app": app_name,
+                "reason": new_reason,
+                "planner": "like_job_open",
+                "llm_provider": None,
+            },
+        )
+    return (
+        "wait",
+        new_reason,
+        {
+            "action": "wait",
+            "seconds": 0.3,
+            "reason": new_reason,
+            "like_job_blocked_type": True,
+        },
+    )
+
+
+def is_yubo_reactions_or_elite_paywall(tree: str) -> bool:
+    """True for Yubo blurred Reactions list / Elite Pack / See who added you."""
+    try:
+        from dating_deck import is_yubo_reactions_or_elite_paywall as _y
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            is_yubo_reactions_or_elite_paywall as _y,
+        )
+    return bool(_y(tree))
+
+
+def yubo_paywall_back_action(
+    tree: str, *, planner: str = "yubo_paywall"
+) -> Optional[Dict[str, Any]]:
+    """Back out of Yubo Reactions / Elite Pack paywall pages entirely."""
+    try:
+        from dating_deck import yubo_paywall_back_action as _y
+    except ImportError:
+        from backend.dating_deck import (  # type: ignore
+            yubo_paywall_back_action as _y,
+        )
+    return _y(tree, planner=planner)
 
 
 def _is_lock_screen_package(package: str) -> bool:
@@ -1527,35 +2105,71 @@ def plan_next_action(
         if isinstance(pending, dict) and pending.get("action"):
             pending.setdefault("planner", "pending_dismiss")
             return _guard(pending)
-        try:
-            bulk_act = plan_bulk_bench(
-                instruction,
-                ui_tree,
-                history,
-                state=st_bulk,
-                package=package,
-                dry_run=dry_run,
-            )
-        except Exception as bulk_err:
-            # r26: never raise out of heuristics — hand off to LLM
-            logger.warning("plan_bulk_bench raised → LLM handoff: %s", bulk_err)
-            st_bulk["_bulk_llm_handoff"] = True
-            return _guard(
-                {
-                    "action": "wait",
-                    "seconds": 0.35,
-                    "delay_s": 0.35,
-                    "reason": (
-                        f"Heuristic exception — hand off to LLM "
-                        f"({bulk_err})"
-                    ),
-                    "planner": "bulk_llm_handoff",
-                    "needs_vision": True,
-                    "_force_vision": True,
-                    "_bulk_llm_handoff": True,
-                    "dry_run": bool(dry_run),
-                }
-            )
+
+        # r28: once handed off to LLM, stay there for the rest of the job.
+        # Never let heuristics reclaim the turn (Yubo/BLK/Badoo/Hily bug).
+        if st_bulk.get("_bulk_llm_handoff"):
+            # Dry swipe only: identifying a real name is still verified success
+            if (
+                dry_run
+                and isinstance(bulk_goal, dict)
+                and bulk_goal.get("kind") == "swipe"
+            ):
+                named = _visible_dry_swipe_card_name(
+                    instruction, ui_tree, st_bulk
+                )
+                if named:
+                    return _guard(
+                        {
+                            "action": "done",
+                            "reason": (
+                                f"[DRY RUN] identified card '{named}'; would "
+                                f"like/pass (dry success, no swipe)"
+                            ),
+                            "planner": "bulk_swipe_heuristic",
+                            "llm_provider": None,
+                            "dry_run": True,
+                            "dry_run_verified": True,
+                            "last_name": named,
+                            "fastpath_step": "bulk_dry_run_skip_like",
+                            "_fastpath_step": "bulk_dry_run_skip_like",
+                        }
+                    )
+            # Fall through to LLM / other planners — skip plan_bulk_bench
+            bulk_act = None
+        else:
+            bulk_act = None
+            try:
+                bulk_act = plan_bulk_bench(
+                    instruction,
+                    ui_tree,
+                    history,
+                    state=st_bulk,
+                    package=package,
+                    dry_run=dry_run,
+                )
+            except Exception as bulk_err:
+                # r26: never raise out of heuristics — hand off to LLM
+                logger.warning(
+                    "plan_bulk_bench raised → LLM handoff: %s", bulk_err
+                )
+                st_bulk["_bulk_llm_handoff"] = True
+                return _guard(
+                    {
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
+                        "reason": (
+                            f"Heuristic exception — hand off to LLM "
+                            f"({bulk_err})"
+                        ),
+                        "planner": "bulk_llm_handoff",
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
+                        "dry_run": bool(dry_run),
+                    }
+                )
         if bulk_act:
             # Heuristic "fail" that isn't a safety refuse → LLM handoff
             bak = str(bulk_act.get("action") or "").lower()
@@ -1620,11 +2234,12 @@ def plan_next_action(
 
             # Always honor verified fast paths (nothing-to-reply, dry evaluate,
             # open_app, Badoo chats open, …) — never block them behind LLM.
+            # r28: do NOT clear _bulk_llm_handoff — once handed off, stay in LLM
+            # for the rest of the job (except these terminal verified wins).
             if _bulk_action_is_verified_fastpath(bulk_act):
                 st_bulk["bulk_stall_n"] = 0
                 st_bulk["_bulk_progress_sig"] = _bulk_progress_signature(st_bulk)
                 st_bulk["bulk_last_progress_at"] = now_ts
-                st_bulk.pop("_bulk_llm_handoff", None)
                 bulk_act["_stall_n"] = 0
                 return _guard(bulk_act)
 
@@ -2968,8 +3583,32 @@ def _end_job_cleanup(job: Dict[str, Any], device_id: str, call_device) -> None:
     job["state"] = state
 
 
+def _dry_run_goal_kind(instruction: str, state: Optional[Dict[str, Any]] = None) -> str:
+    """swipe | message | message_new | other — from instruction / state."""
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+    except ImportError:
+        from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+
+    g = parse_bulk_goal(instruction or "")
+    if isinstance(g, dict) and g.get("kind"):
+        return str(g["kind"])
+    st = state if isinstance(state, dict) else {}
+    if isinstance(st.get("bulk_swipe"), dict):
+        return "swipe"
+    if isinstance(st.get("bulk_message_new"), dict):
+        return "message_new"
+    if isinstance(st.get("bulk_message"), dict):
+        return "message"
+    return "other"
+
+
 def _dry_run_done_is_verified(
-    action: Dict[str, Any], reason: str, state: Dict[str, Any]
+    action: Dict[str, Any],
+    reason: str,
+    state: Dict[str, Any],
+    *,
+    instruction: str = "",
 ) -> bool:
     """True when a dry-run done actually proved the expected UI elements."""
     if action.get("dry_run_verified") is True:
@@ -2977,15 +3616,30 @@ def _dry_run_done_is_verified(
     if state.get("dry_run_verified") is True:
         return True
     low = (reason or "").lower()
-    # Explicit verified markers from heuristics / LLM dry-swipe identify
+    goal_kind = _dry_run_goal_kind(instruction, state)
+    # Explicit verified markers from heuristics / LLM
     if "deck verified" in low or "compose verified" in low:
+        return True
+    # LLM reported compose focus (Bumble Tosin / Tagged Hannah)
+    if (
+        "confirmed editable" in low
+        or "editable input" in low
+        or "composer verified" in low
+        or "compose field" in low
+        or "focused editable" in low
+    ):
+        # Count distinct chat toward N when messaging
+        if goal_kind in ("message", "message_new"):
+            _record_dry_chat_verified(state, action, reason)
         return True
     if "dry_run_verified" in low:
         return True
+    # Card identify is ONLY success for swipe goals — never messaging
+    # (tagged_new3 falsely completed on 'identified card').
     if "identified card" in low or "identified profile" in low:
-        return True
+        return goal_kind == "swipe"
     if "evaluated" in low and "would like/pass" in low:
-        return True
+        return goal_kind == "swipe"
     # A bare skip without verification is NOT success
     if "[dry run] would" in low and "skipped" in low:
         return False
@@ -2994,6 +3648,45 @@ def _dry_run_done_is_verified(
     if "would open" in low and "verified" not in low:
         return False
     return bool(action.get("dry_run_verified"))
+
+
+def _record_dry_chat_verified(
+    state: Dict[str, Any], action: Dict[str, Any], reason: str
+) -> None:
+    """Bump distinct-chat dry progress when compose/editable is confirmed."""
+    if not isinstance(state, dict):
+        return
+    name = (
+        str(action.get("contact") or action.get("last_name") or action.get("name") or "")
+        .strip()
+    )
+    if not name:
+        # Try to pull a name from the reason: "… for Tosin" / "chat with Hannah"
+        m = re.search(
+            r"(?:chat(?:\s+with)?|for|contact|thread)\s+['\"]?([A-Za-z][\w'\-.]*)",
+            reason or "",
+            re.I,
+        )
+        if m:
+            name = m.group(1).strip()
+    bulk_key = (
+        "bulk_message_new"
+        if isinstance(state.get("bulk_message_new"), dict)
+        else "bulk_message"
+    )
+    bulk = state.setdefault(bulk_key, {})
+    if not isinstance(bulk, dict):
+        return
+    names = list(bulk.get("done_names") or [])
+    if name and name.lower() not in {str(x).lower() for x in names}:
+        names.append(name)
+        bulk["done_names"] = names
+        bulk["done"] = max(int(bulk.get("done") or 0), len(names))
+    elif not name:
+        bulk["done"] = max(int(bulk.get("done") or 0), 1)
+    bulk["dry_run_verified"] = True
+    state["dry_run_verified"] = True
+    state[bulk_key] = bulk
 
 
 def _bulk_swipe_app_from_instruction(instruction: str) -> Optional[str]:
@@ -3697,6 +4390,40 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         bool(job.get("dry_run") or state.get("dry_run")),
         bool(job.get("live_test") or state.get("live_test")),
     )
+
+    # r28: honor cancel before every step — never overwrite cancelled
+    if refresh_job_cancel_status(job):
+        status_l = str(job.get("status") or "").lower()
+        if status_l in ("stopped", "cancelled", "canceled"):
+            state["last_action"] = "cancelled"
+            job["state"] = state
+            job.setdefault("result", "Cancelled")
+            logger.info(
+                "step skipped — job already %s job=%s",
+                status_l,
+                job.get("job_id"),
+            )
+            return job
+        if status_l in ("failed", "completed"):
+            return job
+
+    # r28: Taimi / Hinge unsupported — fail fast (<30s) instead of burning steps
+    if not state.get("_unsupported_checked"):
+        state["_unsupported_checked"] = True
+        unsup = unsupported_app_fail_action(instruction)
+        if unsup:
+            job["status"] = "failed"
+            job["error"] = str(unsup.get("reason") or "unsupported app")
+            job["result"] = job["error"]
+            state["last_action"] = "unsupported_app"
+            job["state"] = state
+            job["completed_at"] = now
+            logger.info(
+                "unsupported app fail-fast job=%s: %s",
+                job.get("job_id"),
+                job["error"][:120],
+            )
+            return job
     # Renew at step start — covers slow tree dump + screenshot below
     _renew_job_lease(job)
 
@@ -4838,7 +5565,56 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 str(job.get("job_id") or ""), step + 1, image_b64
             )
 
-        # live_test: likes OK (capped), never paid/super-like; bank text only
+        # r28: re-check cancel right before mutating / completing
+        if refresh_job_cancel_status(job):
+            status_l = str(job.get("status") or "").lower()
+            if status_l in ("stopped", "cancelled", "canceled"):
+                state["last_action"] = "cancelled"
+                job["state"] = state
+                job.setdefault("result", "Cancelled")
+                return job
+
+        # r28: Yubo Reactions / Elite Pack — Back out entirely (never count as likes)
+        yubo_back = yubo_paywall_back_action(
+            ui_tree, planner=str((action or {}).get("planner") or "yubo_paywall")
+        )
+        if yubo_back and kind not in ("done", "fail", "back", "press_button"):
+            # Also block stuck-recovery billing taps
+            if (
+                _action_is_billing_or_terms_tap(action if isinstance(action, dict) else {}, kind)
+                or is_yubo_reactions_or_elite_paywall(ui_tree)
+            ):
+                action = yubo_back
+                kind = "press_button"
+                reason = str(yubo_back.get("reason") or reason)
+
+        # r28: no typing in like/swipe jobs (Hily typed 'Hily' into launcher)
+        kind, reason, action = apply_like_job_no_type_guard(
+            action=action if isinstance(action, dict) else {},
+            kind=kind,
+            reason=reason,
+            instruction=instruction,
+            job=job,
+            package=str(tree_info.get("package") or ""),
+        )
+
+        # Block billing/terms taps even outside live_test (stuck recovery)
+        if _action_is_billing_or_terms_tap(
+            action if isinstance(action, dict) else {}, kind
+        ):
+            new_reason = (
+                f"Blocked billing/terms tap — Back instead ({reason})"
+            )
+            action = {
+                "action": "press_button",
+                "button": "back",
+                "reason": new_reason,
+                "_billing_terms_block": True,
+            }
+            kind = "press_button"
+            reason = new_reason
+
+        # live_test: likes OK (capped by control class), never pass/paid
         is_live_test = bool(job.get("live_test") or state.get("live_test"))
         if is_live_test:
             kind, reason, action = apply_live_test_guard(
@@ -4852,7 +5628,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     or state.get("live_test_max_n")
                     or LIVE_TEST_DEFAULT_MAX_N
                 ),
+                like_job=_instruction_is_like_or_swipe_job(instruction, job),
             )
+            # Snapshot card name before like tap for post-verify
+            if state.get("_pending_live_like"):
+                app_for_like = _bulk_swipe_app_from_instruction(instruction) or ""
+                snapshot_live_like_card_name(
+                    state, ui_tree=ui_tree, app=app_for_like
+                )
             _log_step_decision(
                 job_id=str(job.get("job_id") or ""),
                 step=step,
@@ -4875,7 +5658,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             is_dry
             and kind == "done"
             and not _dry_run_done_is_verified(
-                action if isinstance(action, dict) else {}, reason, state
+                action if isinstance(action, dict) else {},
+                reason,
+                state,
+                instruction=instruction,
             )
             and (
                 "would swipe" in (reason or "").lower()
@@ -4929,7 +5715,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job.get("dry_run") or state.get("dry_run") or action.get("dry_run")
             )
             verified = _dry_run_done_is_verified(
-                action if isinstance(action, dict) else {}, reason, state
+                action if isinstance(action, dict) else {},
+                reason,
+                state,
+                instruction=instruction,
             )
             if is_dry and not verified:
                 _record_step(f"done: {reason}", ok=False, screenshot_key=shot_key)
@@ -4950,6 +5739,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["dry_run_verified"] = True
             _record_step(f"done: {reason}", screenshot_key=shot_key)
             job["state"] = state
+            # r28: never overwrite cancelled/stopped with completed
+            if refresh_job_cancel_status(job):
+                status_l = str(job.get("status") or "").lower()
+                if status_l in ("stopped", "cancelled", "canceled"):
+                    job.setdefault("result", "Cancelled")
+                    _end_job_cleanup(job, device_id, call_device)
+                    return job
             job["status"] = "completed"
             job["result"] = reason or "Goal completed"
             if stats.get("p50_ms") is not None:
@@ -5571,6 +6367,37 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # Track tree fingerprint — same hash after an action = no progress
             after_tree = str(after.get("tree") or "")
             after_pkg = str(after.get("package") or "")
+            # r28: verify live likes only when the card name changes
+            if is_live_test and state.get("_pending_live_like"):
+                app_for_like = _bulk_swipe_app_from_instruction(instruction) or ""
+                if verify_pending_live_like(
+                    state, ui_tree=after_tree, app=app_for_like
+                ):
+                    verify_msg = (
+                        (verify_msg or "") + " · live_like_verified"
+                    ).strip(" ·")
+                    # Cap reached after verified like → complete
+                    cap_n = int(
+                        job.get("live_test_max_n")
+                        or state.get("live_test_max_n")
+                        or LIVE_TEST_DEFAULT_MAX_N
+                    )
+                    if int(state.get("live_likes_done") or 0) >= cap_n:
+                        if not refresh_job_cancel_status(job):
+                            job["status"] = "completed"
+                            job["result"] = (
+                                f"[LIVE TEST] likes done "
+                                f"{state.get('live_likes_done')}/{cap_n}"
+                            )
+                            job["completed_at"] = int(time.time())
+                            state["last_action"] = "live_like_cap_done"
+                            job["state"] = state
+                            _end_job_cleanup(job, device_id, call_device)
+                            return job
+                else:
+                    verify_msg = (
+                        (verify_msg or "") + " · live_like_unverified"
+                    ).strip(" ·")
             # Deterministic post-action checks for type / send (no vision)
             if kind in ("type", "type_text", "input_text"):
                 typed = str(action.get("text") or "")
@@ -5769,6 +6596,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         # Multi-step goals: if the answer is now on screen, complete
         if sat_after and kind not in ("fail",):
+            if refresh_job_cancel_status(job):
+                status_l = str(job.get("status") or "").lower()
+                if status_l in ("stopped", "cancelled", "canceled"):
+                    job.setdefault("result", "Cancelled")
+                    _end_job_cleanup(job, device_id, call_device)
+                    return job
             job["status"] = "completed"
             job["result"] = sat_after
             if verify_msg:

@@ -3683,6 +3683,18 @@ _PROFILE_SECTION_LABELS = frozenset(
         "they liked you",
         "find out who",
         "liked you",
+        # r28: home-folder / chrome mistaken for card or chat names
+        "social",
+        "chats",
+        "chat",
+        "messages",
+        "inbox",
+        "conversations",
+        "added you",
+        "reactions",
+        "elite pack",
+        "see who added you",
+        "send a message",
     }
 )
 
