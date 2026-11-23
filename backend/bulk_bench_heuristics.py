@@ -324,6 +324,36 @@ def parse_bulk_goal(instruction: str) -> Optional[Dict[str, Any]]:
     if "swipe 50" in low or "auto-swipe" in low:
         return {"kind": "swipe", "count": counts["swipe"], "message": None, "app": app}
 
+    # First-contact from Discover. Quoted text or the message bank only.
+    _MESSAGE_BANK = (
+        "hey how are you",
+        "hi miss",
+        "hello miss",
+        "good morning",
+    )
+    fc = re.search(
+        r"(?:send\s+)?(\d+)\s+first[- ]contact(?:\s+messages?)?",
+        low,
+    )
+    if not fc:
+        fc = re.search(
+            r"(?:message|auto[- ]?message|send)\s+(\d+)\s+"
+            r"(?:first[- ]contact(?:\s+messages?)?|openers?)",
+            low,
+        )
+    if fc:
+        n_fc = int(fc.group(1))
+        qm_fc = re.search(r"[\"']([^\"']+)[\"']", text)
+        msg_fc = qm_fc.group(1).strip() if qm_fc else _MESSAGE_BANK[0]
+        return {
+            "kind": "message_new",
+            "count": n_fc,
+            "message": msg_fc,
+            "app": app,
+            "contact_scope": "new",
+            "first_contact": True,
+        }
+
     # New-contact messaging: message "hello miss" to 5 new profiles on Hinge
     qm_new_quoted = re.search(
         r"(?:reply|message|auto[- ]?message)\s+[\"']([^\"']+)[\"']\s+"
@@ -4353,6 +4383,28 @@ def plan_bulk_message_new(
     done = int(bulk.get("done") or 0)
     hist = " ".join(history[-16:]).lower()
     skipped = {str(x).lower() for x in (bulk.get("skipped") or [])}
+
+    if app == "hinge":
+        try:
+            from hinge_fixed_first_contact import (
+                plan_hinge_fixed_first_contact,
+            )
+        except ImportError:
+            from backend.hinge_fixed_first_contact import (  # type: ignore
+                plan_hinge_fixed_first_contact,
+            )
+        fixed = plan_hinge_fixed_first_contact(
+            instruction,
+            ui_tree,
+            history,
+            state=st,
+            package=package,
+            dry_run=dry_run,
+            message=message,
+            target=target,
+        )
+        if fixed:
+            return fixed
 
     # Apps with no reliable free new-message surface → like FALLBACK only after
     # we fail to find Matches/Connections/composer (never hard-replace).
