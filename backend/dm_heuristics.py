@@ -488,6 +488,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
             "Likes",  # match strip paid tile
             "Rewind",
             "Undo",
+            "Treasure",  # promo / freebie row — not a person chat
+            "Open Treasure",
         ),
     },
     "hily": {
@@ -1295,11 +1297,14 @@ def _looks_like_message_preview(label: str) -> bool:
     """True for last-message preview text — never a contact name / row key.
 
     Examples: 'Good and you' (Badoo), 'Hola' (Tagged), 'hey what's up'.
+    Names with emoji/heart suffix ('Amie ♡') are NOT previews.
     """
     name = (label or "").strip()
     if not name:
         return True
-    low = name.lower()
+    # Strip trailing emoji / hearts so "Amie ♡" counts as a person name
+    name_core = re.sub(r"[\W_]+$", "", name, flags=re.UNICODE).strip() or name
+    low = name_core.lower()
     # Short all-lowercase greetings / snippets
     greetings = (
         "hola",
@@ -1326,14 +1331,20 @@ def _looks_like_message_preview(label: str) -> bool:
         "lol",
         "haha",
         "hahaha",
+        "good u",
     )
-    if low in greetings:
+    if low in greetings or name.strip().lower() in greetings:
+        return True
+    # "You: …" outgoing preview prefix
+    if name.strip().lower().startswith("you:"):
         return True
     # Multi-word sentence that is not Title Case person name ("Ada Love")
-    words = name.split()
+    # Ignore non-alpha tokens (♡, emoji) when judging Title Case
+    words = [w for w in name_core.split() if any(ch.isalpha() for ch in w)]
     if len(words) >= 2:
         # All lowercase / sentence case → preview
-        if name == low or (
+        joined = " ".join(words)
+        if joined == joined.lower() or (
             words[0][:1].isupper() and all(w == w.lower() for w in words[1:])
         ):
             # Allow "First Last" Title Case names
@@ -1342,11 +1353,12 @@ def _looks_like_message_preview(label: str) -> bool:
             ):
                 return True
         # Ends with punctuation / question → preview
-        if name[-1] in ".!?…" or "?" in name:
+        if name_core[-1] in ".!?…" or "?" in name_core:
             return True
     # Preview-ish verbs / pronouns
+    low_full = name.lower()
     if any(
-        tok in low
+        tok in low_full
         for tok in (
             " and you",
             "how are",
@@ -2638,7 +2650,35 @@ def badoo_dismiss_popup(
     tree: str, planner: str = "badoo_heuristic"
 ) -> Optional[Dict[str, Any]]:
     nodes = _parse_compact_nodes(tree)
-    blob = " ".join(f"{n.get('id')} {n.get('label')}" for n in nodes).lower()
+    blob = " ".join(
+        f"{n.get('id')} {n.get('label')} {n.get('text')}" for n in nodes
+    ).lower()
+    # Treasure / chest / freebie promo (r21: reply5 stalled Open Treasure)
+    if any(tok in blob for tok in ("treasure", "chest", "freebie", "open treasure")):
+        for lab in ("Close", "Not now", "Maybe later", "No thanks", "Skip"):
+            close = _tree_node_center(tree, lab)
+            if close:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": close[0],
+                        "y": close[1],
+                        "reason": f"Dismiss Badoo Treasure promo → {lab} ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "badoo_popup_treasure",
+                )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Dismiss Badoo Treasure promo ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "badoo_popup_treasure",
+        )
     if "buy credits" in blob:
         close = _tree_node_center(tree, "Close")
         if close:

@@ -471,6 +471,38 @@ def _visible_chat_list_rows(
     result_ids = tuple(profile.get("result_ids") or ())
     # BLK Compose Matches list has no row resource-ids — fall back to names
     blk_name_fallback = app_l == "blk" and (not result_ids or blk_on_matches(ui_tree))
+    # Yubo Compose Conversations: plain-text names (Roch/Leah/…) with no row ids
+    yubo_name_fallback = False
+    if app_l == "yubo":
+        try:
+            from dm_heuristics import yubo_on_chat_list as _yubo_list
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                yubo_on_chat_list as _yubo_list,
+            )
+        yubo_name_fallback = _yubo_list(ui_tree, _log=False) or (
+            "conversations" in (ui_tree or "").lower()
+        )
+    # Hily: Matches/All/Unread chrome present but row ids missing
+    hily_name_fallback = app_l == "hily" and (
+        "matches" in (ui_tree or "").lower()
+        or "unread" in (ui_tree or "").lower()
+        or "dialogmessageitem" in (ui_tree or "").lower()
+    )
+    # Generic: chat-list chrome + scrollable mid-list short names (any dating app)
+    generic_list_chrome = any(
+        tok in (ui_tree or "").lower()
+        for tok in (
+            "conversations",
+            "matches",
+            "messages",
+            "inbox",
+            "connections",
+            "new friends",
+            "your turn",
+            "their turn",
+        )
+    )
     # WhatsApp home: many rows only have text (no resource-id). Accept mid-list
     # Title Case / short names when chats chrome is present.
     wa_home = app_l in ("whatsapp", "wa") and (
@@ -542,6 +574,44 @@ def _visible_chat_list_rows(
                 and _blk_looks_like_person_name(label)
                 and not label.lower().startswith(("your turn", "their turn", "hidden"))
                 and not _looks_like_message_preview(label)
+            ):
+                row_ok = True
+        if not row_ok and (
+            yubo_name_fallback or hily_name_fallback or generic_list_chrome
+        ):
+            # Generic chat-row: short name text in mid-list (not tabs/headers/
+            # previews). Real Yubo: Roch, Leah, Marcia, Hafsa, Amie ♡.
+            y = int(n.get("y") or 0)
+            x = int(n.get("x") or 0)
+            words = label.split()
+            # Allow heart / emoji suffix on names ("Amie ♡")
+            name_core = re.sub(r"[\W_]+$", "", label, flags=re.UNICODE).strip() or label
+            core_words = name_core.split()
+            title_case = bool(core_words) and all(
+                w[:1].isupper()
+                and (len(w) == 1 or w[1:].islower() or "'" in w or not w.isalpha())
+                for w in core_words
+                if w.isalpha() or "'" in w
+            )
+            y_min = 1050 if yubo_name_fallback else 280
+            if (
+                y_min <= y <= 2050
+                and x <= 700
+                and 2 <= len(name_core) <= 28
+                and title_case
+                and not _looks_like_message_preview(label)
+                and not _looks_like_message_preview(name_core)
+                and label.lower()
+                not in (
+                    "all",
+                    "unread",
+                    "top picks",
+                    "finder",
+                    "social",
+                    "people",
+                    "discover",
+                    "treasure",
+                )
             ):
                 row_ok = True
         if not row_ok:
@@ -636,6 +706,15 @@ def _visible_chat_list_rows(
             "calls tab",
             "new chat",
             "archived",
+            "all",
+            "unread",
+            "top picks",
+            "finder",
+            "social",
+            "people",
+            "discover",
+            "treasure",  # Badoo promo row — never a person
+            "encounters",
         ):
             continue
         if any(
@@ -648,6 +727,9 @@ def _visible_chat_list_rows(
                 "older chats",
                 "your turn",
                 "their turn",
+                "treasure",
+                "buy credits",
+                "they liked you",
             )
         ):
             continue
@@ -1872,16 +1954,46 @@ def plan_bulk_swipe(
                 },
                 "bulk_yubo_open_deck",
             )
-    # Bumble People photo grid — navigate to Discover card stack (never tile-tap)
+    # Bumble People/Discover grids — navigate to leftmost swipe deck tab
+    # (first bottom-nav item = main card stack; People @540 is the photo grid).
     if app == "bumble" and (
-        bumble_on_photo_grid(ui_tree) or "same dating goals" in (ui_tree or "").lower()
+        bumble_on_photo_grid(ui_tree)
+        or "same dating goals" in (ui_tree or "").lower()
+        or (
+            not bumble_on_people_deck(ui_tree)
+            and any(
+                t in (ui_tree or "").lower() for t in ("people", "discover", "for you")
+            )
+        )
     ):
-        # Prefer labeled Discover tab in the bottom nav (real swipe screen)
-        disc = _nav_tab_center(
-            ui_tree,
-            "Discover",
-            ids=("com.bumble.app:id/mainApp_navigationTabBar",),
-        ) or _exact_label_center(ui_tree, "Discover")
+        # Prefer labeled Discover / For You in the bottom nav; else leftmost
+        # clickable in the nav band (never People @ mid).
+        disc = (
+            _nav_tab_center(
+                ui_tree,
+                "Discover",
+                "For You",
+                "For you",
+                ids=("com.bumble.app:id/mainApp_navigationTabBar",),
+            )
+            or _exact_label_center(ui_tree, "Discover", y_min=1800)
+            or _exact_label_center(ui_tree, "For You", y_min=1800)
+        )
+        # Leftmost bottom-nav clickable (x < 400) = swipe deck tab
+        if disc is None or int(disc[0]) >= 450:
+            leftmost = None
+            for n in _parse_compact_nodes(ui_tree):
+                y = int(n.get("y") or 0)
+                x = int(n.get("x") or 0)
+                if y < 2000 or x >= 400 or not n.get("clickable"):
+                    continue
+                lab = (n.get("text") or n.get("label") or "").lower()
+                if lab in ("people", "chats", "beeline", "profile"):
+                    continue
+                if leftmost is None or x < leftmost[0]:
+                    leftmost = (x, y)
+            if leftmost:
+                disc = leftmost
         tries = int(bulk.get("_bumble_discover_tries") or 0)
         if tries < 2:
             bulk["_bumble_discover_tries"] = tries + 1
@@ -1899,8 +2011,8 @@ def plan_bulk_swipe(
                     "x": int(xy[0]),
                     "y": int(xy[1]),
                     "reason": (
-                        f"Leave Bumble People grid → Discover card stack "
-                        f"({planner})"
+                        f"Leave Bumble People/Discover grid → leftmost "
+                        f"swipe deck tab ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -1988,46 +2100,61 @@ def plan_bulk_swipe(
                 },
                 "bulk_settle_deck",
             )
-        # Hily: after settle still no Finder — retry Finder tab / Back before idle
+        # Hily: after settle still no Finder — Back once, vision once, then fail
+        # (empty tree / Crush tiles must not loop 7 min).
         if app == "hily" and bulk.get("_deck_settle_done"):
             retries = int(bulk.get("_hily_post_settle_n") or 0)
-            if retries < 2:
+            if retries < 1:
                 bulk["_hily_post_settle_n"] = retries + 1
                 bulk["_deck_settle_done"] = False
                 st["bulk_swipe"] = bulk
-                if retries == 0:
-                    return _fp(
-                        {
-                            "action": "press_button",
-                            "button": "back",
-                            "reason": (
-                                f"Hily deck miss after settle — Back then "
-                                f"Finder ({planner})"
-                            ),
-                            "planner": planner,
-                            "llm_provider": None,
-                            "dry_run": bool(dry_run),
-                        },
-                        "bulk_hily_deck_miss_back",
-                    )
-                xy = DM_APP_PROFILES.get("hily", {}).get("deck_tab_xy") or (142, 2190)
                 return _fp(
                     {
-                        "action": "tap",
-                        "x": int(xy[0]),
-                        "y": int(xy[1]),
+                        "action": "press_button",
+                        "button": "back",
                         "reason": (
-                            f"Hily deck miss — re-tap Finder after settle "
+                            f"Hily deck miss after settle — Back then "
+                            f"Finder ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                    },
+                    "bulk_hily_deck_miss_back",
+                )
+            if not bulk.get("_hily_deck_vision"):
+                bulk["_hily_deck_vision"] = True
+                st["bulk_swipe"] = bulk
+                return _fp(
+                    {
+                        "action": "wait",
+                        "seconds": 0.6,
+                        "reason": (
+                            f"Hily deck miss — vision locate Finder Like/Pass "
                             f"({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
                         "dry_run": bool(dry_run),
-                        "label": "Finder",
                         "needs_vision": True,
+                        "_force_vision": True,
                     },
-                    "bulk_hily_open_finder",
+                    "bulk_hily_deck_vision",
                 )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hily Finder deck not verified after Back+vision — "
+                        f"fail fast (refuse Crush tile hang) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "dry_run_verified": False,
+                },
+                "bulk_hily_deck_miss_fail",
+            )
 
     # App-specific + harmless popups (Streaks Got it!, rate-us, tips)
     # Prefer labeled dismiss; never paid upsells.
@@ -2809,6 +2936,18 @@ def plan_bulk_message(
     if pay:
         return _fp(pay, "bulk_msg_paywall_dismiss")
 
+    # Badoo: Buy Credits / Treasure promo sheets (reply5 stalled on Open Treasure)
+    if (app_key or "").lower() == "badoo":
+        try:
+            from dm_heuristics import badoo_dismiss_popup as _badoo_pop
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                badoo_dismiss_popup as _badoo_pop,
+            )
+        pop = _badoo_pop(ui_tree, planner=planner)
+        if pop:
+            return pop
+
     # Once we intentionally opened / are targeting a thread, do NOT back out.
     # Back-to-root is for job start leftovers and non-target threads only.
     allow_thread = bool(str(bulk.get("current") or "").strip())
@@ -3305,8 +3444,29 @@ def plan_bulk_message(
             "bulk_open_match",
         )
 
-    # No rows: scroll only on a verified list, cap at MAX_LIST_SCROLLS
+    # No rows: one vision locate before scrolling invents nothing
     scroll_n = int(bulk.get("scroll_count") or 0)
+    if list_ok and not rows and not bulk.get("_rows_vision_n"):
+        bulk["_rows_vision_n"] = 1
+        st["bulk_message"] = bulk
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 0.6,
+                "reason": (
+                    f"Vision locate chat-list rows for {app_key or 'app'} "
+                    f"(name + preview siblings) ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "_force_vision": True,
+                "chat_list_verified": True,
+            },
+            "bulk_rows_vision",
+        )
+
+    # No rows: scroll only on a verified list, cap at MAX_LIST_SCROLLS
     if list_ok and scroll_n < MAX_LIST_SCROLLS:
         bulk["scroll_count"] = scroll_n + 1
         st["bulk_message"] = bulk
@@ -3340,6 +3500,7 @@ def plan_bulk_message(
             "llm_provider": None,
             "dry_run": bool(dry_run),
             "dry_run_verified": False,
+            "needs_vision": True,
         },
         "bulk_no_chat_rows",
     )

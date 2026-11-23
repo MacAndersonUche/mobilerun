@@ -168,23 +168,49 @@ class MobilerunAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        // Mirror uiautomator: interactive windows + not-important views.
-        // Must call setServiceInfo — assigning flags alone can leave getWindows()
-        // empty while rootInActiveWindow stays stale (Taimi/Hinge empty dumps).
-        val info = serviceInfo ?: AccessibilityServiceInfo()
-        info.flags = info.flags or
-            AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-            AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-            AccessibilityEvent.TYPE_VIEW_FOCUSED or
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-        info.notificationTimeout = 100
-        setServiceInfo(info)
-        Log.i(TAG, "Accessibility service connected flags=${serviceInfo?.flags}")
+        ensureInteractiveServiceFlags("onServiceConnected")
+    }
+
+    /**
+     * Mirror uiautomator / UiAutomation: interactive windows + not-important
+     * views. Must call setServiceInfo — assigning flags alone (or only once
+     * at connect) can leave getWindows() empty while rootInActiveWindow stays
+     * stale (Taimi: uiautomator 195 nodes, our dump nodes=0).
+     */
+    private fun ensureInteractiveServiceFlags(why: String) {
+        try {
+            val info = serviceInfo ?: AccessibilityServiceInfo()
+            val before = info.flags
+            info.flags = info.flags or
+                AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+            // typeAllMask equivalent — match accessibility_service_config.xml
+            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            info.notificationTimeout = 100
+            setServiceInfo(info)
+            Log.i(
+                TAG,
+                "setServiceInfo($why) flags $before→${serviceInfo?.flags}",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "setServiceInfo($why) failed: ${e.message}")
+        }
+    }
+
+    /** UiAutomator refreshes roots before dump — Compose/RN often need this. */
+    private fun refreshRoot(root: AccessibilityNodeInfo): Int {
+        return try {
+            root.refresh()
+            root.childCount
+        } catch (_: Exception) {
+            try {
+                root.childCount
+            } catch (_: Exception) {
+                0
+            }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -914,6 +940,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     private fun dumpUITreeWalk(deadlineMs: Long, fullMode: Boolean): TreeResult {
+        // Re-apply flags every dump — rebind/toggle can drop interactive-windows
+        ensureInteractiveServiceFlags("dumpUITreeWalk")
         val sb = StringBuilder(8192)
         val counter = intArrayOf(0)
         val appCounter = intArrayOf(0)
@@ -921,6 +949,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val pkgs = linkedSetOf<String>()
         var windowCount = 0
         var partial = false
+        // On-device diag: type/pkg/kids per window (Mac: Taimi nodes=0 vs uiautomator)
+        val winDiag = mutableListOf<String>()
 
         fun pastDeadline(): Boolean {
             if (SystemClock.elapsedRealtime() >= deadlineMs) {
@@ -930,12 +960,14 @@ class MobilerunAccessibilityService : AccessibilityService() {
             return false
         }
 
-        fun emitWindow(id: String, type: String, focused: Int, root: AccessibilityNodeInfo) {
+        fun emitWindow(id: String, type: String, focused: Int, root: AccessibilityNodeInfo): Int {
+            val kidsBefore = refreshRoot(root)
             windowCount++
             val pkg = root.packageName?.toString().orEmpty()
             if (pkg.isNotEmpty()) pkgs.add(pkg)
             val countApp = !isSystemChromePackage(pkg)
-            sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\">\n")
+            val nodesBefore = counter[0]
+            sb.append("<w id=\"$id\" t=\"$type\" p=\"${xmlEsc(pkg)}\" f=\"$focused\" kids=\"$kidsBefore\">\n")
             buildCompactNodes(
                 root, " ", sb, counter, 0, deadlineMs, fullMode,
                 markPartial = { partial = true },
@@ -943,6 +975,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 textCounter = textCounter,
             )
             sb.append("</w>\n")
+            val emitted = counter[0] - nodesBefore
+            winDiag.add("$type:$pkg:kids=$kidsBefore:nodes=$emitted")
+            Log.i(
+                TAG,
+                "emitWindow id=$id type=$type pkg=$pkg kids=$kidsBefore nodes=$emitted",
+            )
+            return emitted
         }
 
         // Prefer TYPE_APPLICATION window whose package == target (hint from
@@ -1003,6 +1042,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
         // Prefer getWindows() TYPE_APPLICATION first (uiautomator-style), then
         // rootInActiveWindow as a fallback candidate — never the other way around
         // when both exist for the same package with unequal richness.
+        // Probe ALL window types for diag (Mac: compare vs uiautomator).
         val winListProbe = try {
             windows?.toList()
         } catch (e: Exception) {
@@ -1011,13 +1051,27 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
         if (!winListProbe.isNullOrEmpty()) {
             for (w in winListProbe) {
-                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
-                val root = try {
+                val probeRoot = try {
                     w.root
                 } catch (_: Exception) {
                     null
-                } ?: continue
-                val pkg = root.packageName?.toString().orEmpty()
+                }
+                val probePkg = probeRoot?.packageName?.toString().orEmpty()
+                val probeKids = if (probeRoot != null) refreshRoot(probeRoot) else -1
+                winDiag.add(
+                    "probe:t=${w.type}:pkg=$probePkg:kids=$probeKids:" +
+                        "f=${if (w.isFocused) 1 else 0}:a=${if (w.isActive) 1 else 0}",
+                )
+                if (probeRoot != null && w.type != AccessibilityWindowInfo.TYPE_APPLICATION) {
+                    try {
+                        probeRoot.recycle()
+                    } catch (_: Exception) {
+                    }
+                    continue
+                }
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val root = probeRoot ?: continue
+                val pkg = probePkg
                 if (isIgnoredOverlayPackage(pkg)) {
                     try {
                         root.recycle()
@@ -1025,7 +1079,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                     }
                     continue
                 }
-                val kids = safeChildCount(root)
+                val kids = probeKids.coerceAtLeast(0)
                 val existingIdx = candidates.indexOfFirst { it.pkg == pkg }
                 if (existingIdx >= 0) {
                     val existing = candidates[existingIdx]
@@ -1069,7 +1123,8 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (rawActive != null) {
             val pkg = rawActive.packageName?.toString().orEmpty()
             if (!isIgnoredOverlayPackage(pkg)) {
-                val kids = safeChildCount(rawActive)
+                val kids = refreshRoot(rawActive)
+                winDiag.add("rootInActive:pkg=$pkg:kids=$kids")
                 val existingIdx = candidates.indexOfFirst { it.pkg == pkg }
                 if (existingIdx >= 0) {
                     val existing = candidates[existingIdx]
@@ -1183,10 +1238,15 @@ class MobilerunAccessibilityService : AccessibilityService() {
         if (preferredActiveRoot != null && !pastDeadline()) {
             Log.i(
                 TAG,
-                "active window pkg=$preferredActivePkg hint=${hint ?: "-"}",
+                "active window pkg=$preferredActivePkg hint=${hint ?: "-"} " +
+                    "fromWindows=$preferredActiveFromWindows",
             )
-            emitWindow("active", "active", 1, preferredActiveRoot)
-            emittedPkgs.add(preferredActivePkg)
+            val n = emitWindow("active", "active", 1, preferredActiveRoot)
+            // Only skip re-walk of same pkg when we actually emitted nodes —
+            // Taimi/Compose often returns kids=0 until a second getWindows root.
+            if (n > 0 && preferredActivePkg.isNotBlank()) {
+                emittedPkgs.add(preferredActivePkg)
+            }
             activeEmitted = true
             try {
                 preferredActiveRoot.recycle()
@@ -1249,13 +1309,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
                         ""
                     }
                     val typeLabel = "${window.type}" + if (title.isNotEmpty()) ":${title.take(24)}" else ""
-                    emitWindow(
+                    val n = emitWindow(
                         id = "${window.id}",
                         type = typeLabel,
                         focused = if (window.isFocused) 1 else 0,
                         root = root,
                     )
-                    if (pkg.isNotBlank()) emittedPkgs.add(pkg)
+                    if (n > 0 && pkg.isNotBlank()) emittedPkgs.add(pkg)
                     try {
                         root.recycle()
                     } catch (_: Exception) {
@@ -1265,9 +1325,11 @@ class MobilerunAccessibilityService : AccessibilityService() {
         }
 
         val body = sb.toString()
+        val diagAttr = xmlEsc(winDiag.take(24).joinToString("|"))
+        Log.i(TAG, "win_diag=$diagAttr nodes=${counter[0]} text=${textCounter[0]}")
         if (body.isBlank()) {
             return TreeResult(
-                tree = """<hierarchy windows="0" nodes="0" empty="true" text_nodes="0" needs_vision="true"/>""",
+                tree = """<hierarchy windows="0" nodes="0" empty="true" text_nodes="0" needs_vision="true" win_diag="$diagAttr"/>""",
                 packageName = "",
                 empty = true,
                 chars = 0,
@@ -1316,6 +1378,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
             append("app_nodes=\"$effectiveAppNodes\" text_nodes=\"$textNodeCount\" ")
             append("needs_vision=\"$needsVision\" ")
             append("partial=\"$truncated\" empty=\"$isEmpty\" mode=\"$mode\" ")
+            append("win_diag=\"$diagAttr\" ")
             append("packages=\"${xmlEsc(pkgs.joinToString(","))}\">\n")
             append(clipped)
             append("</hierarchy>")

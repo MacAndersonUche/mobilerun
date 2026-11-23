@@ -58,6 +58,11 @@ TASK_TIMEOUT_S = int(os.environ.get("AGENT_TASK_TIMEOUT_S") or "900")
 # Fail only when no step progress for this long (still progressing → keep going
 # until TASK_TIMEOUT_S).
 TASK_IDLE_TIMEOUT_S = int(os.environ.get("AGENT_IDLE_TIMEOUT_S") or "240")
+# True no-progress wall: last UI change / successful goal step (not busywork taps).
+# External cancel was ~7 min; fail server-side ~90s without UI progress.
+NO_PROGRESS_TIMEOUT_S = int(os.environ.get("AGENT_NO_PROGRESS_TIMEOUT_S") or "90")
+# Same planner decision (action+reason+coords) repeating → fail
+MAX_SAME_DECISION = int(os.environ.get("AGENT_MAX_SAME_DECISION") or "3")
 # Launcher-only swipe loops: require this many unchanged swipes on a launcher package
 MAX_LAUNCHER_SWIPE_LOOPS = 3
 # Legacy alias (tests) — in-app swipes must NOT trip this; use launcher guard instead
@@ -1117,6 +1122,21 @@ def _same_tap_key(action: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _planner_decision_key(action: Dict[str, Any]) -> Optional[str]:
+    """Stable key for identical planner decisions (reason stem + coords)."""
+    kind = str(action.get("action") or "").lower()
+    if not kind or kind in ("done", "fail", "wait"):
+        # Wait with same reason still counts as a repeated decision
+        if kind != "wait":
+            return None
+    reason = str(action.get("reason") or "")
+    # Strip planner suffix / volatile ids
+    stem = re.sub(r"\s*\([^)]*\)\s*$", "", reason).strip().lower()
+    stem = re.sub(r"\s+", " ", stem)[:80]
+    tap = _same_tap_key(action) or kind
+    return f"{tap}|{stem}" if stem or tap else None
+
+
 def plan_next_action(
     instruction: str,
     ui_tree: str,
@@ -1763,6 +1783,11 @@ def _tree_attr_int(tree: str, name: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _tree_attr_str(tree: str, name: str) -> str:
+    m = re.search(rf'\b{re.escape(name)}="([^"]*)"', tree or "", re.I)
+    return m.group(1) if m else ""
+
+
 def _tree_reported_package(tree: str, fallback: str = "") -> str:
     """Prefer active window package, else packages= list first entry."""
     fb = (fallback or "").strip()
@@ -1846,6 +1871,9 @@ def _normalize_tree_payload(raw: Any) -> Dict[str, Any]:
             "needs_vision": bool(raw.get("needs_vision")),
             "text_nodes": int(
                 raw.get("text_nodes") or _tree_attr_int(tree, "text_nodes")
+            ),
+            "win_diag": str(
+                raw.get("win_diag") or _tree_attr_str(tree, "win_diag") or ""
             ),
         }
     tree = raw if isinstance(raw, str) else (json.dumps(raw) if raw else "")
@@ -2964,6 +2992,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     steps_detail: List[Dict[str, Any]] = list(state.get("steps_detail") or [])
     now = int(time.time())
     created = int(job.get("created_at") or now)
+    # Seed UI-progress clock once so the 90s watchdog has a baseline
+    state.setdefault("last_ui_progress_at", created)
+    state.setdefault("last_progress_at", created)
     # Renew at step start — covers slow tree dump + screenshot below
     _renew_job_lease(job)
 
@@ -3039,6 +3070,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         state["last_action"] = "idle_timeout"
         job["state"] = state
         job["completed_at"] = now
+        return job
+    # True no-progress wall: busywork taps/settles keep last_progress_at fresh
+    # but UI never changes — fail ~90s (r21: every hang sat until 7 min cancel).
+    last_ui = int(state.get("last_ui_progress_at") or created)
+    if now - last_ui > NO_PROGRESS_TIMEOUT_S and int(state.get("steps") or 0) >= 1:
+        job["status"] = "failed"
+        job["error"] = (
+            f"No UI progress for {NO_PROGRESS_TIMEOUT_S}s "
+            f"(last_ui_progress_at={last_ui}; refuse hung 7 min job)"
+        )
+        state["last_action"] = "no_progress_timeout"
+        job["state"] = state
+        job["completed_at"] = now
+        _attach_failure_artifacts(
+            job, device_id, str(state.get("last_tree") or ""), call_device=call_device
+        )
         return job
     if not device_is_reachable(device_id):
         # Brief wait — phone often reconnects within seconds mid-task
@@ -3309,8 +3356,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             state["empty_tree_streak"] = empty_n
             job["state"] = state
             job["result"] = f"Recovering empty UI tree ({empty_n})"
-            if empty_n <= 2:
-                # Best-effort a11y rebind + brief wait — stay running
+            # One rebind only — then vision MUST run (r21: Taimi nodes=0 sat
+            # rebinding while uiautomator had 195 nodes; needs_vision ignored).
+            if empty_n <= 1:
                 try:
                     call_device(
                         device_id,
@@ -3324,14 +3372,63 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["next_run_at"] = int(time.time())
                 _kick_self(job.get("job_id"), job=job)
                 return job
-            # Rotate distinct recoveries instead of hard-failing
-            action = recovery_action(
-                state,
-                instruction,
-                ui_tree,
-                str(tree_info.get("package") or ""),
-                prefer=["dismiss_dialogs", "redump_tree", "vision", "reconnect_wait"],
-            )
+            # Force screenshot + vision on empty tree (verify S3 upload in logs)
+            image_b64 = None
+            use_vision = False
+            try:
+                image_b64 = _fetch_screenshot_b64(device_id, job=job)
+                use_vision = bool(image_b64)
+                logger.info(
+                    "empty-tree vision job=%s shot=%s win_diag=%s nodes=%s",
+                    job.get("job_id"),
+                    "ok" if use_vision else "fail",
+                    tree_info.get("win_diag") or "",
+                    tree_info.get("nodes"),
+                )
+            except Exception as shot_err:
+                logger.warning("empty-tree screenshot failed: %s", shot_err)
+            if use_vision:
+                try:
+                    action = plan_next_action(
+                        instruction,
+                        ui_tree,
+                        history,
+                        image_b64=image_b64,
+                        no_progress_streak=int(state.get("no_progress_streak") or 0),
+                        last_tap_key=state.get("last_tap_key"),
+                        package=str(tree_info.get("package") or ""),
+                        dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+                        agent_state=state,
+                    )
+                    kind = str(action.get("action") or "").lower()
+                    reason = str(action.get("reason") or "empty-tree vision")
+                    planner = action.get("planner") or "llm"
+                    llm_provider = action.get("llm_provider")
+                    if action.get("action") == "tap":
+                        action["_vision_confirmed_label"] = str(
+                            action.get("label")
+                            or action.get("text")
+                            or action.get("reason")
+                            or "vision"
+                        )
+                    _skip_plan = True
+                except Exception as plan_err:
+                    logger.warning("empty-tree vision plan failed: %s", plan_err)
+                    use_vision = False
+            if not use_vision:
+                # Rotate distinct recoveries instead of hard-failing
+                action = recovery_action(
+                    state,
+                    instruction,
+                    ui_tree,
+                    str(tree_info.get("package") or ""),
+                    prefer=[
+                        "dismiss_dialogs",
+                        "redump_tree",
+                        "vision",
+                        "reconnect_wait",
+                    ],
+                )
             if action.get("action") == "_reconnect_wait":
                 if should_hard_fail(state):
                     job["status"] = "failed"
@@ -3349,10 +3446,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             kind = str(action.get("action") or "").lower()
             reason = str(action.get("reason") or "")
             planner = action.get("planner") or "recovery"
-            llm_provider = None
-            image_b64 = None
-            use_vision = False
-            if action.get("_force_vision"):
+            llm_provider = action.get("llm_provider")
+            if action.get("_force_vision") and not image_b64:
                 try:
                     image_b64 = _fetch_screenshot_b64(device_id, job=job)
                     use_vision = bool(image_b64)
@@ -3684,6 +3779,30 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 kind = "done"
                 reason = f"App already open ({fg0 or trivial_target})"
                 action = {"action": "done", "reason": reason}
+
+        # Same planner decision repeating (any action) → fail fast
+        decision_key = _planner_decision_key(action)
+        if decision_key and decision_key == state.get("last_decision_key"):
+            state["same_decision_n"] = int(state.get("same_decision_n") or 0) + 1
+        else:
+            state["same_decision_n"] = 1 if decision_key else 0
+            state["last_decision_key"] = decision_key
+        if (
+            decision_key
+            and int(state.get("same_decision_n") or 0) >= MAX_SAME_DECISION
+            and kind not in ("done", "fail")
+        ):
+            kind = "fail"
+            reason = (
+                f"same planner decision repeated ×{state['same_decision_n']} "
+                f"({decision_key[:100]}) — fail fast (refuse hung 7 min loop)"
+            )
+            action = {"action": "fail", "reason": reason}
+            logger.info(
+                "same-decision fail job=%s key=%s",
+                job.get("job_id"),
+                decision_key[:80],
+            )
 
         # Same tap/swipe coords → fail fast. Tree fingerprint can jitter while the
         # screen is unchanged (Yubo chats tab tap(342,2194) ×N for 7 min) — so we
@@ -4552,6 +4671,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 verify_msg = (verify_msg + " · no_progress").strip(" ·")
             else:
                 state["no_progress_streak"] = 0
+                state["last_ui_progress_at"] = int(time.time())
                 try:
                     from stuck_recovery import reset_stuck
                 except ImportError:
@@ -4559,6 +4679,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
                 reset_stuck(state)
             state["last_tree_fp"] = fp
+            state["last_tree"] = after_tree[:8000]
             # Launcher swipe loop: only abort after ≥3 unchanged launcher swipes
             if _launcher_swipe_abort(
                 state,

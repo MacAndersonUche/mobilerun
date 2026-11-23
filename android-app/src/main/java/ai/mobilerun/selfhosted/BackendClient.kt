@@ -87,6 +87,7 @@ class BackendClient(private val context: Context) {
     private var discoveredHttp: String? = null
 
     companion object {
+        private const val TAG = "BackendClient"
         val DEFAULT_CLOUD_HTTP: String = BuildConfig.DEFAULT_CLOUD_HTTP
         val DEFAULT_CLOUD_WS: String = BuildConfig.DEFAULT_CLOUD_WS
 
@@ -1778,6 +1779,17 @@ class BackendClient(private val context: Context) {
                                 inferredFg ||
                                 detailed.needsVision ||
                                 zeroText
+                            // Parse win_diag from hierarchy for on-device debug
+                            val winDiag = Regex("""win_diag="([^"]*)"""")
+                                .find(tree)?.groupValues?.getOrNull(1).orEmpty()
+                            if (emptyForTarget || winDiag.isNotEmpty()) {
+                                Log.i(
+                                    TAG,
+                                    "get_ui_tree empty=$emptyForTarget nodes=${detailed.nodes} " +
+                                        "text=${detailed.textNodes} needs_vision=$needsVision " +
+                                        "win_diag=$winDiag prefer=$prefer pkg=$reportedPkg",
+                                )
+                            }
                             val out = mutableMapOf<String, Any?>(
                                 "tree" to tree,
                                 "package" to reportedPkg.ifBlank { a11yPkg },
@@ -1791,6 +1803,7 @@ class BackendClient(private val context: Context) {
                                 "text_nodes" to detailed.textNodes,
                                 "chars" to detailed.chars,
                                 "nodes" to detailed.nodes,
+                                "win_diag" to winDiag,
                                 "a11y" to true,
                                 "truncated" to detailed.partial,
                                 "partial" to detailed.partial,
