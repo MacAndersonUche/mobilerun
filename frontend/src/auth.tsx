@@ -26,13 +26,58 @@ type AuthState = {
 
 const AuthCtx = createContext<AuthState | null>(null);
 
+/** True when a stored JWT is missing, unreadable or past its exp claim. */
+export function isTokenExpired(token: string | null, nowMs = Date.now()): boolean {
+  if (!token) return true;
+  try {
+    const part = token.split('.')[1];
+    if (!part) return false; // not a JWT (opaque) — let the server decide
+    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof json.exp === 'number' && json.exp * 1000 <= nowMs;
+  } catch {
+    return false;
+  }
+}
+
+function initialToken(): string | null {
+  const t = getAuthToken();
+  if (t && isTokenExpired(t)) {
+    clearAuthToken();
+    return null;
+  }
+  return t;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(getAuthToken());
+  const [token, setToken] = useState<string | null>(initialToken());
   const [email, setEmail] = useState<string | null>(
     localStorage.getItem('mobilerun_user_email')
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Stale/expired session: any 401 on an authed call signs out so the
+  // login page shows instead of silently failing (e.g. Generate pairing code).
+  useEffect(() => {
+    const id = axios.interceptors.response.use(
+      (r) => r,
+      (err) => {
+        const status = err?.response?.status;
+        const authHeader =
+          err?.config?.headers?.Authorization ?? err?.config?.headers?.authorization;
+        const url = String(err?.config?.url || '');
+        if (status === 401 && authHeader && !url.includes('/api/auth/login')) {
+          clearAuthToken();
+          localStorage.removeItem('mobilerun_user_email');
+          setToken(null);
+          setEmail(null);
+          setError('Session expired — sign in again');
+        }
+        return Promise.reject(err);
+      },
+    );
+    return () => axios.interceptors.response.eject(id);
+  }, []);
 
   useEffect(() => {
     // Cognito hook: if VITE_COGNITO_DOMAIN is set, prefer that later.
