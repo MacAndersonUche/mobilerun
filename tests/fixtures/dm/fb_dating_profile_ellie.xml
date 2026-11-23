@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.facebook.katana">
+<w id="active" t="active" p="com.facebook.katana" f="1">
+ <n d="Profile picture, Ellie, 21" c="1" xy="540,723" b="0,75,1080,1371"/>
+ <n t="Ellie, 21" xy="140,1464"/>
+ <n d="No, Thanks" c="1" xy="340,2116" b="246,2022,435,2211"/>
+ <n d="Like" c="1" xy="739,2116" b="645,2022,834,2211"/>
+</w>
+</hierarchy>

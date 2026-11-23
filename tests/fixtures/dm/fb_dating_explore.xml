@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.facebook.katana">
+<w id="active" t="active" p="com.facebook.katana" f="1">
+ <n t="Explore" xy="540,130"/>
+ <n t="Spotlight" c="1" xy="540,500"/>
+ <n t="Crush" c="1" xy="540,800"/>
+</w>
+</hierarchy>
