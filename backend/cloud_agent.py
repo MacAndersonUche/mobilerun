@@ -3714,6 +3714,29 @@ def _visible_dry_swipe_card_name(
     instruction: str, ui_tree: str, state: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     """Real profile name already on screen / in bulk state (dry swipe success)."""
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+    app = _bulk_swipe_app_from_instruction(instruction)
+    # Hinge: never read Samsung launcher folder labels (r30 "Jobs").
+    if app == "hinge":
+        try:
+            from dm_heuristics import hinge_in_foreground, hinge_deck_card_name
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                hinge_in_foreground,
+                hinge_deck_card_name,
+            )
+        if not hinge_in_foreground(ui_tree or ""):
+            return None
+        name = hinge_deck_card_name(ui_tree or "")
+        if name and _card_name_is_real_profile(name):
+            return name.split(",")[0].strip()
+        return None
     st = state if isinstance(state, dict) else {}
     bulk = st.get("bulk_swipe") if isinstance(st.get("bulk_swipe"), dict) else {}
     for cand in (
@@ -3722,24 +3745,10 @@ def _visible_dry_swipe_card_name(
         st.get("current_profile_name"),
     ):
         if cand and str(cand).strip():
-            try:
-                from bulk_bench_heuristics import _card_name_is_real_profile
-            except ImportError:
-                from backend.bulk_bench_heuristics import (  # type: ignore
-                    _card_name_is_real_profile,
-                )
             if _card_name_is_real_profile(str(cand).strip()):
                 return str(cand).strip().split(",")[0].strip()
-    app = _bulk_swipe_app_from_instruction(instruction)
     if not app:
         return None
-    try:
-        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
-    except ImportError:
-        from backend.bulk_bench_heuristics import (  # type: ignore
-            deck_card_name,
-            _card_name_is_real_profile,
-        )
     name = deck_card_name(app, ui_tree or "")
     if name and _card_name_is_real_profile(name):
         return name.split(",")[0].strip()

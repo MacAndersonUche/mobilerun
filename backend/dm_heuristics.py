@@ -659,8 +659,10 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "package": "co.hinge.app",
         "pkg_markers": ("hinge",),
         "open_label": "Hinge",
+        "launch_activity": "co.hinge.app/.ui.AppActivity",
         "open_settle_s": 5.0,
         "family": "swipe",
+        "intent_only_open": True,  # never home_drawer_search
         "sparse_main_tabs": True,  # Discover/Matches list → vision
         "inbox_labels": ("Matches", "Messages", "Chats", "Liked You", "Inbox"),
         "inbox_tab_labels": ("Matches",),
@@ -669,6 +671,8 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "standouts_tab_xy": (323, 2195),
         "likes_tab_xy": (539, 2195),  # Likes You
         "inbox_tab_xy": (754, 2195),  # Matches
+        # First "Your turn" row centre on SM-G996B 1080x2400 (empty-tree fallback)
+        "top_chat_xy": (540, 480),
         "profile_tab_xy": (970, 2195),
         # Discover: skip / rewind (vision); heart x≈937; Dating Intent chip PAID
         "skip_xy": (115, 2000),
@@ -3635,6 +3639,7 @@ _PROFILE_SECTION_LABELS = frozenset(
         "lifestyle",
         "work",
         "job",
+        "jobs",
         "school",
         "hometown",
         "location",
@@ -3700,6 +3705,43 @@ _PROFILE_SECTION_LABELS = frozenset(
 )
 
 _BLK_FILTER_CHIP_WORDS = _PROFILE_SECTION_LABELS
+
+
+# Samsung home-folder titles that must never be read as dating-profile names.
+_LAUNCHER_HOME_LABELS = frozenset(
+    {
+        "jobs",
+        "notes",
+        "social",
+        "junk",
+        "shopping",
+        "online shopping",
+        "travel & events",
+        "travel and events",
+        "msc uni info",
+        "bible and prayer",
+        "watchtv/gallery",
+        "watchtv",
+        "indeed job search",
+        "health and fitness",
+        "health & fitness",
+        "finance & investments",
+        "finance and investments",
+        "folder",
+    }
+)
+
+
+def is_launcher_home_label(text: str) -> bool:
+    """True for Samsung launcher folder titles (Jobs, Social, …)."""
+    low = (text or "").strip().lower().split(",")[0].strip()
+    if not low:
+        return False
+    if low in _LAUNCHER_HOME_LABELS or low in _PROFILE_SECTION_LABELS:
+        return True
+    if low.endswith(", folder") or low.endswith(" folder"):
+        return True
+    return False
 
 
 def looks_like_section_label(text: str) -> bool:
@@ -4077,9 +4119,9 @@ def hinge_on_discover(tree: str, *, _log: bool = True) -> bool:
         return False
     if hinge_on_thread(tree):
         return False
-    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    nodes = _hinge_nodes(tree)
     if not nodes:
-        nodes = _parse_compact_nodes(tree)
+        return False
     blob = " ".join(
         f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''}"
         for n in nodes
@@ -4102,9 +4144,9 @@ def hinge_on_discover(tree: str, *, _log: bool = True) -> bool:
 
 def hinge_on_matches(tree: str, *, _log: bool = True) -> bool:
     """Matches tab: Your turn / Their turn / Hidden section headers."""
-    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    nodes = _hinge_nodes(tree)
     if not nodes:
-        nodes = _parse_compact_nodes(tree)
+        return False
     blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
     has_turn = "your turn" in blob or "their turn" in blob
     has_hidden = bool(re.search(r"\bhidden\b", blob))
@@ -4116,9 +4158,9 @@ def hinge_on_matches(tree: str, *, _log: bool = True) -> bool:
 
 def hinge_on_thread(tree: str) -> bool:
     """Thread: sole EditText composer, not Discover CTA or Matches list."""
-    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    nodes = _hinge_nodes(tree)
     if not nodes:
-        nodes = _parse_compact_nodes(tree)
+        return False
     edits = [n for n in nodes if n.get("editable")]
     if len(edits) != 1:
         return False
@@ -4163,10 +4205,24 @@ def hinge_deck_card_name(tree: str) -> Optional[str]:
         "intentions",
         "education",
         "health and fitness",
+        "jobs",
+        "notes",
+        "social",
+        "junk",
+        "online shopping",
+        "travel & events",
+        "travel and events",
+        "msc uni info",
+        "bible and prayer",
+        "watchtv/gallery",
+        "indeed job search",
+        "finance & investments",
+        "finance and investments",
     }
-    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    # Never fall back to launcher / other-package nodes (r30: "Jobs" folder).
+    nodes = _hinge_nodes(tree)
     if not nodes:
-        nodes = _parse_compact_nodes(tree)
+        return None
     candidates: List[Tuple[int, str]] = []
     for n in nodes:
         t = (n.get("text") or "").strip()
@@ -4175,7 +4231,7 @@ def hinge_deck_card_name(tree: str) -> Optional[str]:
         low = t.lower()
         if low in skip or low.startswith("enable for"):
             continue
-        if looks_like_section_label(t):
+        if looks_like_section_label(t) or is_launcher_home_label(t):
             continue
         if re.match(r"^profile\d+$", t, re.I):
             continue
@@ -4378,9 +4434,9 @@ def hinge_outgoing_verified(tree: str, message: str) -> bool:
 
 def hinge_find_match_row(tree: str, contact: str) -> Optional[Tuple[int, int]]:
     """Matches list: Your turn / Their turn rows; skip Hidden section."""
-    nodes = _parse_compact_nodes(tree, package_filter="co.hinge.app")
+    nodes = _hinge_nodes(tree)
     if not nodes:
-        nodes = _parse_compact_nodes(tree)
+        return None
     hidden_y: Optional[int] = None
     for n in nodes:
         t = (n.get("text") or "").strip().lower()
@@ -4433,6 +4489,132 @@ def hinge_open_matches_tab(planner: str = "hinge_heuristic") -> Dict[str, Any]:
             "llm_provider": None,
         },
         "hinge_open_matches",
+    )
+
+
+def _hinge_nodes(tree: str) -> List[Dict[str, Any]]:
+    """Hinge-window nodes only. Never the legacy unscoped fallback (launcher)."""
+    nodes = _parse_compact_nodes(tree or "", package_filter="co.hinge.app")
+    return [
+        n
+        for n in nodes
+        if "co.hinge.app" in (n.get("package") or "").lower()
+    ]
+
+
+def hinge_in_foreground(tree: str, package: str = "") -> bool:
+    """True when the foreground window or given package is Hinge."""
+    pkg = (package or "").lower()
+    if "co.hinge.app" in pkg and "launcher" not in pkg:
+        return True
+    blob = tree or ""
+    return 'p="co.hinge.app"' in blob or "p='co.hinge.app'" in blob
+
+
+def hinge_find_top_match_row(tree: str) -> Optional[Tuple[int, int]]:
+    """First Your-turn (else first) match row; skip Hidden. None if tree empty."""
+    nodes = _hinge_nodes(tree)
+    if not nodes:
+        return None
+    hidden_y: Optional[int] = None
+    your_turn_y: Optional[int] = None
+    for n in nodes:
+        t = (n.get("text") or "").strip().lower()
+        y = int(n.get("y") or 0)
+        if t == "hidden" or t.startswith("hidden"):
+            hidden_y = y
+        if t.startswith("your turn"):
+            your_turn_y = y
+    rows: List[Tuple[int, int, int]] = []
+    for n in nodes:
+        text = (n.get("text") or "").strip()
+        if not text or not n.get("clickable"):
+            continue
+        low = text.lower()
+        if low.startswith(("your turn", "their turn", "hidden", "enable for", "matches")):
+            continue
+        if is_launcher_home_label(text) or looks_like_section_label(text):
+            continue
+        if not looks_like_profile_name(text):
+            continue
+        y = int(n.get("y") or 0)
+        if hidden_y is not None and y >= hidden_y:
+            continue
+        rows.append((y, int(n["x"]), y))
+    if not rows:
+        return None
+    if your_turn_y is not None:
+        after = [r for r in rows if r[0] >= your_turn_y]
+        if after:
+            after.sort()
+            return (after[0][1], after[0][2])
+    rows.sort()
+    return (rows[0][1], rows[0][2])
+
+
+def hinge_tap_top_chat(planner: str = "hinge_heuristic") -> Dict[str, Any]:
+    """Tap the top Matches row; uses mapped xy when the list has no a11y."""
+    xy = DM_APP_PROFILES["hinge"].get("top_chat_xy") or (540, 480)
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": f"Open Hinge top match chat (row xy) ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_tap_top_chat",
+    )
+
+
+def hinge_composer_visible(tree: str, vision_hint: str = "") -> bool:
+    """True when the thread composer is in the a11y tree or confirmed by vision.
+
+    Empty Discover/Matches trees must not count. Discover 'Send a message'
+    CTA / Rose sheet is not a thread composer.
+    """
+    if hinge_find_compose(tree) and hinge_on_thread(tree):
+        return True
+    if hinge_find_compose(tree) and not hinge_on_discover(tree) and not hinge_on_matches(tree):
+        return True
+    hint = (vision_hint or "").lower()
+    if not hint:
+        return False
+    if any(bad in hint for bad in ("like sheet", "send like", "rose", "standouts")):
+        return False
+    return any(
+        tok in hint
+        for tok in (
+            "composer visible",
+            "composer is visible",
+            "message box visible",
+            "message field visible",
+            "text field visible",
+            "keyboard visible",
+            "type a message visible",
+        )
+    )
+
+
+def hinge_launch_intent_action(
+    planner: str = "hinge_heuristic",
+    *,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Open Hinge via its launch intent — never launcher search."""
+    return _fp(
+        {
+            "action": "open_app",
+            "app": "Hinge",
+            "package": "co.hinge.app",
+            "launch_activity": "co.hinge.app/.ui.AppActivity",
+            "open_mode": "launch_intent",
+            "reason": reason or f"Open Hinge via launch intent ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_launch_intent",
     )
 
 

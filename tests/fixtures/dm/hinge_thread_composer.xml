@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hinge 1:1 thread with composer (hint is not Discover 'Send a message') -->
+<hierarchy>
+  <w p="co.hinge.app" a="1" f="1">
+    <n t="Rika" xy="540,130" b="[200,80][880,180]"/>
+    <n e="1" t="" d="Message" xy="400,2200" b="[80,2140][900,2260]"/>
+  </w>
+</hierarchy>

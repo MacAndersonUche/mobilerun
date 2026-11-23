@@ -68,11 +68,19 @@ try:
         hinge_dismiss_play_review,
         hinge_find_compose,
         hinge_find_send_a_message,
+        hinge_find_top_match_row,
+        hinge_in_foreground,
+        hinge_launch_intent_action,
         hinge_like_sheet_action,
+        hinge_composer_visible,
         hinge_on_discover,
         hinge_on_like_sheet,
         hinge_on_matches,
+        hinge_on_thread,
         hinge_open_discover_tab,
+        hinge_open_matches_tab,
+        hinge_tap_top_chat,
+        is_launcher_home_label,
         keyboard_likely_up,
         known_root_screen,
         tab_bar_verified,
@@ -151,11 +159,19 @@ except ImportError:
         hinge_dismiss_play_review,
         hinge_find_compose,
         hinge_find_send_a_message,
+        hinge_find_top_match_row,
+        hinge_in_foreground,
+        hinge_launch_intent_action,
         hinge_like_sheet_action,
+        hinge_composer_visible,
         hinge_on_discover,
         hinge_on_like_sheet,
         hinge_on_matches,
+        hinge_on_thread,
         hinge_open_discover_tab,
+        hinge_open_matches_tab,
+        hinge_tap_top_chat,
+        is_launcher_home_label,
         keyboard_likely_up,
         known_root_screen,
         tab_bar_verified,
@@ -1166,6 +1182,205 @@ def _should_expand_collapsed_section(ui_tree: str) -> bool:
     return False
 
 
+
+def _hinge_empty_tree_recover(
+    ui_tree: str,
+    history: List[str],
+    planner: str,
+    *,
+    state: Optional[Dict[str, Any]] = None,
+    package: str = "",
+    intent: str = "",
+    bucket: Optional[Dict[str, Any]] = None,
+    key: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Hinge Discover/Matches often have no a11y.
+
+    Never reopen via launcher search. If already in Hinge: swipe jobs stay
+    put and use vision; message jobs open Matches then the top chat.
+    """
+    st = state if isinstance(state, dict) else {}
+    bucket = bucket if isinstance(bucket, dict) else {}
+    hist = " ".join(history[-16:]).lower()
+    if not hinge_in_foreground(ui_tree, package):
+        return hinge_launch_intent_action(
+            planner=planner,
+            reason=f"Hinge not in foreground — launch intent, never drawer search ({planner})",
+        )
+    if (intent or "").lower() == "message":
+        if "hinge_open_matches" not in hist and "open hinge matches" not in hist:
+            return hinge_open_matches_tab(planner=planner)
+        if (
+            "hinge_tap_top_chat" not in hist
+            and "open hinge top match" not in hist
+        ):
+            row = hinge_find_top_match_row(ui_tree)
+            if row:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(row[0]),
+                        "y": int(row[1]),
+                        "reason": f"Open Hinge top match chat (row) ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hinge_tap_top_chat",
+                )
+            return hinge_tap_top_chat(planner=planner)
+    vision_asks = int(bucket.get("vision_asks") or 0)
+    if vision_asks >= 3:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Empty Hinge a11y after Matches/chat/vision — "
+                    f"composer not confirmed ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "needs_vision": True,
+                "dry_run_verified": False,
+            },
+            "bulk_recover_empty_tree",
+        )
+    bucket["vision_asks"] = vision_asks + 1
+    if key:
+        st[key] = bucket
+    return _fp(
+        {
+            "action": "wait",
+            "seconds": 1.0,
+            "reason": (
+                f"Empty Hinge a11y — confirm card/composer from screenshot "
+                f"({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+            "needs_vision": True,
+            "_force_vision": True,
+            "dry_run_verified": False,
+        },
+        "bulk_recover_empty_vision",
+    )
+
+
+def plan_hinge_reply_step(
+    ui_tree: str,
+    history: List[str],
+    *,
+    package: str = "",
+    dry_run: bool = False,
+    message: str = "",
+    bulk: Optional[Dict[str, Any]] = None,
+    state: Optional[Dict[str, Any]] = None,
+    planner: str = "bulk_message_heuristic",
+) -> Optional[Dict[str, Any]]:
+    """Intent-launch Hinge, open Matches, open top chat, verify composer.
+
+    ``dry_run_verified`` is set only when the composer is visible in the
+    a11y tree or confirmed by a vision/screenshot caption.
+    """
+    st = state if isinstance(state, dict) else {}
+    bulk = bulk if isinstance(bulk, dict) else st.setdefault("bulk_message", {})
+    play = hinge_dismiss_play_review(ui_tree, planner=planner)
+    if play:
+        return play
+    popup = hinge_dismiss_enable_prompt(ui_tree, planner=planner)
+    if popup:
+        return popup
+    if hinge_on_like_sheet(ui_tree) and not bulk.get("typed"):
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Leave Hinge like sheet → Matches ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_leave_like_sheet",
+        )
+
+    vision_hint = str(
+        st.get("vision_caption")
+        or st.get("hinge_vision")
+        or bulk.get("vision_caption")
+        or ""
+    )
+    if hinge_composer_visible(ui_tree, vision_hint=vision_hint):
+        name = str(bulk.get("current") or "").strip() or "chat"
+        if dry_run:
+            if not bulk.get("current"):
+                bulk["current"] = name
+            bulk["dry_verified"] = True
+            bulk["typed"] = True
+            st["bulk_message"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 0.4,
+                    "reason": (
+                        f"[DRY RUN] composer verified for {name}; "
+                        f"would send '{message}' — never typed ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": True,
+                    "dry_run_verified": True,
+                    "screenshot": True,
+                    "would_send_text": message,
+                },
+                "bulk_dry_run_verify_composer",
+            )
+        return None  # live type path in plan_bulk_message
+
+    hist = " ".join(history[-16:]).lower()
+    if not hinge_in_foreground(ui_tree, package):
+        return hinge_launch_intent_action(planner=planner)
+
+    if not hinge_on_thread(ui_tree):
+        if (
+            not hinge_on_matches(ui_tree)
+            and "hinge_open_matches" not in hist
+            and "open hinge matches" not in hist
+        ):
+            return hinge_open_matches_tab(planner=planner)
+        row = hinge_find_top_match_row(ui_tree)
+        if row and "hinge_tap_top_chat" not in hist:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(row[0]),
+                    "y": int(row[1]),
+                    "reason": f"Open Hinge top match chat (row) ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_tap_top_chat",
+            )
+        if "hinge_tap_top_chat" not in hist and "open hinge top match" not in hist:
+            return hinge_tap_top_chat(planner=planner)
+
+    # Thread open or still sparse — wait for screenshot/vision. Never verified yet.
+    return _fp(
+        {
+            "action": "wait",
+            "seconds": 1.0,
+            "reason": (
+                f"Hinge composer not visible yet — confirm from screenshot "
+                f"({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+            "needs_vision": True,
+            "_force_vision": True,
+            "dry_run": bool(dry_run),
+            "dry_run_verified": False,
+        },
+        "hinge_wait_composer_vision",
+    )
+
+
 def _recover_to_root_action(
     app: Optional[str],
     ui_tree: str,
@@ -1174,6 +1389,8 @@ def _recover_to_root_action(
     *,
     state: Optional[Dict[str, Any]] = None,
     allow_open_thread: bool = False,
+    package: str = "",
+    intent: str = "",
 ) -> Optional[Dict[str, Any]]:
     """Back out / relaunch until deck, chat list, or tab bar is visible.
 
@@ -1318,6 +1535,19 @@ def _recover_to_root_action(
     # Empty / wrong-FG tree → request vision + relaunch once (don't hard-fail
     # before the vision path can run — Hinge/Taimi/Hily empty Finder cases).
     if _app_tree_empty(ui_tree, app_l):
+        if app_l == "hinge":
+            act = _hinge_empty_tree_recover(
+                ui_tree,
+                history,
+                planner,
+                state=st,
+                package=package,
+                intent=intent,
+                bucket=bucket,
+                key=key,
+            )
+            if act:
+                return act
         vision_asks = int(bucket.get("vision_asks") or 0)
         if vision_asks < 2 and app_l in DM_APP_PROFILES:
             bucket["vision_asks"] = vision_asks + 1
@@ -1890,9 +2120,11 @@ def _card_name_is_real_profile(name: Optional[str]) -> bool:
         return False
     if _card_name_is_foreign(raw):
         return False
-    # r28: Social / Chats / home-folder chrome
+    # r28/r30: Social / Chats / home-folder chrome (Jobs, Notes, …)
     low = raw.lower().split(",")[0].strip()
     if low in ("social", "chats", "chat", "messages", "inbox", "people", "discover"):
+        return False
+    if is_launcher_home_label(raw):
         return False
     try:
         from dm_heuristics import looks_like_profile_name
@@ -2032,16 +2264,20 @@ def _ensure_app_open(
         return None
     if opens >= 8:
         return None
-    return _fp(
-        {
-            "action": "open_app",
-            "app": open_label,
-            "reason": f"Open {open_label} for bulk ({planner})",
-            "planner": planner,
-            "llm_provider": None,
-        },
-        "bulk_open_app",
-    )
+    act = {
+        "action": "open_app",
+        "app": open_label,
+        "reason": f"Open {open_label} for bulk ({planner})",
+        "planner": planner,
+        "llm_provider": None,
+        "open_mode": "launch_intent",
+    }
+    if want:
+        act["package"] = want
+    launch = str(profile.get("launch_activity") or "").strip()
+    if launch:
+        act["launch_activity"] = launch
+    return _fp(act, "bulk_open_app")
 
 
 def plan_bulk_swipe(
@@ -2125,7 +2361,9 @@ def plan_bulk_swipe(
         )
 
     # Job start: leave leftover photo browser / thread / keyboard
-    recover = _recover_to_root_action(app, ui_tree, history, planner, state=st)
+    recover = _recover_to_root_action(
+        app, ui_tree, history, planner, state=st, package=package, intent="swipe"
+    )
     if recover:
         return recover
 
@@ -3278,6 +3516,22 @@ def plan_bulk_message(
         if pop:
             return pop
 
+    # Hinge: intent-launch, Matches tab, top chat, composer-from-vision.
+    # Must run BEFORE root recover (empty tree used to relaunch via drawer).
+    if app_key == "hinge":
+        hinge_act = plan_hinge_reply_step(
+            ui_tree,
+            history,
+            package=package,
+            dry_run=dry_run,
+            message=message,
+            bulk=bulk,
+            state=st,
+            planner=planner,
+        )
+        if hinge_act:
+            return hinge_act
+
     # Once we intentionally opened / are targeting a thread, do NOT back out.
     # Back-to-root is for job start leftovers and non-target threads only.
     allow_thread = bool(str(bulk.get("current") or "").strip())
@@ -3288,6 +3542,8 @@ def plan_bulk_message(
         planner,
         state=st,
         allow_open_thread=allow_thread,
+        package=package,
+        intent="message",
     )
     if recover:
         return recover
@@ -4119,6 +4375,8 @@ def plan_bulk_message_new(
         planner,
         state=st,
         allow_open_thread=allow_thread,
+        package=package,
+        intent="message",
     )
     if recover:
         return recover
