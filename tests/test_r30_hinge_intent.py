@@ -217,3 +217,33 @@ def test_launcher_tree_reply_launches_via_intent():
     assert act.get("package") == "co.hinge.app"
     assert "drawer" not in str(act.get("reason") or "").lower()
     assert act.get("dry_run_verified") is not True
+
+
+def test_dry_guard_blocks_tap_the_like_button_reason():
+    from backend.cloud_agent import apply_dry_run_send_guard
+
+    kind, reason, out = apply_dry_run_send_guard(
+        dry_run=True,
+        action={
+            "action": "tap",
+            "x": 96,
+            "y": 806,
+            "reason": "tap the like button on the profile to like it",
+        },
+        kind="tap",
+        reason="tap the like button on the profile to like it",
+    )
+    assert kind == "done"
+    assert "like/pass" in reason.lower() or "skipped" in reason.lower()
+    assert out.get("dry_run_verified") is not True
+    assert out.get("action") == "done"
+
+
+def test_hinge_name_from_vision_reply():
+    from backend.cloud_agent import hinge_name_from_vision_reply
+
+    assert hinge_name_from_vision_reply("Da") == "Da"
+    assert hinge_name_from_vision_reply("Da, 23") == "Da"
+    assert hinge_name_from_vision_reply("NONE") is None
+    assert hinge_name_from_vision_reply("Jobs") is None
+    assert hinge_name_from_vision_reply("Social") is None
