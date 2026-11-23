@@ -761,6 +761,23 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
         try:
             cur = get_job(job_id) or {}
             holder = str(cur.get("lease_owner") or "?")
+            # Still enforce wall clock even when lease is held (r26: stuck lease
+            # previously blocked the 90s wall until TTL expired).
+            timed = enforce_job_wall_clock(cur if isinstance(cur, dict) else job)
+            if timed:
+                try:
+                    save_job_progress(_to_plain(timed), owner=None)
+                except Exception:
+                    pass
+                try:
+                    from storage import release_job_lease as _rel
+                except ImportError:
+                    from backend.storage import release_job_lease as _rel  # type: ignore
+                try:
+                    _rel(job_id, None)
+                except Exception:
+                    pass
+                return
         except Exception:
             holder = "?"
         logger.info(
@@ -780,6 +797,14 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             save_job_progress(_to_plain(timed), owner=owner)
         except Exception:
             pass
+        try:
+            from storage import release_job_lease
+        except ImportError:
+            from backend.storage import release_job_lease  # type: ignore
+        try:
+            release_job_lease(job_id, owner)
+        except Exception:
+            pass
         return
     try:
         if kind == "dating":
@@ -788,9 +813,6 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             updated = run_social_step(job)
         else:
             updated = run_agent_step(job)
-        # Renew after the step (slow screenshots / RPC may have burned most of TTL)
-        if job_id:
-            acquire_job_lease(job_id, owner)
         # Targeted update — never put_item whole item (would revive cancelled jobs)
         # and never write lease fields (stale writeback bug).
         ok = save_job_progress(_to_plain(updated), owner=owner)
@@ -808,10 +830,24 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             state = job.setdefault("state", {})
             if isinstance(state, dict):
                 state["last_action"] = f"process_job_crash: {e}"
+                # Force LLM handoff on next successful tick if job stays running
+                state["_bulk_llm_handoff"] = True
+                state["force_vision_once"] = True
                 job["state"] = state
-            job["status"] = "failed"
-            job["error"] = f"step_worker crash: {e}"
-            job["completed_at"] = int(time.time())
+            # Keep running when possible so handoff can recover — only hard-fail
+            # on truly fatal worker crashes.
+            fatal = any(
+                tok in str(e).lower()
+                for tok in ("no module", "syntaxerror", "memoryerror")
+            )
+            if fatal:
+                job["status"] = "failed"
+                job["error"] = f"step_worker crash: {e}"
+                job["completed_at"] = int(time.time())
+            else:
+                job["status"] = "running"
+                job["error"] = f"step_worker soft crash → handoff: {e}"
+                job["next_run_at"] = int(time.time()) + 2
             job["updated_at"] = int(time.time())
             save_job_progress(_to_plain(job), owner=owner)
         except Exception as persist_err:
@@ -820,7 +856,27 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
                 job.get("job_id"),
                 persist_err,
             )
-        raise
+        # Do not re-raise — finally must release the lease
+    finally:
+        # r26 CRITICAL: always release so the next tick is not skipped with
+        # "lease held by <failed invocation>" until the 90s wall.
+        if job_id:
+            try:
+                from storage import release_job_lease
+            except ImportError:
+                from backend.storage import release_job_lease  # type: ignore
+            try:
+                released = release_job_lease(job_id, owner)
+                logger.info(
+                    "process_job lease release job=%s owner=%s ok=%s",
+                    job_id,
+                    owner,
+                    released,
+                )
+            except Exception as rel_err:
+                logger.warning(
+                    "process_job lease release failed job=%s: %s", job_id, rel_err
+                )
 
 
 def handler(event: Dict[str, Any], context: Any):

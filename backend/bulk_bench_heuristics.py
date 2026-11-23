@@ -637,12 +637,40 @@ def _visible_chat_list_rows(
             or "liked you" == low
             or "find out who" in low
             or "liked you!" in low
+            or "find out who they are" in low
+        ):
+            continue
+        # r26: never treat Discover filter chips / section labels as chats
+        try:
+            from dm_heuristics import (
+                looks_like_profile_name,
+                looks_like_section_label,
+            )
+        except ImportError:
+            from backend.dm_heuristics import (  # type: ignore
+                looks_like_profile_name,
+                looks_like_section_label,
+            )
+        name_core = re.sub(r"[\W_]+$", "", name, flags=re.UNICODE).strip() or name
+        if looks_like_section_label(name_core) or looks_like_section_label(label):
+            continue
+        # Person-name heuristic — Age / Notes / Junk never open as a thread.
+        # Allow WA numbers, fake-chats ProfileN/MatchN, emoji-suffixed names.
+        wa_ok = app_l in ("whatsapp", "wa") and bool(re.search(r"\d{3,}", name))
+        fake_ok = bool(re.match(r"^(?:Profile|Match)\d+$", name, re.I))
+        if not (
+            wa_ok
+            or fake_ok
+            or looks_like_profile_name(name_core)
+            or looks_like_profile_name(name)
         ):
             continue
         nid = str(n.get("id") or "").lower()
         cls = str(n.get("cls") or "").lower()
         # Never tap the premium liked-you badge / promo tile as a chat row
         if "dialogtag_liked" in nid or "tag_liked" in nid:
+            continue
+        if "liked" in nid and ("you" in low or "tag" in nid):
             continue
         if any(
             tok in nid or tok in cls
@@ -3511,17 +3539,23 @@ def plan_bulk_message(
         if not focused_is_compose_not_search(ui_tree, compose_labels, search_labels):
             c = compose_center_in_thread(app_key, ui_tree, next_name)
             if c is None:
+                # r26: never raise / hard-fail — hand off to LLM agent loop
                 return _fp(
                     {
-                        "action": "fail",
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
                         "reason": (
                             f"Compose not found for {next_name} after header "
-                            f"verify — refusing list Message tap ({planner})"
+                            f"verify — hand off to LLM ({planner})"
                         ),
                         "planner": planner,
                         "llm_provider": None,
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
                     },
-                    "bulk_compose_not_found",
+                    "bulk_compose_not_found_handoff",
                 )
             return _fp(
                 {

@@ -1522,15 +1522,72 @@ def plan_next_action(
             from backend.bulk_bench_heuristics import plan_bulk_bench  # type: ignore
 
         st_bulk = agent_state if isinstance(agent_state, dict) else {}
-        bulk_act = plan_bulk_bench(
-            instruction,
-            ui_tree,
-            history,
-            state=st_bulk,
-            package=package,
-            dry_run=dry_run,
-        )
+        # Honor queued dismiss from firewall upsell soft-recover
+        pending = st_bulk.pop("_pending_dismiss", None)
+        if isinstance(pending, dict) and pending.get("action"):
+            pending.setdefault("planner", "pending_dismiss")
+            return _guard(pending)
+        try:
+            bulk_act = plan_bulk_bench(
+                instruction,
+                ui_tree,
+                history,
+                state=st_bulk,
+                package=package,
+                dry_run=dry_run,
+            )
+        except Exception as bulk_err:
+            # r26: never raise out of heuristics — hand off to LLM
+            logger.warning("plan_bulk_bench raised → LLM handoff: %s", bulk_err)
+            st_bulk["_bulk_llm_handoff"] = True
+            return _guard(
+                {
+                    "action": "wait",
+                    "seconds": 0.35,
+                    "delay_s": 0.35,
+                    "reason": (
+                        f"Heuristic exception — hand off to LLM "
+                        f"({bulk_err})"
+                    ),
+                    "planner": "bulk_llm_handoff",
+                    "needs_vision": True,
+                    "_force_vision": True,
+                    "_bulk_llm_handoff": True,
+                    "dry_run": bool(dry_run),
+                }
+            )
         if bulk_act:
+            # Heuristic "fail" that isn't a safety refuse → LLM handoff
+            bak = str(bulk_act.get("action") or "").lower()
+            br = (bulk_act.get("reason") or "").lower()
+            if bak == "fail" and not _is_policy_fail_no_stuck(
+                str(bulk_act.get("reason") or "")
+            ):
+                st_bulk["_bulk_llm_handoff"] = True
+                logger.info(
+                    "bulk fail → LLM handoff: %s",
+                    (bulk_act.get("reason") or "")[:120],
+                )
+                return _guard(
+                    {
+                        "action": "wait",
+                        "seconds": 0.35,
+                        "delay_s": 0.35,
+                        "reason": (
+                            f"Heuristic fail — hand off to LLM "
+                            f"({bulk_act.get('reason') or 'fail'})"
+                        ),
+                        "planner": "bulk_llm_handoff",
+                        "needs_vision": True,
+                        "_force_vision": True,
+                        "_bulk_llm_handoff": True,
+                        "dry_run": bool(dry_run),
+                    }
+                )
+            if bulk_act.get("_bulk_llm_handoff") or bulk_act.get(
+                "fastpath_step"
+            ) == "bulk_compose_not_found_handoff":
+                st_bulk["_bulk_llm_handoff"] = True
             now_ts = time.time()
             # Dry swipe: identifying a real card name is already success —
             # never let handoff/LLM swipe past a verified name on screen.
@@ -3077,6 +3134,83 @@ def runner_can_execute(action_or_kind: Any) -> bool:
     return kind in RUNNER_EXECUTABLE_ACTIONS
 
 
+def _resolve_internal_planner_action(
+    action: Dict[str, Any],
+    *,
+    instruction: str,
+    ui_tree: str,
+    history: List[str],
+    state: Dict[str, Any],
+    package: str = "",
+    dry_run: bool = False,
+    image_b64: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Turn internal markers (_vision_retry / _reconnect_wait) into real actions.
+
+    r26: stuck recovery emitted `_vision_retry` which then hit execute_action
+    → RuntimeError 'Unknown action: _vision_retry' and left the lease held.
+    """
+    if not isinstance(action, dict):
+        return {"action": "wait", "seconds": 0.3, "reason": "invalid action"}
+    kind = str(action.get("action") or "").lower()
+    if kind == "_reconnect_wait":
+        return {
+            "action": "wait",
+            "seconds": 1.0,
+            "delay_s": 1.0,
+            "reason": action.get("reason") or "Wait for a11y/WS reconnect",
+            "planner": action.get("planner") or "recovery",
+            "needs_vision": True,
+            "_force_vision": True,
+        }
+    if kind != "_vision_retry":
+        return action
+    # Re-plan with vision / LLM — never pass _vision_retry to the device
+    state["_bulk_llm_handoff"] = True
+    state["force_vision_once"] = True
+    try:
+        planned = plan_next_action(
+            instruction,
+            ui_tree,
+            history,
+            image_b64=image_b64,
+            no_progress_streak=int(state.get("no_progress_streak") or 0),
+            last_tap_key=state.get("last_tap_key"),
+            package=package,
+            dry_run=dry_run,
+            agent_state=state,
+        )
+        if isinstance(planned, dict) and str(planned.get("action") or "").lower() not in (
+            "",
+            "_vision_retry",
+            "_reconnect_wait",
+        ):
+            if planned.get("action") == "tap":
+                planned["_vision_confirmed_label"] = str(
+                    planned.get("label")
+                    or planned.get("text")
+                    or planned.get("reason")
+                    or "vision"
+                )
+            return planned
+    except Exception as e:
+        logger.warning("vision_retry replan failed: %s", e)
+    return {
+        "action": "wait",
+        "seconds": 0.4,
+        "delay_s": 0.4,
+        "reason": (
+            f"Vision retry → LLM handoff "
+            f"({action.get('reason') or 'stuck'})"
+        ),
+        "planner": "bulk_llm_handoff",
+        "needs_vision": True,
+        "_force_vision": True,
+        "_bulk_llm_handoff": True,
+        "dry_run": bool(dry_run),
+    }
+
+
 def execute_action(device_id: str, action: Dict[str, Any]) -> str:
     try:
         from device_rpc import call_device
@@ -3088,6 +3222,12 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         from backend.agent_humanize import jitter_tap  # type: ignore
 
     kind = str(action.get("action") or "").lower()
+    # Defense in depth — never send internal markers to the device
+    if kind in ("_vision_retry", "_reconnect_wait"):
+        logger.warning(
+            "execute_action got internal marker %s — converting to wait", kind
+        )
+        return str(action.get("reason") or f"skipped internal {kind}")
     if kind == "tap":
         ox, oy = int(action["x"]), int(action["y"])
         # Runner-level tap firewall: fresh tree → topmost node at point
@@ -4378,14 +4518,28 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             and int(state.get("same_decision_n") or 0) >= MAX_SAME_DECISION
             and kind not in ("done", "fail")
         ):
-            kind = "fail"
+            # r26: hand off to LLM instead of hard-fail (Hily liked-you loop)
+            state["_bulk_llm_handoff"] = True
+            state["force_vision_once"] = True
+            state["same_decision_n"] = 0
+            state["last_decision_key"] = None
+            kind = "wait"
             reason = (
-                f"same planner decision repeated ×{state['same_decision_n']} "
-                f"({decision_key[:100]}) — fail fast (refuse hung 7 min loop)"
+                f"same planner decision repeated ×{MAX_SAME_DECISION} "
+                f"({decision_key[:80]}) — hand off to LLM"
             )
-            action = {"action": "fail", "reason": reason}
+            action = {
+                "action": "wait",
+                "seconds": 0.35,
+                "delay_s": 0.35,
+                "reason": reason,
+                "planner": "bulk_llm_handoff",
+                "needs_vision": True,
+                "_force_vision": True,
+                "_bulk_llm_handoff": True,
+            }
             logger.info(
-                "same-decision fail job=%s key=%s",
+                "same-decision → LLM handoff job=%s key=%s",
                 job.get("job_id"),
                 decision_key[:80],
             )
@@ -4588,6 +4742,30 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     planner = action.get("planner") or "stuck"
                     if action.get("_force_vision"):
                         state["force_vision_once"] = True
+                    # Resolve _vision_retry before it can reach execute_action
+                    if kind in ("_vision_retry", "_reconnect_wait"):
+                        try:
+                            if not locals().get("image_b64"):
+                                image_b64 = _fetch_screenshot_b64(
+                                    device_id, job=job
+                                )
+                        except Exception:
+                            image_b64 = None
+                        action = _resolve_internal_planner_action(
+                            action,
+                            instruction=instruction,
+                            ui_tree=ui_tree,
+                            history=history,
+                            state=state,
+                            package=str(tree_info.get("package") or ""),
+                            dry_run=bool(
+                                job.get("dry_run") or state.get("dry_run")
+                            ),
+                            image_b64=image_b64,
+                        )
+                        kind = str(action.get("action") or "").lower()
+                        reason = str(action.get("reason") or reason)
+                        planner = action.get("planner") or planner
                     history.append(f"stuck:{state.get('stuck_stage')} → {kind}")
                     state["history"] = history[-40:]
                     state["no_progress_streak"] = 0
@@ -5024,6 +5202,35 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             if job.get(k) is not None
         }
         action["_history"] = list(history[-16:])
+        # r26: never execute internal markers — resolve to LLM/wait first
+        if str(action.get("action") or "").lower() in (
+            "_vision_retry",
+            "_reconnect_wait",
+        ):
+            try:
+                if not locals().get("image_b64"):
+                    image_b64 = _fetch_screenshot_b64(device_id, job=job)
+            except Exception:
+                image_b64 = None
+            action = _resolve_internal_planner_action(
+                action,
+                instruction=instruction,
+                ui_tree=ui_tree,
+                history=history,
+                state=state,
+                package=str(tree_info.get("package") or ""),
+                dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+                image_b64=image_b64,
+            )
+            kind = str(action.get("action") or "").lower()
+            reason = str(action.get("reason") or reason)
+            planner = action.get("planner") or planner
+            _log_step_decision(
+                job_id=str(job.get("job_id") or ""),
+                step=step,
+                action=action,
+                phase="resolve_internal",
+            )
         try:
             summary = execute_action(device_id, action)
         except RuntimeError as e:
@@ -5074,27 +5281,137 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["updated_at"] = int(time.time())
                 _kick_self(job.get("job_id"), job=job)
                 return job
-            if "tap firewall" in err_l or "message text guard" in err_l:
-                logger.error("safety refuse: %s", err)
-                state["steps"] = step + 1
-                state["last_progress_at"] = int(time.time())
-                state["last_action"] = f"fail: {err}"
-                history.append(f"fail: {err}")
-                state["history"] = history[-40:]
-                job["state"] = state
-                job["status"] = "failed"
-                job["error"] = err
-                job["result"] = err
-                job["completed_at"] = int(time.time())
+            # r26: Super Like upsell / They liked you / paid refuse → dismiss
+            # + LLM handoff, never hard-fail the job (lease used to stick).
+            upsell_refuse = any(
+                tok in err_l
+                for tok in (
+                    "super like",
+                    "upgrade your like",
+                    "they liked you",
+                    "find out who",
+                    "crush",
+                    "boost",
+                    "rose",
+                    "paid label",
+                    "paid",
+                )
+            )
+            if "tap firewall" in err_l and upsell_refuse:
+                logger.warning(
+                    "tap firewall upsell → dismiss/handoff (no job fail): %s", err
+                )
+                dismiss = None
                 try:
-                    _attach_failure_artifacts(
-                        job, device_id, ui_tree, call_device=call_device
+                    from dm_heuristics import blk_dismiss_popup
+                except ImportError:
+                    from backend.dm_heuristics import blk_dismiss_popup  # type: ignore
+                try:
+                    dismiss = blk_dismiss_popup(
+                        ui_tree, planner="tap_firewall_upsell"
                     )
                 except Exception:
-                    pass
-                _end_job_cleanup(job, device_id, call_device)
+                    dismiss = None
+                if not dismiss:
+                    # Generic close / back for Hily liked-you tile etc.
+                    close = _tree_node_center(
+                        ui_tree,
+                        "No thanks",
+                        "Not now",
+                        "Close",
+                        "Maybe later",
+                        "Cancel",
+                        "Got it",
+                    )
+                    if close:
+                        dismiss = {
+                            "action": "tap",
+                            "x": close[0],
+                            "y": close[1],
+                            "reason": "Dismiss paid upsell after firewall refuse",
+                            "planner": "tap_firewall_upsell",
+                            "label": "Close",
+                        }
+                    else:
+                        dismiss = {
+                            "action": "press_button",
+                            "button": "back",
+                            "reason": "Back — dismiss paid upsell after firewall",
+                            "planner": "tap_firewall_upsell",
+                        }
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"upsell_dismiss: {err}"
+                state["force_vision_once"] = True
+                state["_bulk_llm_handoff"] = True
+                state["same_tap_streak"] = 0
+                state["same_decision_n"] = 0
+                state["last_tap_key"] = None
+                history.append(f"upsell_dismiss: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "running"
+                # Execute dismiss once in-process when it's a safe back/close
+                try:
+                    if str(dismiss.get("action") or "") in (
+                        "press_button",
+                        "back",
+                        "wait",
+                    ):
+                        execute_action(device_id, dismiss)
+                        history.append(
+                            f"dismissed: {dismiss.get('reason') or dismiss.get('action')}"
+                        )
+                        state["history"] = history[-40:]
+                    else:
+                        # Queue dismiss as next action via state hint
+                        state["_pending_dismiss"] = dismiss
+                except Exception as de:
+                    logger.warning("upsell dismiss exec failed: %s", de)
+                job["next_run_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                _log_step_decision(
+                    job_id=str(job.get("job_id") or ""),
+                    step=step,
+                    action=dismiss,
+                    phase="upsell_handoff",
+                )
+                _kick_self(job.get("job_id"), job=job)
                 return job
-            raise
+            if "tap firewall" in err_l or "message text guard" in err_l:
+                # Other firewall refuses → LLM handoff (never raise / never hold lease)
+                logger.warning(
+                    "safety refuse → LLM handoff (no hard fail): %s", err
+                )
+                state["steps"] = step + 1
+                state["last_progress_at"] = int(time.time())
+                state["last_action"] = f"firewall_handoff: {err}"
+                state["_bulk_llm_handoff"] = True
+                state["force_vision_once"] = True
+                state["same_decision_n"] = 0
+                history.append(f"firewall_handoff: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["status"] = "running"
+                job["error"] = None
+                job["next_run_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                _kick_self(job.get("job_id"), job=job)
+                return job
+            # Unknown execute errors → hand off, don't re-raise into lease leak
+            logger.warning("execute RuntimeError → handoff: %s", err)
+            state["steps"] = step + 1
+            state["last_action"] = f"exec_handoff: {err}"
+            state["_bulk_llm_handoff"] = True
+            state["force_vision_once"] = True
+            history.append(f"exec_handoff: {err}")
+            state["history"] = history[-40:]
+            job["state"] = state
+            job["status"] = "running"
+            job["next_run_at"] = int(time.time())
+            job["updated_at"] = int(time.time())
+            _kick_self(job.get("job_id"), job=job)
+            return job
         # Secure Folder (Samsung user 150): main-profile a11y often cannot see
         # Folder windows — force screenshot+vision on the next plan tick.
         if action.get("_secure_folder") or action.get("_a11y_cross_user_limited"):

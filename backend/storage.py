@@ -179,6 +179,72 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
 DEFAULT_JOB_LEASE_S = 180
 
 
+def release_job_lease(
+    job_id: str,
+    owner: Optional[str] = None,
+    *,
+    now: Optional[int] = None,
+) -> bool:
+    """Clear lease so the next tick can acquire (r26: failed invoke held lease).
+
+    Only the current owner (or any caller when owner is None / expired) may clear.
+    """
+    if not job_id:
+        return False
+    now = int(now if now is not None else time.time())
+    table = _table("JOBS_TABLE")
+    if table is None:
+        store = globals().setdefault("_LOCAL_JOBS", {})
+        item = store.get(job_id)
+        if not item:
+            return False
+        cur_owner = str(item.get("lease_owner") or "")
+        cur_exp = int(item.get("lease_expires_at") or 0)
+        if owner and cur_owner and cur_owner != owner and cur_exp > now:
+            return False
+        item = dict(item)
+        item["lease_owner"] = ""
+        item["lease_expires_at"] = 0
+        item["updated_at"] = now
+        store[job_id] = item
+        return True
+    try:
+        values: Dict[str, Any] = {":empty": "", ":zero": 0, ":now": now}
+        cond = (
+            "attribute_not_exists(lease_owner) OR lease_owner = :empty "
+            "OR lease_expires_at <= :now OR attribute_not_exists(lease_expires_at)"
+        )
+        if owner:
+            values[":owner"] = owner
+            cond = (
+                "attribute_not_exists(lease_owner) OR lease_owner = :empty "
+                "OR lease_owner = :owner OR lease_expires_at <= :now "
+                "OR attribute_not_exists(lease_expires_at)"
+            )
+        table.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression=(
+                "SET lease_owner = :empty, lease_expires_at = :zero, "
+                "updated_at = :now"
+            ),
+            ConditionExpression=cond,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except Exception as e:
+        name = type(e).__name__
+        if (
+            "ConditionalCheckFailed" not in name
+            and "ConditionalCheckFailed" not in str(e)
+        ):
+            import logging
+
+            logging.getLogger("mobilerun.storage").warning(
+                "release_job_lease failed job=%s: %s", job_id, e
+            )
+        return False
+
+
 def acquire_job_lease(
     job_id: str,
     owner: str,

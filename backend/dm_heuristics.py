@@ -2951,9 +2951,24 @@ def thread_header_verified(
     tree: str,
     contact: str,
 ) -> bool:
-    """True when the open thread toolbar/header matches ``contact``."""
+    """True when the open thread toolbar/header matches ``contact``.
+
+    Rejects filter chips / section labels (Age, Notes, …) so Discover chrome
+    never counts as an open chat (r26: BLK falsely verified composer for Age).
+    """
     contact_l = (contact or "").strip().lower()
     if not contact_l or contact_l.startswith("__existing_"):
+        return False
+    if looks_like_section_label(contact):
+        return False
+    contact_core = re.sub(r"[\W_]+$", "", contact, flags=re.UNICODE).strip() or contact
+    person_ok = (
+        looks_like_profile_name(contact)
+        or looks_like_profile_name(contact_core)
+        or bool(re.match(r"^(?:Profile|Match)\d+$", contact, re.I))
+        or bool(re.search(r"\d{3,}", contact))  # WA numbers
+    )
+    if not person_ok:
         return False
     app_l = (app or "").lower()
     profile = DM_APP_PROFILES.get(app_l, {}) if app_l else {}
@@ -2962,6 +2977,8 @@ def thread_header_verified(
         nid = str(n.get("id") or "").lower()
         label = (n.get("text") or n.get("label") or "").strip()
         if not label:
+            continue
+        if looks_like_section_label(label):
             continue
         id_ok = False
         if header_ids:
@@ -3280,6 +3297,49 @@ def hily_dismiss_popup(
             },
             "hily_paywall_back",
         )
+
+    # r26: full-screen "They liked you / Find out who" sheet (no chat rows) → back
+    text_blob = " ".join(
+        (n.get("text") or n.get("label") or "") for n in nodes
+    ).lower()
+    if "they liked you" in text_blob or "find out who" in text_blob:
+        has_chat_row = any(
+            "dialogmessageitem" in str(n.get("id") or "").lower()
+            or "usernamefield" in str(n.get("id") or "").lower()
+            for n in nodes
+        )
+        if not has_chat_row:
+            close = _tree_node_center(
+                tree, "Close", "Not now", "No thanks", "Maybe later", "Got it"
+            )
+            if close:
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": close[0],
+                        "y": close[1],
+                        "reason": (
+                            f"Dismiss Hily 'They liked you' sheet ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hily_liked_you_dismiss",
+                )
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Back — dismiss Hily 'They liked you' sheet ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_liked_you_back",
+            )
+        # List has real rows — row finder already skips the promo tile
+
     return None
 
 
@@ -3600,6 +3660,29 @@ _PROFILE_SECTION_LABELS = frozenset(
         "trending",
         "standouts",
         "preferred",
+        # r26 false card/chat names from section chips / chrome
+        "notes",
+        "junk",
+        "age",
+        "ages",
+        "distance",
+        "verified",
+        "new here",
+        "recently active",
+        "online",
+        "offline",
+        "photos",
+        "photo",
+        "videos",
+        "spotlights",
+        "compatibility",
+        "astrology",
+        "mbti",
+        "love language",
+        "looking for love",
+        "they liked you",
+        "find out who",
+        "liked you",
     }
 )
 
@@ -3742,7 +3825,12 @@ def blk_dismiss_popup(
                 },
                 "blk_streaks_got_it",
             )
-    if "super like" in blob and ("instead" in blob or "send a super like" in blob):
+    if (
+        "super like" in blob
+        or "send a super like" in blob
+        or "upgrade your like" in blob
+    ):
+        # Live-test / post-like upsell: prefer free dismiss, never upgrade CTA
         anyway = _tree_node_center(tree, "Send Like anyway", "Send like anyway")
         if anyway:
             return _fp(
@@ -3753,10 +3841,44 @@ def blk_dismiss_popup(
                     "reason": f"Dismiss Super Like upsell → Send Like anyway ({planner})",
                     "planner": planner,
                     "llm_provider": None,
+                    "label": "Send Like anyway",
                 },
                 "blk_send_like_anyway",
             )
-        # Never tap "Send a Super Like"
+        close = (
+            _exact_label_center(tree, "No thanks")
+            or _exact_label_center(tree, "Not now")
+            or _exact_label_center(tree, "Close")
+            or _exact_label_center(tree, "Maybe later")
+            or _tree_node_center(
+                tree, "No thanks", "Not now", "Close", "Maybe later", "Cancel", "X"
+            )
+        )
+        if close:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": close[0],
+                    "y": close[1],
+                    "reason": (
+                        f"Dismiss Super Like upsell → Close/No thanks ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "label": "No thanks",
+                },
+                "blk_super_like_dismiss",
+            )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back — dismiss Super Like upsell ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "blk_super_like_back",
+        )
     if "get messages notifications" in blob or "messages notifications" in blob:
         close = _tree_node_center(tree, "Close", "Dismiss", "Not now", "No thanks")
         if close:
@@ -4618,7 +4740,12 @@ def tagged_deck_card_name(tree: str) -> Optional[str]:
         nid = str(n.get("id") or "").lower()
         if "tvusername" in nid:
             text = (n.get("text") or "").strip()
-            if text and not re.match(r"Profile\d+", text, re.I):
+            if (
+                text
+                and not re.match(r"Profile\d+", text, re.I)
+                and not looks_like_section_label(text)
+                and looks_like_profile_name(text.split(",")[0].strip())
+            ):
                 return text.split(",")[0].strip()
     skip = {
         "like",
@@ -4630,13 +4757,18 @@ def tagged_deck_card_name(tree: str) -> Optional[str]:
         "meet",
         "nearby",
         "live",
+        "notes",
+        "junk",
+        "age",
     }
     for n in _parse_compact_nodes(tree, package_filter="com.taggedapp"):
         text = (n.get("text") or "").strip()
         if re.match(r"Profile\d+", text, re.I):
             continue
+        if looks_like_section_label(text):
+            continue
         if (
-            re.match(r"^[A-Za-z][A-Za-z\s'\-]{1,30}$", text)
+            looks_like_profile_name(text)
             and int(n.get("y") or 0) < 1200
             and text.lower() not in skip
         ):
