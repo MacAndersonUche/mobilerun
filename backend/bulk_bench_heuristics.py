@@ -2929,32 +2929,13 @@ def plan_bulk_swipe(
                 },
                 "bulk_dry_run_no_card_name",
             )
-        # Optional vertical profile scroll (read more) — never horizontal pass
-        if not bulk.get("_dry_vscroll_done"):
-            bulk["_dry_vscroll_done"] = True
-            bulk["last_name"] = card
-            st["bulk_swipe"] = bulk
-            return _fp(
-                {
-                    "action": "swipe",
-                    "x1": 540,
-                    "y1": 1600,
-                    "x2": 540,
-                    "y2": 900,
-                    "_dry_run_vertical_scroll": True,
-                    "dry_run": True,
-                    "reason": (
-                        f"[DRY RUN] vertical scroll on '{card}' then "
-                        f"would like/pass {target} ({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                },
-                "bulk_dry_run_vscroll",
-            )
+        # r25: dry success = identify 1 real name — no scroll/swipe required.
+        # (Prior vscroll step let LLM handoff steal the turn and emit a real
+        # swipe that dry_run then failed as unverified.)
         evaluated = 1
         bulk["done"] = evaluated
         bulk["last_name"] = card
+        bulk["_dry_vscroll_done"] = True
         bulk["dry_logs"] = [
             f"[DRY RUN] evaluated {evaluated} card ({card}); "
             f"would like/pass {target}"

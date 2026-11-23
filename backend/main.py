@@ -167,6 +167,9 @@ class TaskRequest(BaseModel):
     speed_preset: str = "balanced"
     # dry_run: navigate + fill compose, but do NOT tap Send; final screenshot kept
     dry_run: bool = False
+    # live_test: real likes (never super-like/paid) + message-bank sends, capped
+    live_test: bool = False
+    live_test_max_n: int = 3
 
 
 class TaskStep(BaseModel):
@@ -1450,13 +1453,19 @@ async def submit_task(
                 "max_steps": request.max_steps or 15,
                 "speed_preset": speed,
                 "mode": mode,
-                "dry_run": bool(request.dry_run),
+                "dry_run": bool(request.dry_run) and not bool(request.live_test),
+                "live_test": bool(request.live_test),
+                "live_test_max_n": int(request.live_test_max_n or 3),
                 "created_at": int(datetime.now().timestamp()),
                 "next_run_at": int(datetime.now().timestamp()),
                 "state": {
                     "steps": 0,
                     "history": [],
-                    "dry_run": bool(request.dry_run),
+                    "dry_run": bool(request.dry_run) and not bool(request.live_test),
+                    "live_test": bool(request.live_test),
+                    "live_test_max_n": int(request.live_test_max_n or 3),
+                    "live_likes_done": 0,
+                    "live_messages_done": 0,
                 },
                 "ttl": int(datetime.now().timestamp()) + 86400,
                 "result": "Queued for cloud agent",
@@ -3288,6 +3297,9 @@ async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)
 class ModeStartBody(BaseModel):
     device_id: Optional[str] = None
     dry_run: bool = True
+    # live_test: real likes (capped) + message-bank sends; never super-like/paid
+    live_test: bool = False
+    live_test_max_n: int = 3
     stand_in_package: Optional[str] = None
     max_steps: Optional[int] = None
     # new = openers/first contact only; existing = replies only; both = default mix
@@ -3355,13 +3367,19 @@ async def start_dating_mode(
     dating_mode_state.pop("job_id", None)
 
     contact_scope = "both"
+    live_test = False
+    live_test_max_n = 3
     if body:
         device_id = body.device_id or device_id
         dry_run = body.dry_run if body.dry_run is not None else dry_run
+        live_test = bool(getattr(body, "live_test", False))
+        live_test_max_n = int(getattr(body, "live_test_max_n", None) or 3)
         stand_in_package = body.stand_in_package or stand_in_package
         raw_scope = str(body.contact_scope or "both").lower().strip()
         if raw_scope in ("new", "existing", "both"):
             contact_scope = raw_scope
+    if live_test:
+        dry_run = False  # real likes/sends under caps
 
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
@@ -3369,12 +3387,24 @@ async def start_dating_mode(
 
     job_id = f"dating_{secrets.token_hex(8)}"
     dating_mode_state["job_id"] = job_id
-    # Cap dry-run jobs so emulator E2E finishes quickly
+    # Cap dry-run / live-test jobs so emulator E2E finishes quickly
     caps = {
-        "opener_target": 3 if dry_run else secrets.randbelow(51) + 50,
-        "global_message_max": 6 if dry_run else secrets.randbelow(401) + 100,
-        "swipe_cap": 2 if dry_run else 50,
-        "reply_cap": 2 if dry_run else 50,
+        "opener_target": (
+            live_test_max_n
+            if live_test
+            else (3 if dry_run else secrets.randbelow(51) + 50)
+        ),
+        "global_message_max": (
+            live_test_max_n
+            if live_test
+            else (6 if dry_run else secrets.randbelow(401) + 100)
+        ),
+        "swipe_cap": (
+            live_test_max_n if live_test else (2 if dry_run else 50)
+        ),
+        "reply_cap": (
+            live_test_max_n if live_test else (2 if dry_run else 50)
+        ),
     }
     if contact_scope == "new":
         caps["reply_cap"] = 0
@@ -3388,6 +3418,8 @@ async def start_dating_mode(
         "status": "running",
         "device_id": device_id,
         "dry_run": dry_run,
+        "live_test": live_test,
+        "live_test_max_n": live_test_max_n,
         "contact_scope": contact_scope,
         "stand_in_package": stand_in,
         "created_at": int(datetime.now().timestamp()),
@@ -3404,6 +3436,11 @@ async def start_dating_mode(
             "stand_in_package": stand_in,
             "current_app": stand_in,
             "contact_scope": contact_scope,
+            "dry_run": dry_run,
+            "live_test": live_test,
+            "live_test_max_n": live_test_max_n,
+            "live_likes_done": 0,
+            "live_messages_done": 0,
         },
         "ttl": int(datetime.now().timestamp()) + 7 * 86400,
     }

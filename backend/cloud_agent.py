@@ -65,9 +65,18 @@ DRY-RUN CONSTRAINTS (must obey):
 - NEVER tap paid CTAs (Boost, Rose, Super Like, Crush, Buy, Subscribe, credits).
 - Reply goal: open distinct existing chats and confirm editable input each time.
 - New-contact goal: open distinct new profiles' message/comment input; dismiss paywalls.
-- Swipe goal: identify a REAL profile name ("Name" / "Name, age") — section labels
-  (Intentions, Health and Fitness, Education, …) are NOT names. N=1 is OK in dry-run.
+- SWIPE GOAL SUCCESS (dry-run): as soon as you see ONE real profile name on screen
+  ("Name" or "Name, 28" — NOT section labels like Intentions / Health and Fitness),
+  call done immediately:
+  {"action":"done","reason":"[DRY RUN] identified card Name; would like/pass",
+   "dry_run_verified":true}
+  Do NOT swipe, like, or pass — identifying the name IS the goal. N=1 is enough.
 """
+
+# r25: hand off to LLM when bulk heuristics make no verified progress for this long
+BULK_STALL_HANDOFF_S = int(os.environ.get("BULK_STALL_HANDOFF_S") or "20")
+# Live-test mode default cap (likes / real sends) per app / job
+LIVE_TEST_DEFAULT_MAX_N = int(os.environ.get("LIVE_TEST_MAX_N") or "3")
 
 # Wall-clock timeout for a cloud agent job (seconds). Default 15 min so a
 # 10–20 step messaging flow is not killed by tree/LLM latency alone.
@@ -757,6 +766,124 @@ def _is_chat_list_scroll_swipe(action: Dict[str, Any], kind: str) -> bool:
     return abs(y2 - y1) > abs(x2 - x1) * 2 and abs(y2 - y1) >= 200
 
 
+def apply_live_test_guard(
+    *,
+    live_test: bool,
+    action: Dict[str, Any],
+    kind: str,
+    reason: str,
+    state: Optional[Dict[str, Any]] = None,
+    max_n: int = LIVE_TEST_DEFAULT_MAX_N,
+) -> tuple:
+    """LIVE test mode: likes OK (capped), never super-like/paid; bank text only.
+
+    Message bodies are enforced separately by message_text_guard. This guard
+    blocks paid CTAs and enforces max N likes/sends per job.
+    """
+    if not live_test:
+        return kind, reason, action
+    st = state if isinstance(state, dict) else {}
+    cap = int(st.get("live_test_max_n") or max_n or LIVE_TEST_DEFAULT_MAX_N)
+    k = (kind or str((action or {}).get("action") or "")).lower()
+    if k in ("open_app", "launch", "wait", "fail", "done", "back", "home"):
+        return kind, reason, action
+
+    reason_l = (reason or str((action or {}).get("reason") or "")).lower()
+    label_blob = " ".join(
+        str((action or {}).get(k) or "").lower()
+        for k in ("label", "text", "desc", "content_desc", "id")
+    )
+    paid_hit = _action_looks_like_paid(action, kind) or any(
+        tok in reason_l or tok in label_blob
+        for tok in (
+            "super like",
+            "superswipe",
+            "super swipe",
+            "crush",
+            "boost",
+            "rose",
+            "premium",
+            "subscribe",
+            "buy credits",
+            "spotlight",
+            "yubucks",
+            "instant chat",
+            "hingex",
+            "hinge+",
+        )
+    )
+    if paid_hit:
+        new_reason = f"[LIVE TEST] blocked paid/super-like — skipped ({reason})"
+        logger.info("%s", new_reason)
+        return (
+            "wait",
+            new_reason,
+            {
+                **action,
+                "action": "wait",
+                "seconds": 0.4,
+                "reason": new_reason,
+                "live_test": True,
+                "live_test_blocked_paid": True,
+            },
+        )
+
+    # Count likes / right-swipes toward cap
+    is_like = bool(
+        k == "swipe"
+        or _action_looks_like_swipe_or_like(action, kind)
+        or (
+            k == "tap"
+            and any(
+                tok in (reason or "").lower()
+                for tok in ("like", "voteyes", "heart", "right swipe")
+            )
+            and "super" not in (reason or "").lower()
+            and "pass" not in (reason or "").lower()
+        )
+    )
+    is_send = bool(_action_looks_like_send(action, kind) or k == "ime_send")
+    if is_like:
+        done_n = int(st.get("live_likes_done") or 0)
+        if done_n >= cap:
+            new_reason = (
+                f"[LIVE TEST] like cap reached ({done_n}/{cap}) — stop"
+            )
+            return (
+                "done",
+                new_reason,
+                {
+                    "action": "done",
+                    "reason": new_reason,
+                    "live_test": True,
+                    "live_test_verified": True,
+                    "dry_run_verified": True,  # treat as verified completion
+                },
+            )
+        st["live_likes_done"] = done_n + 1
+        action = {**action, "live_test": True, "_live_like_n": done_n + 1}
+    if is_send:
+        done_m = int(st.get("live_messages_done") or 0)
+        if done_m >= cap:
+            new_reason = (
+                f"[LIVE TEST] message cap reached ({done_m}/{cap}) — stop"
+            )
+            return (
+                "done",
+                new_reason,
+                {
+                    "action": "done",
+                    "reason": new_reason,
+                    "live_test": True,
+                    "live_test_verified": True,
+                    "dry_run_verified": True,
+                },
+            )
+        st["live_messages_done"] = done_m + 1
+        action = {**action, "live_test": True, "_live_msg_n": done_m + 1}
+    return kind, reason, action
+
+
 def apply_dry_run_send_guard(
     *,
     dry_run: bool,
@@ -1404,16 +1531,48 @@ def plan_next_action(
             dry_run=dry_run,
         )
         if bulk_act:
+            now_ts = time.time()
+            # Dry swipe: identifying a real card name is already success —
+            # never let handoff/LLM swipe past a verified name on screen.
+            if dry_run and isinstance(bulk_goal, dict) and bulk_goal.get("kind") == "swipe":
+                named = _visible_dry_swipe_card_name(
+                    instruction, ui_tree, st_bulk
+                )
+                if named and str(bulk_act.get("action") or "").lower() != "done":
+                    bulk_act = {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] identified card '{named}'; would "
+                            f"like/pass (dry success, no swipe)"
+                        ),
+                        "planner": "bulk_swipe_heuristic",
+                        "llm_provider": None,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "last_name": named,
+                        "fastpath_step": "bulk_dry_run_skip_like",
+                        "_fastpath_step": "bulk_dry_run_skip_like",
+                    }
+                    st_bulk.setdefault("bulk_swipe", {})
+                    if isinstance(st_bulk["bulk_swipe"], dict):
+                        st_bulk["bulk_swipe"]["last_name"] = named
+                        st_bulk["bulk_swipe"]["done"] = max(
+                            int(st_bulk["bulk_swipe"].get("done") or 0), 1
+                        )
+                        st_bulk["bulk_swipe"]["dry_run_verified"] = True
+
             # Always honor verified fast paths (nothing-to-reply, dry evaluate,
             # open_app, Badoo chats open, …) — never block them behind LLM.
             if _bulk_action_is_verified_fastpath(bulk_act):
                 st_bulk["bulk_stall_n"] = 0
                 st_bulk["_bulk_progress_sig"] = _bulk_progress_signature(st_bulk)
+                st_bulk["bulk_last_progress_at"] = now_ts
                 st_bulk.pop("_bulk_llm_handoff", None)
+                bulk_act["_stall_n"] = 0
                 return _guard(bulk_act)
 
-            # r24: after 2 heuristic steps without verified progress, hand off
-            # to the general LLM agent loop (screenshot + set-of-marks tree).
+            # r24/r25: hand off after 2 no-progress steps OR 20s without
+            # verified progress — so open→stall does not sit until the 90s wall.
             sig = _bulk_progress_signature(st_bulk)
             prev_sig = st_bulk.get("_bulk_progress_sig")
             stall = int(st_bulk.get("bulk_stall_n") or 0)
@@ -1421,16 +1580,26 @@ def plan_next_action(
                 stall += 1
             elif prev_sig is not None and sig != prev_sig:
                 stall = 0  # verified progress advanced
+                st_bulk["bulk_last_progress_at"] = now_ts
             else:
                 stall = max(stall, 1)  # first bulk action counts toward stall
             st_bulk["bulk_stall_n"] = stall
             st_bulk["_bulk_progress_sig"] = sig
+            if not st_bulk.get("bulk_last_progress_at"):
+                # Seed after open/first action so the 20s clock starts
+                st_bulk["bulk_last_progress_at"] = now_ts
+            last_prog = float(st_bulk.get("bulk_last_progress_at") or now_ts)
+            timed_stall = (now_ts - last_prog) >= float(BULK_STALL_HANDOFF_S)
 
             wants_vis = bool(
                 bulk_act.get("_force_vision") or bulk_act.get("needs_vision")
             )
             bulk_kind = str(bulk_act.get("action") or "").lower()
-            handoff = bool(st_bulk.get("_bulk_llm_handoff")) or stall >= 2
+            handoff = (
+                bool(st_bulk.get("_bulk_llm_handoff"))
+                or stall >= 2
+                or timed_stall
+            )
             defer_to_vision = bool(image_b64) and (
                 handoff
                 or (wants_vis and bulk_kind in ("wait", "fail"))
@@ -1438,32 +1607,46 @@ def plan_next_action(
             if handoff and not image_b64:
                 # Ask outer step loop to fetch screenshot + replan via LLM
                 st_bulk["_bulk_llm_handoff"] = True
-                return _guard(
-                    {
-                        "action": "wait",
-                        "seconds": 0.35,
-                        "delay_s": 0.35,
-                        "reason": (
-                            f"Heuristic stall ×{stall} — hand off to LLM "
-                            f"agent loop (screenshot + SoM tree)"
-                        ),
-                        "planner": "bulk_llm_handoff",
-                        "llm_provider": None,
-                        "needs_vision": True,
-                        "_force_vision": True,
-                        "_bulk_llm_handoff": True,
-                        "dry_run": bool(dry_run),
-                    }
+                why = (
+                    f"timed {int(now_ts - last_prog)}s"
+                    if timed_stall
+                    else f"stall ×{stall}"
                 )
+                act = {
+                    "action": "wait",
+                    "seconds": 0.35,
+                    "delay_s": 0.35,
+                    "reason": (
+                        f"Heuristic {why} — hand off to LLM "
+                        f"agent loop (screenshot + SoM tree)"
+                    ),
+                    "planner": "bulk_llm_handoff",
+                    "llm_provider": None,
+                    "needs_vision": True,
+                    "_force_vision": True,
+                    "_bulk_llm_handoff": True,
+                    "_stall_n": stall,
+                    "dry_run": bool(dry_run),
+                }
+                logger.info(
+                    "step_decision ts=%.3f phase=handoff stall=%s timed=%s reason=%s",
+                    now_ts,
+                    stall,
+                    timed_stall,
+                    act["reason"][:120],
+                )
+                return _guard(act)
             if defer_to_vision:
                 st_bulk["_bulk_llm_handoff"] = True
                 logger.info(
-                    "bulk deferred to LLM (stall=%s): %s",
+                    "bulk deferred to LLM (stall=%s timed=%s): %s",
                     stall,
+                    timed_stall,
                     (bulk_act.get("reason") or "")[:120],
                 )
                 # Fall through to LLM below — do not return bulk_act
             else:
+                bulk_act["_stall_n"] = stall
                 return _guard(bulk_act)
 
     # When bulk handed off to LLM, skip other heuristics so the general
@@ -1616,8 +1799,49 @@ def plan_next_action(
     action = _parse_action_json(raw)
     action["planner"] = "llm"
     action["llm_provider"] = provider_used
+    # r25 dry swipe: if LLM tries swipe/like/pass but a real name is visible,
+    # rewrite to verified done — identifying the name IS success.
+    if dry_run and bulk_goal and isinstance(bulk_goal, dict):
+        if bulk_goal.get("kind") == "swipe":
+            ak = str(action.get("action") or "").lower()
+            if ak in ("swipe", "tap", "done") or action.get("dry_run_verified"):
+                named = _visible_dry_swipe_card_name(
+                    instruction, ui_tree, agent_state if isinstance(agent_state, dict) else None
+                )
+                if named and (
+                    ak in ("swipe",)
+                    or _action_looks_like_swipe_or_like(action, ak)
+                    or (ak == "done" and not action.get("dry_run_verified"))
+                ):
+                    action = {
+                        "action": "done",
+                        "reason": (
+                            f"[DRY RUN] identified card '{named}'; would "
+                            f"like/pass (LLM — no swipe needed)"
+                        ),
+                        "planner": "llm",
+                        "llm_provider": provider_used,
+                        "dry_run": True,
+                        "dry_run_verified": True,
+                        "last_name": named,
+                    }
     # Hard rule: never let the LLM invent message body text
-    return _guard(action)
+    guarded = _guard(action)
+    _log_step_decision(
+        job_id=str(
+            (agent_state or {}).get("job_id")
+            if isinstance(agent_state, dict)
+            else ""
+        ),
+        step=int(
+            (agent_state or {}).get("steps") or 0
+            if isinstance(agent_state, dict)
+            else 0
+        ),
+        action=guarded if isinstance(guarded, dict) else action,
+        phase="plan_return",
+    )
+    return guarded
 
 
 def _tree_node_center(tree: str, *needles: str) -> Optional[tuple]:
@@ -2696,10 +2920,14 @@ def _dry_run_done_is_verified(
     if state.get("dry_run_verified") is True:
         return True
     low = (reason or "").lower()
-    # Explicit verified markers from heuristics
+    # Explicit verified markers from heuristics / LLM dry-swipe identify
     if "deck verified" in low or "compose verified" in low:
         return True
     if "dry_run_verified" in low:
+        return True
+    if "identified card" in low or "identified profile" in low:
+        return True
+    if "evaluated" in low and "would like/pass" in low:
         return True
     # A bare skip without verification is NOT success
     if "[dry run] would" in low and "skipped" in low:
@@ -2709,6 +2937,108 @@ def _dry_run_done_is_verified(
     if "would open" in low and "verified" not in low:
         return False
     return bool(action.get("dry_run_verified"))
+
+
+def _bulk_swipe_app_from_instruction(instruction: str) -> Optional[str]:
+    try:
+        from bulk_bench_heuristics import parse_bulk_goal
+    except ImportError:
+        from backend.bulk_bench_heuristics import parse_bulk_goal  # type: ignore
+
+    g = parse_bulk_goal(instruction or "")
+    if isinstance(g, dict) and g.get("kind") == "swipe":
+        return str(g.get("app") or "") or None
+    return None
+
+
+def _visible_dry_swipe_card_name(
+    instruction: str, ui_tree: str, state: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """Real profile name already on screen / in bulk state (dry swipe success)."""
+    st = state if isinstance(state, dict) else {}
+    bulk = st.get("bulk_swipe") if isinstance(st.get("bulk_swipe"), dict) else {}
+    for cand in (
+        bulk.get("last_name"),
+        bulk.get("current"),
+        st.get("current_profile_name"),
+    ):
+        if cand and str(cand).strip():
+            try:
+                from bulk_bench_heuristics import _card_name_is_real_profile
+            except ImportError:
+                from backend.bulk_bench_heuristics import (  # type: ignore
+                    _card_name_is_real_profile,
+                )
+            if _card_name_is_real_profile(str(cand).strip()):
+                return str(cand).strip().split(",")[0].strip()
+    app = _bulk_swipe_app_from_instruction(instruction)
+    if not app:
+        return None
+    try:
+        from bulk_bench_heuristics import deck_card_name, _card_name_is_real_profile
+    except ImportError:
+        from backend.bulk_bench_heuristics import (  # type: ignore
+            deck_card_name,
+            _card_name_is_real_profile,
+        )
+    name = deck_card_name(app, ui_tree or "")
+    if name and _card_name_is_real_profile(name):
+        return name.split(",")[0].strip()
+    return None
+
+
+def _salvage_dry_swipe_done(
+    *,
+    instruction: str,
+    ui_tree: str,
+    state: Dict[str, Any],
+    action: Dict[str, Any],
+    reason: str,
+) -> Optional[Dict[str, Any]]:
+    """If dry swipe was blocked or LLM tried to swipe, succeed on a real name."""
+    name = _visible_dry_swipe_card_name(instruction, ui_tree, state)
+    if not name:
+        return None
+    new_reason = (
+        f"[DRY RUN] identified card '{name}'; would like/pass "
+        f"(no swipe needed) — {reason}"
+    )[:240]
+    return {
+        **action,
+        "action": "done",
+        "reason": new_reason,
+        "dry_run": True,
+        "dry_run_verified": True,
+        "last_name": name,
+        "planner": action.get("planner") or "dry_swipe_identify",
+    }
+
+
+def _log_step_decision(
+    *,
+    job_id: str,
+    step: int,
+    action: Dict[str, Any],
+    phase: str = "plan",
+) -> None:
+    """Server-side timestamped decision log (r25: find open→stall gaps)."""
+    kind = str((action or {}).get("action") or "")
+    reason = str((action or {}).get("reason") or "")[:160]
+    planner = str((action or {}).get("planner") or "")
+    logger.info(
+        "step_decision ts=%.3f job=%s step=%s phase=%s planner=%s action=%s "
+        "reason=%s stall=%s handoff=%s",
+        time.time(),
+        job_id,
+        step,
+        phase,
+        planner,
+        kind,
+        reason,
+        (action or {}).get("_stall_n")
+        or "",
+        bool((action or {}).get("_bulk_llm_handoff")),
+    )
 
 
 # Every planner-emitted action kind the step runner can execute (keep in sync
@@ -3211,9 +3541,22 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     steps_detail: List[Dict[str, Any]] = list(state.get("steps_detail") or [])
     now = int(time.time())
     created = int(job.get("created_at") or now)
+    state["job_id"] = str(job.get("job_id") or "")
     # Seed UI-progress clock once so the 90s watchdog has a baseline
     state.setdefault("last_ui_progress_at", created)
     state.setdefault("last_progress_at", created)
+    logger.info(
+        "step_decision ts=%.3f job=%s step=%s phase=step_start "
+        "last_ui=%s stall=%s handoff=%s dry=%s live_test=%s",
+        time.time(),
+        job.get("job_id"),
+        step,
+        state.get("last_ui_progress_at"),
+        state.get("bulk_stall_n"),
+        bool(state.get("_bulk_llm_handoff")),
+        bool(job.get("dry_run") or state.get("dry_run")),
+        bool(job.get("live_test") or state.get("live_test")),
+    )
     # Renew at step start — covers slow tree dump + screenshot below
     _renew_job_lease(job)
 
@@ -3783,7 +4126,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # Always bind before any path that may skip plan_next_action — recovery
         # empty-tree fallthrough used to hit UnboundLocalError on np_streak.
         np_streak = int(state.get("no_progress_streak") or 0)
-        job_dry_run = bool(job.get("dry_run") or state.get("dry_run"))
+        # live_test disables dry_run so likes/sends can execute under caps
+        job_dry_run = bool(job.get("dry_run") or state.get("dry_run")) and not bool(
+            job.get("live_test") or state.get("live_test")
+        )
         if not _skip_plan:
             image_b64 = None
             # Sparse/empty trees (Compose/Flutter/custom views) → screenshot + vision
@@ -3883,6 +4229,16 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
             try:
+                logger.info(
+                    "step_decision ts=%.3f job=%s step=%s phase=before_plan "
+                    "pkg=%s tree_chars=%s vision=%s",
+                    time.time(),
+                    job.get("job_id"),
+                    step,
+                    tree_info.get("package"),
+                    len(ui_tree or ""),
+                    bool(use_vision),
+                )
                 action = plan_next_action(
                     instruction,
                     ui_tree,
@@ -3894,6 +4250,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     dry_run=job_dry_run,
                     agent_state=state,
                 )
+                if isinstance(action, dict):
+                    _log_step_decision(
+                        job_id=str(job.get("job_id") or ""),
+                        step=step,
+                        action=action,
+                        phase="after_plan",
+                    )
             except RuntimeError as plan_err:
                 # Recover instead of failing when possible
                 if should_hard_fail(state) and not _llm_keys_present():
@@ -4297,20 +4660,72 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 str(job.get("job_id") or ""), step + 1, image_b64
             )
 
+        # live_test: likes OK (capped), never paid/super-like; bank text only
+        is_live_test = bool(job.get("live_test") or state.get("live_test"))
+        if is_live_test:
+            kind, reason, action = apply_live_test_guard(
+                live_test=True,
+                action=action if isinstance(action, dict) else {},
+                kind=kind,
+                reason=reason,
+                state=state,
+                max_n=int(
+                    job.get("live_test_max_n")
+                    or state.get("live_test_max_n")
+                    or LIVE_TEST_DEFAULT_MAX_N
+                ),
+            )
+            _log_step_decision(
+                job_id=str(job.get("job_id") or ""),
+                step=step,
+                action=action if isinstance(action, dict) else {},
+                phase="live_test_guard",
+            )
+
         # dry_run: never send. Use fp_step / element heuristics — NEVER reassign
         # the int `step` counter (PR #54 regression: step+1 TypeError).
+        is_dry = bool(job.get("dry_run") or state.get("dry_run"))
         kind, reason, action = apply_dry_run_send_guard(
-            dry_run=bool(job.get("dry_run") or state.get("dry_run")),
+            dry_run=is_dry and not is_live_test,
             action=action if isinstance(action, dict) else {},
             kind=kind,
             reason=reason,
         )
+        # r25: LLM/heuristics that emit swipe in dry mode → if a real card
+        # name is already visible, that IS dry-swipe success (do not fail).
+        if (
+            is_dry
+            and kind == "done"
+            and not _dry_run_done_is_verified(
+                action if isinstance(action, dict) else {}, reason, state
+            )
+            and (
+                "would swipe" in (reason or "").lower()
+                or "would like/pass" in (reason or "").lower()
+            )
+        ):
+            salvaged = _salvage_dry_swipe_done(
+                instruction=instruction,
+                ui_tree=ui_tree,
+                state=state,
+                action=action if isinstance(action, dict) else {},
+                reason=reason,
+            )
+            if salvaged:
+                action = salvaged
+                kind = "done"
+                reason = str(salvaged.get("reason") or reason)
+                logger.info(
+                    "step_decision ts=%.3f job=%s phase=dry_swipe_salvage reason=%s",
+                    time.time(),
+                    job.get("job_id"),
+                    reason[:120],
+                )
 
         if kind == "done":
             # Always capture a final screenshot for dry-run compose verification
             if not shot_key and (
-                bool(job.get("dry_run") or state.get("dry_run"))
-                or action.get("screenshot")
+                is_dry or action.get("screenshot")
             ):
                 try:
                     final_b64 = _fetch_screenshot_b64(device_id, job=job)
