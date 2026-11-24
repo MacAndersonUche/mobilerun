@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../auth';
 import { cognitoAuthorizeUrl, getCognitoConfig } from '../cognito';
 import { Button, Card, ErrorBanner, Input } from '../components/ui';
@@ -7,6 +8,7 @@ export default function LoginPage() {
   const { login, loading, error } = useAuth();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin');
+  const [showPassword, setShowPassword] = useState(false);
   const cognito = getCognitoConfig();
 
   return (
@@ -60,13 +62,24 @@ export default function LoginPage() {
             </label>
             <label className="block text-sm text-mute">
               Password
-              <Input
-                className="mt-1"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
+              <span className="relative mt-1 block">
+                <Input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-mute hover:text-white"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </span>
             </label>
             <Button
               className="w-full"
