@@ -47,9 +47,8 @@ def test_normalize_per_app_and_combo():
         "co.hinge.app",
         "com.facebook.katana",
         "com.hily.app",
-        "com.hily.app#like",
     ]
-    assert counts["com.hily.app"] == 12
+    assert counts["com.hily.app"] == 5  # r46: Hily messages capped at 5
 
 
 @pytest.mark.parametrize(

@@ -16,8 +16,6 @@ from backend.bulk_bench_heuristics import parse_bulk_goal
     "pkg,count,app,kind,n",
     [
         ("co.hinge.app", 7, "hinge", "message_new", 7),
-        ("com.hily.app", 9, "hily", "message_new", 5),
-        ("com.hily.app", None, "hily", "message_new", 5),
         ("com.facebook.katana", None, "facebook", "message_new", 50),
         ("com.facebook.katana", 80, "facebook", "message_new", 50),
         ("com.affinityapps.blk", 30, "blk", "message_new", 30),
@@ -110,7 +108,7 @@ def test_start_single_app_creates_agent_job(client):
     assert r.status_code == 200, r.text
     job = r.json()["job"]
     assert job["kind"] == "agent"
-    assert job["instruction"] == "send 5 first contact messages on hily"
+    assert job["instruction"] == "fixed hily message 5 likes 30"
     assert job["dry_run"] is True
     assert client.kicked == [job["job_id"]]
     st = client.get("/api/dating/status").json()
@@ -166,20 +164,23 @@ def test_step_worker_chains_next_app(monkeypatch):
     assert len(put) == 1 and put[0]["dating_app"] == "com.badoo.mobile"
 
 
-def test_hily_likes_after_five_messages():
+def test_hily_one_job_message_then_likes():
+    """r46: no separate #like step — the Hily job likes, messages, likes."""
     ok, _ = dating_run.split_supported(["com.hily.app", "co.hinge.app"])
-    assert ok == ["com.hily.app", "com.hily.app#like", "co.hinge.app"]
+    assert ok == ["com.hily.app", "co.hinge.app"]
     job = dating_run.build_job(device_id="d1", queue=ok, count=12, dry_run=False)
-    assert job["instruction"] == "send 5 first contact messages on hily"
-    job["status"] = "completed"  # 5/5 sent (or allowance gone → failed, same)
-    like = dating_run.next_job_after(job)
-    assert like["run_step"] == "like"
-    assert like["dating_app"] == "com.hily.app"
-    goal = parse_bulk_goal(like["instruction"])
+    assert job["instruction"] == "fixed hily message 5 likes 30"
+    job["status"] = "failed"
+    assert dating_run.next_job_after(job)["dating_app"] == "co.hinge.app"
+
+
+def test_old_queued_hily_like_step_still_runs():
+    job = dating_run.build_job(
+        device_id="d1", queue=["com.hily.app#like"], count=12, dry_run=False
+    )
+    assert job["run_step"] == "like"
+    goal = parse_bulk_goal(job["instruction"])
     assert goal == {"kind": "swipe", "count": 12, "message": None, "app": "hily"}
-    assert like["run_queue"] == ["co.hinge.app"]
-    like["status"] = "failed"
-    assert dating_run.next_job_after(like)["dating_app"] == "co.hinge.app"
 
 
 def test_hily_like_step_never_messages_or_crush():

@@ -16,6 +16,14 @@ import {
   datingStartBody,
   runCountFor,
   runCountLabel,
+  type RunMode,
+  runModesOf,
+  hasLikeCap,
+  likeCapKey,
+  likeCapFor,
+  likeCapHint,
+  parseLikeCap,
+  showsCount,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -209,13 +217,17 @@ export default function DatingPage() {
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
   // Per app, per run (each app card): swipes or messages. Saved per app on
-  // the server; Hily = likes after its 5 messages, Facebook Dating max 50.
+  // the server; Hily = messages (max 5), Facebook Dating max 50.
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
   // r45: what is typed in each card's count box (free text until Start/blur)
   const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
   const [countErrors, setCountErrors] = useState<Record<string, string>>({});
   // r45: per-app run mode (Tagged: auto swipe / auto message)
   const [runModes, setRunModes] = useState<Record<string, string>>({});
+  // r46: max likes per Hily mode ("<pkg>:<mode>" -> n) + typed drafts
+  const [likeCaps, setLikeCaps] = useState<Record<string, number>>({});
+  const [likeDrafts, setLikeDrafts] = useState<Record<string, string>>({});
+  const [likeErrors, setLikeErrors] = useState<Record<string, string>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
@@ -294,12 +306,14 @@ export default function DatingPage() {
         '/api/selectors/status',
         { apps: [] }
       );
-      const rc = await soft<{ counts?: Record<string, number>; modes?: Record<string, string> }>(
-        '/api/dating/run-counts',
-        { counts: {}, modes: {} }
-      );
+      const rc = await soft<{
+        counts?: Record<string, number>;
+        modes?: Record<string, string>;
+        like_caps?: Record<string, number>;
+      }>('/api/dating/run-counts', { counts: {}, modes: {}, like_caps: {} });
       setRunCounts(rc.counts || {});
       setRunModes(rc.modes || {});
+      setLikeCaps(rc.like_caps || {});
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -399,6 +413,7 @@ export default function DatingPage() {
       }
       // r45: validate typed counts on Start only
       let counts = runCounts;
+      let caps = likeCaps;
       if (action === 'start') {
         const startApps = onlyApp
           ? [onlyApp]
@@ -406,17 +421,29 @@ export default function DatingPage() {
         const errs: Record<string, string> = {};
         const next = { ...runCounts };
         startApps.forEach((pkg) => {
-          if (countDrafts[pkg] === undefined) return;
+          if (countDrafts[pkg] === undefined || !showsCount(pkg, runModes)) return;
           const r = parseRunCount(pkg, countDrafts[pkg]);
           if (r.ok) next[pkg] = r.n;
           else errs[pkg] = r.error;
         });
+        // r46: typed max-likes boxes (per app mode)
+        const nextCaps = { ...likeCaps };
+        const likeErrs: Record<string, string> = {};
+        Object.entries(likeDrafts).forEach(([key, raw]) => {
+          if (!startApps.some((p) => key.startsWith(`${p}:`))) return;
+          const r = parseLikeCap(raw);
+          if (r.ok) nextCaps[key] = r.n;
+          else likeErrs[key] = r.error;
+        });
         setCountErrors(errs);
-        if (Object.keys(errs).length) {
-          alert(Object.values(errs).join('\n'));
+        setLikeErrors(likeErrs);
+        const allErrs = [...Object.values(errs), ...Object.values(likeErrs)];
+        if (allErrs.length) {
+          alert(allErrs.join('\n'));
           return;
         }
         counts = next;
+        caps = nextCaps;
       }
       const body =
         action === 'start'
@@ -426,6 +453,7 @@ export default function DatingPage() {
               contactScope,
               counts,
               modes: runModes,
+              likeCaps: caps,
               apps: onlyApp
                 ? [onlyApp]
                 : configApps.filter((a) => a.enabled).map((a) => a.package_name),
@@ -468,7 +496,28 @@ export default function DatingPage() {
     }
   };
 
-  const saveRunMode = async (pkg: string, mode: 'swipe' | 'message') => {
+  const saveLikeCap = async (key: string, raw: string) => {
+    const r = parseLikeCap(raw);
+    if (!r.ok) {
+      setLikeErrors((prev) => ({ ...prev, [key]: r.error }));
+      return;
+    }
+    const n = r.n;
+    setLikeErrors((prev) => omitKey(prev, key));
+    setLikeDrafts((prev) => omitKey(prev, key));
+    setLikeCaps((prev) => ({ ...prev, [key]: n }));
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/run-counts`,
+        { like_caps: { [key]: n } },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const saveRunMode = async (pkg: string, mode: RunMode) => {
     setRunModes((prev) => ({ ...prev, [pkg]: mode }));
     try {
       await axios.post(
@@ -788,7 +837,7 @@ export default function DatingPage() {
                 )}
               </div>
             </div>
-            {canRunApp(app.package) && (
+            {canRunApp(app.package) && showsCount(app.package, runModes) && (
               <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
                 <span>{runCountLabel(app.package)}</span>
                 <input
@@ -816,23 +865,53 @@ export default function DatingPage() {
                 role="group"
                 aria-label={`${app.name} run mode`}
               >
-                {(['swipe', 'message'] as const).map((m) => (
+                {runModesOf(app.package).map((m) => (
                   <button
-                    key={m}
+                    key={m.value}
                     type="button"
-                    onClick={() => saveRunMode(app.package, m)}
+                    onClick={() => saveRunMode(app.package, m.value)}
                     className={`flex-1 px-2 py-1 ${
-                      runModeFor(app.package, runModes) === m
+                      runModeFor(app.package, runModes) === m.value
                         ? 'bg-rose-600 text-white'
                         : 'bg-canvas-elev text-mute'
                     }`}
                   >
-                    {m === 'swipe' ? 'Auto swipe' : 'Auto message'}
+                    {m.label}
                   </button>
                 ))}
               </div>
             )}
-            {canRunApp(app.package) && (
+            {hasLikeCap(app.package) &&
+              (() => {
+                const mode = runModeFor(app.package, runModes);
+                const key = likeCapKey(app.package, mode);
+                return (
+                  <>
+                    <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
+                      <span>Max likes ({mode === 'likes' ? 'Likes only' : 'Message + likes'})</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={likeDrafts[key] ?? String(likeCapFor(app.package, mode, likeCaps))}
+                        onChange={(e) =>
+                          setLikeDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                        }
+                        onBlur={(e) => saveLikeCap(key, e.target.value)}
+                        className="mr-input w-20 text-sm"
+                        data-testid={`dating-like-cap-${app.package}-${mode}`}
+                        aria-label={`${app.name} max likes`}
+                        title="Saved separately for each mode."
+                      />
+                    </label>
+                    <div
+                      className={`-mt-1 px-3 text-xs ${likeErrors[key] ? 'text-red-300' : 'text-mute'}`}
+                    >
+                      {likeErrors[key] || likeCapHint(app.package, mode)}
+                    </div>
+                  </>
+                );
+              })()}
+            {canRunApp(app.package) && showsCount(app.package, runModes) && (
               <div
                 className={`-mt-1 px-3 text-xs ${countErrors[app.package] ? 'text-red-300' : 'text-mute'}`}
                 data-testid={`dating-run-count-hint-${app.package}`}

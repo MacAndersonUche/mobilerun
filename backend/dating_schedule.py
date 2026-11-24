@@ -29,16 +29,22 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     from dating_run import (
+        DEFAULT_LIKES,
+        HILY_MODES,
         LIKE_AFTER,
         MAX_COUNT,
+        MAX_LIKES,
         RUN_APPS,
         build_job,
         resolve_package,
     )
 except ImportError:  # pragma: no cover
     from backend.dating_run import (  # type: ignore
+        DEFAULT_LIKES,
+        HILY_MODES,
         LIKE_AFTER,
         MAX_COUNT,
+        MAX_LIKES,
         RUN_APPS,
         build_job,
         resolve_package,
@@ -99,6 +105,16 @@ def normalize(raw: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) ->
         mode = str(it.get("mode") or "").strip().lower()
         if pkg == "com.taggedapp":
             item["mode"] = mode if mode in ("swipe", "message") else "swipe"
+        if pkg == "com.hily.app":
+            # r46: Likes only | Message + likes, each with its max likes
+            item["mode"] = mode if mode in HILY_MODES else "message_likes"
+            count = min(count, 5)
+            item["count"] = count
+            try:
+                likes = int(it.get("likes") or DEFAULT_LIKES)
+            except (TypeError, ValueError):
+                raise ScheduleError("max likes must be a number")
+            item["likes"] = max(1, min(MAX_LIKES, likes))
         items.append(item)
     if not items:
         raise ScheduleError("pick at least one app")
@@ -216,6 +232,16 @@ def build_modes(s: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def build_like_caps(s: Dict[str, Any]) -> Dict[str, int]:
+    """r46: Hily max likes for the item's mode."""
+    out: Dict[str, int] = {}
+    for it in s.get("items") or []:
+        if it.get("app") == "com.hily.app" and it.get("likes"):
+            mode = str(it.get("mode") or "message_likes")
+            out[f"com.hily.app:{mode}"] = int(it["likes"])
+    return out
+
+
 def run_active(device_id: str, jobs: List[Dict[str, Any]]) -> Optional[str]:
     """job_id of a running job on this device, if any."""
     for j in jobs or []:
@@ -319,6 +345,7 @@ def fire_due(
                 dry_run=bool(s.get("dry_run", True)),
                 counts=counts,
                 modes=build_modes(s),
+                like_caps=build_like_caps(s),
             )
             job["schedule_id"] = s.get("id")
             put_job(job)

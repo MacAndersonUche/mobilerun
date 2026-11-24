@@ -156,7 +156,7 @@ def test_per_app_counts_drive_each_job():
     assert j2["instruction"] == "fixed swipe 7 on badoo"
     j2["status"] = "failed"
     j3 = next_job_after(j2)
-    assert j3["instruction"] == "send 5 first contact messages on hily"
+    # r46: Hily = one job, 5 messages (cap) then likes up to the mode max
+    assert j3["instruction"] == "fixed hily message 5 likes 30"
     j3["status"] = "completed"
-    j4 = next_job_after(j3)
-    assert j4["instruction"] == "swipe 12 on hily"
+    assert next_job_after(j3) is None
