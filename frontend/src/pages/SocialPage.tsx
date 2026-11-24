@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { MessageCircle, Play, Pause, Square } from 'lucide-react';
+import { MessageCircle, Play, Square } from 'lucide-react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
 import { getAuthToken, getBackendUrl } from '../config';
+import { canMessageApp, socialRunBody } from '../lib/socialRun';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
 import LiveActivityFeed, {
   ActivityPayload,
@@ -31,6 +32,9 @@ export default function SocialPage() {
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
   const [deviceId, setDeviceId] = useState('');
+  const [runApp, setRunApp] = useState('com.whatsapp');
+  const [contact, setContact] = useState('');
+  const [msgText, setMsgText] = useState('');
   const [devices, setDevices] = useState<
     Array<{ device_id: string; name?: string; connected?: boolean }>
   >([]);
@@ -118,6 +122,27 @@ export default function SocialPage() {
     }
   };
 
+  const runSocial = async (action: 'message' | 'reply') => {
+    setLoading(true);
+    try {
+      const res = await axios.post(
+        `${getBackendUrl()}/api/social/run`,
+        socialRunBody({ deviceId, app: runApp, action, contact, message: msgText, dryRun }),
+        { headers: headers() }
+      );
+      setRunning(true);
+      if (res.data?.activity) setActivity(res.data.activity);
+      await load();
+    } catch (e) {
+      const detail = axios.isAxiosError(e)
+        ? String(e.response?.data?.detail || e.message)
+        : `Failed to ${action}`;
+      alert(detail);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const control = async (action: 'start' | 'stop' | 'pause') => {
     setLoading(true);
     try {
@@ -194,22 +219,6 @@ export default function SocialPage() {
 
       <div className="flex flex-wrap gap-3 items-center">
         <button
-          disabled={loading}
-          onClick={() => control('start')}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded"
-          data-testid="social-start"
-          title={running ? 'Restarts social mode (stops current job first)' : 'Start social mode'}
-        >
-          <Play size={16} /> {running ? 'Restart' : 'Start'}
-        </button>
-        <button
-          disabled={loading || !running}
-          onClick={() => control('pause')}
-          className="flex items-center gap-2 px-4 py-2 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded"
-        >
-          <Pause size={16} /> {paused ? 'Resume' : 'Pause'}
-        </button>
-        <button
           disabled={loading || !running}
           onClick={() => control('stop')}
           className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
@@ -224,7 +233,7 @@ export default function SocialPage() {
             onChange={(e) => setDryRun(e.target.checked)}
             data-testid="social-dry-run"
           />
-          Dry-run (no real messages)
+          Dry-run (no real messages · WhatsApp always dry-run)
         </label>
         {devices.length > 0 && (
           <select
@@ -243,6 +252,63 @@ export default function SocialPage() {
           </select>
         )}
         <span className="text-sm text-mute ml-auto">Unread · {unread}</span>
+      </div>
+
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <h3 className="font-semibold">Message or reply</h3>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <select
+            className="mr-input text-sm sm:max-w-xs"
+            value={runApp}
+            onChange={(e) => setRunApp(e.target.value)}
+            data-testid="social-run-app"
+            aria-label="Social app"
+          >
+            {apps
+              .filter((a) => canMessageApp(a.package_name))
+              .map((a) => (
+                <option key={a.package_name} value={a.package_name}>
+                  {a.name}
+                </option>
+              ))}
+          </select>
+          <input
+            className="mr-input text-sm sm:max-w-xs"
+            placeholder="Person's name (for Message this person)"
+            value={contact}
+            onChange={(e) => setContact(e.target.value)}
+            data-testid="social-run-contact"
+            aria-label="Person's name"
+          />
+          <input
+            className="mr-input text-sm sm:flex-1"
+            placeholder="Message"
+            value={msgText}
+            onChange={(e) => setMsgText(e.target.value)}
+            data-testid="social-run-message"
+            aria-label="Message"
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={loading || !contact.trim() || !msgText.trim()}
+            onClick={() => runSocial('message')}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded text-sm"
+            data-testid="social-message-person"
+          >
+            <Play size={16} /> Message this person
+          </button>
+          <button
+            type="button"
+            disabled={loading || !msgText.trim()}
+            onClick={() => runSocial('reply')}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-800 hover:bg-emerald-700 disabled:opacity-50 rounded text-sm"
+            data-testid="social-reply"
+          >
+            <MessageCircle size={16} /> Reply to messages
+          </button>
+        </div>
       </div>
 
       <LiveActivityFeed

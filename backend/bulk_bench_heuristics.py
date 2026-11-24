@@ -2322,6 +2322,12 @@ def _ensure_app_open(
     return _fp(act, "bulk_open_app")
 
 
+# Social messaging apps: message / reply only, never swipe or like
+_SOCIAL_DM_APPS = frozenset(
+    {"whatsapp", "instagram", "messenger", "telegram", "snapchat", "x", "twitter"}
+)
+
+
 def plan_bulk_swipe(
     instruction: str,
     ui_tree: str,
@@ -2349,6 +2355,21 @@ def plan_bulk_swipe(
     planner = "bulk_swipe_heuristic"
     hist = " | ".join(history[-12:]).lower()
     app = (goal.get("app") or "") or ""
+
+    # Socials (WhatsApp, Instagram, Messenger, …) never swipe / like.
+    if app in _SOCIAL_DM_APPS:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"No swipe or like on social app {app} — only message a "
+                    f"person or reply to messages ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "bulk_swipe_social_blocked",
+        )
 
     # Foreign billing FG (Play / Spay) — dismiss BEFORE wrong-app reopen.
     # In-app upsells stay with per-app interrupt maps; generic dating_deck

@@ -850,7 +850,28 @@ def _register_catalog_profiles() -> None:
         }
 
 
+def _register_facebook_dating_fallback() -> None:
+    """Lambda has no fake-chats catalog — still know Facebook Dating."""
+    if "facebook" in DM_APP_PROFILES:
+        return
+    DM_APP_PROFILES["facebook"] = {
+        **DM_APP_PROFILES["tinder"],
+        "aliases": ("facebook dating", "facebook", "fb dating"),
+        "package": "com.facebook.katana",
+        "pkg_markers": ("facebook", "katana", "dating"),
+        "open_label": "Facebook Dating",
+        "like_ids": ("id/dating_like",),
+        "pass_ids": ("id/dating_pass",),
+        "compose_ids": ("id/dating_composer",),
+        "send_ids": ("id/dating_send",),
+        "search_ids": ("id/dating_search", "id/dating_search_edit"),
+        "result_ids": ("id/dating_match_row", "id/dating_inbox_row"),
+        "header_ids": ("id/dating_thread_title",),
+    }
+
+
 _register_catalog_profiles()
+_register_facebook_dating_fallback()
 
 
 def tree_node_count(tree: str) -> int:

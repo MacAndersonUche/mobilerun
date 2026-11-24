@@ -7,6 +7,8 @@ import ModeSpeedPicker from '../components/ModeSpeedPicker';
 import LiveActivityFeed, {
   ActivityPayload,
 } from '../components/LiveActivityFeed';
+import { canRunApp, datingStartBody } from '../lib/datingRun';
+import { isSocialPackage } from '../lib/socialRun';
 
 type Speed = 'fast' | 'balanced' | 'careful';
 
@@ -190,6 +192,8 @@ export default function DatingPage() {
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
+  // Per run: Hinge sends this many; Hily caps at 5, Facebook Dating at 50
+  const [runCount, setRunCount] = useState(5);
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
@@ -347,7 +351,10 @@ export default function DatingPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const control = async (action: 'start' | 'stop' | 'pause') => {
+  const control = async (
+    action: 'start' | 'stop' | 'pause',
+    onlyApp?: string
+  ) => {
     setLoading(true);
     try {
       if (action === 'start') {
@@ -364,12 +371,15 @@ export default function DatingPage() {
       }
       const body =
         action === 'start'
-          ? {
-              device_id: deviceId || undefined,
-              dry_run: dryRun,
-              contact_scope: contactScope,
-              stand_in_package: 'ai.mobilerun.mockdating',
-            }
+          ? datingStartBody({
+              deviceId,
+              dryRun,
+              contactScope,
+              count: runCount,
+              apps: onlyApp
+                ? [onlyApp]
+                : configApps.filter((a) => a.enabled).map((a) => a.package_name),
+            })
           : {};
       await axios.post(`${getBackendUrl()}/api/dating/${action}`, body, {
         headers: authHeaders(),
@@ -629,6 +639,20 @@ export default function DatingPage() {
             <option value="both">Both</option>
           </select>
         </label>
+        <label className="flex items-center gap-2 text-sm text-mute">
+          Per run
+          <input
+            type="number"
+            min={1}
+            max={200}
+            value={runCount}
+            onChange={(e) => setRunCount(Math.max(1, Number(e.target.value) || 1))}
+            className="mr-input w-20 text-sm"
+            data-testid="dating-run-count"
+            aria-label="Messages or swipes per app"
+            title="Hinge/BLK/Yubo/Bumble/Badoo: this many. Hily: 5 messages, then this many free likes. Facebook Dating max 50."
+          />
+        </label>
         {devices.length > 0 && (
           <select
             className="mr-input w-full text-sm sm:max-w-xs"
@@ -685,7 +709,9 @@ export default function DatingPage() {
 
       {/* Per-app stats */}
       <div className="grid md:grid-cols-2 gap-4">
-        {cardsForDatingApps(apps, configApps).map((app) => (
+        {cardsForDatingApps(apps, configApps)
+          .filter((app) => !isSocialPackage(app.package))
+          .map((app) => (
           <div
             key={app.package}
             className="bg-surface border border-line rounded-lg p-4 space-y-3"
@@ -695,8 +721,20 @@ export default function DatingPage() {
                 <h4 className="font-semibold text-lg text-white">{app.name}</h4>
                 <p className="text-xs text-mute">{app.package}</p>
               </div>
-              <div className="text-right text-sm text-mute">
+              <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
                 <div>{app.inbox.unread} unread</div>
+                {canRunApp(app.package) && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => control('start', app.package)}
+                    className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+                    data-testid={`dating-run-${app.package}`}
+                    title={`Run only ${app.name}`}
+                  >
+                    <Play size={12} /> Run
+                  </button>
+                )}
               </div>
             </div>
             <ProgressBar
@@ -767,7 +805,9 @@ export default function DatingPage() {
       <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
         <h3 className="text-lg font-semibold">Apps & Persona</h3>
         <div className="space-y-2">
-          {configApps.map((app) => (
+          {configApps
+            .filter((app) => !isSocialPackage(app.package_name))
+            .map((app) => (
             <div
               key={app.package_name}
               className="flex flex-wrap items-center gap-2 justify-between rounded-xl border border-line bg-canvas-elev px-3 py-2"
