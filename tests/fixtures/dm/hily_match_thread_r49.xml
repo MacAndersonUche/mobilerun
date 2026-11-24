@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Amy" i="threadToolBarName" xy="400,150" b="200,110,600,190"/>
+ <n e="1" i="threadInputFieldText" h="Aa" cls="EditText" c="1" xy="480,1330" b="40,1270,930,1390"/>
+ <n d="Send" i="threadSend" c="1" xy="1017,1330" b="954,1267,1080,1393"/>
+</w>
+</hierarchy>

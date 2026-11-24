@@ -1,0 +1,6 @@
+<hierarchy windows="1" nodes="4" partial="false" empty="false" mode="compact" packages="com.android.systemui">
+<w id="active" t="active" p="com.android.systemui" f="1">
+ <n t="WhatsApp" xy="300,400" b="100,360,600,440"/>
+ <n t="New message from Sam" xy="400,480" b="100,450,800,510"/>
+</w>
+</hierarchy>

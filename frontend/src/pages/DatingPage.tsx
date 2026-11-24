@@ -24,6 +24,7 @@ import {
   likeCapHint,
   parseLikeCap,
   showsCount,
+  sortDatingApps,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -84,6 +85,11 @@ const DATING_APP_NAMES: Record<string, string> = {
   'co.yellw.yellowapp': 'Yubo',
   'com.badoo.mobile': 'Badoo',
   'com.affinityapps.blk': 'BLK',
+  'com.tinder': 'Tinder',
+  'enterprises.dating.boo': 'Boo',
+  'social.breeze.breeze_app': 'Breeze',
+  'com.getpure.pure': 'Pure',
+  'com.threesome.swingers.threefun': '3Fun',
   'com.hily.app': 'Hily',
   'co.hinge.app': 'Hinge',
   'com.taggedapp': 'Tagged',
@@ -134,7 +140,7 @@ function cardsForDatingApps(
       name: datingAppDisplayName(a.package, a.name || prev?.name),
     });
   }
-  return Array.from(byPkg.values());
+  return sortDatingApps(Array.from(byPkg.values()), (a) => a.package);
 }
 
 interface OpenerTemplate {
@@ -881,14 +887,17 @@ export default function DatingPage() {
                 ))}
               </div>
             )}
-            {hasLikeCap(app.package) &&
+            {hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
               (() => {
                 const mode = runModeFor(app.package, runModes);
                 const key = likeCapKey(app.package, mode);
                 return (
                   <>
                     <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
-                      <span>Max likes ({mode === 'likes' ? 'Likes only' : 'Message + likes'})</span>
+                      <span>
+                        Max likes (
+                        {runModesOf(app.package).find((m) => m.value === mode)?.label || mode})
+                      </span>
                       <input
                         type="text"
                         inputMode="numeric"
@@ -950,7 +959,7 @@ export default function DatingPage() {
         <h3 className="text-lg font-semibold">Apps for Start</h3>
         <p className="text-xs text-mute">Tap an app to include it in Start. Templates/AI = how first messages are written.</p>
         <div className="space-y-2">
-          {configApps
+          {sortDatingApps(configApps, (a) => a.package_name)
             .filter((app) => !isSocialPackage(app.package_name))
             .map((app) => (
             <div

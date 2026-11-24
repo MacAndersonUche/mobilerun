@@ -2013,6 +2013,12 @@ def _is_fixed_swipe_action(action: Dict[str, Any]) -> bool:
         # r46: Hily fixed run (Finder likes repeat the same heart xy by design)
         or planner == "hily_fixed_run"
         or step.startswith("hily_run")
+        # r49: Tinder fixed auto-swipe (same right-swipe each card by design)
+        or planner == "tinder_fixed"
+        or step.startswith("tinder_fixed")
+        # r50: paid-popup guard + generic fixed liker (Boo/Breeze/Pure/3Fun/Taimi)
+        or planner in ("paid_popup_guard", "fixed_like_run")
+        or step.startswith(("paid_popup", "fixed_like"))
     )
 
 
@@ -2021,7 +2027,7 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     inst = (instruction or "").lower()
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
         return True
-    if "fixed hily" in inst:  # r46
+    if "fixed hily" in inst or "fixed tinder" in inst or "fixed app " in inst:  # r46/r49/r50
         return True
     # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
     # paid Blast sheet; Hily left for Google Messages; Hinge opened Matches
@@ -2128,6 +2134,20 @@ def plan_next_action(
             bulk_goal = None
     secure_folder_goal = "secure folder" in instr_l
 
+    # r50: paid popups (price / premium / Gold / Boost / coins / credits /
+    # VIP / Blast…) are closed before any fixed planner step — every app.
+    if ("fixed " in instr_l or "first contact" in instr_l
+            or _fixed_swipe_run(instruction, agent_state)) and not any(
+                p in (ui_tree or "").lower() for p in ("out of likes",)):
+        try:
+            from paid_popup import paid_popup_action
+        except ImportError:
+            from backend.paid_popup import paid_popup_action  # type: ignore
+        pp = paid_popup_action(ui_tree, "paid_popup_guard",
+                               agent_state if isinstance(agent_state, dict) else None)
+        if pp:
+            return pp
+
     # r45: Tagged fixed runs (auto swipe / auto message) — no LLM, never paid
     if "fixed tagged" in instr_l:
         try:
@@ -2146,6 +2166,52 @@ def plan_next_action(
                     enforce_message_text as _enf_tg,
                 )
             return _enf_tg(tg_act, instruction, history=history)
+
+    # r50: Boo / Breeze / Taimi / Pure / 3Fun fixed like / message runs
+    if "fixed app " in instr_l:
+        try:
+            from fixed_like_run import plan_fixed_like_run
+        except ImportError:
+            from backend.fixed_like_run import plan_fixed_like_run  # type: ignore
+        st_fl = agent_state if isinstance(agent_state, dict) else {}
+        fl_act = plan_fixed_like_run(instruction, ui_tree, history, state=st_fl, dry_run=dry_run)
+        if fl_act is None:
+            fl_act = {"action": "wait", "reason": "Fixed app run: waiting for a readable screen",
+                      "planner": "fixed_like_run", "llm_provider": None, "_no_llm_handoff": True}
+        try:
+            from message_text_guard import enforce_message_text as _enf_fl
+        except ImportError:
+            from backend.message_text_guard import (  # type: ignore
+                enforce_message_text as _enf_fl,
+            )
+        return _enf_fl(fl_act, instruction, history=history)
+
+    # r49: Tinder fixed auto-swipe — free right-swipes, popups closed,
+    # matches get a bank line, no LLM, never paid
+    if "fixed tinder" in instr_l:
+        try:
+            from tinder_fixed_swipe import plan_tinder_fixed_swipe
+        except ImportError:
+            from backend.tinder_fixed_swipe import plan_tinder_fixed_swipe  # type: ignore
+        st_td = agent_state if isinstance(agent_state, dict) else {}
+        td_act = plan_tinder_fixed_swipe(
+            instruction, ui_tree, history, state=st_td, dry_run=dry_run
+        )
+        if td_act is None:
+            td_act = {
+                "action": "wait",
+                "reason": "Tinder fixed swipe: waiting for a readable screen",
+                "planner": "tinder_fixed",
+                "llm_provider": None,
+                "_no_llm_handoff": True,
+            }
+        try:
+            from message_text_guard import enforce_message_text as _enf_td
+        except ImportError:
+            from backend.message_text_guard import (  # type: ignore
+                enforce_message_text as _enf_td,
+            )
+        return _enf_td(td_act, instruction, history=history)
 
     # r46: Hily fixed run (Likes only / Message + likes) — Finder likes,
     # Likes-sent envelopes, no LLM, never paid
@@ -5822,7 +5888,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
         # No-progress → escalate stuck recovery (never die stuck on one screen)
-        if np_streak >= MAX_NO_PROGRESS and kind not in ("done", "fail"):
+        # r48: a fixed planner's own bounded wait (Yubo waiting for the sent
+        # sheet to close) is not "stuck" — stuck recovery pressed Back on the
+        # Yubo deck, which exits the app (24 Nov 10:28).
+        fixed_wait = kind == "wait" and bool(action.get("_no_llm_handoff"))
+        if (
+            np_streak >= MAX_NO_PROGRESS
+            and kind not in ("done", "fail")
+            and not fixed_wait
+        ):
             sat = _goal_satisfied_from_tree(
                 instruction,
                 ui_tree,
@@ -6875,6 +6949,14 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # count as UI progress (bounded by the mode's max likes + wall).
             hily_like_tap = (
                 str(action.get("fastpath_step") or "") == "hily_run_fixed_like_swipe"
+                and kind == "tap"
+            ) or (
+                # r49: Tinder right-swipe (card may not be in the tree either)
+                str(action.get("fastpath_step") or "") == "tinder_fixed_like_swipe"
+                and kind == "swipe"
+            ) or (
+                # r50: generic fixed like taps (card may not be in the tree)
+                str(action.get("fastpath_step") or "") == "fixed_like_tap_like_swipe"
                 and kind == "tap"
             )
             if not tree_changed and not hily_like_tap:

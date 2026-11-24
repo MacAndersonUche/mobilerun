@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Enjoying Hily?" cls="TextView" xy="540,900" b="200,860,880,940"/>
+ <n t="Rate us" cls="TextView" c="1" xy="540,1300" b="300,1250,780,1350"/>
+ <n t="Not now" cls="TextView" c="1" xy="540,1450" b="300,1400,780,1500"/>
+</w>
+</hierarchy>

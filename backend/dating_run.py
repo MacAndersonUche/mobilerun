@@ -27,19 +27,44 @@ RUN_APPS: Dict[str, Tuple[str, str, Optional[int]]] = {
     "co.hinge.app": ("hinge", "first_contact", None),
     "com.hily.app": ("hily", "first_contact", 5),
     "com.facebook.katana": ("facebook", "first_contact", 50),
-    "com.affinityapps.blk": ("blk", "first_contact", None),
     "co.yellw.yellowapp": ("yubo", "first_contact", None),
     "com.bumble.app": ("bumble", "swipe", None),
     "com.badoo.mobile": ("badoo", "swipe", None),
     # r45: Tagged — auto swipe (free like) or auto message (per-app mode)
     "com.taggedapp": ("tagged", "tagged", None),
+    # r49 (CA-24): Tinder fixed auto-swipe — free right-swipe, popups closed,
+    # matches get a bank line
+    "com.affinityapps.blk": ("blk", "first_contact", None),  # r49: bottom
+    "com.tinder": ("tinder", "tinder", None),
+    # r50: generic fixed like / message runs (fixed_like_run.py)
+    "com.takimi.android": ("taimi", "fixed_app", None),
+    "enterprises.dating.boo": ("boo", "fixed_app", None),
+    "social.breeze.breeze_app": ("breeze", "fixed_app", None),
+    "com.getpure.pure": ("pure", "fixed_app", None),
+    "com.threesome.swingers.threefun": ("threefun", "fixed_app", None),
 }
+# r50: per-app modes for the fixed_app runs (first = default)
+FIXED_APP_MODES: Dict[str, Tuple[str, ...]] = {
+    "com.takimi.android": ("likes", "message_likes"),
+    "enterprises.dating.boo": ("likes", "message_likes"),
+    "social.breeze.breeze_app": ("likes",),
+    "com.getpure.pure": ("likes", "message"),
+    "com.threesome.swingers.threefun": ("likes",),
+}
+TINDER_PKG = "com.tinder"
 TAGGED_PKG = "com.taggedapp"
 TAGGED_MODES = ("swipe", "message")
 HILY_PKG = "com.hily.app"
 HILY_MODES = ("likes", "message_likes")  # Likes only | Message + likes
-DEFAULT_MODE = {TAGGED_PKG: "swipe", HILY_PKG: "message_likes"}
-RUN_MODES = {TAGGED_PKG: TAGGED_MODES, HILY_PKG: HILY_MODES}
+DEFAULT_MODE = {TAGGED_PKG: "swipe", HILY_PKG: "message_likes",
+                **{k: v[0] for k, v in FIXED_APP_MODES.items()}}
+RUN_MODES = {TAGGED_PKG: TAGGED_MODES, HILY_PKG: HILY_MODES, **FIXED_APP_MODES}
+# Apps with a "Max likes" box per mode (Hily: both; Boo / Taimi: Message + like)
+LIKE_CAP_MODES: Dict[str, Tuple[str, ...]] = {
+    HILY_PKG: HILY_MODES,
+    "com.takimi.android": ("message_likes",),
+    "enterprises.dating.boo": ("message_likes",),
+}
 # Max likes per Hily mode (portal box per mode); cap like the other counts
 DEFAULT_LIKES = 30
 MAX_LIKES = 500
@@ -63,7 +88,7 @@ def clean_like_caps(raw: Optional[Dict[str, Any]]) -> Dict[str, int]:
         pkg_s, _, mode = str(k).partition(":")
         pkg = resolve_package(pkg_s)
         mode = mode.strip().lower()
-        if pkg != HILY_PKG or mode not in HILY_MODES:
+        if mode not in LIKE_CAP_MODES.get(pkg or "", ()):
             continue
         try:
             n = int(v)
@@ -88,7 +113,33 @@ def hily_plan(
         return mode, 0, likes
     msgs = run_count(HILY_PKG, count, counts)
     return mode, msgs, max(likes, msgs)
+def fixed_app_plan(
+    pkg: str,
+    count: Optional[int],
+    counts: Optional[Dict[str, int]] = None,
+    modes: Optional[Dict[str, str]] = None,
+    like_caps: Optional[Dict[str, int]] = None,
+) -> Tuple[str, int, int]:
+    """r50 -> (mode, messages, likes) for Boo / Breeze / Taimi / Pure / 3Fun.
+
+    likes mode: the card number is the likes. message_likes: the card number
+    is the messages, likes come from the mode's Max likes box. message: the
+    card number is the messages."""
+    allowed = FIXED_APP_MODES[pkg]
+    mode = (modes or {}).get(pkg) or allowed[0]
+    if mode not in allowed:
+        mode = allowed[0]
+    n = run_count(pkg, count, counts)
+    if mode == "likes":
+        return mode, 0, n
+    if mode == "message":
+        return mode, n, 0
+    likes = int((like_caps or {}).get(f"{pkg}:{mode}") or DEFAULT_LIKES)
+    return mode, n, max(1, min(MAX_LIKES, likes))
+
+
 _BY_KEY = {v[0]: k for k, v in RUN_APPS.items()}
+_BY_KEY.update({"3fun": "com.threesome.swingers.threefun", "takimi": "com.takimi.android"})
 # Follow-up step queued right after an app's main job (likes only)
 # r46: Hily likes run inside its own job (hily_fixed_run); the old
 # ``com.hily.app#like`` step stays known so queued runs still finish.
@@ -173,6 +224,11 @@ def instruction_for(
     if pkg == TAGGED_PKG:
         mode = (modes or {}).get(pkg) or "swipe"
         return f"fixed tagged {mode} {n}"
+    if pkg == TINDER_PKG:
+        return f"fixed tinder swipe {n}"
+    if pkg in FIXED_APP_MODES:
+        mode, msgs, likes = fixed_app_plan(pkg, count, counts, modes, like_caps)
+        return f"fixed app {RUN_APPS[pkg][0]} {mode} messages {msgs} likes {likes}"
     if pkg in _LIKE_STEPS:
         # Hily: buttons only (gesture swipe does not register) → free heart
         return f"swipe {n} on {RUN_APPS[base_package(pkg)][0]}"
@@ -221,6 +277,18 @@ def build_job(
     n = run_count(pkg, count, counts)
     max_steps = min(400, 6 * n + 15)
     wall_s = 0
+    if pkg == "co.yellw.yellowapp":
+        # r48: ~7 steps per card (open, Direct, type, send, popup, swipe,
+        # next card); 6n+15 ran out at card 5 on 24 Nov
+        max_steps = min(400, 9 * n + 20)
+    if pkg in FIXED_APP_MODES:
+        _m, msgs, likes = fixed_app_plan(pkg, count, counts, modes, like_caps)
+        max_steps = min(1500, 3 * likes + 8 * msgs + 30)
+        wall_s = min(3600, 120 + 12 * likes + 60 * msgs)
+    if pkg == TINDER_PKG:
+        # swipe + popup / match-message headroom
+        max_steps = min(1500, 3 * n + 30)
+        wall_s = min(3600, 120 + 12 * n)
     if pkg == HILY_PKG:
         _m, msgs, likes = hily_plan(count, counts, modes, like_caps)
         # ~1-2 steps per Finder like + ~6 per Likes-sent message

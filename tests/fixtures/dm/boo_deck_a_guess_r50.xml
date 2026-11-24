@@ -1,0 +1,10 @@
+<hierarchy windows="1" nodes="9" partial="false" empty="false" mode="compact" packages="enterprises.dating.boo">
+<w id="active" t="active" p="enterprises.dating.boo" f="1">
+ <n t="Ava, 25" xy="300,1500" b="60,1460,600,1540"/>
+ <n d="Pass" c="1" xy="330,2000" b="250,1920,410,2080"/>
+ <n d="Super Like" c="1" xy="540,2000" b="480,1940,600,2060"/>
+ <n d="Like" c="1" xy="750,2000" b="670,1920,830,2080"/>
+ <n d="Home" c="1" xy="108,2200" b="0,2140,216,2260"/>
+ <n d="Messages" c="1" xy="756,2200" b="648,2140,864,2260"/>
+</w>
+</hierarchy>

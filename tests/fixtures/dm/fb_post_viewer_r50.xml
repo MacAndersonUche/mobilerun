@@ -1,0 +1,25 @@
+<hierarchy windows="1" nodes="21" app_nodes="21" text_nodes="19" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.facebook.katana">
+<w id="active" t="active" p="com.facebook.katana" f="1" kids="2">
+ <n i="com.facebook.katana:id/(name removed)" cls="FrameLayout" c="1" xy="540,133" b="0,75,1080,191"/>
+ <n d="Close" cls="Button" c="1" xy="73,133" b="26,86,121,181"/>
+ <n d="TSH Tennis's post" cls="ViewGroup" xy="492,133" b="126,75,859,191"/>
+ <n t="TSH Tennis" d="TSH Tennis" cls="ViewGroup" xy="540,133" b="423,107,657,160"/>
+ <n d="Search" cls="Button" c="1" xy="911,133" b="864,86,959,181"/>
+ <n d="Profile switcher" cls="Button" c="1" xy="1016,133" b="964,75,1069,191"/>
+ <n d="Profile picture" cls="ImageView" xy="1005,132" b="974,101,1037,164"/>
+ <n cls="RecyclerView" s="1" xy="540,1092" b="0,191,1080,1994"/>
+ <n d="Open TSH Tennis's story, unseen story" cls="ImageView" c="1" xy="84,292" b="32,240,137,345"/>
+ <n t="TSH Tennis Meta Verified account" d="TSH Tennis Meta Verified account" cls="ViewGroup" xy="553,263" b="158,239,948,288"/>
+ <n t="37m•Shared with: Public" d="37m•Shared with: Public" cls="ViewGroup" xy="220,318" b="158,299,283,337"/>
+ <n d="More options for TSH Tennis's post" cls="Button" c="1" xy="1024,263" b="969,208,1080,318"/>
+ <n d="❤️" cls="Button" c="1" xy="67,2079" b="0,2006,135,2153"/>
+ <n d="🙌" cls="Button" c="1" xy="202,2079" b="135,2006,270,2153"/>
+ <n d="🔥" cls="Button" c="1" xy="337,2079" b="270,2006,405,2153"/>
+ <n d="👏" cls="Button" c="1" xy="472,2079" b="405,2006,540,2153"/>
+ <n d="😢" cls="Button" c="1" xy="607,2079" b="540,2006,675,2153"/>
+ <n d="😍" cls="Button" c="1" xy="742,2079" b="675,2006,810,2153"/>
+ <n d="😮" cls="Button" c="1" xy="877,2079" b="810,2006,945,2153"/>
+ <n d="😂" cls="Button" c="1" xy="1012,2079" b="945,2006,1080,2153"/>
+ <n t="Write a comment…" d="Write a comment…" h="Write a comment…" cls="TextView" it="147457" c="1" e="1" xy="540,2207" b="32,2158,1048,2257"/>
+</w>
+</hierarchy>

@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="9" partial="false" empty="false" mode="compact" packages="enterprises.dating.boo">
+<w id="active" t="active" p="enterprises.dating.boo" f="1">
+ <n t="Messages" xy="200,150" b="40,100,400,200"/>
+ <n d="Zoe, New match" c="1" xy="540,500" b="0,420,1080,580"/>
+ <n d="Kim, hey there" c="1" xy="540,700" b="0,620,1080,780"/>
+</w>
+</hierarchy>

@@ -58,6 +58,15 @@ except ImportError:  # pragma: no cover
         plan_hily_fixed_first_contact,
     )
 
+try:
+    from hily_interrupts import handle_interrupt, is_match_popup
+    from hily_fixed_first_contact import allowed_message as _bank_text
+except ImportError:  # pragma: no cover
+    from backend.hily_interrupts import handle_interrupt, is_match_popup  # type: ignore
+    from backend.hily_fixed_first_contact import (  # type: ignore
+        allowed_message as _bank_text,
+    )
+
 PLANNER = "hily_fixed_run"
 LIKE_XY = (750, 1959)  # verified S21 map; Crush (540,1959) is never tapped
 PKG = "com.hily.app"
@@ -116,6 +125,15 @@ def _mark(a: Dict[str, Any]) -> Dict[str, Any]:
     a["planner"] = PLANNER
     a["_no_llm_handoff"] = True
     return a
+
+
+def _drop_unverified_like(hr: dict) -> None:
+    """r49 (Mac): a heart tap only counts when the very next screen is the Finder
+    deck again. Anything else (popup, notification, match, sheet, other app) means
+    the tap may have hit that instead — drop it; the heart is tapped again on Finder."""
+    if hr.get("awaiting_like"):
+        hr["awaiting_like"] = False
+        hr["unverified_likes"] = int(hr.get("unverified_likes") or 0) + 1
 
 
 def plan_hily_fixed_run(
@@ -184,17 +202,27 @@ def plan_hily_fixed_run(
     if likes >= max_likes and phase != "likes1" or (not msgs and likes >= max_likes):
         return _act("done", "hily_run_done",
                     f"Hily {mode} finished: {likes}/{max_likes} likes"
+                    + (f", {hr.get('match_msgs')} match messages" if hr.get("match_msgs") else "")
                     + (f", {hr.get('msg_end') or ('sent %d/%d' % (hr.get('sent', 0), msgs))}"
                        if msgs else ""),
                     False)
 
     # ---- Finder like phases ----
+    # r49: a match popup (or the chat it opened) → free bank message first
+    if is_match_popup(ui_tree) or (hr.get("match") or {}).get("open"):
+        ia = handle_interrupt(ui_tree, hr, _bank_text(message), PLANNER)
+        if ia:
+            _drop_unverified_like(hr)
+            return ia
     popup = hily_dismiss_popup(ui_tree, planner=PLANNER)
     if popup:
+        _drop_unverified_like(hr)
         return _mark(popup)
     if hily_on_photo_viewer(ui_tree):
+        _drop_unverified_like(hr)
         return _mark(hily_back_from_photo_viewer(planner=PLANNER))
     if _is_paywall(ui_tree) or (hily_on_profile_sheet(ui_tree) and not hily_on_mbm(ui_tree)):
+        _drop_unverified_like(hr)
         return _act("press_button", "hily_run_sheet_back",
                     "Close Hily paid/Crush sheet — Back, nothing bought", False, button="back")
 
@@ -202,6 +230,7 @@ def plan_hily_fixed_run(
     bare_finder = not on_finder and finder_without_card_nodes(ui_tree)
     if on_finder or bare_finder:
         hr["recover"] = 0
+        hr.pop("match", None)  # r49: back on Finder — match popup finished
         if hr.get("awaiting_like"):
             hr["awaiting_like"] = False
             likes += 1
@@ -233,6 +262,23 @@ def plan_hily_fixed_run(
             like["fastpath_step"] = like["_fastpath_step"] = "hily_run_fixed_like_swipe"
             return _mark(like)
 
+    # r49: notifications / popups / prompts over Finder → close, carry on
+    ia = handle_interrupt(ui_tree, hr, _bank_text(message), PLANNER)
+    if ia:
+        n_int = int(hr.get("interrupts") or 0) + 1
+        hr["interrupts"] = n_int
+        _drop_unverified_like(hr)
+        if ia.get("fastpath_step") == "hily_int_back":
+            # blind Back on an unknown screen shares the lost-Finder budget
+            nb = int(hr.get("recover") or 0) + 1
+            hr["recover"] = nb
+            if nb > MAX_RECOVER:
+                return _act("fail", "hily_run_lost",
+                            f"Hily: could not get back to Finder after {MAX_RECOVER} tries "
+                            f"({likes} likes)", False)
+        if n_int <= 40:
+            return ia
+
     # Not on Finder → tap the Finder tab (never Back off the top screen)
     n = int(hr.get("recover") or 0) + 1
     hr["recover"] = n
@@ -240,10 +286,7 @@ def plan_hily_fixed_run(
         return _act("fail", "hily_run_lost",
                     f"Hily: could not get back to Finder after {MAX_RECOVER} tries "
                     f"({likes} likes)", False)
-    if hr.get("awaiting_like") and n == 1:
-        # the like landed on a match / popup screen — still counts once
-        hr["awaiting_like"] = False
-        hr["likes"] = likes + 1
+    _drop_unverified_like(hr)  # r49: not Finder after the heart → not counted
     pkgs = re.search(r'packages="([^"]*)"', ui_tree or "")
     if (ui_tree or "").strip() and pkgs and PKG not in pkgs.group(1):
         return _act("open_app", "hily_run_open", "Open Hily", False, app="Hily", package=PKG)

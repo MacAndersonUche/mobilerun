@@ -3635,7 +3635,7 @@ async def _start_dating_apps_run(
         raise HTTPException(
             status_code=400,
             detail=f"No app with an auto run selected ({names}). "
-            "Supported: Hinge, Hily, Facebook Dating, BLK, Yubo, Bumble, Badoo, Tagged.",
+            "Supported: Hinge, Hily, Facebook Dating, Yubo, Bumble, Badoo, Tagged, Taimi, BLK, Tinder, Boo, Breeze, Pure, 3Fun.",
         )
     did = (device_id or "").strip()
     if not did or did == "default":

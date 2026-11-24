@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.tinder">
+<w id="active" t="active" p="com.tinder" f="1">
+ <n t="Get Tinder Gold" xy="540,500" b="200,450,880,550"/>
+ <n t="See who likes you · £14.99/month" xy="540,700" b="100,650,980,750"/>
+ <n t="Continue" c="1" xy="540,1900" b="200,1850,880,1950"/>
+ <n t="No thanks" c="1" xy="540,2100" b="300,2050,780,2150"/>
+</w>
+</hierarchy>

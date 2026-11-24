@@ -12,6 +12,8 @@ Like button, or No Thanks. Daily cap is 50.
 
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -151,6 +153,94 @@ def _has_like_pass(tree: str) -> bool:
     )
 
 
+_FEED_MARKERS = (
+    "what's on your mind", "what’s on your mind", "story tray", "shared with:",
+    "write a comment", "home, tab 1", "reels, tab", "marketplace, tab", "'s post",
+    "create story", "news feed",
+)
+FB_NAV_MAX = 6
+
+
+def _in_dating(tree: str) -> bool:
+    """Facebook Dating screens (real 19–24 Nov trees): deck No, Thanks / Like,
+    profile photo button, photo comment sheet, Dating header."""
+    blob = _blob(tree)
+    return (
+        _on_comment_sheet(tree)
+        or "no, thanks" in blob
+        or "profile_photo" in blob
+        or "profile_circular_button" in blob
+        or bool(re.search(r'd="profile picture, [^"]+, \d{2}', tree or "", re.I))
+        or 'd="dating"' in blob and "tab 4 of" not in blob
+        or _on_explore_menu(tree)
+    )
+
+
+def facebook_to_dating(
+    tree: str, bulk: Dict[str, Any], planner: str
+) -> Optional[Dict[str, Any]]:
+    """r50: Facebook opened on the main app (feed / a post), not Dating.
+
+    24 Nov 10:55 (task_fd4408515608a893): Facebook resumed on a TSH Tennis
+    post viewer; the planner tapped the "card photo" (534,1004) and then the
+    post's Profile picture ×3 → same-step stop. Dating is the bottom tab
+    "Dating, tab 4 of 6" (real 19 Nov home tree) — close the post first,
+    tap that tab, else Menu → Dating, else Back (bounded)."""
+    pk = re.search(r'packages="([^"]*)"', tree or "")
+    if not pk or "com.facebook.katana" not in pk.group(1):
+        return None
+    if _in_dating(tree):
+        bulk["fb_nav"] = 0
+        return None
+    blob = _blob(tree)
+    nodes = _parse_compact_nodes(tree)
+
+    def lab(n: Dict[str, Any]) -> str:
+        return str(n.get("desc") or n.get("text") or n.get("label") or "").strip()
+
+    feedish = any(m in blob for m in _FEED_MARKERS) or "tab 1 of" in blob or (
+        "menu" in blob and "facebook logo" in blob)
+    n_nav = int(bulk.get("fb_nav") or 0) + 1
+    bulk["fb_nav"] = n_nav
+    base = {"planner": planner, "llm_provider": None}
+    if n_nav > FB_NAV_MAX:
+        return _fp({**base, "action": "fail",
+                    "reason": f"Could not find Facebook Dating (bottom tab / Menu) after "
+                              f"{FB_NAV_MAX} tries ({planner})"}, "fb_dating_nav_lost")
+    if bulk.get("fb_tab_tapped") and not any(m in blob for m in _FEED_MARKERS):
+        # Dating tab already opened and no feed on screen: Dating home (the
+        # tab bar can stay) — hand over to the Dating planner
+        bulk["fb_nav"] = 0
+        return None
+    for n in nodes:
+        lo = lab(n).lower()
+        if (lo.startswith("dating, tab") or lo == "dating") and n.get("x") is not None:
+            bulk["fb_tab_tapped"] = True
+            return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
+                        "reason": f"Open Facebook Dating — bottom tab '{lab(n)[:30]}' ({planner})"},
+                       "fb_dating_nav_tab")
+    if not feedish and not any(lab(n).lower() in ("close", "menu") for n in nodes):
+        return None  # unknown Facebook screen — let the Dating planner decide
+    for n in nodes:
+        if lab(n).lower() == "close" and n.get("clickable") and n.get("x") is not None \
+                and int(n.get("y") or 9999) < 300:
+            return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
+                        "reason": f"Facebook post open, not Dating — Close it ({planner})"},
+                       "fb_dating_nav_close_post")
+    if not bulk.get("fb_menu_tried"):
+        for n in nodes:
+            if lab(n).lower() == "menu" and n.get("x") is not None:
+                bulk["fb_menu_tried"] = True
+                return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
+                            "reason": f"No Dating tab — open the Facebook Menu ({planner})"},
+                           "fb_dating_nav_menu")
+    if n_nav >= 3 and not bulk.get("fb_scrolled_top"):
+        bulk["fb_scrolled_top"] = True
+    return _fp({**base, "action": "press_button", "button": "back",
+                "reason": f"Not in Facebook Dating — Back toward the tab bar ({planner})"},
+               "fb_dating_nav_back")
+
+
 def plan_facebook_dating_fixed_first_contact(
     instruction: str,
     ui_tree: str,
@@ -189,6 +279,11 @@ def plan_facebook_dating_fixed_first_contact(
             },
             "fb_dating_fc_done",
         )
+
+    nav = facebook_to_dating(ui_tree, bulk, planner)
+    if nav:
+        st["bulk_message_new"] = bulk
+        return nav
 
     if _on_explore_menu(ui_tree):
         return _fp(

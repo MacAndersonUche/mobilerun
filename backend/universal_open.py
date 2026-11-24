@@ -47,6 +47,11 @@ _APP_ALIASES: Dict[str, Tuple[str, ...]] = {
     "Hinge": ("hinge", "co.hinge.app"),
     "Badoo": ("badoo", "com.badoo.mobile"),
     "Tinder": ("tinder", "com.tinder"),
+    # r50 (no bare "boo": it is inside "facebook")
+    "Boo": (" boo ", "enterprises.dating.boo", "boo dating"),
+    "Breeze": ("breeze", "social.breeze.breeze_app"),
+    "Pure": (" pure ", "com.getpure.pure"),
+    "3Fun": ("3fun", "threefun", "com.threesome.swingers.threefun"),
     "WhatsApp": ("whatsapp", "com.whatsapp", "wa"),
     "Instagram": ("instagram", "com.instagram.android"),
     "Messenger": ("messenger", "com.facebook.orca"),

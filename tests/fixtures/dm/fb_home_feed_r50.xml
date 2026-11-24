@@ -1,0 +1,38 @@
+<hierarchy windows="1" nodes="40" partial="false" empty="false" mode="compact" packages="com.facebook.katana">
+<w id="active" t="active" p="com.facebook.katana" f="1">
+ <n d="Go to profile" c="1" xy="84,275" b="32,223,137,328"/>
+ <n d="Go to profile" xy="84,275" b="32,223,137,328"/>
+ <n t="What's on your mind?" d="What's on your mind?" c="1" xy="545,275" b="158,230,932,321"/>
+ <n d="Select photos or videos for your post" c="1" xy="1000,275" b="953,228,1048,323"/>
+ <n d="Story tray" xy="540,678" b="0,360,1080,997"/>
+ <n d="Create story" c="1" xy="166,676" b="5,381,327,972"/>
+ <n t="Create story" d="Create story" xy="165,939" b="73,919,257,959"/>
+ <n d="Onome Henry Efakpo's story, Unseen" xy="498,676" b="332,381,664,971"/>
+ <n d="Onome Henry Efakpo's story, Unseen" c="1" xy="498,676" b="337,381,659,971"/>
+ <n t="Onome Henry Efakpo" d="Onome Henry Efakpo" xy="498,917" b="358,876,638,958"/>
+ <n d="Lydia Babie's story, Unseen" xy="830,676" b="664,381,996,971"/>
+ <n d="Lydia Babie's story, Unseen" c="1" xy="830,676" b="669,381,991,971"/>
+ <n d="Mutheu Mutinda's story, Unseen" xy="1038,676" b="996,381,1080,971"/>
+ <n d="Mutheu Mutinda's story, Unseen" c="1" xy="1040,676" b="1001,381,1080,971"/>
+ <n d="Open LADbible's story, unseen story" c="1" xy="84,1081" b="32,1029,137,1134"/>
+ <n t="LADbible Meta Verified account•Subscribe" d="LADbible Meta Verified account•Subscribe" xy="491,1053" b="158,1030,824,1076"/>
+ <n t="LADbible" c="1" xy="236,1053" b="158,1030,315,1076"/>
+ <n t="Subscribe" c="1" xy="477,1053" b="389,1030,566,1076"/>
+ <n t="3h•Shared with: Public" d="3h•Shared with: Public" xy="206,1106" b="158,1087,255,1125"/>
+ <n d="More options for LADbible's post" c="1" xy="903,1052" b="845,997,961,1107"/>
+ <n d="Hide post" c="1" xy="1024,1052" b="969,997,1080,1107"/>
+ <n t="The game has already caused some controversy in relationships &#129762;" d="The game has already caused some controversy in relationships &#129762;" c="1" xy="540,1223" b="32,1166,1048,1281"/>
+ <n d="Photo" c="1" xy="540,1777" b="0,1281,1080,2274"/>
+ <n d="Home, tab 1 of 6" c="1" xy="90,2200" b="0,2127,180,2274"/>
+ <n d="Reels, tab 2 of 6, 10 or more new" c="1" xy="270,2200" b="180,2127,360,2274"/>
+ <n d="Marketplace, tab 3 of 6" c="1" xy="450,2200" b="360,2127,540,2274"/>
+ <n d="Dating, tab 4 of 6, 2 new" c="1" xy="630,2200" b="540,2127,720,2274"/>
+ <n d="Notifications, tab 5 of 6, 10 or more new" c="1" xy="810,2200" b="720,2127,900,2274"/>
+ <n d="Profile, tab 6 of 6" c="1" xy="990,2200" b="900,2127,1080,2274"/>
+ <n d="Menu" c="1" xy="69,133" b="11,75,127,191"/>
+ <n d="Facebook logo" c="1" xy="295,133" b="127,91,463,175"/>
+ <n d="Create, double-tap to create a new post, story or reel" c="1" xy="779,133" b="721,75,837,191"/>
+ <n d="Search" c="1" xy="895,133" b="837,75,953,191"/>
+ <n d="Messaging, 36 unread messages" c="1" xy="1011,133" b="953,75,1069,191"/>
+</w>
+</hierarchy>
