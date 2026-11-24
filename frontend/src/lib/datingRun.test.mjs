@@ -41,7 +41,7 @@ assert.equal(runCountFor('com.bumble.app', { 'com.bumble.app': 20 }), 20);
 assert.equal(clampRunCount('com.badoo.mobile', 0), 1);
 assert.equal(clampRunCount('com.badoo.mobile', 900), 500);
 assert.equal(runCountLabel('com.bumble.app'), 'Swipes per run');
-assert.match(runCountLabel('com.hily.app'), /after 5 messages/);
+assert.match(runCountLabel('com.hily.app'), /max 5/); // r46: Hily messages
 assert.equal(one.device_id, undefined);
 console.log('datingRun ok');
 
@@ -73,4 +73,27 @@ console.log('datingRun ok');
   a(b.modes['com.taggedapp'] === 'message' && !('com.bumble.app' in b.modes), 'modes body');
   a(b.counts['com.taggedapp'] === 7, 'tagged count');
   console.log('r45 tagged mode tests ok');
+}
+
+// r46: Hily Likes only / Message + likes, max likes per mode
+{
+  const m = await import('./datingRun.ts');
+  const a = (c, msg) => { if (!c) throw new Error(msg); };
+  a(m.hasRunMode('com.hily.app') && m.hasLikeCap('com.hily.app'), 'hily has modes + likes');
+  a(!m.hasLikeCap('com.taggedapp'), 'tagged has no like cap');
+  a(m.runModeFor('com.hily.app', {}) === 'message_likes', 'hily default message + likes');
+  a(m.runModeFor('com.hily.app', { 'com.hily.app': 'swipe' }) === 'message_likes', 'tagged mode refused for hily');
+  a(m.runModesOf('com.hily.app').map((x) => x.label).join('|') === 'Likes only|Message + likes', 'labels');
+  a(!m.showsCount('com.hily.app', { 'com.hily.app': 'likes' }), 'no message box in Likes only');
+  a(m.showsCount('com.hily.app', {}), 'message box in Message + likes');
+  a(!m.parseRunCount('com.hily.app', '6').ok, 'hily messages max 5');
+  a(!m.parseLikeCap('501').ok && m.parseLikeCap('120').ok, 'likes max 500');
+  const b = m.datingStartBody({ deviceId: 'd', dryRun: false, contactScope: 'new',
+    counts: { 'com.hily.app': 3 }, apps: ['com.hily.app', 'com.bumble.app'],
+    modes: { 'com.hily.app': 'likes' }, likeCaps: { 'com.hily.app:likes': 80 } });
+  a(b.modes['com.hily.app'] === 'likes', 'hily mode in body');
+  a(b.like_caps['com.hily.app:likes'] === 80, 'likes-only cap');
+  a(b.like_caps['com.hily.app:message_likes'] === 30, 'other mode keeps its own default');
+  a(!Object.keys(b.like_caps).some((k) => k.startsWith('com.bumble')), 'no bumble caps');
+  console.log('r46 hily mode tests ok');
 }

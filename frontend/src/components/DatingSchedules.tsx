@@ -10,6 +10,12 @@ import {
   parseRunCount,
   runCountFor,
   runCountHint,
+  hasLikeCap,
+  runModeFor,
+  runModesOf,
+  parseLikeCap,
+  likeCapHint,
+  DEFAULT_LIKES,
 } from '../lib/datingRun';
 import {
   DAY_LABELS,
@@ -99,7 +105,13 @@ export default function DatingSchedules(props: Props) {
       const rc = parseRunCount(i.app, drafts[`${i.app}:count`] ?? String(i.count), `${name} per run`);
       if (!rr.ok) errs.push(rr.error);
       if (!rc.ok) errs.push(rc.error);
-      return { ...i, runs: rr.ok ? rr.n : i.runs, count: rc.ok ? rc.n : i.count };
+      let likes = i.likes;
+      if (hasLikeCap(i.app)) {
+        const rl = parseLikeCap(drafts[`${i.app}:likes`] ?? String(i.likes ?? DEFAULT_LIKES));
+        if (!rl.ok) errs.push(`${name} ${rl.error}`);
+        else likes = rl.n;
+      }
+      return { ...i, runs: rr.ok ? rr.n : i.runs, count: rc.ok ? rc.n : i.count, likes };
     });
     if (errs.length) return setErr(errs.join(' · '));
     const body = scheduleBody({ ...edit, items, device_id: edit.device_id || props.deviceId });
@@ -121,7 +133,7 @@ export default function DatingSchedules(props: Props) {
         : [...edit.items, { app: pkg, runs: 1, count: runCountFor(pkg, props.runCounts) }],
     });
   };
-  const setDraft = (pkg: string, key: 'runs' | 'count', v: string) =>
+  const setDraft = (pkg: string, key: 'runs' | 'count' | 'likes', v: string) =>
     setDrafts((prev) => ({ ...prev, [`${pkg}:${key}`]: v }));
 
   return (
@@ -247,13 +259,13 @@ export default function DatingSchedules(props: Props) {
                       </label>
                       {hasRunMode(pkg) && (
                         <select
-                          value={it.mode === 'message' ? 'message' : 'swipe'}
+                          value={runModeFor(pkg, { [pkg]: it.mode || '' })}
                           onChange={(e) =>
                             setEdit({
                               ...edit,
                               items: edit.items.map((i) =>
                                 i.app === pkg
-                                  ? { ...i, mode: e.target.value === 'message' ? 'message' : 'swipe' }
+                                  ? { ...i, mode: runModeFor(pkg, { [pkg]: e.target.value }) }
                                   : i
                               ),
                             })
@@ -262,9 +274,26 @@ export default function DatingSchedules(props: Props) {
                           data-testid={`schedule-mode-${pkg}`}
                           aria-label={`${appName(pkg)} mode`}
                         >
-                          <option value="swipe">Auto swipe</option>
-                          <option value="message">Auto message</option>
+                          {runModesOf(pkg).map((m) => (
+                            <option key={m.value} value={m.value}>
+                              {m.label}
+                            </option>
+                          ))}
                         </select>
+                      )}
+                      {hasLikeCap(pkg) && (
+                        <label className="flex items-center gap-1 text-xs text-mute">
+                          Max likes
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={drafts[`${pkg}:likes`] ?? String(it.likes ?? DEFAULT_LIKES)}
+                            onChange={(e) => setDraft(pkg, 'likes', e.target.value)}
+                            className="mr-input w-20 text-sm"
+                            title={likeCapHint(pkg, runModeFor(pkg, { [pkg]: it.mode || '' }))}
+                            data-testid={`schedule-likes-${pkg}`}
+                          />
+                        </label>
                       )}
                       <span className="text-xs text-mute">
                         runs max {MAX_RUNS_PER_APP} · {runCountHint(pkg)}

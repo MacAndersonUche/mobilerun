@@ -71,7 +71,19 @@ def _blob(tree: str) -> str:
 
 def _on_comment_sheet(tree: str) -> bool:
     blob = _blob(tree)
-    return "say something about this photo" in blob
+    if "say something about this photo" in blob:
+        return True
+    # r46 (CA-7): once typed (or before the hint renders) the placeholder is
+    # gone — the box is an editable field with a Send button and no deck
+    # Like / No Thanks buttons.
+    nodes = _parse_compact_nodes(tree)
+    has_edit = any(n.get("editable") for n in nodes)
+    has_send = any(
+        str(n.get("desc") or n.get("label") or "").strip().lower() == "send"
+        for n in nodes
+    )
+    deck = "profile_circular_button" in blob or "no, thanks" in blob
+    return has_edit and has_send and not deck
 
 
 def _on_explore_menu(tree: str) -> bool:
@@ -95,10 +107,30 @@ def _on_paywall(tree: str) -> bool:
 
 
 def _profile_photo_center(tree: str) -> Optional[Tuple[int, int]]:
-    for n in _parse_compact_nodes(tree):
-        d = str(n.get("desc") or n.get("label") or "").strip().lower()
-        if d.startswith("profile picture"):
+    """The photo itself — never the whole-profile ScrollView.
+
+    r46 (CA-7): the 24 Nov Facebook build labels the profile ScrollView
+    "Profile picture, Kirsty, 25 · …" (bounds 0,75..1080,2274, centre
+    540,1174 = the bio). It comes first in the tree, so the planner tapped
+    the bio three times and the run stopped. Prefer the photo button id,
+    then a Profile-picture node that is not a scroller and not full height.
+    """
+    nodes = _parse_compact_nodes(tree)
+    for n in nodes:
+        nid = str(n.get("id") or "").lower()
+        if "profile_photo" in nid and n.get("x") is not None:
             return (int(n["x"]), int(n["y"]))
+    for n in nodes:
+        d = str(n.get("desc") or n.get("label") or "").strip().lower()
+        if not d.startswith("profile picture"):
+            continue
+        cls = str(n.get("cls") or n.get("class") or "").lower()
+        if "scroll" in cls or n.get("scrollable"):
+            continue
+        y1, y2 = n.get("y1"), n.get("y2")
+        if y1 is not None and y2 is not None and int(y2) - int(y1) > 1500:
+            continue
+        return (int(n["x"]), int(n["y"]))
     return None
 
 
@@ -138,7 +170,12 @@ def plan_facebook_dating_fixed_first_contact(
         {"done": 0, "typed": False},
     )
     done = int(bulk.get("done") or 0)
-    if done >= cap:
+    if done >= cap and not (
+        bulk.get("awaiting_send") and not dry_run and _on_comment_sheet(ui_tree)
+        and int(bulk.get("send_retry") or 0) < 1
+        and comment_text(instruction, message).lower()
+        in _blob(ui_tree)
+    ):
         return _fp(
             {
                 "action": "done",
@@ -186,6 +223,45 @@ def plan_facebook_dating_fixed_first_contact(
     text = comment_text(instruction, message)
 
     if _on_comment_sheet(ui_tree):
+        bulk["awaiting_sheet"] = 0
+        # r46: the line still in the box after Send → tap Send once more,
+        # never type it again (no double message to the same person).
+        box = ""
+        for n in _parse_compact_nodes(ui_tree):
+            if n.get("editable"):
+                box = str(n.get("text") or "").strip()
+        if bulk.get("awaiting_send") and not dry_run:
+            if box.lower() == text.lower():
+                if int(bulk.get("send_retry") or 0) < 1:
+                    bulk["send_retry"] = 1
+                    st["bulk_message_new"] = bulk
+                    send = _send_center(ui_tree) or SEND_XY
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(send[0]),
+                            "y": int(send[1]),
+                            "reason": f"Comment still in the box — tap Send again ({planner})",
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "fb_dating_fc_send_retry",
+                    )
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Facebook Dating comment did not send after a retry "
+                            f"— stop, nothing paid ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "fb_dating_fc_not_sent",
+                )
+            bulk["awaiting_send"] = False
+            bulk["send_retry"] = 0
+            st["bulk_message_new"] = bulk
         if dry_run:
             bulk["done"] = cap
             bulk["typed"] = True
@@ -239,6 +315,8 @@ def plan_facebook_dating_fixed_first_contact(
             )
         bulk["done"] = done + 1
         bulk["typed"] = False
+        bulk["awaiting_send"] = True
+        bulk["send_retry"] = 0
         st["bulk_message_new"] = bulk
         return _fp(
             {
@@ -279,6 +357,8 @@ def plan_facebook_dating_fixed_first_contact(
     # Profile or card: tap the photo, never the heart / No Thanks.
     photo = _profile_photo_center(ui_tree)
     if photo:
+        bulk["awaiting_sheet"] = 1
+        st["bulk_message_new"] = bulk
         px, py = int(photo[0]), int(photo[1])
         # If the node is huge, use the verified photo center.
         if py > 1500:
@@ -297,6 +377,25 @@ def plan_facebook_dating_fixed_first_contact(
             },
             "fb_dating_fc_tap_photo",
         )
+
+    # r46: the comment box can take a moment to render after the photo tap —
+    # wait for it instead of tapping (540,1000), which closed it (24 Nov).
+    waited = int(bulk.get("awaiting_sheet") or 0)
+    if waited and waited <= 2 and not _has_like_pass(ui_tree):
+        bulk["awaiting_sheet"] = waited + 1
+        st["bulk_message_new"] = bulk
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 1.0,
+                "delay_s": 1.0,
+                "reason": f"Waiting for the photo comment box ({waited}/2) ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "fb_dating_fc_wait_sheet",
+        )
+    bulk["awaiting_sheet"] = 0
 
     if _has_like_pass(ui_tree) or "dating" in _blob(ui_tree) or "liked you" in _blob(ui_tree):
         return _fp(

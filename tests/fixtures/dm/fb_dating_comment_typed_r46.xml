@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="6" partial="false" empty="false" mode="compact" packages="com.facebook.katana">
+<w id="active" t="active" p="com.facebook.katana" f="1">
+ <n d="Close" c="1" xy="89,292" b="42,245,137,339"/>
+ <n d="More" c="1" xy="981,292" b="934,246,1029,339"/>
+ <n e="1" f="1" t="hi miss you look beautiful" cls="EditText" c="1" xy="472,1324" b="74,1298,871,1351"/>
+ <n d="Send" c="1" xy="980,1329" b="923,1272,1038,1387"/>
+</w>
+</hierarchy>

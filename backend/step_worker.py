@@ -100,6 +100,12 @@ def enforce_job_wall_clock(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     state = job.get("state") if isinstance(job.get("state"), dict) else {}
     # Absolute job wall (r23: refuse 7+ min hangs)
     wall = min(int(JOB_WALL_S), int(_TASK_WALL_S))
+    # r46: long fixed runs (Hily likes up to the mode max) carry their own
+    # wall, bounded at 1h; the 90s no-UI-progress wall still applies.
+    try:
+        wall = max(wall, min(3600, int(job.get("wall_s") or 0)))
+    except (TypeError, ValueError):
+        pass
     if now - created > wall:
         return _fail_job_timeout(
             job,

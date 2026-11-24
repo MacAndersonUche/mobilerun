@@ -1,7 +1,22 @@
 /** r44: dating run schedules (per app + combo) → /api/dating/schedules. */
-import { RUNNABLE_APPS, clampRunCount, hasRunMode } from './datingRun.ts';
+import {
+  DEFAULT_LIKES,
+  LIKES_MAX,
+  RUNNABLE_APPS,
+  type RunMode,
+  clampRunCount,
+  hasLikeCap,
+  hasRunMode,
+  runModeFor,
+} from './datingRun.ts';
 
-export type ScheduleItem = { app: string; runs: number; count: number; mode?: 'swipe' | 'message' };
+export type ScheduleItem = {
+  app: string;
+  runs: number;
+  count: number;
+  mode?: RunMode;
+  likes?: number; // r46: Hily max likes for the item's mode
+};
 export type DatingSchedule = {
   id?: string;
   name?: string;
@@ -43,7 +58,10 @@ export function scheduleBody(s: DatingSchedule) {
       app: i.app,
       runs: clampRuns(i.runs),
       count: clampRunCount(i.app, i.count),
-      ...(hasRunMode(i.app) ? { mode: i.mode === 'message' ? 'message' : 'swipe' } : {}),
+      ...(hasRunMode(i.app) ? { mode: runModeFor(i.app, { [i.app]: i.mode || '' }) } : {}),
+      ...(hasLikeCap(i.app)
+        ? { likes: Math.max(1, Math.min(LIKES_MAX, Math.floor(Number(i.likes) || DEFAULT_LIKES))) }
+        : {}),
     }));
   return {
     name: s.name || undefined,
@@ -59,7 +77,7 @@ export function scheduleBody(s: DatingSchedule) {
 export function scheduleSummary(s: DatingSchedule, name: (pkg: string) => string): string {
   const parts = s.items.map(
     (i) =>
-      `${name(i.app)}${i.mode ? ` ${i.mode}` : ''} ${i.runs > 1 ? `×${i.runs} ` : ''}(${i.count}/run)`
+      `${name(i.app)}${i.mode ? ` ${i.mode}` : ''} ${i.runs > 1 ? `×${i.runs} ` : ''}(${i.count}/run${i.likes ? `, ${i.likes} likes` : ''})`
   );
   return `${parts.join(' → ')} · ${s.time} ${daysLabel(s.days)}${s.dry_run ? ' · dry run' : ''}`;
 }

@@ -3317,12 +3317,16 @@ class ModeStartBody(BaseModel):
     counts: Optional[Dict[str, int]] = None
     # r45: per-app run mode (Tagged: "swipe" | "message")
     modes: Optional[Dict[str, str]] = None
+    # r46: max likes per app mode ({"com.hily.app:likes": 40})
+    like_caps: Optional[Dict[str, int]] = None
 
 
 class RunCountsBody(BaseModel):
     counts: Dict[str, int] = {}
     # r45: per-app run mode, e.g. {"com.taggedapp": "message"}
     modes: Optional[Dict[str, str]] = None
+    # r46: max likes per app mode, e.g. {"com.hily.app:likes": 40}
+    like_caps: Optional[Dict[str, int]] = None
 
 
 def _load_run_counts(auth: Optional[dict]) -> Dict[str, int]:
@@ -3356,7 +3360,11 @@ def _save_run_counts(auth: Optional[dict], counts: Dict[str, Any]) -> Dict[str, 
     save_user_setting(
         _dating_user_id(auth),
         "dating_run_counts",
-        {"counts": merged, "modes": _load_run_modes(auth)},
+        {
+            "counts": merged,
+            "modes": _load_run_modes(auth),
+            "like_caps": _load_like_caps(auth),
+        },
     )
     return merged
 
@@ -3392,7 +3400,53 @@ def _save_run_modes(auth: Optional[dict], modes: Optional[Dict[str, Any]]) -> Di
     save_user_setting(
         _dating_user_id(auth),
         "dating_run_counts",
-        {"counts": _load_run_counts(auth), "modes": merged},
+        {
+            "counts": _load_run_counts(auth),
+            "modes": merged,
+            "like_caps": _load_like_caps(auth),
+        },
+    )
+    return merged
+
+
+def _load_like_caps(auth: Optional[dict]) -> Dict[str, int]:
+    """r46: max likes per app mode, e.g. {"com.hily.app:likes": 40}."""
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        from dating_run import clean_like_caps
+    except ImportError:
+        from backend.dating_run import clean_like_caps  # type: ignore
+    try:
+        data = get_user_setting(_dating_user_id(auth), "dating_run_counts") or {}
+    except Exception:  # pragma: no cover
+        data = {}
+    return clean_like_caps(data.get("like_caps") if isinstance(data, dict) else None)
+
+
+def _save_like_caps(
+    auth: Optional[dict], caps: Optional[Dict[str, Any]]
+) -> Dict[str, int]:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+    try:
+        from dating_run import clean_like_caps
+    except ImportError:
+        from backend.dating_run import clean_like_caps  # type: ignore
+    merged = _load_like_caps(auth)
+    merged.update(clean_like_caps(caps))
+    save_user_setting(
+        _dating_user_id(auth),
+        "dating_run_counts",
+        {
+            "counts": _load_run_counts(auth),
+            "modes": _load_run_modes(auth),
+            "like_caps": merged,
+        },
     )
     return merged
 
@@ -3485,7 +3539,11 @@ async def delete_dating_schedule(
 @app.get("/api/dating/run-counts")
 async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
     """Per-app per-run numbers shown on each dating app card."""
-    return {"counts": _load_run_counts(auth), "modes": _load_run_modes(auth)}
+    return {
+        "counts": _load_run_counts(auth),
+        "modes": _load_run_modes(auth),
+        "like_caps": _load_like_caps(auth),
+    }
 
 
 @app.post("/api/dating/run-counts")
@@ -3494,7 +3552,12 @@ async def set_run_counts(
 ):
     counts = _save_run_counts(auth, body.counts) if body.counts else _load_run_counts(auth)
     modes = _save_run_modes(auth, body.modes) if body.modes else _load_run_modes(auth)
-    return {"status": "saved", "counts": counts, "modes": modes}
+    caps = (
+        _save_like_caps(auth, body.like_caps)
+        if body.like_caps
+        else _load_like_caps(auth)
+    )
+    return {"status": "saved", "counts": counts, "modes": modes, "like_caps": caps}
 
 
 def _kick_job(job_id: str) -> None:
@@ -3605,6 +3668,15 @@ async def _start_dating_apps_run(
     except Exception as e:
         logger.warning("run modes save/load failed: %s", e)
         modes = dict(getattr(body, "modes", None) or {})
+    try:
+        like_caps = (
+            _save_like_caps(auth, body.like_caps)
+            if getattr(body, "like_caps", None)
+            else _load_like_caps(auth)
+        )
+    except Exception as e:
+        logger.warning("like caps save/load failed: %s", e)
+        like_caps = dict(getattr(body, "like_caps", None) or {})
     job = build_job(
         device_id=did,
         queue=queue,
@@ -3613,6 +3685,7 @@ async def _start_dating_apps_run(
         speed_preset=dating_mode_state.get("speed_preset") or "balanced",
         counts=counts,
         modes=modes,
+        like_caps=like_caps,
     )
     try:
         put_job(job)

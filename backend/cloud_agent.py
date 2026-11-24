@@ -2010,6 +2010,9 @@ def _is_fixed_swipe_action(action: Dict[str, Any]) -> bool:
         or "_fixed_first_contact" in planner
         or "_fixed_fc_" in step
         or "no_llm_handoff" in planner
+        # r46: Hily fixed run (Finder likes repeat the same heart xy by design)
+        or planner == "hily_fixed_run"
+        or step.startswith("hily_run")
     )
 
 
@@ -2017,6 +2020,8 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     """r43: a Bumble/Badoo fixed-swipe job — never hand it to the LLM."""
     inst = (instruction or "").lower()
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
+        return True
+    if "fixed hily" in inst:  # r46
         return True
     # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
     # paid Blast sheet; Hily left for Google Messages; Hinge opened Matches
@@ -2141,6 +2146,33 @@ def plan_next_action(
                     enforce_message_text as _enf_tg,
                 )
             return _enf_tg(tg_act, instruction, history=history)
+
+    # r46: Hily fixed run (Likes only / Message + likes) — Finder likes,
+    # Likes-sent envelopes, no LLM, never paid
+    if "fixed hily" in instr_l:
+        try:
+            from hily_fixed_run import plan_hily_fixed_run
+        except ImportError:
+            from backend.hily_fixed_run import plan_hily_fixed_run  # type: ignore
+        st_hy = agent_state if isinstance(agent_state, dict) else {}
+        hy_act = plan_hily_fixed_run(
+            instruction, ui_tree, history, state=st_hy, dry_run=dry_run
+        )
+        if hy_act is None:
+            hy_act = {
+                "action": "wait",
+                "reason": "Hily fixed run: waiting for a readable screen",
+                "planner": "hily_fixed_run",
+                "llm_provider": None,
+                "_no_llm_handoff": True,
+            }
+        try:
+            from message_text_guard import enforce_message_text as _enf_hy
+        except ImportError:
+            from backend.message_text_guard import (  # type: ignore
+                enforce_message_text as _enf_hy,
+            )
+        return _enf_hy(hy_act, instruction, history=history)
 
     # Deterministic short-circuit: goal already visible → done (avoids tap loops)
     if not bulk_goal and not secure_folder_goal:
