@@ -730,6 +730,36 @@ def _cleanup_cancelled_job(job: Dict[str, Any]) -> None:
         logger.warning("cancelled-job cleanup failed: %s", e)
 
 
+def _start_next_run_app(job: Dict[str, Any]) -> None:
+    """Run-page Start: queue the next app once this app's job has ended."""
+    try:
+        from dating_run import next_job_after
+    except ImportError:
+        from backend.dating_run import next_job_after  # type: ignore
+    try:
+        nxt = next_job_after(_to_plain(job))
+        if not nxt:
+            return
+        put_job(nxt)
+        logger.info(
+            "dating run next app job=%s app=%s after=%s",
+            nxt.get("job_id"),
+            nxt.get("dating_app"),
+            job.get("job_id"),
+        )
+        arn = _step_worker_target()
+        if arn and os.environ.get("USE_AWS_STORAGE", "").lower() == "true":
+            import boto3
+
+            boto3.client("lambda").invoke(
+                FunctionName=arn,
+                InvocationType="Event",
+                Payload=json.dumps({"job_id": nxt["job_id"]}).encode(),
+            )
+    except Exception as e:
+        logger.warning("dating run next app failed: %s", e)
+
+
 def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
@@ -803,7 +833,8 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     timed = enforce_job_wall_clock(job)
     if timed:
         try:
-            save_job_progress(_to_plain(timed), owner=owner)
+            if save_job_progress(_to_plain(timed), owner=owner):
+                _start_next_run_app(timed)
         except Exception:
             pass
         try:
@@ -825,6 +856,8 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
         # Targeted update — never put_item whole item (would revive cancelled jobs)
         # and never write lease fields (stale writeback bug).
         ok = save_job_progress(_to_plain(updated), owner=owner)
+        if ok:
+            _start_next_run_app(updated)
         if not ok:
             logger.warning(
                 "process_job progress not saved job=%s — status changed or lease lost",

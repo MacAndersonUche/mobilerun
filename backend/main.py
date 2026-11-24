@@ -3307,6 +3307,11 @@ class ModeStartBody(BaseModel):
     max_steps: Optional[int] = None
     # new = openers/first contact only; existing = replies only; both = default mix
     contact_scope: Optional[str] = "both"
+    # Real per-app run (Run page Start / per-app Run). Packages or app keys,
+    # run one after another. None = legacy stand-in loop (emulator tests).
+    apps: Optional[List[str]] = None
+    # Messages / swipes per app. Hinge uses it as-is; Hily caps at 5, FB at 50.
+    count: Optional[int] = None
 
 
 def _kick_job(job_id: str) -> None:
@@ -3337,6 +3342,16 @@ def _activity_for_mode(kind: str, job_id: Optional[str] = None) -> Dict[str, Any
             job = get_job(job_id)
         except Exception:
             job = None
+    if job and job.get("dating_run") and job_id:
+        # Multi-app run: show the app that is on now (newest job of the run)
+        try:
+            try:
+                from dating_run import latest_in_run
+            except ImportError:
+                from backend.dating_run import latest_in_run  # type: ignore
+            job = latest_in_run(job_id, list_recent_jobs(limit=40)) or job
+        except Exception:
+            pass
     if not job:
         try:
             for j in list_recent_jobs(limit=40):
@@ -3346,6 +3361,76 @@ def _activity_for_mode(kind: str, job_id: Optional[str] = None) -> Dict[str, Any
         except Exception:
             job = None
     return activity_payload_from_job(job)
+
+
+async def _start_dating_apps_run(
+    body: ModeStartBody, auth: Optional[dict], device_id: str, dry_run: bool
+) -> Dict[str, Any]:
+    """Run-page Start / per-app Run: real agent jobs, one app at a time."""
+    try:
+        from dating_run import build_job, split_supported
+    except ImportError:
+        from backend.dating_run import build_job, split_supported  # type: ignore
+    try:
+        from device_push import device_is_reachable
+    except ImportError:
+        try:
+            from backend.device_push import device_is_reachable  # type: ignore
+        except ImportError:
+            device_is_reachable = lambda _d: False  # type: ignore
+    try:
+        from storage import put_job
+    except ImportError:
+        from backend.storage import put_job  # type: ignore
+
+    queue, unsupported = split_supported(list(body.apps or []))
+    if not queue:
+        names = ", ".join(unsupported) or "none selected"
+        raise HTTPException(
+            status_code=400,
+            detail=f"No app with an auto run selected ({names}). "
+            "Supported: Hinge, Hily, Facebook Dating, BLK, Yubo, Bumble, Badoo.",
+        )
+    did = (device_id or "").strip()
+    if not did or did == "default":
+        raise HTTPException(
+            status_code=400, detail="Pick your phone in the device list first"
+        )
+    mem = connected_devices.get(did) or {}
+    if not (mem.get("connected") or device_is_reachable(did)):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone offline — open MobileRun on the phone and wait "
+            "until Devices shows Connected",
+        )
+    job = build_job(
+        device_id=did,
+        queue=queue,
+        count=body.count,
+        dry_run=dry_run,
+        speed_preset=dating_mode_state.get("speed_preset") or "balanced",
+    )
+    try:
+        put_job(job)
+        _kick_job(job["job_id"])
+    except Exception as e:
+        logger.exception("Could not start dating run: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"Could not start run: {e}"
+        ) from e
+    dating_mode_state["running"] = True
+    dating_mode_state["paused"] = False
+    dating_mode_state["job_id"] = job["job_id"]
+    dating_mode_state["current_app"] = queue[0]
+    _save_dating_runtime(auth)
+    return {
+        "status": "started",
+        "state": dating_mode_state,
+        "job": job,
+        "queue": queue,
+        "skipped": unsupported,
+        "activity": _activity_for_mode("dating", job["job_id"]),
+    }
 
 
 @app.post("/api/dating/start")
@@ -3383,6 +3468,9 @@ async def start_dating_mode(
             contact_scope = raw_scope
     if live_test:
         dry_run = False  # real likes/sends under caps
+
+    if body and body.apps is not None:
+        return await _start_dating_apps_run(body, auth, device_id, dry_run)
 
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
@@ -3487,6 +3575,16 @@ async def stop_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)
             from storage import get_job, put_job
 
             job = get_job(job_id)
+            if job and job.get("dating_run"):
+                # Stop the app that is on now; its queue dies with it
+                try:
+                    from dating_run import latest_in_run
+                    from storage import list_recent_jobs
+                except ImportError:
+                    from backend.dating_run import latest_in_run  # type: ignore
+                    from backend.storage import list_recent_jobs  # type: ignore
+
+                job = latest_in_run(job_id, list_recent_jobs(limit=40)) or job
             if job:
                 job["status"] = "stopped"
                 put_job(job)
