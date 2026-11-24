@@ -73,7 +73,7 @@ def test_fb_post_viewer_closes_then_dating_tab():
     a = fb(FB_I, _t("fb_home_feed_r50.xml"), [], state=st, target=5)
     assert a["fastpath_step"] == "fb_dating_nav_tab" and (a["x"], a["y"]) == (630, 2200)
     a = fb(FB_I, _t("fb_dating_profile_ellie.xml"), [], state=st, target=5)
-    assert a["fastpath_step"] == "fb_dating_fc_tap_photo"
+    assert a["fastpath_step"] == "fb_dating_fc_tap_like"
 
 
 def test_fb_never_taps_post_photo_and_gives_up_cleanly():

@@ -159,3 +159,105 @@ def test_send_like_coords_are_not_rose():
     assert not in_rose_bounds(*SEND_LIKE_XY)
     assert in_rose_bounds(231, 1269)
     assert PHOTO_HEART_XY[0] == 937
+
+
+def _rose_tree(typed: bool = True, anyway: bool = True) -> str:
+    tree = (FIX / "hinge_rose_popup.xml").read_text(encoding="utf-8")
+    if not typed:
+        tree = tree.replace('t="hi miss" e="1"', 't="" e="1"')
+    if not anyway:
+        tree = "\n".join(
+            line for line in tree.splitlines() if "Send Like anyway" not in line
+        )
+    return tree
+
+
+def test_rose_popup_after_send_taps_anyway_without_recount():
+    # Video: Send Like already went through, the Rose sheet pops up after.
+    # "Send Like anyway" confirms it as a free like — never "Send a Rose",
+    # and the send is NOT counted a second time.
+    tree = _rose_tree(typed=True)
+    st = {"bulk_message_new": {"done": 1, "typed": False, "just_sent": True}}
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        tree,
+        ["Opened Hinge", "Type like-sheet comment", "Send Like"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == (540, 1060)
+    assert "anyway" in (act.get("reason") or "").lower()
+    assert "rose" in (act.get("reason") or "").lower()
+    assert st["bulk_message_new"]["done"] == 1
+
+
+def test_rose_popup_with_verified_comment_sends_via_anyway():
+    # The comment is verified in the box: the anyway tap IS the send.
+    tree = _rose_tree(typed=True)
+    st = {"bulk_message_new": {"done": 0, "typed": True}}
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        tree,
+        ["Opened Hinge", "Type like-sheet comment"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == (540, 1060)
+    assert (act.get("x"), act.get("y")) != SEND_LIKE_XY
+    assert st["bulk_message_new"]["done"] == 1
+    assert st["bulk_message_new"]["just_sent"] is True
+
+
+def test_rose_popup_before_typing_backs_out_not_bare_like():
+    # Popup before the comment was typed: Back to the sheet and type
+    # first — never send a bare like, never tap Rose.
+    tree = _rose_tree(typed=False)
+    st = {"bulk_message_new": {"done": 0, "typed": False}}
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        tree,
+        ["Opened Hinge", "Hinge Discover photo heart"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "press_button"
+    assert act.get("button") == "back"
+    assert act.get("x") is None
+    assert st["bulk_message_new"]["done"] == 0
+
+
+def test_rose_popup_without_anyway_node_backs_out_never_map():
+    # No tree node for "Send Like anyway": Back out. The map Send Like
+    # coords sit between the Rose button and the anyway link on this
+    # sheet, so guessing them could tap Rose.
+    tree = _rose_tree(typed=True, anyway=False)
+    st = {"bulk_message_new": {"done": 0, "typed": True}}
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        tree,
+        ["Opened Hinge", "Type like-sheet comment"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "press_button"
+    assert act.get("button") == "back"
+    assert act.get("x") is None
+    assert st["bulk_message_new"]["done"] == 0

@@ -23,6 +23,7 @@ FIX = Path(__file__).parent / "fixtures" / "dm"
 FINDER = (FIX / "hily_finder.xml").read_text(encoding="utf-8")
 LIKES_SENT = (FIX / "hily_likes_sent.xml").read_text(encoding="utf-8")
 MBM = (FIX / "hily_mbm_shann.xml").read_text(encoding="utf-8")
+MBM_TYPED = (FIX / "hily_mbm_typed.xml").read_text(encoding="utf-8")
 CHATS = (FIX / "hily_chats.xml").read_text(encoding="utf-8")
 LIKES_SENT_EMPTY = "\n".join(
     ln for ln in LIKES_SENT.splitlines() if "chat_request" not in ln
@@ -144,8 +145,8 @@ def test_likes_only_finder_hearts_then_done_never_crush():
 def test_message_and_likes_full_cycle():
     trees = [
         FINDER, FINDER, FINDER,         # 2 likes (counted on the next Finder)
-        LIKES_SENT, MBM, MBM,           # envelope → type → send 1
-        LIKES_SENT, LIKES_SENT, MBM, MBM,  # confirm 1, envelope, type, send 2
+        LIKES_SENT, MBM, MBM_TYPED,     # envelope → type → send 1 (box verified)
+        LIKES_SENT, LIKES_SENT, MBM, MBM_TYPED,  # confirm 1, envelope, type, send 2
         LIKES_SENT,                     # confirm 2 → back to Finder
         CHATS, FINDER, FINDER, FINDER,  # Finder tab, likes 3,4 → done
     ]

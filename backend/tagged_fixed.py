@@ -1,8 +1,11 @@
 """r45: Tagged fixed runs — auto swipe or auto message. No LLM, never paid.
 
-Mac (24 Nov): "for auto message click into a profile, send a message, click
+Mac (24 Nov, spoken): "for auto message click into a profile, send a message, click
 the send arrow, then go back into the profile, match by clicking the middle,
 then swipe".
+Video (24 Nov 2026) supersedes it: tap the deck chat bubble → chat → type →
+send arrow → back to the deck. The profile path stays as the fallback when
+the deck has no chat bubble.
 
 Real-device map (S21+ 1080x2400, 22 Nov, dm_heuristics DM_APP_PROFILES
 ["tagged"]): Match game tab ``tab_match_game`` (540, 2200); card buttons
@@ -136,6 +139,17 @@ def _send_xy(tree: str) -> Optional[Tuple[int, int]]:
             if x > comp[0] + 200 and abs(y - comp[1]) < 90:
                 best = best or (x, y)
     return best
+
+
+def _deck_chat_xy(tree: str) -> Optional[Tuple[int, int]]:
+    """The middle chat-bubble button on the Match deck, else None.
+
+    Video (24 Nov 2026): tapping it opens the chat directly — no need to
+    open the profile first. The profile path stays as the fallback when
+    the deck has no chat bubble.
+    """
+    c = _tree_id_center(tree, "chatBtn", "id/chatBtn")
+    return (int(c[0]), int(c[1])) if c else None
 
 
 def _profile_message_xy(tree: str) -> Optional[Tuple[int, int]]:
@@ -285,8 +299,8 @@ def plan_tagged_fixed(
         tg["awaiting_sent"] = ""
         tg["send_retry"] = 0
         tg["sent_this"] = True
-        tg["phase"] = "back_to_profile"
-        phase = "back_to_profile"
+        tg["phase"] = "back_to_deck"
+        phase = "back_to_deck"
 
     if phase == "deck":
         if on_deck(ui_tree):
@@ -294,9 +308,19 @@ def plan_tagged_fixed(
             tg["name"] = _card_name(ui_tree)
             if dry_run:
                 return _act("done", "tagged_fixed_dry",
-                            f"[DRY RUN] on Tagged match game; would open the profile, send "
-                            f"'{text}', tap the middle match and move on — no tap", True,
+                            f"[DRY RUN] on Tagged match game; would tap the chat bubble, send "
+                            f"'{text}', then back to the deck — no tap", True,
                             dry_run_verified=True, would_send_text=text)
+            # Video (24 Nov 2026): tap the deck chat bubble straight into
+            # the chat. The profile path below is the fallback when the
+            # deck has no chat bubble.
+            chat = _deck_chat_xy(ui_tree)
+            if chat:
+                tg["phase"] = "compose"
+                return _act("tap", "tagged_fixed_open_chat",
+                            f"Open the chat on {tg.get('name') or 'this'} card "
+                            f"(deck chat bubble)", dry_run,
+                            x=chat[0], y=chat[1])
             tg["phase"] = "profile"
             name_xy = _tree_id_center(ui_tree, "tvUsername", "id/tvUsername")
             xy = (int(name_xy[0]), int(name_xy[1])) if name_xy else CARD_XY
@@ -343,23 +367,18 @@ def plan_tagged_fixed(
                     f"Tagged send arrow — message {done + 1}/{target}", dry_run,
                     x=xy[0], y=xy[1])
 
-    if phase == "back_to_profile":
+    if phase == "back_to_deck":
+        # Video (24 Nov 2026): after the send, go straight back to the
+        # deck — no profile, no middle-match tap.
         if on_thread(ui_tree):
             return _act("press_button", "tagged_fixed_thread_back",
-                        "Message sent — Back to the profile", dry_run, button="back")
+                        "Message sent — Back to the match game", dry_run, button="back")
         if tg.get("sent_this"):
             tg["sent_this"] = False
             done += 1
             tg["done"] = done
-        xy = _middle_like_xy(ui_tree)
         tg["phase"] = "after_match"
-        if xy:
-            return _act("tap", "tagged_fixed_match_middle",
-                        f"Tap the middle match button (free) — {done}/{target} sent",
-                        dry_run, x=xy[0], y=xy[1])
-        return _act("press_button", "tagged_fixed_profile_back",
-                    f"No free match button on the profile — Back ({done}/{target} sent)",
-                    dry_run, button="back")
+        phase = "after_match"
 
     if phase == "after_match":
         tg["phase"] = "deck"

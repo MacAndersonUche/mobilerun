@@ -64,7 +64,8 @@ def test_live_mbm_types_then_sends_not_crush():
 
     act2 = plan_hily_fixed_first_contact(
         "send 2 first contact messages on Hily",
-        tree,
+        # The line is verified in the box: only then does Send happen.
+        (FIX / "hily_mbm_typed.xml").read_text(encoding="utf-8"),
         ["Opened Hily", "Type MBM first-contact"],
         state=st,
         package="com.hily.app",
@@ -90,6 +91,28 @@ def test_live_mbm_types_then_sends_not_crush():
         target=2,
     )
     assert st["bulk_message_new"]["done"] == 1
+
+
+def test_mbm_empty_box_retypes_never_sends():
+    # PR #83 rule on Hily too: the type never landed, so Send must NOT be
+    # tapped — retype, bounded, and nothing counts as sent.
+    tree = (FIX / "hily_mbm_shann.xml").read_text(encoding="utf-8")
+    st = {"bulk_message_new": {"done": 0, "typed": True}}
+    act = plan_hily_fixed_first_contact(
+        "send 2 first contact messages on Hily",
+        tree,
+        ["Opened Hily", "Type MBM first-contact"],
+        state=st,
+        package="com.hily.app",
+        dry_run=False,
+        message="hey how are you",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "type"
+    assert act.get("text") == "hey how are you"
+    assert st["bulk_message_new"]["done"] == 0
+    assert not st["bulk_message_new"].get("awaiting_sent")
 
 
 def test_allowance_zero_stops_without_send():
@@ -125,6 +148,31 @@ def test_likes_sent_taps_chat_request_not_crush():
     assert (act.get("x"), act.get("y")) == (445, 925)
     assert (act.get("x"), act.get("y")) != CRUSH_XY
     assert "chat_request" in (act.get("reason") or "")
+
+
+def test_not_for_you_dialog_taps_skip_profile():
+    # X on a Likes-you card opens "Not for you?" — confirm with
+    # "Skip profile" (video flow, description-only: no frame captured it).
+    tree = (
+        '<hierarchy packages="com.hily.app"><w p="com.hily.app" f="1">'
+        '<n t="Not for you?" xy="540,900" b="80,800,1000,1000"/>'
+        '<n t="Skip profile" c="1" xy="540,1200" b="300,1140,780,1260"/>'
+        '<n t="Keep" c="1" xy="540,1400" b="300,1340,780,1460"/>'
+        "</w></hierarchy>"
+    )
+    act = plan_hily_fixed_first_contact(
+        "send 2 first contact messages on Hily",
+        tree,
+        ["Opened Hily"],
+        state={"bulk_message_new": {"done": 0}},
+        dry_run=False,
+        message="hey how are you",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == (540, 1200)
+    assert "skip profile" in (act.get("reason") or "").lower()
 
 
 def test_finder_opens_activity_not_crush():

@@ -56,7 +56,8 @@ def test_live_types_then_sends_not_yubucks():
     assert act.get("text") == "hey how are you"
     act2 = plan_yubo_fixed_first_contact(
         "send 2 first contact messages on Yubo",
-        tree,
+        # The line is verified in the box: only then does Send happen.
+        (FIX / "yubo_say_hello_typed.xml").read_text(encoding="utf-8"),
         ["Type Yubo first-contact"],
         state=st,
         dry_run=False,
@@ -81,6 +82,27 @@ def test_live_types_then_sends_not_yubucks():
         target=2,
     )
     assert st["bulk_message_new"]["done"] == 1
+
+
+def test_live_empty_box_retypes_never_sends():
+    # PR #83 rule on Yubo too: the type never landed, so Send must NOT be
+    # tapped — retype, bounded, and nothing counts as sent.
+    tree = (FIX / "yubo_say_hello.xml").read_text(encoding="utf-8")
+    st = {"bulk_message_new": {"done": 0, "typed": True}}
+    act = plan_yubo_fixed_first_contact(
+        "send 2 first contact messages on Yubo",
+        tree,
+        ["Type Yubo first-contact"],
+        state=st,
+        dry_run=False,
+        message="hey how are you",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "type"
+    assert act.get("text") == "hey how are you"
+    assert st["bulk_message_new"]["done"] == 0
+    assert not st["bulk_message_new"].get("awaiting_sent")
 
 
 def test_new_friends_taps_person_not_reactions_or_infinity():

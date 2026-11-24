@@ -373,7 +373,26 @@ def plan_yubo_fixed_first_contact(
                 },
                 "yubo_fixed_fc_dry",
             )
-        if not bulk.get("typed"):
+        # PR #83 rule, every app (video, 24 Nov 2026): Send only when the
+        # exact line is verified in the box. A type that never landed
+        # retypes (bounded) — it must never reach Send.
+        box = composer_text(ui_tree)
+        if not bulk.get("typed") or box.lower() != text.lower():
+            tries = int(bulk.get("type_tries") or 0)
+            if tries >= 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Yubo first-contact never landed in the box "
+                            f"after 2 tries — stop, nothing sent ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "yubo_fixed_fc_type_fail",
+                )
+            bulk["type_tries"] = tries + 1
             bulk["typed"] = True
             st["bulk_message_new"] = bulk
             return _fp(
@@ -387,6 +406,7 @@ def plan_yubo_fixed_first_contact(
                 },
                 "yubo_fixed_fc_type",
             )
+        bulk["type_tries"] = 0
         send = _send_right_of_composer(ui_tree) or (
             DIRECT_SEND_XY if on_direct else SEND_XY
         )

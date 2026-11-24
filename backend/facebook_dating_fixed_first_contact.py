@@ -5,9 +5,12 @@ Verified on the S21+ (1080x2400), 23 Nov 2026:
   Amber, 20  — "hi miss you look beautiful" + Send (980, 1329)
   Next card: Kloeé, 24. Nothing paid was tapped.
 
-Route: tap the profile photo → "Say something about this photo..." box
-→ type Mac's exact line → Send. Never tap Spotlight, Crush, the heart
-Like button, or No Thanks. Daily cap is 50.
+Route: tap the purple heart on the card → profile → heart again →
+"Say something about this photo..." box → type Mac's exact line → Send.
+Video (24 Nov 2026): the heart opens the profile from the deck and the
+comment box from the profile — it never sends a bare like. The photo tap
+stays as the fallback when the heart node is not in the tree. Never tap
+Spotlight, Crush, or No Thanks. Daily cap is 50.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ MESSAGE_BANK = (
 PHOTO_XY = (540, 723)  # center of Profile picture [0,75][1080,1371]
 CARD_PHOTO_XY = (540, 1000)  # card stack, above Like/Pass
 SEND_XY = (980, 1329)  # desc Send [923,1272][1038,1387]
-LIKE_XY = (739, 2116)  # purple heart — never; the comment is the like
+LIKE_XY = (739, 2116)  # purple heart — video: opens profile / comment box
 PASS_XY = (340, 2116)
 EXPLORE_XY = (893, 260)
 
@@ -111,6 +114,23 @@ def _on_paywall(tree: str) -> bool:
             "boost",
         )
     )
+
+
+def _like_center(tree: str) -> Optional[Tuple[int, int]]:
+    """The purple heart ("Like" node) on the card or the profile.
+
+    Video (24 Nov 2026): tapping it opens the profile from the deck and
+    the "Say something about this photo..." box from the profile — it
+    never sends a bare like. Exact label only, so "Liked you" chips and
+    "Like" headers never match.
+    """
+    for n in _parse_compact_nodes(tree):
+        if str(n.get("desc") or n.get("label") or "").strip().lower() != "like":
+            continue
+        if n.get("x") is None:
+            continue
+        return (int(n["x"]), int(n["y"]))
+    return None
 
 
 def _profile_photo_center(tree: str) -> Optional[Tuple[int, int]]:
@@ -637,7 +657,29 @@ def plan_facebook_dating_fixed_first_contact(
             "fb_dating_fc_dry_card",
         )
 
-    # Profile or card: tap the photo, never the heart / No Thanks.
+    # Card or profile: tap the purple heart first (video flow) — it opens
+    # the profile from the deck and the comment box from the profile.
+    # Fall back to the photo tap when the heart node is not in the tree.
+    like = _like_center(ui_tree)
+    if like:
+        bulk["awaiting_sheet"] = 1
+        st["bulk_message_new"] = bulk
+        return _fp(
+            {
+                "action": "tap",
+                "x": int(like[0]),
+                "y": int(like[1]),
+                "reason": (
+                    f"Tap Facebook Dating heart (Like) to open the comment "
+                    f"box ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "fb_dating_fc_tap_like",
+        )
+
+    # Profile or card: tap the photo, never No Thanks.
     photo = _profile_photo_center(ui_tree)
     if photo:
         bulk["awaiting_sheet"] = 1

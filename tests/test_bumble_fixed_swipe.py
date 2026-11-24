@@ -327,7 +327,42 @@ def test_dump_failed_live_just_swipes():
     assert "dump failed" in act["reason"]
 
 
-def test_badoo_matches_sheet_backs_out():
+def test_bumble_compliment_picker_backs_out_never_swipes():
+    # Video (24 Nov 2026): tapping the star opens the "Second time's a
+    # charm" compliment picker — a paid flow. The planner must never
+    # swipe on it; dismiss with the picker's Back and buy nothing.
+    tree = (
+        '<hierarchy packages="com.bumble.app"><w p="com.bumble.app">'
+        '<n t="Second time\'s a charm" xy="540,400" b="80,350,1000,450"/>'
+        '<n t="You\'ve already liked these bees, why not use Compliments to '
+        'help you stand out?" xy="540,600" b="80,550,1000,700"/>'
+        '<n t="3 Compliments left" xy="540,800" b="80,750,1000,850"/>'
+        '<n t="Juliana, 26" xy="540,1200" b="80,1100,1000,1300"/>'
+        '<n t="Lauren, 26" xy="540,1600" b="80,1500,1000,1700"/>'
+        '<n t="Back" c="1" xy="80,150" b="20,100,140,200"/>'
+        "</w></hierarchy>"
+    )
+    assert bumble_fixed_guard(tree) is not None
+    act = plan_fixed_swipe(
+        "like 5 profiles on Bumble (fixed)",
+        tree,
+        [],
+        state={"bulk_swipe": {"done": 0, "target": 5}},
+        package="com.bumble.app",
+        dry_run=False,
+        planner="bumble_fixed",
+        app="bumble",
+    )
+    assert act["action"] == "tap"
+    assert (act["x"], act["y"]) == (80, 150)
+    assert "paid popup" in act["reason"].lower()
+    assert "nothing bought" in act["reason"].lower()
+    assert act.get("x1") is None
+
+
+def test_badoo_matches_sheet_taps_maybe_later_when_present():
+    # Video (24 Nov 2026): dismiss the "10 new matches" sheet with a safe
+    # label when one is in the tree — never "See my matches".
     tree = (
         '<hierarchy packages="com.badoo.mobile"><w p="com.badoo.mobile">'
         '<n t="You have 10 new matches!" xy="540,1400" b="80,1300,1000,1500"/>'
@@ -346,13 +381,78 @@ def test_badoo_matches_sheet_backs_out():
         planner="badoo_fixed",
         app="badoo",
     )
+    assert act["action"] == "tap"
+    assert (act["x"], act["y"]) == (540, 2050)
+    assert "matches sheet" in act["reason"].lower()
+    assert "see my matches" in act["reason"].lower()
+    assert act.get("x1") is None
+
+
+def test_badoo_matches_sheet_backs_out_without_safe_label():
+    # The video's sheet has NO "Maybe later" — only "See my matches" —
+    # so Back is the dismissal, never tapping "See my matches".
+    tree = (
+        '<hierarchy packages="com.badoo.mobile"><w p="com.badoo.mobile">'
+        '<n t="You have 10 new matches!" xy="540,1400" b="80,1300,1000,1500"/>'
+        '<n t="See my matches" c="1" xy="540,1800" b="80,1700,1000,1900"/>'
+        "</w></hierarchy>"
+    )
+    assert badoo_matches_sheet(tree)
+    act = plan_fixed_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [],
+        state={"bulk_swipe": {"done": 0, "target": 5}},
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
+    )
     assert act["action"] == "press_button" and act["button"] == "back"
     assert "matches sheet" in act["reason"].lower()
     assert act.get("x") is None and act.get("x1") is None
 
 
-def test_badoo_encounters_live_swipes_mid_height():
+def test_badoo_encounters_live_taps_heart_not_swipe():
+    # Video (24 Nov 2026): the Encounters deck has a heart Like button —
+    # tap it instead of swiping when the tree has it.
     tree = (FIXTURES / "badoo_encounters.xml").read_text()
+    st = {"bulk_swipe": {"done": 0, "target": 5}}
+    act = plan_fixed_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [],
+        state=st,
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
+    )
+    assert act["fastpath_step"] == "badoo_fixed_scroll_top"
+    act = plan_fixed_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [act["reason"]],
+        state=st,
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
+    )
+    assert act["action"] == "tap"
+    assert (act["x"], act["y"]) == (855, 1982)  # VoteYes heart
+    assert "fixed like swipe" in act["reason"]
+    assert "1/5" in act["reason"]
+    assert act["planner"] == "badoo_fixed"
+
+
+def test_badoo_encounters_no_heart_falls_back_to_swipe():
+    # No heart node in the tree: the verified right-swipe is the fallback.
+    tree = "\n".join(
+        ln
+        for ln in (FIXTURES / "badoo_encounters.xml").read_text().splitlines()
+        if "buttonVoteYes" not in ln
+    )
     st = {"bulk_swipe": {"done": 0, "target": 5}}
     act = plan_fixed_swipe(
         "like 5 profiles on Badoo (fixed)",

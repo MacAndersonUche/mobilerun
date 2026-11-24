@@ -89,8 +89,8 @@ def test_post_then_feed_then_home_still_works():
     a = _p(HOME, st)
     assert a["fastpath_step"] == "fb_dating_fc_wait_card"
     a = _p(ELLIE, st)
-    assert a["fastpath_step"] == "fb_dating_fc_tap_photo"
-    assert (a["x"], a["y"]) == PHOTO_XY
+    assert a["fastpath_step"] == "fb_dating_fc_tap_like"
+    assert (a["x"], a["y"]) == LIKE_XY
 
 
 def test_routed_without_llm_and_quoted_bank_text():

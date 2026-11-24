@@ -9,7 +9,6 @@ from backend.facebook_dating_fixed_first_contact import (
     DAILY_CAP,
     LIKE_XY,
     PHOTO_COMMENT_TEXT,
-    PHOTO_XY,
     SEND_XY,
     plan_facebook_dating_fixed_first_contact,
 )
@@ -96,7 +95,9 @@ def test_live_types_mac_text_then_sends_not_heart():
     assert st["bulk_message_new"]["done"] == 1
 
 
-def test_profile_taps_photo_not_like_or_pass():
+def test_profile_taps_heart_to_open_comment_box():
+    # Video (24 Nov 2026): the purple heart on the profile opens the
+    # "Say something about this photo..." box — it never sends a bare like.
     tree = (FIX / "fb_dating_profile_ellie.xml").read_text(encoding="utf-8")
     act = plan_facebook_dating_fixed_first_contact(
         "send 2 first contact messages on Facebook Dating",
@@ -109,9 +110,8 @@ def test_profile_taps_photo_not_like_or_pass():
     )
     assert act is not None
     assert act.get("action") == "tap"
-    assert (act.get("x"), act.get("y")) == PHOTO_XY
-    assert (act.get("x"), act.get("y")) != LIKE_XY
-    assert "photo" in (act.get("reason") or "").lower()
+    assert (act.get("x"), act.get("y")) == LIKE_XY
+    assert "heart" in (act.get("reason") or "").lower()
 
 
 def test_explore_backs_out_not_spotlight_or_crush():
