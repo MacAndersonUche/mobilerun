@@ -205,3 +205,26 @@ def latest_in_run(run_id: str, jobs: List[Dict[str, Any]]) -> Optional[Dict[str,
         if str(j.get("run_id") or "") == run_id:
             return j
     return None
+
+
+def running_dating_jobs(
+    jobs: List[Dict[str, Any]], *, skip: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """r45: every still-running dating job (Stop must free the phone even
+    when this Lambda lost dating_mode_state['job_id'])."""
+    out: List[Dict[str, Any]] = []
+    for j in jobs or []:
+        if not isinstance(j, dict):
+            continue
+        if str(j.get("status") or "") != "running":
+            continue
+        if skip and str(j.get("job_id") or "") == skip:
+            continue
+        if (
+            j.get("dating_run")
+            or j.get("dating_app")
+            or j.get("schedule_id")
+            or str(j.get("mode") or "") == "dating"
+        ):
+            out.append(j)
+    return out

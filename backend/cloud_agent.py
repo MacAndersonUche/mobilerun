@@ -310,6 +310,8 @@ def _bulk_action_is_verified_fastpath(action: Dict[str, Any]) -> bool:
     planner = str(action.get("planner") or "").lower()
     if (
         planner.endswith("_fixed")
+        or "no_llm_handoff" in planner
+        or "_fixed_first_contact" in planner
         or step.startswith("bumble_fixed")
         or step.startswith("badoo_fixed")
         or action.get("_no_llm_handoff")
@@ -2002,6 +2004,12 @@ def _is_fixed_swipe_action(action: Dict[str, Any]) -> bool:
         step.startswith("bumble_fixed")
         or step.startswith("badoo_fixed")
         or planner in ("bumble_fixed", "badoo_fixed")
+        # r45: fixed first-contact planners (Hinge/BLK/Hily/FB/Yubo) — the
+        # Yubo job handed off to the LLM, which typed the instruction text
+        # and parked on the paid Blast sheet (24 Nov 01:49).
+        or "_fixed_first_contact" in planner
+        or "_fixed_fc_" in step
+        or "no_llm_handoff" in planner
     )
 
 
@@ -2009,6 +2017,10 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     """r43: a Bumble/Badoo fixed-swipe job — never hand it to the LLM."""
     inst = (instruction or "").lower()
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
+        return True
+    # r45: Yubo first-contact never uses the LLM (it tapped onto the paid
+    # Blast sheet, 24 Nov). Other apps keep their current fallback.
+    if "first contact" in inst and "yubo" in inst:
         return True
     st = state if isinstance(state, dict) else {}
     return str(st.get("swipe_mode") or "").lower() == "fixed"
@@ -2208,6 +2220,18 @@ def plan_next_action(
                 logger.warning(
                     "plan_bulk_bench raised → LLM handoff: %s", bulk_err
                 )
+                if _fixed_swipe_run(instruction, st_bulk):
+                    return _guard(
+                        {
+                            "action": "wait",
+                            "seconds": 1.0,
+                            "delay_s": 1.0,
+                            "reason": f"Fixed run: planner error, retry (no AI) ({bulk_err})",
+                            "planner": "fixed_planner_error",
+                            "llm_provider": None,
+                            "_no_llm_handoff": True,
+                        }
+                    )
                 st_bulk["_bulk_llm_handoff"] = True
                 return _guard(
                     {
@@ -2261,6 +2285,11 @@ def plan_next_action(
             if _is_fixed_swipe_action(bulk_act):
                 st_bulk["bulk_stall_n"] = 0
                 st_bulk["bulk_last_progress_at"] = time.time()
+                return _guard(bulk_act)
+            # r45: on a fixed run, helper steps (open app, popups, recover)
+            # are returned as-is — never a stall → LLM handoff.
+            if _fixed_swipe_run(instruction, st_bulk):
+                bulk_act.setdefault("_no_llm_handoff", True)
                 return _guard(bulk_act)
             if bak == "fail" and not _is_policy_fail_no_stuck(
                 str(bulk_act.get("reason") or "")
@@ -2412,6 +2441,20 @@ def plan_next_action(
             else:
                 bulk_act["_stall_n"] = stall
                 return _guard(bulk_act)
+
+        # r45: fixed runs never fall through to the LLM.
+        if not bulk_act and _fixed_swipe_run(instruction, st_bulk):
+            return _guard(
+                {
+                    "action": "wait",
+                    "seconds": 1.5,
+                    "delay_s": 1.5,
+                    "reason": "Fixed run: no fixed step for this screen yet — wait (no AI)",
+                    "planner": "fixed_no_step",
+                    "llm_provider": None,
+                    "_no_llm_handoff": True,
+                }
+            )
 
     # When bulk handed off to LLM, skip other heuristics so the general
     # agent loop (screenshot + SoM) owns navigation.

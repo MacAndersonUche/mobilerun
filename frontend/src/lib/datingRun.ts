@@ -33,6 +33,33 @@ export function runCountLabel(pkg: string): string {
   return 'Messages per run';
 }
 
+/** Hint shown under a count box: the real cap only (no minimum clamp). */
+export function runCountHint(pkg: string): string {
+  if (pkg === 'com.facebook.katana') return 'Max 50 (Facebook Dating limit)';
+  if (pkg === 'com.hily.app') return `Max ${RUN_COUNT_MAX} · Hily sends 5 messages, then likes`;
+  return `Max ${RUN_COUNT_MAX}`;
+}
+
+export type CountParse = { ok: true; n: number } | { ok: false; error: string };
+
+/**
+ * r45: validate a typed count on submit. The box itself accepts anything
+ * (it can be cleared while typing); only Start/Save checks it.
+ */
+export function parseCountInput(raw: unknown, cap: number, label = 'Number'): CountParse {
+  const t = String(raw ?? '').trim();
+  if (t === '') return { ok: false, error: `${label}: enter a number` };
+  if (!/^\d+$/.test(t)) return { ok: false, error: `${label}: whole numbers only` };
+  const n = Number(t);
+  if (n < 1) return { ok: false, error: `${label}: must be 1 or more` };
+  if (n > cap) return { ok: false, error: `${label}: max is ${cap}` };
+  return { ok: true, n };
+}
+
+export function parseRunCount(pkg: string, raw: unknown, label?: string): CountParse {
+  return parseCountInput(raw, runCountCap(pkg), label || runCountLabel(pkg));
+}
+
 export function clampRunCount(pkg: string, n: unknown): number {
   const v = Math.floor(Number(n));
   if (!Number.isFinite(v) || v < 1) return 1;

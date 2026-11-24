@@ -3752,8 +3752,39 @@ async def stop_dating_mode(auth: Optional[dict] = Depends(optional_verify_token)
         except Exception as e:
             logger.warning("Could not stop job: %s", e)
 
+    # r45: also stop any other running dating job (stuck/queued ones kept the
+    # phone locked so a new Badoo run could not start, 24 Nov).
+    stopped_ids: List[str] = []
+    try:
+        try:
+            from dating_run import running_dating_jobs
+            from storage import list_recent_jobs, put_job
+        except ImportError:
+            from backend.dating_run import running_dating_jobs  # type: ignore
+            from backend.storage import list_recent_jobs, put_job  # type: ignore
+        for j in running_dating_jobs(list_recent_jobs(limit=50)):
+            j["status"] = "stopped"
+            j["error"] = j.get("error") or "Stopped from the portal"
+            j["updated_at"] = int(time.time())
+            put_job(j)
+            stopped_ids.append(str(j.get("job_id") or ""))
+            did = str(j.get("device_id") or "")
+            if did:
+                try:
+                    try:
+                        from cloud_agent import _end_job_cleanup
+                        from device_rpc import call_device
+                    except ImportError:
+                        from backend.cloud_agent import _end_job_cleanup  # type: ignore
+                        from backend.device_rpc import call_device  # type: ignore
+                    _end_job_cleanup(j, did, call_device)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("Could not sweep dating jobs: %s", e)
+
     _save_dating_runtime(auth)
-    return {"status": "stopped", "state": dating_mode_state}
+    return {"status": "stopped", "state": dating_mode_state, "stopped": stopped_ids}
 
 
 @app.post("/api/dating/pause")

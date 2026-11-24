@@ -93,6 +93,33 @@ def _on_paywall(tree: str) -> bool:
     ) and "say hello to" not in blob and not _on_chat_list(tree)
 
 
+_BLAST_MARKERS = (
+    "message tons of new people",
+    "super blast",
+)
+
+
+def blast_selected(tree: str) -> bool:
+    """r45: the 'Send a message' sheet with paid Blast (Yubucks) selected.
+
+    Blast selected shows the 'Message tons of new people at once' line and
+    the 50+/100+/200+ reach chips (the tile also shows 'Blast · 490').
+    """
+    blob = _blob(tree)
+    if "blast" not in blob:
+        return False
+    if "message tons of new people" in blob:
+        return True
+    return "50+" in blob and "100+" in blob
+
+
+def composer_text(tree: str) -> str:
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable"):
+            return (n.get("text") or "").strip()
+    return ""
+
+
 def _composer(tree: str) -> Optional[Tuple[int, int]]:
     for n in _parse_compact_nodes(tree):
         if n.get("editable"):
@@ -201,8 +228,104 @@ def plan_yubo_fixed_first_contact(
             "yubo_fixed_fc_paywall_back",
         )
 
+    # r45: confirm the last Send actually went before counting it.
+    pending = str(bulk.get("awaiting_sent") or "")
+    if pending:
+        left = composer_text(ui_tree).lower()
+        if left and left == pending.lower() and not blast_selected(ui_tree):
+            tries = int(bulk.get("send_retry") or 0)
+            if tries < 1:
+                bulk["send_retry"] = tries + 1
+                send = _send_right_of_composer(ui_tree) or SEND_XY
+                if send not in (YUBUCKS_XY, ROCKET_XY):
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(send[0]),
+                            "y": int(send[1]),
+                            "reason": f"Yubo Send again — '{pending}' still in the box ({planner})",
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "yubo_fixed_fc_send_retry",
+                    )
+            bulk["awaiting_sent"] = ""
+            bulk["send_retry"] = 0
+            bulk["typed"] = False
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Yubo message did not send ('{pending}' still in the "
+                        f"box after retry) — stop, nothing paid ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "yubo_fixed_fc_not_sent",
+            )
+        if left == pending.lower() and blast_selected(ui_tree):
+            pass  # handled by the Direct guard below (nothing was sent)
+        else:
+            done += 1
+            bulk["done"] = done
+            bulk["awaiting_sent"] = ""
+            bulk["send_retry"] = 0
+            bulk["typed"] = False
+            bulk["_close_sheet"] = True
+            st["bulk_message_new"] = bulk
+            if done >= cap:
+                return _fp(
+                    {
+                        "action": "done",
+                        "reason": f"Yubo first-contact finished {done}/{cap} ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                        "dry_run": bool(dry_run),
+                    },
+                    "yubo_fixed_fc_done",
+                )
+
+    # r45: never send while paid Blast is selected — pick Direct (max 3).
+    if blast_selected(ui_tree):
+        n_sel = int(bulk.get("direct_tries") or 0) + 1
+        bulk["direct_tries"] = n_sel
+        st["bulk_message_new"] = bulk
+        if n_sel > 3:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Yubo sheet stays on paid Blast after 3 Direct taps "
+                        f"— stop, nothing sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "yubo_fixed_fc_blast_stop",
+            )
+        sel = yubo_direct_sheet_action(ui_tree, planner=planner)
+        if not sel:
+            # Detector thinks Direct is selected but Blast markers remain
+            sel = _fp(
+                {
+                    "action": "tap",
+                    "x": 855,
+                    "y": 655,
+                    "reason": f"Select Direct (Blast is paid) ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "yubo_select_direct",
+            )
+        sel["planner"] = planner
+        return sel
+    bulk["direct_tries"] = 0
+
     select_direct = yubo_direct_sheet_action(ui_tree, planner=planner)
     if select_direct:
+        select_direct["planner"] = planner
         return select_direct
 
     text = allowed_message(message)
@@ -210,6 +333,24 @@ def plan_yubo_fixed_first_contact(
     on_hello = _on_say_hello(ui_tree) or (
         _composer(ui_tree) is not None and "say hello" in _blob(ui_tree)
     )
+
+    # r45: after a confirmed Direct send, close the sheet (Back) instead of
+    # typing again to the same person; then carry on to the next contact.
+    if bulk.get("_close_sheet") and on_direct and not composer_text(ui_tree):
+        bulk["_close_sheet"] = False
+        st["bulk_message_new"] = bulk
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Yubo message sent — close the send sheet ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "yubo_fixed_fc_close_sheet",
+        )
+    if not on_direct:
+        bulk["_close_sheet"] = False
 
     if on_hello or on_direct:
         if dry_run:
@@ -260,8 +401,18 @@ def plan_yubo_fixed_first_contact(
                 },
                 "yubo_fixed_fc_refuse_paid",
             )
-        bulk["done"] = done + 1
-        bulk["typed"] = False
+        if blast_selected(ui_tree):  # belt and braces — never a paid send
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": f"Yubo Blast selected at send — refuse ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "yubo_fixed_fc_refuse_blast",
+            )
+        bulk["awaiting_sent"] = text
+        bulk["send_retry"] = 0
         st["bulk_message_new"] = bulk
         return _fp(
             {
@@ -269,7 +420,7 @@ def plan_yubo_fixed_first_contact(
                 "x": int(send[0]),
                 "y": int(send[1]),
                 "reason": (
-                    f"Yubo Send first-contact {bulk['done']}/{cap} "
+                    f"Yubo Send first-contact {done + 1}/{cap} "
                     f"— never Blast/Yubucks ({planner})"
                 ),
                 "planner": planner,

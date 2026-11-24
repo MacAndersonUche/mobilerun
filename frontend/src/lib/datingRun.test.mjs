@@ -43,3 +43,19 @@ assert.equal(runCountLabel('com.bumble.app'), 'Swipes per run');
 assert.match(runCountLabel('com.hily.app'), /after 5 messages/);
 assert.equal(one.device_id, undefined);
 console.log('datingRun ok');
+
+// r45: free typing, validate on submit; caps kept
+{
+  const { parseCountInput, parseRunCount, runCountHint } = await import('./datingRun.ts');
+  const a = (c, m) => { if (!c) throw new Error(m); };
+  a(parseCountInput('', 10).ok === false, 'blank refused at submit');
+  a(parseCountInput('abc', 10).ok === false, 'letters refused');
+  a(parseCountInput('0', 10).ok === false, 'zero refused');
+  a(parseCountInput('7', 10).ok && parseCountInput('7', 10).n === 7, '7 ok');
+  a(parseCountInput('11', 10).ok === false, 'over cap refused');
+  const fb = parseRunCount('com.facebook.katana', '60');
+  a(!fb.ok && /50/.test(fb.error), 'FB cap 50 shown');
+  a(parseRunCount('com.bumble.app', '250').ok, 'bumble 250 ok');
+  a(/50/.test(runCountHint('com.facebook.katana')), 'FB hint');
+  console.log('r45 count input tests ok');
+}

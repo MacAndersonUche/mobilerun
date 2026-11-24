@@ -436,6 +436,9 @@ def _deck_tab_xy(app: str, tree: str) -> Optional[Tuple[int, int]]:
 
 
 def _bottom_nav_visible(tree: str) -> bool:
+    # r45: Badoo's tabs carry ids even when their labels are not read
+    if "nav_bar_button_" in (tree or ""):
+        return True
     return sum(
         1
         for n in _visible_nodes(tree)
@@ -576,6 +579,31 @@ def _recover_action(
     )
 
 
+_DISMISS_LABELS = (
+    "close", "not now", "no thanks", "no, thanks", "maybe later", "later",
+    "skip", "dismiss", "cancel", "x", "×",
+)
+
+
+def _paid_popup_dismiss(tree: str) -> Optional[Tuple[int, int, str]]:
+    """Free close control on a paid popup: (x, y, label) or None."""
+    best = None
+    for n in _visible_nodes(tree):
+        lab = (n.get("label") or "").strip()
+        low = lab.lower()
+        nid = str(n.get("id") or "").lower()
+        if low in _DISMISS_LABELS or nid.endswith(("/close", "_close", "close_button", "closebutton")):
+            if bumble_fixed_guard(lab):
+                continue
+            if int(n.get("y") or 0) >= 2100:  # bottom nav, not a popup
+                continue
+            xy = (int(n.get("x") or 0), int(n.get("y") or 0), lab or "Close")
+            if xy[0] <= 0 or xy[1] <= 0:
+                continue
+            best = best or xy
+    return best
+
+
 def _fail(reason: str, planner: str, dry_run: bool) -> Dict[str, Any]:
     return _fp(
         {
@@ -634,9 +662,18 @@ def badoo_fixed_on_deck(tree: str) -> bool:
             return True
     except Exception:
         pass
-    blob = visible_ui_text(tree).lower()
+    # r45: ignore the bottom tabs ("Encounters", "Likes") — they are on every
+    # Badoo screen, so Chats / Liked you looked like the deck and the run
+    # swiped in place instead of going back to Encounters.
+    parts = []
+    for n in _visible_nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if "nav_bar_button" in nid or int(n.get("y") or 0) >= 2100:
+            continue
+        parts.append(" ".join([n.get("label") or "", nid]))
+    blob = " ".join(parts).lower()
     if "encounters" in blob and (
-        "like" in blob or "voteyes" in blob or "send a crush" in blob
+        re.search(r"\blike\b", blob) or "voteyes" in blob or "send a crush" in blob
     ):
         return True
     return False
@@ -794,6 +831,32 @@ def plan_fixed_swipe(
         )
 
     blocked = bumble_fixed_guard(ui_tree)
+    if blocked and "match" not in blocked:
+        # r45: a paid upsell popup (Buy Credits / Premium) with a free Close /
+        # Not now is dismissed, not a dead end. Never taps the paid CTA.
+        dismiss = _paid_popup_dismiss(ui_tree)
+        n_dis = int(bulk.get("_paid_dismiss_n") or 0)
+        if dismiss and n_dis < 3:
+            bulk["_paid_dismiss_n"] = n_dis + 1
+            bulk["_fixed_top_done"] = False
+            st["bulk_swipe"] = bulk
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": dismiss[0],
+                    "y": dismiss[1],
+                    "label": dismiss[2],
+                    "reason": (
+                        f"{label} fixed swipe: close paid popup ({blocked}) "
+                        f"with '{dismiss[2]}' — nothing bought ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "_no_llm_handoff": True,
+                },
+                f"{app}_fixed_close_paid_popup",
+            )
     if blocked:
         return _fail(
             f"{label} fixed swipe aborted: {blocked} — no tap ({planner})",

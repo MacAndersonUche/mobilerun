@@ -35,6 +35,8 @@ def extract_quoted_message_text(instruction: str) -> Optional[str]:
         # message "hello miss" to 3 new profiles / reply "hey" to 5 chats
         r"(?:message|reply|auto[- ]?message|send)\s+[\"']([^\"']+)[\"']\s+to\b",
         r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']",
+        # r45: '... first contact messages on facebook dating "hi miss …"'
+        r"messages?\s+on\s+[\w ]+?\s+\"([^\"]{1,500})\"\s*$",
     )
     for pat in patterns:
         m = re.search(pat, text, re.I)
@@ -85,6 +87,14 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
         # Reject instruction-shaped captures ("a hinge message to Sam")
         low = body.lower()
         if "message to" in low or re.search(r"\bto\s+\d+\b", low):
+            continue
+        # r45: "send 5 first contact messages on yubo" is a job instruction,
+        # not the message body (Yubo typed it verbatim, 24 Nov 01:49).
+        if (
+            re.match(r"^\d+\s", low)
+            or "first contact" in low
+            or re.search(r"\bmessages?\s+(?:on|to|in)\b", low)
+        ):
             continue
         if body and len(body) <= 2000:
             return body

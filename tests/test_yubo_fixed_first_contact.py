@@ -68,6 +68,18 @@ def test_live_types_then_sends_not_yubucks():
     assert act2.get("x") == SEND_XY[0]
     assert abs(int(act2.get("y")) - SEND_XY[1]) <= 2
     assert (act2.get("x"), act2.get("y")) != YUBUCKS_XY
+    # r45: counted only once the box is empty (message went)
+    assert st["bulk_message_new"]["done"] == 0
+    assert st["bulk_message_new"]["awaiting_sent"] == "hey how are you"
+    plan_yubo_fixed_first_contact(
+        "send 2 first contact messages on Yubo",
+        tree,
+        ["Yubo Send first-contact 1/2"],
+        state=st,
+        dry_run=False,
+        message="hey how are you",
+        target=2,
+    )
     assert st["bulk_message_new"]["done"] == 1
 
 
