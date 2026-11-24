@@ -1,4 +1,8 @@
-"""Hily first-contact: Message Before Match from Likes sent (free daily cap 5).
+"""Hily first-contact: Message Before Match from Likes sent (daily cap 5).
+
+Each message spends 1 Major Crush — a limited credit, not free (video,
+24 Nov 2026: allowance 9 → 8 after one send). Only run it with Mac's
+approval, and stop when the allowance hits 0.
 
 Verified on the S21+ (1080x2400), 23 Nov 2026:
   Shann    — "hey how are you" via sendMessageButton (980, 1329)
@@ -378,6 +382,46 @@ def plan_hily_fixed_first_contact(
                 },
                 "hily_fixed_fc_refuse_crush",
             )
+        # PR #83 rule, every app (video, 24 Nov 2026): Send only when the
+        # exact line is verified in the box. A type that never landed
+        # retypes (bounded) — it must never reach Send.
+        box = ""
+        for n in _parse_compact_nodes(ui_tree):
+            if "textinput" in str(n.get("id") or "").lower() or n.get("editable"):
+                box = (n.get("text") or "").strip()
+                break
+        if box.lower() != text.lower():
+            tries = int(bulk.get("type_tries") or 0)
+            if tries >= 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Hily MBM comment never landed in the box after "
+                            f"2 tries — stop, nothing sent ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hily_fixed_fc_type_fail",
+                )
+            bulk["type_tries"] = tries + 1
+            bulk["typed"] = False
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "type",
+                    "text": text,
+                    "reason": (
+                        f"Type MBM first-contact '{text}' (retry) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "clear": True,
+                },
+                "hily_fixed_fc_type",
+            )
+        bulk["type_tries"] = 0
         # r45: count only once Hily confirms (Message sent / sheet closed)
         bulk["awaiting_sent"] = text
         st["bulk_message_new"] = bulk

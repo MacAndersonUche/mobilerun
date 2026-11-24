@@ -7,6 +7,13 @@ Verified on the S21+ (1080x2400), 23 Nov 2026:
 Discover often has an empty a11y tree, so the heart tap uses the stable
 photo-heart map (937, 1356) instead of per-card vision. Prompt-heart Y
 moves with prompt length and is not used. The like sheet itself has a11y.
+
+Video (24 Nov 2026, Mac by hand): after Send Like a "Send a Rose
+instead?" sheet can appear — dismiss it with "Send Like anyway", never
+"Send a Rose" and never the rose icon next to Send Like. The "Send Like
+anyway" tap is tree-resolved only: the map Send Like coords sit between
+the Rose button and the anyway link on that sheet, so a map fallback
+there could tap Rose.
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ try:
     from dm_heuristics import (
         DM_APP_PROFILES,
         _fp,
+        _tree_node_center,
         compose_box_focused,
         compose_box_text,
         hinge_dismiss_enable_prompt,
@@ -30,6 +38,7 @@ except ImportError:  # pragma: no cover
     from backend.dm_heuristics import (  # type: ignore
         DM_APP_PROFILES,
         _fp,
+        _tree_node_center,
         compose_box_focused,
         compose_box_text,
         hinge_dismiss_enable_prompt,
@@ -124,6 +133,35 @@ def _off_discover(tree: str) -> Optional[str]:
     if {"edit profile", "preview"} & top or "my profile" in blob:
         return "Profile"
     return None
+
+
+def _on_rose_popup(tree: str) -> bool:
+    """The "Send a Rose instead?" sheet: Rose button + "Send Like anyway"."""
+    blob = _low(tree)
+    return "send a rose instead" in blob and "send like anyway" in blob
+
+
+def _rose_popup_anyway(tree: str, planner: str) -> Optional[Dict[str, Any]]:
+    """Tree-resolved "Send Like anyway" tap — None when it is not in the
+    tree, so the caller Backs out instead of guessing map coords on a
+    sheet where the Rose button sits next to the anyway link."""
+    xy = _tree_node_center(tree, "Send Like anyway", "Send like anyway")
+    if not xy:
+        return None
+    return _fp(
+        {
+            "action": "tap",
+            "x": int(xy[0]),
+            "y": int(xy[1]),
+            "reason": (
+                f"Hinge Rose popup — Send Like anyway (never Send a Rose) "
+                f"({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_fixed_fc_rose_anyway",
+    )
 
 
 def _on_paywall_sheet(tree: str) -> bool:
@@ -225,6 +263,64 @@ def plan_hinge_fixed_first_contact(
         )
         return act
 
+    text = allowed_message(message)
+
+    # Video flow: the "Send a Rose instead?" sheet appears after Send Like.
+    # Dismiss it with "Send Like anyway" — never "Send a Rose". The sheet
+    # is handled here, ahead of the generic paywall Back, because Back
+    # would abandon the like instead of confirming it as a free like.
+    # Dry runs fall through to the sheet block below (no taps).
+    if not dry_run and _on_rose_popup(ui_tree):
+        anyway = _rose_popup_anyway(ui_tree, planner)
+        if anyway is None:
+            # No tree node for the anyway link: Back out rather than
+            # guess map coords next to the Rose button.
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": (
+                        f"Hinge Rose popup without a Send Like anyway node "
+                        f"— Back, never guess near Rose ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_rose_back",
+            )
+        if bulk.get("just_sent") or bulk.get("closing"):
+            # Send Like already went through and was counted — this tap
+            # only confirms it as a free like. Never recount.
+            bulk["closing"] = False
+            st["bulk_message_new"] = bulk
+            return anyway
+        if compose_box_text(ui_tree).lower() == text.lower():
+            # The comment is verified in the box: this tap IS the send.
+            bulk["done"] = done + 1
+            bulk["typed"] = False
+            bulk["awaiting_sheet"] = False
+            bulk["just_sent"] = True
+            bulk["close_tries"] = 0
+            bulk["type_tries"] = 0
+            bulk["focus_tries"] = 0
+            st["bulk_message_new"] = bulk
+            return anyway
+        # Popup before typing: do not send a bare like — Back to the
+        # sheet and type first.
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": (
+                    f"Hinge Rose popup before the comment was typed — Back "
+                    f"to the sheet, never send a bare like ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_fixed_fc_rose_back",
+        )
+
     if _on_paywall_sheet(ui_tree):
         return _fp(
             {
@@ -240,7 +336,6 @@ def plan_hinge_fixed_first_contact(
             "hinge_fixed_fc_paywall_back",
         )
 
-    text = allowed_message(message)
     on_sheet = hinge_on_like_sheet(ui_tree) or bool(bulk.get("awaiting_sheet"))
     # Prefer a11y when the like sheet is actually in the tree.
     if hinge_on_like_sheet(ui_tree):

@@ -2,7 +2,10 @@
 
 Verified S21+ mid-height right-swipe, scaled to screen size
 (1080x2400: 200,1200 -> 980,1200 @300ms). Paid-text guard before each
-swipe; if the dump fails, just swipe. Badoo match sheets: Back.
+swipe; if the dump fails, just swipe. Badoo: like via the Encounters
+heart button when the tree has it (swipe is the fallback); match sheets
+dismiss with "Maybe later" when present, else Back — never "See my
+matches".
 """
 
 from __future__ import annotations
@@ -57,6 +60,11 @@ _PAID_PHRASES = (
     "premium",
     "badoo premium",
     "buy credits",
+    # Video (24 Nov 2026): the "Second time's a charm" compliment picker
+    # is a paid flow — catch it here so the planner never swipes on it.
+    # Picker-only wording; it never appears in a profile bio.
+    "second time's a charm",
+    "compliments left",
 )
 _MATCH_PHRASES = (
     "it's a match",
@@ -155,7 +163,14 @@ def dump_failed(tree: str) -> bool:
 
 
 def badoo_matches_sheet(tree: str) -> bool:
-    """True on Badoo's 'You have N new matches' sheet — dismiss with Back."""
+    """True on Badoo's 'You have N new matches' sheet.
+
+    Dismiss with a safe label ("Maybe later" / "Not now" / "Close") when
+    one is in the tree, else Back — never "See my matches". The video
+    (24 Nov 2026) shows the sheet with only "See my matches", so Back is
+    the common path; tap-outside is not used (the exposed area is the
+    live deck card underneath).
+    """
     blob = visible_ui_text(tree).lower()
     if "see my matches" in blob:
         return True
@@ -164,6 +179,34 @@ def badoo_matches_sheet(tree: str) -> bool:
     ):
         return True
     return False
+
+
+def _badoo_matches_dismiss(tree: str) -> Optional[Tuple[int, int, str]]:
+    """A safe dismiss label on the matches sheet, else None."""
+    for label in ("Maybe later", "Not now", "Close"):
+        for n in _parse_compact_nodes(tree):
+            if str(n.get("label") or n.get("text") or "").strip() == label:
+                if n.get("x") is not None:
+                    return (int(n["x"]), int(n["y"]), label)
+    return None
+
+
+def _badoo_like_center(tree: str) -> Optional[Tuple[int, int]]:
+    """The heart Like button on the Badoo Encounters deck, else None.
+
+    Video (24 Nov 2026): heart = like, X = pass, chat bubble = message.
+    VoteYes id first; exact "Like" label as fallback. Never the Crush
+    (super-like) button — different id, never matched here.
+    """
+    for n in _parse_compact_nodes(tree):
+        if "buttonvoteyes" in str(n.get("id") or "").lower().replace("_", ""):
+            if n.get("x") is not None:
+                return (int(n["x"]), int(n["y"]))
+    for n in _parse_compact_nodes(tree):
+        if str(n.get("desc") or n.get("label") or "").strip().lower() == "like":
+            if n.get("x") is not None:
+                return (int(n["x"]), int(n["y"]))
+    return None
 
 
 def _visible_nodes(tree: str) -> List[Dict[str, Any]]:
@@ -365,13 +408,18 @@ def _harmless_popup_action(
                     },
                     "bumble_fixed_popup",
                 )
-    # Known non-paid dismiss from the existing map (Enjoying Bumble / Interested).
-    # Skip Interested? (preference, not a system popup). Enjoying is Back.
+    # Known non-paid dismiss from the existing map (Enjoying Bumble /
+    # Interested / compliments upsell). Skip Interested? (preference, not
+    # a system popup). Enjoying is Back; the compliments picker is Back
+    # too — never tap a Compliment or the star.
     try:
         act = bumble_dismiss_popup(tree, planner=planner)
     except Exception:
         act = None
-    if act and "enjoying" in (act.get("reason") or "").lower():
+    if act and (
+        "enjoying" in (act.get("reason") or "").lower()
+        or "compliments upsell" in (act.get("reason") or "").lower()
+    ):
         act["planner"] = planner
         act["_no_llm_handoff"] = True
         return act
@@ -582,6 +630,9 @@ def _recover_action(
 _DISMISS_LABELS = (
     "close", "not now", "no thanks", "no, thanks", "maybe later", "later",
     "skip", "dismiss", "cancel", "x", "×",
+    # "Back" is a safe dismiss on a paid popup (same as pressing Back) —
+    # the Bumble compliment picker has a Back node, no X.
+    "back",
 )
 
 
@@ -865,6 +916,24 @@ def plan_fixed_swipe(
         )
 
     if app == "badoo" and badoo_matches_sheet(ui_tree):
+        dismiss = _badoo_matches_dismiss(ui_tree)
+        if dismiss:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": dismiss[0],
+                    "y": dismiss[1],
+                    "reason": (
+                        f"Badoo fixed swipe: dismiss matches sheet with "
+                        f"'{dismiss[2]}' — never 'See my matches' ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                    "_no_llm_handoff": True,
+                },
+                "badoo_fixed_matches_dismiss",
+            )
         return _fp(
             {
                 "action": "press_button",
@@ -924,6 +993,33 @@ def plan_fixed_swipe(
             coords=coords,
             done=done,
         )
+
+    # Video (24 Nov 2026): Badoo's Encounters deck has a heart Like
+    # button — tap it when the tree has it. The verified right-swipe stays
+    # as the fallback when the tree has no heart. The reason keeps
+    # "fixed like swipe" so the awaiting-verify counting keys on it
+    # exactly like a swipe.
+    if app == "badoo":
+        heart = _badoo_like_center(ui_tree)
+        if heart:
+            bulk["awaiting_verify"] = True
+            bulk["_fixed_recover_n"] = 0
+            st["bulk_swipe"] = bulk
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": heart[0],
+                    "y": heart[1],
+                    "reason": (
+                        f"{label} fixed like swipe {done + 1}/{target} — "
+                        f"heart button {heart[0]},{heart[1]} ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "_no_llm_handoff": True,
+                },
+                f"{app}_fixed_like_swipe",
+            )
 
     return _swipe_action(
         f"{label} fixed like swipe {done + 1}/{target} {coord_s} ({planner})"

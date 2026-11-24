@@ -237,7 +237,11 @@ DM_APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "launch_activity": "com.bumble.app/.ui.launcher.BumbleLauncherActivity",
         "open_settle_s": 5.0,  # splash
         "family": "swipe",
-        # People deck (no like/pass buttons — gesture only)
+        # People deck: the free like is the right swipe. The yellow
+        # heart-in-bubble button is "Send a compliment" (paid/limited) and
+        # the star is SuperSwipe — never tap either (video, 24 Nov 2026).
+        # Tapping the star opens the "Second time's a charm" compliment
+        # picker; the fixed planner treats it as a paid popup and backs out.
         "deck_ids": (
             "com.bumble.app:id/profile_root_container",
             "id/profile_root_container",
@@ -3385,6 +3389,35 @@ def hily_dismiss_popup(
     text_blob = " ".join(
         (n.get("text") or n.get("label") or "") for n in nodes
     ).lower()
+
+    # "Not for you?" (X on a Likes-you card) — confirm with "Skip profile".
+    # Video flow is description-only (no frame captured it); the dialog
+    # title and button are Hily's own wording.
+    if "not for you" in text_blob:
+        skip = _tree_node_center(tree, "Skip profile")
+        if skip:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": skip[0],
+                    "y": skip[1],
+                    "reason": f"Dismiss Hily 'Not for you?' → Skip profile ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_not_for_you_skip",
+            )
+        return _fp(
+            {
+                "action": "press_button",
+                "button": "back",
+                "reason": f"Back — dismiss Hily 'Not for you?' ({planner})",
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_not_for_you_back",
+        )
+
     if "they liked you" in text_blob or "find out who" in text_blob:
         has_chat_row = any(
             "dialogmessageitem" in str(n.get("id") or "").lower()

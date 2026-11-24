@@ -1,0 +1,16 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Hinge "Send a Rose instead?" sheet over the like sheet (video, 24 Nov 2026):
+     comment typed, Rose PAID button, "Send Like anyway" link below it.
+     Coords are the 1080x2400 tree; the anyway link sits outside ROSE_BOUNDS. -->
+<hierarchy>
+  <w p="co.hinge.app" a="1">
+    <n t="Add a comment" xy="540,1100" b="[95,1015][985,1190]" />
+    <n t="hi miss" e="1" f="1" xy="540,1102" b="[95,1015][985,1190]" h="Add a comment" />
+    <n t="Rose" xy="225,1277" b="[95,1225][355,1330]" c="1" />
+    <n t="Send Like" xy="686,1277" b="[400,1225][980,1330]" c="1" />
+    <n t="Send a Rose instead?" xy="540,700" b="[100,650][980,750]" />
+    <n t="Upgrade your Like to a Rose to be seen first" xy="540,800" b="[100,760][980,840]" />
+    <n t="Send a Rose" xy="540,950" b="[300,900][780,1000]" c="1" />
+    <n t="Send Like anyway" xy="540,1060" b="[400,1030][680,1090]" c="1" />
+  </w>
+</hierarchy>

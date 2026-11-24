@@ -71,23 +71,38 @@ def test_swipe_dry_run_taps_nothing():
 
 
 def test_message_full_cycle():
+    # Video (24 Nov 2026): deck chat bubble → chat → type → send arrow →
+    # Back to the deck. No profile, no middle-match tap.
     st = {}
     inst = "fixed tagged message 1"
-    a = _plan(inst, DECK, st)  # open the profile (name)
-    assert a["action"] == "tap" and (a["x"], a["y"]) == (540, 500)
-    a = _plan(inst, PROFILE, st)  # open message box (not the gift)
-    assert a["action"] == "tap" and (a["x"], a["y"]) == (300, 1900)
+    a = _plan(inst, DECK, st)  # tap the deck chat bubble (not the profile)
+    assert a["action"] == "tap" and (a["x"], a["y"]) == (540, 1911)
     a = _plan(inst, THREAD.format(t=""), st)  # type bank text
     assert a["action"] == "type" and a["text"] == "hi miss"
     a = _plan(inst, THREAD.format(t="hi miss"), st)  # send arrow
     assert a["action"] == "tap" and (a["x"], a["y"]) == (990, 2200)
     a = _plan(inst, THREAD.format(t=""), st)  # box cleared → sent → Back
     assert a["action"] == "press_button" and a["button"] == "back"
-    a = _plan(inst, PROFILE, st)  # middle match (free Like)
-    assert a["action"] == "tap" and (a["x"], a["y"]) == (540, 2050)
-    assert st["tagged_fixed"]["done"] == 1
-    a = _plan(inst, DECK, st)
+    a = _plan(inst, DECK, st)  # back on the deck → done
     assert a["action"] == "done"
+    assert st["tagged_fixed"]["done"] == 1
+
+
+def test_message_falls_back_to_profile_without_chat_bubble():
+    # Deck without a chat bubble: open the profile, then the message
+    # button — the old path, kept as the fallback.
+    deck_no_chat = _tree(
+        '<n i="tvUsername" t="Casey" xy="540,500" b="[200,440][880,560]" />'
+        '<n i="dislikeBtn" xy="220,1908" b="[140,1830][300,1980]" c="1" />'
+        '<n i="likeBtn" xy="860,1908" b="[780,1830][940,1980]" c="1" />'
+        '<n i="tab_match_game" xy="540,2200" b="[460,2130][620,2270]" c="1" />'
+    )
+    st = {}
+    inst = "fixed tagged message 1"
+    a = _plan(inst, deck_no_chat, st)  # open the profile (name)
+    assert a["action"] == "tap" and (a["x"], a["y"]) == (540, 500)
+    a = _plan(inst, PROFILE, st)  # open message box (not the gift)
+    assert a["action"] == "tap" and (a["x"], a["y"]) == (300, 1900)
 
 
 def test_message_not_sent_retries_then_stops():
