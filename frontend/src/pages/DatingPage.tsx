@@ -25,6 +25,8 @@ import {
   parseLikeCap,
   showsCount,
   sortDatingApps,
+  RUNNABLE_APPS,
+  ensureRunnableConfigApps,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -132,6 +134,16 @@ function cardsForDatingApps(
       name: datingAppDisplayName(a.package_name, a.name),
       package: a.package_name,
     });
+  }
+  // r51b: always show runnable apps even if /api/dating/config is stale
+  for (const pkg of RUNNABLE_APPS) {
+    if (!byPkg.has(pkg)) {
+      byPkg.set(pkg, {
+        ...blank(),
+        name: datingAppDisplayName(pkg),
+        package: pkg,
+      });
+    }
   }
   for (const a of apps) {
     const prev = byPkg.get(a.package);
@@ -323,7 +335,14 @@ export default function DatingPage() {
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
-      setConfigApps(configRes.data.apps || []);
+      setConfigApps(
+        ensureRunnableConfigApps(configRes.data.apps || [], (pkg) => ({
+          name: datingAppDisplayName(pkg),
+          package_name: pkg,
+          enabled: true,
+          daily_swipe_cap: 50,
+        }))
+      );
       setPersona(configRes.data.persona_prompt || '');
       const df = configRes.data.date_flow || {};
       setReplyPersona(

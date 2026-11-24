@@ -47,6 +47,16 @@ export function sortDatingApps<T>(items: T[], pkgOf: (item: T) => string): T[] {
     .map((x) => x.item);
 }
 
+/** Append any runnable app missing from a saved / API app list. */
+export function ensureRunnableConfigApps<T extends { package_name: string }>(
+  configApps: T[],
+  seed: (pkg: string) => T
+): T[] {
+  const have = new Set((configApps || []).map((a) => a.package_name));
+  const extra = RUNNABLE_APPS.filter((pkg) => !have.has(pkg)).map(seed);
+  return [...(configApps || []), ...extra];
+}
+
 // r45: Tagged runs as auto swipe (free like) or auto message
 export const TAGGED_PKG = 'com.taggedapp';
 // r46: Hily runs as "Likes only" or "Message + likes"

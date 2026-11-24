@@ -140,3 +140,21 @@ console.log('datingRun ok');
   assert.equal(hasLikeCap('enterprises.dating.boo', 'message_likes'), true);
   assert.equal(hasLikeCap('com.hily.app', 'likes'), true);
 }
+
+// r51b: saved/API lists that omit new runnable apps get them appended
+{
+  const { ensureRunnableConfigApps } = await import('./datingRun.ts');
+  const seeded = ensureRunnableConfigApps(
+    [{ package_name: 'com.bumble.app', name: 'Bumble' }],
+    (pkg) => ({ package_name: pkg, name: pkg })
+  );
+  const pkgs = seeded.map((a) => a.package_name);
+  assert.equal(pkgs[0], 'com.bumble.app');
+  for (const p of ['com.takimi.android', 'enterprises.dating.boo', 'social.breeze.breeze_app',
+    'com.getpure.pure', 'com.threesome.swingers.threefun', 'com.tinder']) {
+    assert.equal(pkgs.includes(p), true, 'missing ' + p);
+  }
+  const again = ensureRunnableConfigApps(seeded, (pkg) => ({ package_name: pkg, name: 'dup' }));
+  assert.equal(again.filter((a) => a.package_name === 'enterprises.dating.boo').length, 1);
+  console.log('r51b ensureRunnableConfigApps tests ok');
+}
