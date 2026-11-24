@@ -20,9 +20,8 @@ Coordinates (S21+ 1080x2400):
   Up arrow (986, 1335) — right of the composer, 22 Nov + 24 Nov dumps.
   Like swipe 250,1000 → 1050,1050 — 19 Nov map.
   Deck tab (140, 2194) — 19 Nov map.
-  GUESS: the "sent" text Mac describes was never captured in a dump; the
-  planner accepts a text node containing "sent" (e.g. "Message sent",
-  "Sent", "Chat sent") or the typed line shown outside the text box.
+  Sent = the sheet closes back to the deck after the up arrow (19 Nov map,
+  24 Nov prod job), or the box empties, or a "sent" text shows.
 No LLM; Yubucks (840,158), rocket (1000,2000), Blast, Super Blast,
 Infinity/HyperSurge are never tapped.
 """
@@ -182,7 +181,14 @@ def plan_yubo_card_first_contact(
     # ---- waiting for the sent signal ----
     if phase == "awaiting_sent":
         box = composer_text(ui_tree).lower() if sheet else ""
-        if sent_seen(ui_tree, text) and not box:
+        # r48: Yubo's sent signal for a Direct to a card is the sheet closing
+        # back to the deck (19 Nov map; 24 Nov 10:28 job: 4 sends, the sheet
+        # closed every time, none counted, waits tripped stuck-Back). The
+        # sheet still open with an empty box also means it went.
+        closed_to_deck = not sheet and yubo_on_deck(ui_tree, _log=False)
+        if (sent_seen(ui_tree, text) and not box) or closed_to_deck or (
+            sheet and not box and not blast_selected(ui_tree)
+        ):
             yc["sent"] = sent = sent + 1
             st["bulk_message_new"]["done"] = sent
             yc["phase"] = "swipe"

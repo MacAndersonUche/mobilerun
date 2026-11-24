@@ -5822,7 +5822,15 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
         # No-progress → escalate stuck recovery (never die stuck on one screen)
-        if np_streak >= MAX_NO_PROGRESS and kind not in ("done", "fail"):
+        # r48: a fixed planner's own bounded wait (Yubo waiting for the sent
+        # sheet to close) is not "stuck" — stuck recovery pressed Back on the
+        # Yubo deck, which exits the app (24 Nov 10:28).
+        fixed_wait = kind == "wait" and bool(action.get("_no_llm_handoff"))
+        if (
+            np_streak >= MAX_NO_PROGRESS
+            and kind not in ("done", "fail")
+            and not fixed_wait
+        ):
             sat = _goal_satisfied_from_tree(
                 instruction,
                 ui_tree,

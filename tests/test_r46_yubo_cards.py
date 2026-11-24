@@ -82,16 +82,29 @@ def test_never_types_or_sends_on_blast():
     assert a["action"] == "fail" and "Blast" in a["reason"]
 
 
-def test_not_counted_without_sent_signal_and_never_more_than_n_sends():
+def test_sheet_closing_to_deck_counts_as_sent_and_never_more_than_n_sends():
+    """r48: the sheet closing back to the card after the up arrow = sent."""
     st: dict = {}
     for t in (DECK, DIRECT, TYPED):
         _p(t, st, target=1)
-    # sheet closed back to the card, no sent signal
-    waits = [_p(DECK, st, target=1) for _ in range(3)]
-    assert all(w["action"] == "wait" for w in waits)
-    a = _p(DECK, st, target=1)
-    assert a["fastpath_step"] == "yubo_card_fixed_like_swipe"  # still swiped
+    a = _p(DECK, st, target=1)  # sheet closed back to the same card
+    assert a["fastpath_step"] == "yubo_card_fixed_like_swipe"  # no waits
+    assert st["yubo_card"]["sent"] == 1
+    a = _p(DECK2, st, target=1)
+    assert a["action"] == "done" and "1/1" in a["reason"]
+
+
+def test_unknown_screen_after_send_waits_then_not_counted():
+    blank = '<hierarchy packages="co.yellw.yellowapp"><w p="co.yellw.yellowapp"><n t="?" xy="1,1"/></w></hierarchy>'
+    st: dict = {}
+    for t in (DECK, DIRECT, TYPED):
+        _p(t, st, target=1)
+    waits = [_p(blank, st, target=1) for _ in range(3)]
+    assert all(w["action"] == "wait" and w["_no_llm_handoff"] for w in waits)
+    _p(blank, st, target=1)
     assert st["yubo_card"]["sent"] == 0 and st["yubo_card"]["unconfirmed"] == 1
+    a = _p(DECK, st, target=1)
+    assert a["fastpath_step"] == "yubo_card_fixed_like_swipe"  # still swiped once
     a = _p(DECK2, st, target=1)
     assert a["action"] == "done" and "never more than 1" in a["reason"]
 

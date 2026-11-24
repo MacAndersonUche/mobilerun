@@ -1,0 +1,33 @@
+<hierarchy windows="1" nodes="29" app_nodes="29" text_nodes="23" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1" kids="1">
+ <n t="Blast · Super Blast · Direct" cls="View" c="1" xy="540,1237" b="42,222,1038,2253"/>
+ <n t="Blast" cls="View" c="1" xy="225,678" b="107,531,343,825"/>
+ <n t="Blast" cls="TextView" xy="170,570" b="124,548,217,593"/>
+ <n t="Super Blast" cls="View" c="1" xy="540,678" b="422,531,658,825"/>
+ <n t="Super Blast" cls="TextView" xy="540,570" b="439,548,641,593"/>
+ <n t="Direct" cls="View" c="1" xy="855,678" b="708,494,1002,862"/>
+ <n t="Direct" cls="TextView" xy="802,543" b="729,515,875,572"/>
+ <n t="Hey · 👋 · x · Hi · 😂 · Live? · 🔥" cls="View" s="1" xy="540,1186" b="0,1134,1080,1239"/>
+ <n t="Hey" cls="View" c="1" xy="125,1187" b="42,1124,208,1250"/>
+ <n t="Hey" cls="TextView" xy="125,1187" b="84,1160,166,1214"/>
+ <n t="👋" cls="View" c="1" xy="297,1187" b="229,1124,366,1250"/>
+ <n t="👋" cls="TextView" xy="297,1187" b="271,1160,324,1214"/>
+ <n t="x" cls="View" c="1" xy="442,1187" b="379,1124,505,1250"/>
+ <n t="x" cls="TextView" xy="442,1187" b="429,1160,455,1214"/>
+ <n t="Hi" cls="View" c="1" xy="582,1187" b="518,1124,646,1250"/>
+ <n t="Hi" cls="TextView" xy="582,1187" b="560,1160,604,1214"/>
+ <n t="😂" cls="View" c="1" xy="735,1187" b="667,1124,804,1250"/>
+ <n t="😂" cls="TextView" xy="735,1187" b="709,1160,762,1214"/>
+ <n t="Live?" cls="View" c="1" xy="920,1187" b="825,1124,1015,1250"/>
+ <n t="Live?" cls="TextView" xy="920,1187" b="867,1160,973,1214"/>
+ <n t="🔥" cls="View" c="1" xy="1058,1187" b="1036,1124,1080,1250"/>
+ <n t="🔥" cls="TextView" xy="1079,1187" b="1078,1160,1080,1214"/>
+ <n cls="EditText" c="1" e="1" f="1" xy="466,1334" b="42,1271,891,1397"/>
+ <n t="Send a message" cls="TextView" xy="250,1334" b="84,1307,417,1361"/>
+ <n cls="Button" c="1" xy="632,1334" b="585,1271,680,1397"/>
+ <n cls="Button" c="1" xy="727,1334" b="680,1271,775,1397"/>
+ <n cls="Button" c="1" xy="838,1334" b="775,1271,901,1397"/>
+ <n cls="View" c="1" xy="986,1335" b="923,1272,1049,1398"/>
+ <n cls="Button" c="1" xy="75,150" b="12,87,138,213"/>
+</w>
+</hierarchy>
