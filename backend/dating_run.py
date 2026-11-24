@@ -221,6 +221,10 @@ def build_job(
     n = run_count(pkg, count, counts)
     max_steps = min(400, 6 * n + 15)
     wall_s = 0
+    if pkg == "co.yellw.yellowapp":
+        # r48: ~7 steps per card (open, Direct, type, send, popup, swipe,
+        # next card); 6n+15 ran out at card 5 on 24 Nov
+        max_steps = min(400, 9 * n + 20)
     if pkg == HILY_PKG:
         _m, msgs, likes = hily_plan(count, counts, modes, like_caps)
         # ~1-2 steps per Finder like + ~6 per Likes-sent message
