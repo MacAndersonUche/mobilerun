@@ -1,7 +1,8 @@
 """Social page actions: message one person, or reply to existing chats.
 
 Socials (WhatsApp, Instagram, Messenger, Telegram, Snapchat, X, Facebook)
-never get swipe / like / per-run settings. WhatsApp is always dry-run.
+never get swipe / like / per-run settings. All socials, WhatsApp included,
+follow the Dry-run toggle.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ SOCIAL_PACKAGES = set(SOCIAL_APPS) | {
     "com.snapchat.android",
     "com.twitter.android",
 }
-DRY_RUN_ONLY = {"com.whatsapp"}
 REPLY_CHATS = 5  # chats per "reply to messages" (no per-run setting)
 
 
@@ -57,7 +57,7 @@ def build_job(
     *, device_id: str, pkg: str, action: str, contact: str, message: str, dry_run: bool
 ) -> Dict[str, Any]:
     instruction = instruction_for(pkg, action, contact, message)
-    dry = True if pkg in DRY_RUN_ONLY else bool(dry_run)
+    dry = bool(dry_run)
     now = int(time.time())
     job_id = f"task_{secrets.token_hex(8)}"
     return {

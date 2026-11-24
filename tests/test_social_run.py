@@ -44,12 +44,17 @@ def test_bad_social_requests_rejected(pkg, action, contact, msg):
         social_run.instruction_for(pkg, action, contact, msg)
 
 
-def test_whatsapp_forced_dry_run():
+def test_whatsapp_follows_dry_run_toggle():
     job = social_run.build_job(
         device_id="d", pkg="com.whatsapp", action="message",
         contact="Jo", message="hi", dry_run=False,
     )
-    assert job["dry_run"] is True and job["state"]["dry_run"] is True
+    assert job["dry_run"] is False and job["state"]["dry_run"] is False
+    dry = social_run.build_job(
+        device_id="d", pkg="com.whatsapp", action="message",
+        contact="Jo", message="hi", dry_run=True,
+    )
+    assert dry["dry_run"] is True
     ig = social_run.build_job(
         device_id="d", pkg="com.instagram.android", action="message",
         contact="Jo", message="hi", dry_run=False,
@@ -111,7 +116,7 @@ def test_social_run_endpoint(client):
     )
     assert r.status_code == 200, r.text
     job = r.json()["job"]
-    assert job["dry_run"] is True
+    assert job["dry_run"] is False  # WhatsApp follows the toggle
     assert job["instruction"] == "whatsapp message Jo and say hi"
     assert client.saved["job_id"] == job["job_id"]  # Stop works cross-Lambda
     bad = client.post(

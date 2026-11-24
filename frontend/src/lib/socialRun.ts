@@ -39,7 +39,6 @@ export function socialRunBody(opts: {
     action: opts.action,
     contact: opts.action === 'message' ? (opts.contact || '').trim() : undefined,
     message: opts.message.trim(),
-    // WhatsApp is dry-run only
-    dry_run: opts.app === 'com.whatsapp' ? true : opts.dryRun,
+    dry_run: opts.dryRun,
   };
 }

@@ -233,7 +233,7 @@ export default function SocialPage() {
             onChange={(e) => setDryRun(e.target.checked)}
             data-testid="social-dry-run"
           />
-          Dry-run (no real messages · WhatsApp always dry-run)
+          Dry-run (no real messages)
         </label>
         {devices.length > 0 && (
           <select
