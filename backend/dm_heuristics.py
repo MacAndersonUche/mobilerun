@@ -2508,9 +2508,24 @@ def yubo_direct_sheet_action(
             blast_n = n
     if direct_n is None and blast_n is None:
         return None
+    # r45: Blast mode shows "Message tons of new people at once" and the
+    # 50+/100+/200+ reach chips. The old size check read the wide Direct
+    # *tile* (View 737..973) as "selected" and let the send go on Blast.
+    blast_mode = "message tons of new people" in blob or (
+        "50+" in blob and "100+" in blob
+    )
+    # Prefer the Direct TextView (the tile View has the same label)
+    for n in nodes:
+        if (n.get("label") or "").strip().lower() == "direct" and "text" in str(
+            n.get("cls") or n.get("class") or ""
+        ).lower():
+            direct_n = n
+            break
     # Selected Direct has bounds ≈[729,515][875,572]; unselected ≈[754,525][871,570]
     direct_selected = False
-    if direct_n is not None and direct_n.get("x1") is not None:
+    if blast_mode:
+        direct_selected = False
+    elif direct_n is not None and direct_n.get("x1") is not None:
         w = int(direct_n["x2"]) - int(direct_n["x1"])
         h = int(direct_n["y2"]) - int(direct_n["y1"])
         # Selected tile is slightly larger

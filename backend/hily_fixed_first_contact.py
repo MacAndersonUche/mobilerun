@@ -27,6 +27,9 @@ try:
         hily_on_photo_viewer,
         hily_on_profile_sheet,
         hily_back_from_photo_viewer,
+        hily_first_grid_tile_center,
+        hily_on_chats_list,
+        hily_on_top_picks_grid,
     )
 except ImportError:  # pragma: no cover
     from backend.dm_heuristics import (  # type: ignore
@@ -41,6 +44,9 @@ except ImportError:  # pragma: no cover
         hily_on_photo_viewer,
         hily_on_profile_sheet,
         hily_back_from_photo_viewer,
+        hily_first_grid_tile_center,
+        hily_on_chats_list,
+        hily_on_top_picks_grid,
     )
 
 PLANNER = "hily_fixed_first_contact_no_llm_handoff"
@@ -57,6 +63,7 @@ SEND_XY = (980, 1329)
 CLOSE_XY = (74, 160)
 CRUSH_XY = (540, 1959)  # deck Major Crush — never
 TEXT_INPUT_XY = (540, 1344)
+DISCOVER_TAB_XY = (540, 2190)  # bottomNavTab_7 Discover
 
 
 def allowed_message(text: str) -> str:
@@ -158,6 +165,58 @@ def plan_hily_fixed_first_contact(
             },
             "hily_fixed_fc_done",
         )
+
+    pending = str(bulk.get("awaiting_sent") or "")
+    if pending:
+        box = ""
+        for n in _parse_compact_nodes(ui_tree):
+            if "textinput" in str(n.get("id") or "").lower() or n.get("editable"):
+                box = (n.get("text") or "").strip()
+                break
+        still = hily_on_mbm(ui_tree) and box.lower() == pending.lower()
+        if still and "message sent" not in _blob(ui_tree):
+            tries = int(bulk.get("send_retry") or 0)
+            bulk["send_retry"] = tries + 1
+            st["bulk_message_new"] = bulk
+            if tries < 1:
+                send = _send_center(ui_tree) or SEND_XY
+                return _fp(
+                    {
+                        "action": "tap",
+                        "x": int(send[0]),
+                        "y": int(send[1]),
+                        "reason": f"Hily Send again — '{pending}' still in the box ({planner})",
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hily_fixed_fc_send_retry",
+                )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": f"Hily message did not send ('{pending}' still in the box) — stop ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_fixed_fc_not_sent",
+            )
+        done += 1
+        bulk["done"] = done
+        bulk["awaiting_sent"] = ""
+        bulk["send_retry"] = 0
+        bulk["typed"] = False
+        st["bulk_message_new"] = bulk
+        if done >= cap:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": f"Hily first-contact finished {done}/{cap} — sent, now auto-like ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                    "dry_run": bool(dry_run),
+                },
+                "hily_fixed_fc_done",
+            )
 
     popup = hily_dismiss_popup(ui_tree, planner=planner)
     if popup:
@@ -319,8 +378,8 @@ def plan_hily_fixed_first_contact(
                 },
                 "hily_fixed_fc_refuse_crush",
             )
-        bulk["done"] = done + 1
-        bulk["typed"] = False
+        # r45: count only once Hily confirms (Message sent / sheet closed)
+        bulk["awaiting_sent"] = text
         st["bulk_message_new"] = bulk
         return _fp(
             {
@@ -328,7 +387,7 @@ def plan_hily_fixed_first_contact(
                 "x": int(send[0]),
                 "y": int(send[1]),
                 "reason": (
-                    f"Hily Send first-contact {bulk['done']}/{cap} "
+                    f"Hily Send first-contact {done + 1}/{cap} "
                     f"— never Crush ({planner})"
                 ),
                 "planner": planner,
@@ -391,7 +450,91 @@ def plan_hily_fixed_first_contact(
             "hily_fixed_fc_likes_sent",
         )
 
+    # r45 (Mac): new people from Discover — open a Top-picks tile, then the
+    # free message envelope on the profile. Never Crush.
+    if (
+        bulk.get("_via_discover")
+        and hily_on_top_picks_grid(ui_tree)
+        and not hily_on_chats_list(ui_tree)  # chat rows carry Crush chips
+        and not _tree_id_center(ui_tree, "ActionButton_LIKE", "id/ActionButton_LIKE")
+    ):
+        tile = hily_first_grid_tile_center(ui_tree)
+        n_tiles = int(bulk.get("_discover_opens") or 0)
+        if tile and n_tiles < cap + 5:
+            bulk["_discover_opens"] = n_tiles + 1
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(tile[0]),
+                    "y": int(tile[1]),
+                    "reason": f"Open a new person from Hily Discover ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_fixed_fc_discover_tile",
+            )
+    if bulk.get("_via_discover") and not _on_activity(ui_tree):
+        env_xy = _first_chat_request(ui_tree)
+        if env_xy:
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(env_xy[0]),
+                    "y": int(env_xy[1]),
+                    "reason": f"Open free message on this Discover profile ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_fixed_fc_discover_envelope",
+            )
+        if int(bulk.get("_discover_misses") or 0) >= 3:
+            return _fp(
+                {
+                    "action": "done",
+                    "reason": (
+                        f"Hily: no free message button on Discover profiles "
+                        f"after {done}/{cap} sent — moving on to likes ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                    "stopped_reason": "no_more_targets",
+                },
+                "hily_fixed_fc_discover_none",
+            )
+        if not hily_on_top_picks_grid(ui_tree) or hily_on_chats_list(ui_tree):
+            bulk["_discover_misses"] = int(bulk.get("_discover_misses") or 0) + 1
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": DISCOVER_TAB_XY[0],
+                    "y": DISCOVER_TAB_XY[1],
+                    "reason": f"Back to Hily Discover for the next new person ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_fixed_fc_discover_tab",
+            )
+
     if _on_likes_sent(ui_tree) and not req:
+        bulk["_via_discover"] = True
+        st["bulk_message_new"] = bulk
+        return _fp(
+            {
+                "action": "tap",
+                "x": DISCOVER_TAB_XY[0],
+                "y": DISCOVER_TAB_XY[1],
+                "reason": (
+                    f"Likes sent has no free envelopes left ({done}/{cap}) — "
+                    f"go to Discover for new people ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_fixed_fc_to_discover",
+        )
+    if False:
         return _fp(
             {
                 "action": "done",

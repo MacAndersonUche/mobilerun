@@ -130,7 +130,8 @@ def test_cloud_agent_fixed_helpers():
     assert _is_fixed_swipe_action(act)
     assert _fixed_swipe_run("fixed swipe 20 on bumble", {})
     assert _fixed_swipe_run("x", {"swipe_mode": "fixed"})
-    assert not _fixed_swipe_run("send 2 first contact messages on hily", {})
+    # r45: Hily / Hinge / Yubo first contact are fixed (no LLM) too
+    assert _fixed_swipe_run("send 2 first contact messages on hily", {})
     assert not _is_fixed_swipe_action({"action": "swipe", "planner": "llm"})
 
 

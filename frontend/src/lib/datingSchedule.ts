@@ -1,7 +1,7 @@
 /** r44: dating run schedules (per app + combo) → /api/dating/schedules. */
-import { RUNNABLE_APPS, clampRunCount } from './datingRun.ts';
+import { RUNNABLE_APPS, clampRunCount, hasRunMode } from './datingRun.ts';
 
-export type ScheduleItem = { app: string; runs: number; count: number };
+export type ScheduleItem = { app: string; runs: number; count: number; mode?: 'swipe' | 'message' };
 export type DatingSchedule = {
   id?: string;
   name?: string;
@@ -43,6 +43,7 @@ export function scheduleBody(s: DatingSchedule) {
       app: i.app,
       runs: clampRuns(i.runs),
       count: clampRunCount(i.app, i.count),
+      ...(hasRunMode(i.app) ? { mode: i.mode === 'message' ? 'message' : 'swipe' } : {}),
     }));
   return {
     name: s.name || undefined,
@@ -57,7 +58,8 @@ export function scheduleBody(s: DatingSchedule) {
 
 export function scheduleSummary(s: DatingSchedule, name: (pkg: string) => string): string {
   const parts = s.items.map(
-    (i) => `${name(i.app)} ${i.runs > 1 ? `×${i.runs} ` : ''}(${i.count}/run)`
+    (i) =>
+      `${name(i.app)}${i.mode ? ` ${i.mode}` : ''} ${i.runs > 1 ? `×${i.runs} ` : ''}(${i.count}/run)`
   );
   return `${parts.join(' → ')} · ${s.time} ${daysLabel(s.days)}${s.dry_run ? ' · dry run' : ''}`;
 }

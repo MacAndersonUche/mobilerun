@@ -91,6 +91,37 @@ def _on_likes_you(tree: str) -> bool:
     return False
 
 
+def _off_discover(tree: str) -> Optional[str]:
+    """r45: which non-Discover Hinge screen is showing (None = Discover/unknown)."""
+    if not (tree or "").strip() or hinge_on_like_sheet(tree):
+        return None
+    try:
+        from dm_heuristics import _parse_compact_nodes as _pc
+    except ImportError:  # pragma: no cover
+        from backend.dm_heuristics import _parse_compact_nodes as _pc  # type: ignore
+    nodes = _pc(tree)
+    labels = [
+        (str(n.get("label") or n.get("text") or "").strip().lower(), int(n.get("y") or 0))
+        for n in nodes
+    ]
+    top = {lab for lab, y in labels if 0 < y < 300}
+    blob = " ".join(lab for lab, _y in labels)
+    # 1:1 thread: a Message composer near the bottom, no Discover sheet
+    for n in nodes:
+        lab = str(n.get("label") or n.get("desc") or n.get("hint") or "").lower()
+        if n.get("editable") and ("message" in lab or "type" in lab) and "send a message" not in blob:
+            return "thread"
+    if "matches" in top or "your turn" in blob or "their turn" in blob:
+        return "Matches"
+    if "standouts" in top:
+        return "Standouts"
+    if "likes you" in blob:
+        return "Likes You"
+    if {"edit profile", "preview"} & top or "my profile" in blob:
+        return "Profile"
+    return None
+
+
 def _on_paywall_sheet(tree: str) -> bool:
     blob = _low(tree)
     if hinge_on_like_sheet(tree) and "send a rose instead" not in blob:
@@ -312,6 +343,41 @@ def plan_hinge_fixed_first_contact(
             st["bulk_message_new"] = bulk
             act = hinge_open_discover_tab(planner=planner)
             return act
+
+    # r45 (Mac: "stuck in Matches, doesn't click the Discover H"): off
+    # Discover → a chat thread backs out; Matches / Standouts / Profile tap
+    # the H tab (leftmost). Never the blind photo-heart tap there (it opened
+    # a match row). Capped, no AI.
+    off = _off_discover(ui_tree)
+    if off:
+        n = int(bulk.get("_recover_n") or 0) + 1
+        bulk["_recover_n"] = n
+        st["bulk_message_new"] = bulk
+        if n > 10:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": f"Hinge could not get back to Discover after 10 tries — stop ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_recover_fail",
+            )
+        if off == "thread":
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Hinge chat open — Back out, then Discover ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_thread_back",
+            )
+        act = hinge_open_discover_tab(planner=planner)
+        act["reason"] = f"Hinge on {off} — tap the H Discover tab ({planner})"
+        return act
+    bulk["_recover_n"] = 0
 
     bulk["awaiting_sheet"] = True
     bulk["typed"] = False

@@ -476,6 +476,7 @@ def other_running_job_on_device(
     *,
     except_job_id: str = "",
     now: Optional[int] = None,
+    created_at: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return another running job on the same device with a live lease.
 
@@ -511,12 +512,26 @@ def other_running_job_on_device(
             continue
         if str(j.get("device_id") or "").strip() != did:
             continue
+        # r45: a queued job that never ran a step must not block an older
+        # job (Yubo + 2 queued Badoo deferred each other forever, 24 Nov).
+        st = j.get("state") if isinstance(j.get("state"), dict) else {}
+        started = int(st.get("steps") or 0) > 0 or bool(st.get("job_busy_sent"))
+        if not started:
+            if created_at is not None and int(j.get("created_at") or 0) > int(
+                created_at
+            ):
+                continue
+            if created_at is not None and int(j.get("created_at") or 0) == int(
+                created_at
+            ) and jid > except_id:
+                continue
         holder = str(j.get("lease_owner") or "")
         exp = int(j.get("lease_expires_at") or 0)
         # Live lease on another job → device busy
         if holder and exp > now:
             return j
-        # Recently updated running job without expired lease clock
+        # Recently stepped running job without expired lease clock. Deferral
+        # writes 'deferred_at', not 'updated_at', so waiting is not activity.
         updated = int(j.get("updated_at") or 0)
         if updated and (now - updated) < 90:
             return j

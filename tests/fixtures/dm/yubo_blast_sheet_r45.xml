@@ -1,0 +1,32 @@
+<hierarchy windows="1" nodes="28" app_nodes="28" text_nodes="23" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1" kids="1">
+ <n t="Blast · Super Blast · Direct · Message tons of new people at once. Learn more · 5 first contact messages on yubo" cls="View" c="1" xy="540,1237" b="42,222,1038,2253"/>
+ <n t="Blast · 490" cls="View" c="1" xy="225,655" b="78,471,372,839"/>
+ <n t="Blast" cls="TextView" xy="157,520" b="99,492,215,549"/>
+ <n t="490" cls="TextView" xy="246,778" b="208,755,285,802"/>
+ <n t="Super Blast" cls="View" c="1" xy="540,655" b="422,508,658,802"/>
+ <n t="Super Blast" cls="TextView" xy="540,547" b="439,525,641,570"/>
+ <n t="Direct" cls="View" c="1" xy="855,655" b="737,508,973,802"/>
+ <n t="Direct" cls="TextView" xy="812,547" b="754,525,871,570"/>
+ <n t="Message tons of new people at once. Learn more" cls="TextView" xy="540,1105" b="199,1088,881,1123"/>
+ <n t="50+" cls="View" c="1" xy="201,1202" b="42,1139,360,1265"/>
+ <n t="50+" cls="TextView" xy="201,1202" b="163,1179,239,1226"/>
+ <n t="100+" cls="View" c="1" xy="540,1202" b="381,1139,699,1265"/>
+ <n t="100+" cls="TextView" xy="540,1202" b="494,1179,587,1226"/>
+ <n t="200+" cls="View" c="1" xy="879,1202" b="720,1139,1038,1265"/>
+ <n t="200+" cls="TextView" xy="879,1202" b="829,1179,930,1226"/>
+ <n t="5 first contact messages on yubo" cls="EditText" c="1" e="1" f="1" xy="466,1334" b="42,1271,891,1397"/>
+ <n cls="Button" c="1" xy="632,1334" b="585,1271,680,1397"/>
+ <n cls="Button" c="1" xy="727,1334" b="680,1271,775,1397"/>
+ <n cls="Button" c="1" xy="838,1334" b="775,1271,901,1397"/>
+ <n cls="View" c="1" xy="986,1335" b="923,1272,1049,1398"/>
+ <n t="Photo from gallery" cls="View" c="1" xy="540,1679" b="0,1595,1080,1764"/>
+ <n t="Photo from gallery" cls="TextView" xy="371,1680" b="189,1653,554,1707"/>
+ <n t="Take a selfie" cls="View" c="1" xy="540,1851" b="0,1767,1080,1936"/>
+ <n t="Take a selfie" cls="TextView" xy="313,1852" b="189,1825,437,1879"/>
+ <n t="Picture from profile" cls="View" c="1" xy="540,2023" b="0,1939,1080,2108"/>
+ <n t="Picture from profile" cls="TextView" xy="379,2024" b="189,1997,569,2051"/>
+ <n cls="Button" c="1" xy="75,150" b="12,87,138,213"/>
+ <n t="150" cls="TextView" xy="1004,148" b="971,125,1037,172"/>
+</w>
+</hierarchy>

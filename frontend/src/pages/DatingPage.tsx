@@ -9,9 +9,11 @@ import LiveActivityFeed, {
 } from '../components/LiveActivityFeed';
 import {
   canRunApp,
-  clampRunCount,
+  parseRunCount,
+  runCountHint,
+  hasRunMode,
+  runModeFor,
   datingStartBody,
-  runCountCap,
   runCountFor,
   runCountLabel,
 } from '../lib/datingRun';
@@ -162,6 +164,12 @@ function ProgressBar({
   );
 }
 
+function omitKey<T>(o: Record<string, T>, k: string): Record<string, T> {
+  const out = { ...o };
+  delete out[k];
+  return out;
+}
+
 export default function DatingPage() {
   const [status, setStatus] = useState<DatingStatus | null>(null);
   const [apps, setApps] = useState<AppStats[]>([]);
@@ -203,6 +211,11 @@ export default function DatingPage() {
   // Per app, per run (each app card): swipes or messages. Saved per app on
   // the server; Hily = likes after its 5 messages, Facebook Dating max 50.
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
+  // r45: what is typed in each card's count box (free text until Start/blur)
+  const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
+  const [countErrors, setCountErrors] = useState<Record<string, string>>({});
+  // r45: per-app run mode (Tagged: auto swipe / auto message)
+  const [runModes, setRunModes] = useState<Record<string, string>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
@@ -281,11 +294,12 @@ export default function DatingPage() {
         '/api/selectors/status',
         { apps: [] }
       );
-      const rc = await soft<{ counts?: Record<string, number> }>(
+      const rc = await soft<{ counts?: Record<string, number>; modes?: Record<string, string> }>(
         '/api/dating/run-counts',
-        { counts: {} }
+        { counts: {}, modes: {} }
       );
       setRunCounts(rc.counts || {});
+      setRunModes(rc.modes || {});
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -383,13 +397,35 @@ export default function DatingPage() {
           /* ok */
         }
       }
+      // r45: validate typed counts on Start only
+      let counts = runCounts;
+      if (action === 'start') {
+        const startApps = onlyApp
+          ? [onlyApp]
+          : configApps.filter((a) => a.enabled).map((a) => a.package_name);
+        const errs: Record<string, string> = {};
+        const next = { ...runCounts };
+        startApps.forEach((pkg) => {
+          if (countDrafts[pkg] === undefined) return;
+          const r = parseRunCount(pkg, countDrafts[pkg]);
+          if (r.ok) next[pkg] = r.n;
+          else errs[pkg] = r.error;
+        });
+        setCountErrors(errs);
+        if (Object.keys(errs).length) {
+          alert(Object.values(errs).join('\n'));
+          return;
+        }
+        counts = next;
+      }
       const body =
         action === 'start'
           ? datingStartBody({
               deviceId,
               dryRun,
               contactScope,
-              counts: runCounts,
+              counts,
+              modes: runModes,
               apps: onlyApp
                 ? [onlyApp]
                 : configApps.filter((a) => a.enabled).map((a) => a.package_name),
@@ -410,13 +446,34 @@ export default function DatingPage() {
     }
   };
 
-  const saveRunCount = async (pkg: string, value: number) => {
-    const n = clampRunCount(pkg, value);
+  const saveRunCount = async (pkg: string, raw: string) => {
+    const r = parseRunCount(pkg, raw);
+    if (!r.ok) {
+      // keep what was typed; Start will refuse until it is fixed
+      setCountErrors((prev) => ({ ...prev, [pkg]: r.error }));
+      return;
+    }
+    const n = r.n;
+    setCountErrors((prev) => omitKey(prev, pkg));
+    setCountDrafts((prev) => omitKey(prev, pkg));
     setRunCounts((prev) => ({ ...prev, [pkg]: n }));
     try {
       await axios.post(
         `${getBackendUrl()}/api/dating/run-counts`,
         { counts: { [pkg]: n } },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const saveRunMode = async (pkg: string, mode: 'swipe' | 'message') => {
+    setRunModes((prev) => ({ ...prev, [pkg]: mode }));
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/run-counts`,
+        { modes: { [pkg]: mode } },
         { headers: authHeaders() }
       );
     } catch (e) {
@@ -633,8 +690,9 @@ export default function DatingPage() {
             <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
           </button>
           <button
-            disabled={loading || !status?.running}
+            disabled={loading}
             onClick={() => control('stop')}
+            title="Stops every running dating job and frees the phone"
             className="tap-target flex items-center justify-center gap-2 rounded-xl bg-surface-elev px-3 text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
             data-testid="dating-stop"
           >
@@ -734,23 +792,53 @@ export default function DatingPage() {
               <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
                 <span>{runCountLabel(app.package)}</span>
                 <input
-                  type="number"
-                  min={1}
-                  max={runCountCap(app.package)}
-                  value={runCountFor(app.package, runCounts)}
-                  onChange={(e) =>
-                    setRunCounts((prev) => ({
-                      ...prev,
-                      [app.package]: clampRunCount(app.package, e.target.value),
-                    }))
+                  type="text"
+                  inputMode="numeric"
+                  value={
+                    countDrafts[app.package] ??
+                    String(runCounts[app.package] ?? runCountFor(app.package, runCounts))
                   }
-                  onBlur={(e) => saveRunCount(app.package, Number(e.target.value))}
+                  onChange={(e) =>
+                    setCountDrafts((prev) => ({ ...prev, [app.package]: e.target.value }))
+                  }
+                  onBlur={(e) => saveRunCount(app.package, e.target.value)}
                   className="mr-input w-20 text-sm"
                   data-testid={`dating-run-count-${app.package}`}
                   aria-label={`${app.name} ${runCountLabel(app.package)}`}
                   title="Used by Start and by this app's Run button. Saved for this app."
                 />
               </label>
+            )}
+            {hasRunMode(app.package) && (
+              <div
+                className="flex overflow-hidden rounded-lg border border-line text-xs"
+                data-testid={`dating-run-mode-${app.package}`}
+                role="group"
+                aria-label={`${app.name} run mode`}
+              >
+                {(['swipe', 'message'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => saveRunMode(app.package, m)}
+                    className={`flex-1 px-2 py-1 ${
+                      runModeFor(app.package, runModes) === m
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-canvas-elev text-mute'
+                    }`}
+                  >
+                    {m === 'swipe' ? 'Auto swipe' : 'Auto message'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {canRunApp(app.package) && (
+              <div
+                className={`-mt-1 px-3 text-xs ${countErrors[app.package] ? 'text-red-300' : 'text-mute'}`}
+                data-testid={`dating-run-count-hint-${app.package}`}
+              >
+                {countErrors[app.package] || runCountHint(app.package)}
+              </div>
             )}
             <details className="text-sm text-mute">
               <summary className="cursor-pointer select-none">

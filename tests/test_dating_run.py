@@ -46,7 +46,8 @@ def test_unsupported_apps_skipped():
     ok, bad = dating_run.split_supported(
         ["com.whatsapp", "hinge", "co.hinge.app", "com.taggedapp", "ai.mobilerun.mockdating"]
     )
-    assert ok == ["co.hinge.app"]
+    # r45: Tagged is runnable now (auto swipe / auto message)
+    assert ok == ["co.hinge.app", "com.taggedapp"]
     assert "com.whatsapp" in bad and "ai.mobilerun.mockdating" in bad
 
 

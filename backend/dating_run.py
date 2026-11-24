@@ -30,7 +30,22 @@ RUN_APPS: Dict[str, Tuple[str, str, Optional[int]]] = {
     "co.yellw.yellowapp": ("yubo", "first_contact", None),
     "com.bumble.app": ("bumble", "swipe", None),
     "com.badoo.mobile": ("badoo", "swipe", None),
+    # r45: Tagged — auto swipe (free like) or auto message (per-app mode)
+    "com.taggedapp": ("tagged", "tagged", None),
 }
+TAGGED_PKG = "com.taggedapp"
+TAGGED_MODES = ("swipe", "message")
+
+
+def clean_modes(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Per-app run mode (Tagged only for now): package -> swipe | message."""
+    out: Dict[str, str] = {}
+    for k, v in (raw or {}).items() if isinstance(raw, dict) else []:
+        pkg = resolve_package(str(k))
+        m = str(v or "").strip().lower()
+        if pkg == TAGGED_PKG and m in TAGGED_MODES:
+            out[pkg] = m
+    return out
 _BY_KEY = {v[0]: k for k, v in RUN_APPS.items()}
 # Follow-up step queued right after an app's main job (likes only)
 LIKE_AFTER = {"com.hily.app": "com.hily.app#like"}
@@ -99,9 +114,15 @@ def run_count(
 
 
 def instruction_for(
-    pkg: str, count: Optional[int], counts: Optional[Dict[str, int]] = None
+    pkg: str,
+    count: Optional[int],
+    counts: Optional[Dict[str, int]] = None,
+    modes: Optional[Dict[str, str]] = None,
 ) -> str:
     n = run_count(pkg, count, counts)
+    if pkg == TAGGED_PKG:
+        mode = (modes or {}).get(pkg) or "swipe"
+        return f"fixed tagged {mode} {n}"
     if pkg in _LIKE_STEPS:
         # Hily: buttons only (gesture swipe does not register) → free heart
         return f"swipe {n} on {RUN_APPS[base_package(pkg)][0]}"
@@ -139,10 +160,12 @@ def build_job(
     run_id: Optional[str] = None,
     speed_preset: str = "balanced",
     counts: Optional[Dict[str, int]] = None,
+    modes: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Agent job for ``queue[0]``; the rest of the queue runs after it ends."""
     pkg = queue[0]
     counts = clean_counts(counts)
+    modes = clean_modes(modes)
     n = run_count(pkg, count, counts)
     now = int(time.time())
     job_id = f"task_{secrets.token_hex(8)}"
@@ -156,7 +179,7 @@ def build_job(
         "run_step": "like" if pkg in _LIKE_STEPS else "main",
         "status": "running",
         "device_id": device_id,
-        "instruction": instruction_for(pkg, count, counts),
+        "instruction": instruction_for(pkg, count, counts, modes),
         # ~6 planner steps per message/swipe plus app open + popups
         "max_steps": min(400, 6 * n + 15),
         "speed_preset": speed_preset,
@@ -168,6 +191,7 @@ def build_job(
         "run_count": int(count or 0),
         # Per-app per-run numbers from the app cards (package -> n)
         "run_counts": dict(counts),
+        "run_modes": dict(modes),
         "state": {
             "steps": 0,
             "history": [],
@@ -196,6 +220,7 @@ def next_job_after(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         run_id=str(job.get("run_id") or job.get("job_id") or ""),
         speed_preset=str(job.get("speed_preset") or "balanced"),
         counts=job.get("run_counts") if isinstance(job.get("run_counts"), dict) else None,
+        modes=job.get("run_modes") if isinstance(job.get("run_modes"), dict) else None,
     )
 
 
@@ -205,3 +230,26 @@ def latest_in_run(run_id: str, jobs: List[Dict[str, Any]]) -> Optional[Dict[str,
         if str(j.get("run_id") or "") == run_id:
             return j
     return None
+
+
+def running_dating_jobs(
+    jobs: List[Dict[str, Any]], *, skip: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """r45: every still-running dating job (Stop must free the phone even
+    when this Lambda lost dating_mode_state['job_id'])."""
+    out: List[Dict[str, Any]] = []
+    for j in jobs or []:
+        if not isinstance(j, dict):
+            continue
+        if str(j.get("status") or "") != "running":
+            continue
+        if skip and str(j.get("job_id") or "") == skip:
+            continue
+        if (
+            j.get("dating_run")
+            or j.get("dating_app")
+            or j.get("schedule_id")
+            or str(j.get("mode") or "") == "dating"
+        ):
+            out.append(j)
+    return out

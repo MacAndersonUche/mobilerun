@@ -95,7 +95,8 @@ def enforce_job_wall_clock(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Returns a failed job dict when the wall is exceeded, else None.
     """
     now = int(time.time())
-    created = int(job.get("created_at") or now)
+    # r45: a job that waited for the phone starts its clocks when it starts
+    created = int(job.get("started_at") or job.get("created_at") or now)
     state = job.get("state") if isinstance(job.get("state"), dict) else {}
     # Absolute job wall (r23: refuse 7+ min hangs)
     wall = min(int(JOB_WALL_S), int(_TASK_WALL_S))
@@ -760,6 +761,10 @@ def _start_next_run_app(job: Dict[str, Any]) -> None:
         logger.warning("dating run next app failed: %s", e)
 
 
+# r45: a queued job waiting on a busy phone gives up after this long.
+DEFER_MAX_S = 600
+
+
 def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     kind = job.get("kind", "dating")
     if job.get("status") != "running":
@@ -776,7 +781,14 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
     # Device mutex: another live job on same phone → defer (r19 overlap)
     did = str(job.get("device_id") or "").strip()
     if did and job_id:
-        other = other_running_job_on_device(did, except_job_id=job_id)
+        try:
+            other = other_running_job_on_device(
+                did,
+                except_job_id=job_id,
+                created_at=int(job.get("created_at") or 0) or None,
+            )
+        except TypeError:  # pragma: no cover - older storage signature
+            other = other_running_job_on_device(did, except_job_id=job_id)
         if other:
             other_id = str(other.get("job_id") or "?")
             logger.info(
@@ -786,14 +798,38 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
                 other_id,
                 other.get("lease_owner"),
             )
-            # Push next_run slightly so we don't hot-spin
+            # Push next_run slightly so we don't hot-spin. r45: no updated_at
+            # bump (that made waiting look like activity → deadlock), and a
+            # job that waited DEFER_MAX_S without starting gives up.
             try:
-                job["next_run_at"] = int(time.time()) + 15
-                job["updated_at"] = int(time.time())
+                nowi = int(time.time())
+                job["next_run_at"] = nowi + 15
+                job["deferred_at"] = nowi
+                job.setdefault("first_deferred_at", nowi)
+                st0 = job.get("state") if isinstance(job.get("state"), dict) else {}
+                waited = nowi - int(job.get("first_deferred_at") or nowi)
+                if int(st0.get("steps") or 0) == 0 and waited > DEFER_MAX_S:
+                    job["status"] = "failed"
+                    job["error"] = (
+                        f"Phone busy with {other_id} for {waited}s — not started"
+                    )
+                    job["completed_at"] = nowi
+                    job["updated_at"] = nowi
                 put_job(_to_plain(job))
             except Exception:
                 pass
             return
+        # r45: first real step after waiting → start the clocks now, so the
+        # 90s no-progress wall does not count the time spent queued.
+        st_q = job.get("state") if isinstance(job.get("state"), dict) else {}
+        if job.get("first_deferred_at") and not job.get("started_at") and int(
+            st_q.get("steps") or 0
+        ) == 0:
+            nowq = int(time.time())
+            job["started_at"] = nowq
+            st_q["last_ui_progress_at"] = nowq
+            st_q["last_progress_at"] = nowq
+            job["state"] = st_q
     # Lease: second concurrent worker skips — prevents parallel swipes
     if job_id and not acquire_job_lease(job_id, owner):
         holder = "?"

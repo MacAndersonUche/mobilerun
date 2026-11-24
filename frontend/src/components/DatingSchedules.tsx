@@ -3,12 +3,18 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { CalendarClock, Pencil, Plus, Trash2 } from 'lucide-react';
 import { getBackendUrl } from '../config';
-import { RUNNABLE_APPS, runCountFor, runCountCap } from '../lib/datingRun';
+import {
+  RUNNABLE_APPS,
+  parseCountInput,
+  hasRunMode,
+  parseRunCount,
+  runCountFor,
+  runCountHint,
+} from '../lib/datingRun';
 import {
   DAY_LABELS,
   DatingSchedule,
   MAX_RUNS_PER_APP,
-  clampRuns,
   scheduleBody,
   scheduleSummary,
   validTime,
@@ -37,6 +43,13 @@ export default function DatingSchedules(props: Props) {
   const [edit, setEdit] = useState<DatingSchedule | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // r45: typed Runs / Per-run text, keyed "pkg:runs" / "pkg:count"
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const startEdit = (s: DatingSchedule | null) => {
+    setDrafts({});
+    setErr(null);
+    setEdit(s);
+  };
   const url = `${getBackendUrl()}/api/dating/schedules`;
 
   const load = async () => {
@@ -74,13 +87,28 @@ export default function DatingSchedules(props: Props) {
     if (!edit) return;
     if (!edit.items.length) return setErr('Pick at least one app');
     if (!validTime(edit.time)) return setErr('Time must be HH:MM');
-    const body = scheduleBody({ ...edit, device_id: edit.device_id || props.deviceId });
+    // r45: validate typed numbers on Save only
+    const errs: string[] = [];
+    const items = edit.items.map((i) => {
+      const name = appName(i.app);
+      const rr = parseCountInput(
+        drafts[`${i.app}:runs`] ?? String(i.runs),
+        MAX_RUNS_PER_APP,
+        `${name} runs`
+      );
+      const rc = parseRunCount(i.app, drafts[`${i.app}:count`] ?? String(i.count), `${name} per run`);
+      if (!rr.ok) errs.push(rr.error);
+      if (!rc.ok) errs.push(rc.error);
+      return { ...i, runs: rr.ok ? rr.n : i.runs, count: rc.ok ? rc.n : i.count };
+    });
+    if (errs.length) return setErr(errs.join(' · '));
+    const body = scheduleBody({ ...edit, items, device_id: edit.device_id || props.deviceId });
     const ok = await call(() =>
       edit.id
         ? axios.put(`${url}/${edit.id}`, body, { headers: authHeaders() })
         : axios.post(url, body, { headers: authHeaders() })
     );
-    if (ok) setEdit(null);
+    if (ok) startEdit(null);
   };
 
   const toggleItem = (pkg: string) => {
@@ -93,12 +121,8 @@ export default function DatingSchedules(props: Props) {
         : [...edit.items, { app: pkg, runs: 1, count: runCountFor(pkg, props.runCounts) }],
     });
   };
-  const setItem = (pkg: string, key: 'runs' | 'count', v: number) =>
-    edit &&
-    setEdit({
-      ...edit,
-      items: edit.items.map((i) => (i.app === pkg ? { ...i, [key]: v } : i)),
-    });
+  const setDraft = (pkg: string, key: 'runs' | 'count', v: string) =>
+    setDrafts((prev) => ({ ...prev, [`${pkg}:${key}`]: v }));
 
   return (
     <div className="bg-surface border border-line rounded-lg p-4 space-y-3" data-testid="dating-schedules">
@@ -109,7 +133,7 @@ export default function DatingSchedules(props: Props) {
         <button
           type="button"
           disabled={busy}
-          onClick={() => setEdit(blank(props))}
+          onClick={() => startEdit(blank(props))}
           className="flex items-center gap-1 rounded-lg bg-rose-600 px-3 py-1 text-sm text-white hover:bg-rose-500 disabled:opacity-50"
           data-testid="schedule-new"
         >
@@ -156,7 +180,7 @@ export default function DatingSchedules(props: Props) {
               />
               On
             </label>
-            <button type="button" title="Edit" onClick={() => setEdit({ ...s })}>
+            <button type="button" title="Edit" onClick={() => startEdit({ ...s })}>
               <Pencil size={14} />
             </button>
             <button
@@ -200,27 +224,51 @@ export default function DatingSchedules(props: Props) {
                       <label className="flex items-center gap-1 text-xs text-mute">
                         Runs
                         <input
-                          type="number"
-                          min={1}
-                          max={MAX_RUNS_PER_APP}
-                          value={it.runs}
-                          onChange={(e) => setItem(pkg, 'runs', clampRuns(e.target.value))}
+                          type="text"
+                          inputMode="numeric"
+                          value={drafts[`${pkg}:runs`] ?? String(it.runs)}
+                          onChange={(e) => setDraft(pkg, 'runs', e.target.value)}
                           className="mr-input w-16 text-sm"
+                          title={`Max ${MAX_RUNS_PER_APP} runs`}
+                          data-testid={`schedule-runs-${pkg}`}
                         />
                       </label>
                       <label className="flex items-center gap-1 text-xs text-mute">
                         Per run
                         <input
-                          type="number"
-                          min={1}
-                          max={runCountCap(pkg)}
-                          value={it.count}
-                          onChange={(e) =>
-                            setItem(pkg, 'count', Math.max(1, Math.min(runCountCap(pkg), Number(e.target.value) || 1)))
-                          }
+                          type="text"
+                          inputMode="numeric"
+                          value={drafts[`${pkg}:count`] ?? String(it.count)}
+                          onChange={(e) => setDraft(pkg, 'count', e.target.value)}
                           className="mr-input w-20 text-sm"
+                          title={runCountHint(pkg)}
+                          data-testid={`schedule-count-${pkg}`}
                         />
                       </label>
+                      {hasRunMode(pkg) && (
+                        <select
+                          value={it.mode === 'message' ? 'message' : 'swipe'}
+                          onChange={(e) =>
+                            setEdit({
+                              ...edit,
+                              items: edit.items.map((i) =>
+                                i.app === pkg
+                                  ? { ...i, mode: e.target.value === 'message' ? 'message' : 'swipe' }
+                                  : i
+                              ),
+                            })
+                          }
+                          className="mr-input text-xs"
+                          data-testid={`schedule-mode-${pkg}`}
+                          aria-label={`${appName(pkg)} mode`}
+                        >
+                          <option value="swipe">Auto swipe</option>
+                          <option value="message">Auto message</option>
+                        </select>
+                      )}
+                      <span className="text-xs text-mute">
+                        runs max {MAX_RUNS_PER_APP} · {runCountHint(pkg)}
+                      </span>
                     </>
                   )}
                 </div>
@@ -278,7 +326,7 @@ export default function DatingSchedules(props: Props) {
             >
               Save schedule
             </button>
-            <button type="button" onClick={() => setEdit(null)} className="rounded bg-surface px-3 py-1">
+            <button type="button" onClick={() => startEdit(null)} className="rounded bg-surface px-3 py-1">
               Cancel
             </button>
           </div>
