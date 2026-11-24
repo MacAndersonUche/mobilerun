@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="3" app_nodes="3" text_nodes="2" needs_vision="false" partial="false" empty="false" mode="compact" packages="com.sec.android.app.launcher">
+<w id="active" t="active" p="com.sec.android.app.launcher" f="1" kids="3">
+ <n d="Facebook" cls="TextView" c="1" xy="162,820" b="80,760,244,880"/>
+ <n d="Chrome" cls="TextView" c="1" xy="540,820" b="458,760,622,880"/>
+ <n d="Settings" cls="TextView" c="1" xy="918,820" b="836,760,1000,880"/>
+</w>
+</hierarchy>

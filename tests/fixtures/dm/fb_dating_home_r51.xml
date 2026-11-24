@@ -1,0 +1,30 @@
+<hierarchy windows="1" nodes="26" app_nodes="26" text_nodes="22" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.facebook.katana">
+<w id="active" t="active" p="com.facebook.katana" f="1" kids="2">
+ <n i="com.facebook.katana:id/(name removed)" cls="HorizontalScrollView" s="1" xy="540,1174" b="0,75,1080,2274"/>
+ <n i="com.facebook.katana:id/(name removed)" cls="ViewPager" s="1" xy="540,1174" b="0,75,1080,2274"/>
+ <n d="Story tray" i="android:id/list" cls="RecyclerView" s="1" v="0" xy="-1080,1174" b="0,75,-2160,2274"/>
+ <n d="Go to profile" cls="Button" c="1" v="0" xy="-1551,159" b="0,107,-3103,212"/>
+ <n t="What's on your mind?" d="What's on your mind?" cls="Button" c="1" v="0" xy="-1154,159" b="0,114,-2308,205"/>
+ <n d="Select photos or videos for your post" cls="ViewGroup" c="1" v="0" xy="-1096,159" b="0,112,-2192,207"/>
+ <n d="Story tray" cls="ViewGroup" v="0" xy="-1080,562" b="0,244,-2160,881"/>
+ <n cls="ScrollView" s="1" xy="540,1159" b="0,191,1080,2127"/>
+ <n d="Liked you, new items available · Friendship, new items available · Matches, new " cls="HorizontalScrollView" s="1" xy="540,262" b="0,215,1080,309"/>
+ <n i="com.facebook.katana:id/(name removed)" cls="FrameLayout" c="1" xy="540,133" b="0,75,1080,191"/>
+ <n d="Menu" cls="Button" c="1" xy="77,133" b="32,75,122,191"/>
+ <n d="Dating" cls="ViewGroup" xy="529,133" b="127,75,932,191"/>
+ <n t="Dating" d="Dating" cls="ViewGroup" xy="251,134" b="127,91,376,178"/>
+ <n d="Dating settings" i="com.facebook.katana:id/(name removed)" cls="Button" c="1" xy="1000,133" b="953,86,1048,181"/>
+ <n d="Home, tab 1 of 6" i="com.facebook.katana:id/(name removed)" cls="ActionBar$Tab" c="1" xy="90,2200" b="0,2127,180,2274"/>
+ <n d="Reels, tab 2 of 6, 1 new" i="com.facebook.katana:id/(name removed)" cls="ActionBar$Tab" c="1" xy="270,2200" b="180,2127,360,2274"/>
+ <n d="Marketplace, tab 3 of 6" i="com.facebook.katana:id/(name removed)" cls="ActionBar$Tab" c="1" xy="450,2200" b="360,2127,540,2274"/>
+ <n d="Dating, tab 4 of 6" i="com.facebook.katana:id/(name removed)" cls="ActionBar$Tab" c="1" xy="630,2200" b="540,2127,720,2274"/>
+ <n d="Notifications, tab 5 of 6, 2 new" i="com.facebook.katana:id/(name removed)" cls="ActionBar$Tab" c="1" xy="810,2200" b="720,2127,900,2274"/>
+ <n d="Profile, tab 6 of 6" i="com.facebook.katana:id/(name removed)" cls="ActionBar$Tab" c="1" xy="990,2200" b="900,2127,1080,2274"/>
+ <n d="Menu · Create, double-tap to create a new post, story or reel · Search · Messagi" cls="FrameLayout" c="1" v="0" xy="540,75" b="0,75,1080,75"/>
+ <n d="Menu" i="com.facebook.katana:id/(name removed)" cls="Button" c="1" v="0" xy="69,75" b="11,75,127,75"/>
+ <n d="Facebook logo" i="com.facebook.katana:id/(name removed)" cls="View" c="1" v="0" xy="295,67" b="127,75,463,59"/>
+ <n d="Create, double-tap to create a new post, story or reel" i="com.facebook.katana:id/(name removed)" cls="Button" c="1" v="0" xy="779,75" b="721,75,837,75"/>
+ <n d="Search" i="com.facebook.katana:id/(name removed)" cls="Button" c="1" v="0" xy="895,75" b="837,75,953,75"/>
+ <n d="Messaging, 3 unread messages" i="com.facebook.katana:id/(name removed)" cls="Button" c="1" v="0" xy="1011,75" b="953,75,1069,75"/>
+</w>
+</hierarchy>
