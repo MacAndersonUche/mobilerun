@@ -27,13 +27,17 @@ RUN_APPS: Dict[str, Tuple[str, str, Optional[int]]] = {
     "co.hinge.app": ("hinge", "first_contact", None),
     "com.hily.app": ("hily", "first_contact", 5),
     "com.facebook.katana": ("facebook", "first_contact", 50),
-    "com.affinityapps.blk": ("blk", "first_contact", None),
     "co.yellw.yellowapp": ("yubo", "first_contact", None),
     "com.bumble.app": ("bumble", "swipe", None),
     "com.badoo.mobile": ("badoo", "swipe", None),
     # r45: Tagged — auto swipe (free like) or auto message (per-app mode)
     "com.taggedapp": ("tagged", "tagged", None),
+    # r49 (CA-24): Tinder fixed auto-swipe — free right-swipe, popups closed,
+    # matches get a bank line
+    "com.affinityapps.blk": ("blk", "first_contact", None),  # r49: bottom
+    "com.tinder": ("tinder", "tinder", None),
 }
+TINDER_PKG = "com.tinder"
 TAGGED_PKG = "com.taggedapp"
 TAGGED_MODES = ("swipe", "message")
 HILY_PKG = "com.hily.app"
@@ -173,6 +177,8 @@ def instruction_for(
     if pkg == TAGGED_PKG:
         mode = (modes or {}).get(pkg) or "swipe"
         return f"fixed tagged {mode} {n}"
+    if pkg == TINDER_PKG:
+        return f"fixed tinder swipe {n}"
     if pkg in _LIKE_STEPS:
         # Hily: buttons only (gesture swipe does not register) → free heart
         return f"swipe {n} on {RUN_APPS[base_package(pkg)][0]}"
@@ -225,6 +231,10 @@ def build_job(
         # r48: ~7 steps per card (open, Direct, type, send, popup, swipe,
         # next card); 6n+15 ran out at card 5 on 24 Nov
         max_steps = min(400, 9 * n + 20)
+    if pkg == TINDER_PKG:
+        # swipe + popup / match-message headroom
+        max_steps = min(1500, 3 * n + 30)
+        wall_s = min(3600, 120 + 12 * n)
     if pkg == HILY_PKG:
         _m, msgs, likes = hily_plan(count, counts, modes, like_caps)
         # ~1-2 steps per Finder like + ~6 per Likes-sent message

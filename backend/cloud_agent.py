@@ -2013,6 +2013,9 @@ def _is_fixed_swipe_action(action: Dict[str, Any]) -> bool:
         # r46: Hily fixed run (Finder likes repeat the same heart xy by design)
         or planner == "hily_fixed_run"
         or step.startswith("hily_run")
+        # r49: Tinder fixed auto-swipe (same right-swipe each card by design)
+        or planner == "tinder_fixed"
+        or step.startswith("tinder_fixed")
     )
 
 
@@ -2021,7 +2024,7 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     inst = (instruction or "").lower()
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
         return True
-    if "fixed hily" in inst:  # r46
+    if "fixed hily" in inst or "fixed tinder" in inst:  # r46 / r49
         return True
     # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
     # paid Blast sheet; Hily left for Google Messages; Hinge opened Matches
@@ -2146,6 +2149,33 @@ def plan_next_action(
                     enforce_message_text as _enf_tg,
                 )
             return _enf_tg(tg_act, instruction, history=history)
+
+    # r49: Tinder fixed auto-swipe — free right-swipes, popups closed,
+    # matches get a bank line, no LLM, never paid
+    if "fixed tinder" in instr_l:
+        try:
+            from tinder_fixed_swipe import plan_tinder_fixed_swipe
+        except ImportError:
+            from backend.tinder_fixed_swipe import plan_tinder_fixed_swipe  # type: ignore
+        st_td = agent_state if isinstance(agent_state, dict) else {}
+        td_act = plan_tinder_fixed_swipe(
+            instruction, ui_tree, history, state=st_td, dry_run=dry_run
+        )
+        if td_act is None:
+            td_act = {
+                "action": "wait",
+                "reason": "Tinder fixed swipe: waiting for a readable screen",
+                "planner": "tinder_fixed",
+                "llm_provider": None,
+                "_no_llm_handoff": True,
+            }
+        try:
+            from message_text_guard import enforce_message_text as _enf_td
+        except ImportError:
+            from backend.message_text_guard import (  # type: ignore
+                enforce_message_text as _enf_td,
+            )
+        return _enf_td(td_act, instruction, history=history)
 
     # r46: Hily fixed run (Likes only / Message + likes) — Finder likes,
     # Likes-sent envelopes, no LLM, never paid
@@ -6884,6 +6914,10 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             hily_like_tap = (
                 str(action.get("fastpath_step") or "") == "hily_run_fixed_like_swipe"
                 and kind == "tap"
+            ) or (
+                # r49: Tinder right-swipe (card may not be in the tree either)
+                str(action.get("fastpath_step") or "") == "tinder_fixed_like_swipe"
+                and kind == "swipe"
             )
             if not tree_changed and not hily_like_tap:
                 state["no_progress_streak"] = (

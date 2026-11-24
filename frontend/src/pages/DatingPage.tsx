@@ -24,6 +24,7 @@ import {
   likeCapHint,
   parseLikeCap,
   showsCount,
+  sortDatingApps,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -84,6 +85,7 @@ const DATING_APP_NAMES: Record<string, string> = {
   'co.yellw.yellowapp': 'Yubo',
   'com.badoo.mobile': 'Badoo',
   'com.affinityapps.blk': 'BLK',
+  'com.tinder': 'Tinder',
   'com.hily.app': 'Hily',
   'co.hinge.app': 'Hinge',
   'com.taggedapp': 'Tagged',
@@ -134,7 +136,7 @@ function cardsForDatingApps(
       name: datingAppDisplayName(a.package, a.name || prev?.name),
     });
   }
-  return Array.from(byPkg.values());
+  return sortDatingApps(Array.from(byPkg.values()), (a) => a.package);
 }
 
 interface OpenerTemplate {
@@ -950,7 +952,7 @@ export default function DatingPage() {
         <h3 className="text-lg font-semibold">Apps for Start</h3>
         <p className="text-xs text-mute">Tap an app to include it in Start. Templates/AI = how first messages are written.</p>
         <div className="space-y-2">
-          {configApps
+          {sortDatingApps(configApps, (a) => a.package_name)
             .filter((app) => !isSocialPackage(app.package_name))
             .map((app) => (
             <div

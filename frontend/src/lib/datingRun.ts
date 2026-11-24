@@ -5,12 +5,30 @@ export const RUNNABLE_APPS = [
   'co.hinge.app',
   'com.hily.app',
   'com.facebook.katana',
-  'com.affinityapps.blk',
   'co.yellw.yellowapp',
   'com.bumble.app',
   'com.badoo.mobile',
   'com.taggedapp',
+  // r49: Mac — Tinder and BLK at the bottom of the list
+  'com.affinityapps.blk',
+  'com.tinder', // r49 (CA-24): fixed auto-swipe
 ];
+
+// r49: Mac (24 Nov) — "move Tinder and BLK to the bottom of the portal"
+export const BOTTOM_APPS = ['com.affinityapps.blk', 'com.tinder'];
+function bottomRank(pkg: string): number {
+  const p = (pkg || '').toLowerCase();
+  if (p.startsWith('com.tinder') || p.includes('tinder')) return 2;
+  if (p === 'com.affinityapps.blk' || p.endsWith('.blk')) return 1;
+  return 0;
+}
+/** Stable sort: every other app keeps its order; BLK then Tinder go last. */
+export function sortDatingApps<T>(items: T[], pkgOf: (item: T) => string): T[] {
+  return items
+    .map((item, i) => ({ item, i, r: bottomRank(pkgOf(item)) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.item);
+}
 
 // r45: Tagged runs as auto swipe (free like) or auto message
 export const TAGGED_PKG = 'com.taggedapp';

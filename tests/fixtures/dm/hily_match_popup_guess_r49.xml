@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="It's a match!" cls="TextView" xy="540,600" b="200,560,880,640"/>
+ <n t="You and Amy liked each other" cls="TextView" xy="540,700" b="150,670,930,730"/>
+ <n e="1" h="Say something nice" cls="EditText" c="1" xy="460,1700" b="40,1640,880,1760"/>
+ <n d="Send" i="matchSendButton" cls="ImageView" c="1" xy="980,1700" b="920,1640,1040,1760"/>
+ <n t="Keep swiping" cls="TextView" c="1" xy="540,1950" b="300,1900,780,2000"/>
+</w>
+</hierarchy>

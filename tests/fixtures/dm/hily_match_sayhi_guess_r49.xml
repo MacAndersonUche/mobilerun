@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="You matched with Amy" cls="TextView" xy="540,600" b="200,560,880,640"/>
+ <n t="Say hi" cls="TextView" c="1" xy="540,1800" b="300,1750,780,1850"/>
+ <n d="Close" i="closeButton" c="1" xy="80,150" b="20,90,140,210"/>
+</w>
+</hierarchy>

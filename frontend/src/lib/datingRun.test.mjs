@@ -8,6 +8,8 @@ import {
   datingStartBody,
   runCountFor,
   runCountLabel,
+  sortDatingApps,
+  RUNNABLE_APPS,
 } from './datingRun.ts';
 
 assert.equal(canRunApp('co.hinge.app'), true);
@@ -96,4 +98,18 @@ console.log('datingRun ok');
   a(b.like_caps['com.hily.app:message_likes'] === 30, 'other mode keeps its own default');
   a(!Object.keys(b.like_caps).some((k) => k.startsWith('com.bumble')), 'no bumble caps');
   console.log('r46 hily mode tests ok');
+}
+
+// r49: Tinder and BLK at the bottom; everything else keeps its order
+{
+  const pk = (a) => a.p;
+  const got = sortDatingApps(
+    [{ p: 'com.tinder' }, { p: 'com.bumble.app' }, { p: 'com.affinityapps.blk' },
+     { p: 'com.hily.app' }, { p: 'co.hinge.app' }],
+    pk
+  ).map(pk);
+  assert.deepEqual(got, ['com.bumble.app', 'com.hily.app', 'co.hinge.app',
+    'com.affinityapps.blk', 'com.tinder']);
+  assert.deepEqual(RUNNABLE_APPS.slice(-2), ['com.affinityapps.blk', 'com.tinder']);
+  assert.equal(canRunApp('com.tinder'), true);
 }

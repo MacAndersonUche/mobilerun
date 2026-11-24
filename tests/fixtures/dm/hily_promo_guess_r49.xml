@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1">
+ <n t="Get Hily Premium" cls="TextView" xy="540,600" b="200,560,880,640"/>
+ <n t="£9.99 per week" cls="TextView" xy="540,800" b="200,760,880,840"/>
+ <n t="Continue" cls="TextView" c="1" xy="540,1900" b="200,1850,880,1950"/>
+ <n d="close" i="paywallCloseButton" c="1" xy="980,150" b="920,90,1040,210"/>
+</w>
+</hierarchy>

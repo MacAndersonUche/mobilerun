@@ -1,0 +1,6 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.tinder">
+<w id="active" t="active" p="com.tinder" f="1">
+ <n t="You're out of likes!" xy="540,500" b="200,450,880,550"/>
+ <n t="Get Tinder Plus" c="1" xy="540,1900" b="200,1850,880,1950"/>
+</w>
+</hierarchy>

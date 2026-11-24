@@ -1,0 +1,10 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.tinder">
+<w id="active" t="active" p="com.tinder" f="1">
+ <n t="Cara, 23" xy="300,1600" b="60,1560,600,1640"/>
+ <n d="Rewind" c="1" xy="150,2000" b="90,1940,210,2060"/>
+ <n d="Nope" c="1" xy="330,2000" b="250,1920,410,2080"/>
+ <n d="Super Like" c="1" xy="540,2000" b="480,1940,600,2060"/>
+ <n d="Like" c="1" xy="750,2000" b="670,1920,830,2080"/>
+ <n d="Boost" c="1" xy="930,2000" b="870,1940,990,2060"/>
+</w>
+</hierarchy>

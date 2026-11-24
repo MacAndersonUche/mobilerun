@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="4" partial="false" empty="false" mode="compact" packages="com.google.android.permissioncontroller">
+<w id="active" t="active" p="com.google.android.permissioncontroller" f="1">
+ <n t="Allow Hily to send you notifications?" xy="540,1200" b="100,1160,980,1240"/>
+ <n t="Allow" i="permission_allow_button" c="1" xy="540,1500" b="100,1450,980,1550"/>
+ <n t="Don't allow" i="permission_deny_button" c="1" xy="540,1650" b="100,1600,980,1700"/>
+</w>
+</hierarchy>
