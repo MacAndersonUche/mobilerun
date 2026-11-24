@@ -92,10 +92,30 @@ def test_like_sheet_types_then_send_like_not_rose():
     assert act is not None
     assert act.get("action") == "type"
     assert act.get("text") == "hi miss"
+    # Discover typing is a paste (one commit), never chunked human-paced.
+    assert act.get("humanize") is False
 
-    act2 = plan_hinge_fixed_first_contact(
+    # The same empty box again: the type never landed, so Send Like must
+    # NOT be tapped and nothing must count as sent — retype, bounded.
+    act_empty = plan_hinge_fixed_first_contact(
         "send 2 first contact messages on Hinge",
         tree,
+        ["Opened Hinge", "Type like-sheet comment"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act_empty is not None
+    assert act_empty.get("action") == "type"
+    assert st["bulk_message_new"]["done"] == 0
+
+    # Only once the line is verified in the box does Send Like happen.
+    typed_tree = (FIX / "hinge_like_sheet_typed.xml").read_text(encoding="utf-8")
+    act2 = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        typed_tree,
         ["Opened Hinge", "Type like-sheet comment"],
         state=st,
         package="co.hinge.app",

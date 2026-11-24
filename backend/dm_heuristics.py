@@ -4476,18 +4476,47 @@ def hinge_find_send_a_message(tree: str) -> Optional[Tuple[int, int]]:
     return _tree_node_center(tree, "Send a message", "Send message")
 
 
-def hinge_find_compose(tree: str) -> Optional[Tuple[int, int]]:
-    """Thread / like-sheet comment EditText (hint Send a message / Add a comment)."""
+def _compose_editable(tree: str) -> Optional[Dict[str, Any]]:
+    """The compose-box editable: the focused one, else the bottom-most.
+
+    Shared selection so planners and the device-side target agree on which
+    field the text must land in. Facebook keeps off-screen feed editables
+    in the tree (r51) — the focused box wins over tree order.
+    """
     edits = [n for n in _parse_compact_nodes(tree) if n.get("editable")]
     if not edits:
         return None
-    # Prefer focused, else bottom-most
     focused = [n for n in edits if n.get("focused")]
-    n = (
-        focused[-1]
-        if focused
-        else sorted(edits, key=lambda e: int(e.get("y") or 0))[-1]
-    )
+    if focused:
+        return focused[-1]
+    return sorted(edits, key=lambda e: int(e.get("y") or 0))[-1]
+
+
+def compose_box_text(tree: str) -> str:
+    """Text currently in the compose box ('' when empty or no box).
+
+    A box showing only its placeholder counts as its placeholder text here
+    (Facebook renders the placeholder as the node's text until something
+    is typed) — callers compare against the expected message, so an empty
+    box never equals it.
+    """
+    n = _compose_editable(tree)
+    if not n:
+        return ""
+    return str(n.get("text") or "").strip()
+
+
+def compose_box_focused(tree: str) -> bool:
+    """True when the compose box is the focused editable in the tree."""
+    n = _compose_editable(tree)
+    return bool(n and n.get("focused"))
+
+
+def hinge_find_compose(tree: str) -> Optional[Tuple[int, int]]:
+    """Thread / like-sheet comment EditText (hint Send a message / Add a comment)."""
+    n = _compose_editable(tree)
+    if not n:
+        return None
     return (int(n["x"]), int(n["y"]))
 
 

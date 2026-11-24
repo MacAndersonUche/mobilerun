@@ -1887,17 +1887,21 @@ class MobilerunAccessibilityService : AccessibilityService() {
         @Suppress("UNUSED_PARAMETER")
         val _humanize = humanize
         val root = rootInActiveWindow ?: return false
-        // Prefer chat compose (WhatsApp entry / Message hint) over search EditTexts
-        var targetNode = findComposeEditable(root)
-        if (targetNode == null) {
-            targetNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (targetNode != null && !targetNode.isEditable) {
-                try {
-                    targetNode.recycle()
-                } catch (_: Exception) {
-                }
-                targetNode = null
+        // The field the app has focused is the typing target: use it before
+        // any tree-order scan. Facebook keeps off-screen feed editables in
+        // the tree, and the old tree-order pick could type into a field the
+        // user never sees while the visible box stayed empty.
+        var targetNode = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (targetNode != null && !targetNode.isEditable) {
+            try {
+                targetNode.recycle()
+            } catch (_: Exception) {
             }
+            targetNode = null
+        }
+        // Prefer chat compose (WhatsApp entry / Message hint) over search EditTexts
+        if (targetNode == null) {
+            targetNode = findComposeEditable(root)
         }
         if (targetNode == null) {
             targetNode = findEditable(root)
@@ -1958,10 +1962,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
             val setTextSuccess =
                 targetNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
             if (setTextSuccess) {
-                return true
+                return verifyTextLanded(targetNode, finalText, effectiveCurrent)
             }
             // Clipboard paste fallback (OEM / Secure Folder windows that reject SET_TEXT)
-            return pasteViaClipboard(targetNode, finalText)
+            if (pasteViaClipboard(targetNode, finalText)) {
+                return verifyTextLanded(targetNode, finalText, effectiveCurrent)
+            }
+            return false
         } catch (e: Exception) {
             Log.e(TAG, "Error setting text via accessibility: ${e.message}")
             return false
@@ -1974,6 +1981,30 @@ class MobilerunAccessibilityService : AccessibilityService() {
                 root.recycle()
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /**
+     * Read the field back after typing: ACTION_SET_TEXT can report success
+     * on a stale or wrong node while the visible box stays empty. Only
+     * fail when the node can be re-read and shows nothing landed (empty,
+     * or still the old text) — a field that holds the new text, or one
+     * that cannot be re-read, keeps the old behaviour.
+     */
+    private fun verifyTextLanded(
+        node: AccessibilityNodeInfo,
+        expected: String,
+        previousText: String,
+    ): Boolean {
+        if (expected.isEmpty()) return true
+        return try {
+            if (!node.refresh()) return true
+            val actual = node.text?.toString().orEmpty()
+            if (actual.isEmpty()) return false
+            if (actual == previousText && actual != expected) return false
+            actual == expected || actual.contains(expected)
+        } catch (_: Exception) {
+            true
         }
     }
 
@@ -1998,7 +2029,13 @@ class MobilerunAccessibilityService : AccessibilityService() {
         val preferred = ArrayList<AccessibilityNodeInfo>()
         val searchy = ArrayList<AccessibilityNodeInfo>()
         collectEditables(node, preferred, searchy)
-        val hit = preferred.firstOrNull() ?: searchy.firstOrNull()
+        // Focused first, then visible, then tree order: an off-screen feed
+        // editable must never win over the field the user is looking at.
+        val ordered = preferred.sortedWith(
+            compareByDescending<AccessibilityNodeInfo> { it.isFocused }
+                .thenByDescending { it.isVisibleToUser },
+        )
+        val hit = ordered.firstOrNull() ?: searchy.firstOrNull()
         // Recycle losers
         for (n in preferred) {
             if (n !== hit) {

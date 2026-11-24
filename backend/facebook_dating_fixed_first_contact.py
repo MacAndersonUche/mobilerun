@@ -13,13 +13,18 @@ Like button, or No Thanks. Daily cap is 50.
 from __future__ import annotations
 
 import re
-
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from dm_heuristics import _fp, _parse_compact_nodes, _tree_node_center
+    from dm_heuristics import (
+        _compose_editable,
+        _fp,
+        _parse_compact_nodes,
+        _tree_node_center,
+    )
 except ImportError:  # pragma: no cover
     from backend.dm_heuristics import (  # type: ignore
+        _compose_editable,
         _fp,
         _parse_compact_nodes,
         _tree_node_center,
@@ -310,6 +315,17 @@ def plan_facebook_dating_fixed_first_contact(
             "fb_dating_fc_done",
         )
 
+    # Off the sheet: any post-send / per-profile state is stale (the sheet
+    # closed = the send went through, or this is a new profile). Clear it
+    # here so a stale awaiting_send can never make the next profile wait
+    # and Back out of its sheet instead of typing.
+    if not _on_comment_sheet(ui_tree):
+        bulk["awaiting_send"] = False
+        bulk.pop("just_sent", None)
+        bulk.pop("closing", None)
+        bulk["type_tries"] = 0
+        bulk["focus_tries"] = 0
+
     # r46/r51: after a photo tap the next tree can be a brief blank
     # ("waiting for the comment box") — don't Back out of Dating.
     if not int(bulk.get("awaiting_sheet") or 0):
@@ -352,12 +368,17 @@ def plan_facebook_dating_fixed_first_contact(
 
     if _on_comment_sheet(ui_tree):
         bulk["awaiting_sheet"] = 0
+        # The box, from the tree: its text, whether it is focused, and
+        # where to tap to focus it. Typing is never issued on an unfocused
+        # box, and Send is never tapped until the exact line is in the box.
+        box_node = _compose_editable(ui_tree)
+        box = str(box_node.get("text") or "").strip() if box_node else ""
+        box_focused = bool(box_node and box_node.get("focused"))
+        box_xy = (
+            (int(box_node["x"]), int(box_node["y"])) if box_node else None
+        )
         # r46: the line still in the box after Send → tap Send once more,
         # never type it again (no double message to the same person).
-        box = ""
-        for n in _parse_compact_nodes(ui_tree):
-            if n.get("editable"):
-                box = str(n.get("text") or "").strip()
         if bulk.get("awaiting_send") and not dry_run:
             if box.lower() == text.lower():
                 if int(bulk.get("send_retry") or 0) < 1:
@@ -387,8 +408,12 @@ def plan_facebook_dating_fixed_first_contact(
                     },
                     "fb_dating_fc_not_sent",
                 )
+            # The line left the box after Send: it went. Never type again
+            # on this sheet — wait for it to close, then Back out.
             bulk["awaiting_send"] = False
             bulk["send_retry"] = 0
+            bulk["just_sent"] = True
+            bulk["close_tries"] = 0
             st["bulk_message_new"] = bulk
         if dry_run:
             bulk["done"] = cap
@@ -410,56 +435,186 @@ def plan_facebook_dating_fixed_first_contact(
                 },
                 "fb_dating_fc_dry_sheet",
             )
-        if not bulk.get("typed"):
-            bulk["typed"] = True
+        if bulk.get("just_sent"):
+            bulk["just_sent"] = False
+            bulk["closing"] = True
             st["bulk_message_new"] = bulk
             return _fp(
                 {
-                    "action": "type",
-                    "text": text,
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "delay_s": 1.0,
                     "reason": (
-                        f"Type photo comment '{text}' ({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "clear": True,
-                },
-                "fb_dating_fc_type",
-            )
-        send = _send_center(ui_tree) or SEND_XY
-        if send in (LIKE_XY, PASS_XY, EXPLORE_XY):
-            return _fp(
-                {
-                    "action": "press_button",
-                    "button": "back",
-                    "reason": (
-                        f"Refuse Facebook Dating paid/like-heart coords "
+                        f"Comment sent — waiting for the sheet to close "
                         f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                 },
-                "fb_dating_fc_refuse_paid",
+                "fb_dating_fc_wait_close",
             )
-        bulk["done"] = done + 1
-        bulk["typed"] = False
-        bulk["awaiting_send"] = True
-        bulk["send_retry"] = 0
+        if bulk.get("closing"):
+            if box.lower() == text.lower():
+                # The line is back in the box: the send did not land.
+                # One more Send tap, never a retype, never a recount.
+                if int(bulk.get("send_retry") or 0) < 1:
+                    bulk["send_retry"] = 1
+                    bulk["closing"] = False
+                    bulk["awaiting_send"] = True
+                    st["bulk_message_new"] = bulk
+                    send = _send_center(ui_tree) or SEND_XY
+                    return _fp(
+                        {
+                            "action": "tap",
+                            "x": int(send[0]),
+                            "y": int(send[1]),
+                            "reason": f"Comment still in the box — tap Send again ({planner})",
+                            "planner": planner,
+                            "llm_provider": None,
+                        },
+                        "fb_dating_fc_send_retry",
+                    )
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Facebook Dating comment did not send after a retry "
+                            f"— stop, nothing paid ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "fb_dating_fc_not_sent",
+                )
+            tries = int(bulk.get("close_tries") or 0) + 1
+            bulk["close_tries"] = tries
+            st["bulk_message_new"] = bulk
+            if tries > 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Facebook Dating comment sheet did not close "
+                            f"after send — stop, nothing paid ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "fb_dating_fc_close_fail",
+                )
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Comment sent — dismiss the sheet ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "fb_dating_fc_close_back",
+            )
+        # Send only when the exact line is verified in the box. A type
+        # that never landed (empty box / placeholder still showing) must
+        # never reach Send, and must never count as a send.
+        if box.lower() == text.lower():
+            send = _send_center(ui_tree) or SEND_XY
+            if send in (LIKE_XY, PASS_XY, EXPLORE_XY):
+                return _fp(
+                    {
+                        "action": "press_button",
+                        "button": "back",
+                        "reason": (
+                            f"Refuse Facebook Dating paid/like-heart coords "
+                            f"({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "fb_dating_fc_refuse_paid",
+                )
+            bulk["done"] = done + 1
+            bulk["typed"] = False
+            bulk["awaiting_send"] = True
+            bulk["send_retry"] = 0
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(send[0]),
+                    "y": int(send[1]),
+                    "reason": (
+                        f"Facebook Dating Send photo comment "
+                        f"{bulk['done']}/{cap} — never Spotlight/Crush "
+                        f"({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "fb_dating_fc_send",
+            )
+        # The line is not in the box yet: focus it first (tree-verified),
+        # then paste it in one commit — never chunked human-paced typing
+        # on Discover. Bounded: after 2 failed types, stop honestly.
+        if not box_focused and box_xy:
+            tries = int(bulk.get("focus_tries") or 0) + 1
+            bulk["focus_tries"] = tries
+            st["bulk_message_new"] = bulk
+            if tries > 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Facebook Dating comment box never took focus "
+                            f"— stop, nothing sent ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "fb_dating_fc_focus_fail",
+                )
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(box_xy[0]),
+                    "y": int(box_xy[1]),
+                    "reason": (
+                        f"Focus the photo comment box before typing ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "fb_dating_fc_focus_box",
+            )
+        tries = int(bulk.get("type_tries") or 0)
+        if tries >= 2:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Facebook Dating comment never landed in the box "
+                        f"after 2 tries — stop, nothing sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "fb_dating_fc_type_fail",
+            )
+        bulk["type_tries"] = tries + 1
+        bulk["typed"] = True
         st["bulk_message_new"] = bulk
         return _fp(
             {
-                "action": "tap",
-                "x": int(send[0]),
-                "y": int(send[1]),
+                "action": "type",
+                "text": text,
                 "reason": (
-                    f"Facebook Dating Send photo comment "
-                    f"{bulk['done']}/{cap} — never Spotlight/Crush "
+                    f"Type photo comment '{text}' (paste, one commit) "
                     f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
+                "clear": True,
+                "humanize": False,
             },
-            "fb_dating_fc_send",
+            "fb_dating_fc_type",
         )
 
     if dry_run:
