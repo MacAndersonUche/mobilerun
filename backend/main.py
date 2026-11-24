@@ -3312,6 +3312,58 @@ class ModeStartBody(BaseModel):
     apps: Optional[List[str]] = None
     # Messages / swipes per app. Hinge uses it as-is; Hily caps at 5, FB at 50.
     count: Optional[int] = None
+    # r43: per-app per-run numbers from each app card (package -> n). Saved
+    # per user; when omitted, the saved numbers are used.
+    counts: Optional[Dict[str, int]] = None
+
+
+class RunCountsBody(BaseModel):
+    counts: Dict[str, int]
+
+
+def _load_run_counts(auth: Optional[dict]) -> Dict[str, int]:
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        from dating_run import clean_counts
+    except ImportError:
+        from backend.dating_run import clean_counts  # type: ignore
+    try:
+        data = get_user_setting(_dating_user_id(auth), "dating_run_counts") or {}
+    except Exception as e:  # pragma: no cover
+        logger.warning("run counts load failed: %s", e)
+        data = {}
+    return clean_counts(data.get("counts") if isinstance(data, dict) else None)
+
+
+def _save_run_counts(auth: Optional[dict], counts: Dict[str, Any]) -> Dict[str, int]:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+    try:
+        from dating_run import clean_counts
+    except ImportError:
+        from backend.dating_run import clean_counts  # type: ignore
+    merged = _load_run_counts(auth)
+    merged.update(clean_counts(counts))
+    save_user_setting(_dating_user_id(auth), "dating_run_counts", {"counts": merged})
+    return merged
+
+
+@app.get("/api/dating/run-counts")
+async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Per-app per-run numbers shown on each dating app card."""
+    return {"counts": _load_run_counts(auth)}
+
+
+@app.post("/api/dating/run-counts")
+async def set_run_counts(
+    body: RunCountsBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    return {"status": "saved", "counts": _save_run_counts(auth, body.counts)}
 
 
 def _kick_job(job_id: str) -> None:
@@ -3403,12 +3455,23 @@ async def _start_dating_apps_run(
             detail="Phone offline — open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
+    # Each app card's own number; fall back to the saved per-app numbers.
+    try:
+        counts = (
+            _save_run_counts(auth, body.counts)
+            if body.counts
+            else _load_run_counts(auth)
+        )
+    except Exception as e:
+        logger.warning("run counts save/load failed: %s", e)
+        counts = dict(body.counts or {})
     job = build_job(
         device_id=did,
         queue=queue,
         count=body.count,
         dry_run=dry_run,
         speed_preset=dating_mode_state.get("speed_preset") or "balanced",
+        counts=counts,
     )
     try:
         put_job(job)

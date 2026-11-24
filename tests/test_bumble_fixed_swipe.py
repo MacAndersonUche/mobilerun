@@ -173,7 +173,20 @@ def test_dry_plan_returns_coords_and_does_not_swipe():
 
 
 def test_live_plan_swipes_right_and_caps_at_five():
-    st = {"bulk_swipe": {"done": 0, "target": 20}}
+    # r43: live_test jobs keep the 5 cap (real runs use the per-run count)
+    st = {"bulk_swipe": {"done": 0, "target": 20}, "live_test": True,
+          "live_test_max_n": 5}
+    top = plan_bumble_fixed_swipe(
+        "like 20 profiles on Bumble (fixed)",
+        KALIA,
+        [],
+        state=st,
+        package="com.bumble.app",
+        dry_run=False,
+        live_test_max_n=5,
+    )
+    assert top["action"] == "swipe" and top["y2"] > top["y1"]  # scroll to top
+    assert top["fastpath_step"] == "bumble_fixed_scroll_top"
     act = plan_bumble_fixed_swipe(
         "like 20 profiles on Bumble (fixed)",
         KALIA,
@@ -223,26 +236,29 @@ def test_guard_fail_does_not_tap():
     assert act.get("x") is None and act.get("x1") is None
 
 
-def test_not_on_deck_backs_once_then_stops():
+def test_not_on_deck_taps_people_tab_never_back():
+    """r43: Chats selected → tap People (top screen: Back would close Bumble)."""
     tree = _deck_tree(selected="chats")
     st = {"bulk_swipe": {"done": 0, "target": 5}}
-    first = plan_bumble_fixed_swipe(
-        "like 5 profiles on Bumble (fixed)",
-        tree,
-        [],
-        state=st,
-        dry_run=False,
+    seen = []
+    for i in range(10):
+        act = plan_bumble_fixed_swipe(
+            "like 5 profiles on Bumble (fixed)",
+            tree,
+            [a["reason"] for a in seen],
+            state=st,
+            dry_run=False,
+        )
+        seen.append(act)
+    assert seen[0]["action"] == "tap" and seen[0]["x"] == 540
+    assert seen[0]["fastpath_step"] == "bumble_fixed_recover_tab"
+    assert all(a.get("button") != "back" for a in seen)
+    assert all(a.get("_no_llm_handoff") for a in seen)
+    last = plan_bumble_fixed_swipe(
+        "like 5 profiles on Bumble (fixed)", tree, [], state=st, dry_run=False
     )
-    assert first["action"] == "press_button" and first["button"] == "back"
-    second = plan_bumble_fixed_swipe(
-        "like 5 profiles on Bumble (fixed)",
-        tree,
-        [first["reason"]],
-        state=st,
-        dry_run=False,
-    )
-    assert second["action"] == "fail"
-    assert "still not" in second["reason"].lower()
+    assert last["action"] == "fail"
+    assert "could not get back" in last["reason"].lower()
 
 
 def test_plan_bulk_swipe_uses_fixed_branch():
@@ -342,6 +358,17 @@ def test_badoo_encounters_live_swipes_mid_height():
         "like 5 profiles on Badoo (fixed)",
         tree,
         [],
+        state=st,
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
+    )
+    assert act["fastpath_step"] == "badoo_fixed_scroll_top"
+    act = plan_fixed_swipe(
+        "like 5 profiles on Badoo (fixed)",
+        tree,
+        [act["reason"]],
         state=st,
         package="com.badoo.mobile",
         dry_run=False,

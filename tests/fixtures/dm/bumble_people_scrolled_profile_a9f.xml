@@ -1,0 +1,40 @@
+<hierarchy windows="1" nodes="36" app_nodes="36" text_nodes="32" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.bumble.app">
+<w id="active" t="active" p="com.bumble.app" f="1" kids="2">
+ <n i="com.bumble.app:id/mainApp_viewPager" cls="ViewPager" s="1" xy="540,1097" b="0,75,1080,2120"/>
+ <n i="com.bumble.app:id/navbar_logo" cls="ImageView" c="1" xy="184,148" b="0,117,368,180"/>
+ <n d="Filters" i="com.bumble.app:id/toolbar_filter_container" cls="FrameLayout" c="1" xy="1006,148" b="933,75,1080,222"/>
+ <n d="Filters" i="com.bumble.app:id/toolbar_filter" cls="Button" xy="1006,148" b="975,117,1038,180"/>
+ <n i="com.bumble.app:id/encountersGridProfile_list" cls="RecyclerView" s="1" xy="540,1171" b="21,243,1059,2099"/>
+ <n i="com.bumble.app:id/encountersGridProfile_list" cls="RecyclerView" s="1" xy="540,1171" b="21,243,1059,2099"/>
+ <n t="Chats" i="com.bumble.app:id/mainAppToolbarNavigation_title" cls="TextView" v="0" xy="1641,149" b="2202,101,1080,197"/>
+ <n d="Search" i="com.bumble.app:id/mainAppToolbarNavigation_openSearchIcon" cls="ImageView" c="1" v="0" xy="2097,148" b="3115,107,1080,190"/>
+ <n t="Your matches" i="com.bumble.app:id/connections_expiringConnectionsTitle" cls="TextView" v="0" xy="1620,293" b="2160,264,1080,323"/>
+ <n d="1 people like you! People are waiting to talk to you. Like t" i="com.bumble.app:id/connections_beelinePromoContainer" cls="Button" c="1" v="0" xy="1620,459" b="2160,344,1080,575"/>
+ <n t="1" i="com.bumble.app:id/component_beeline_card_stack_counter" cls="TextView" v="0" xy="1665,541" b="2250,515,1080,568"/>
+ <n t="People are waiting to talk to you. Like them back to start chatting." i="com.bumble.app:id/connections_beelinePromoTitle" cls="TextView" v="0" xy="1756,428" b="2433,377,1080,480"/>
+ <n t="See who’s liked you" i="com.bumble.app:id/connections_beelinePromoCta" cls="TextView" v="0" xy="1756,516" b="2433,491,1080,541"/>
+ <n t="Chats" i="com.bumble.app:id/connections_connectionsTitleValue" cls="TextView" v="0" xy="1641,637" b="2202,608,1080,667"/>
+ <n t="Recent" i="com.bumble.app:id/connections_filterText" cls="TextView" v="0" xy="2043,638" b="3006,613,1080,663"/>
+ <n d="Conversations are filtered by Recent" i="com.bumble.app:id/connections_filterIcon" cls="Button" c="1" v="0" xy="2101,638" b="3123,585,1080,691"/>
+ <n t="Connections start here" cls="TextView" v="0" xy="2700,1159" b="2202,1111,3198,1207"/>
+ <n t="When you like each other, you’ll match. Here’s where you can chat." cls="TextView" v="0" xy="2700,1286" b="2202,1228,3198,1344"/>
+ <n t="Keep connecting" cls="View" c="1" v="0" xy="2424,1449" b="2202,1386,2647,1512"/>
+ <n t="Older chats · (44)" cls="ViewGroup" c="1" v="0" xy="1620,1648" b="2160,1596,1080,1701"/>
+ <n t="Older chats" i="com.bumble.app:id/header_title" cls="TextView" v="0" xy="1641,1648" b="2202,1620,1080,1677"/>
+ <n t="(44)" i="com.bumble.app:id/header_conversation_count" cls="TextView" v="0" xy="1761,1648" b="2442,1620,1080,1677"/>
+ <n t="Profile" d="Profile" cls="View" c="1" xy="108,2197" b="0,2120,216,2274"/>
+ <n d="Profile" cls="View" xy="108,2197" b="0,2120,216,2274"/>
+ <n t="Profile" cls="TextView" xy="108,2234" b="67,2215,149,2253"/>
+ <n t="Discover" d="Discover" cls="View" c="1" xy="324,2197" b="216,2120,432,2274"/>
+ <n d="Discover" cls="View" xy="324,2197" b="216,2120,432,2274"/>
+ <n t="Discover" cls="TextView" xy="324,2234" b="269,2215,379,2253"/>
+ <n d="People" cls="View" xy="540,2197" b="432,2120,648,2274"/>
+ <n t="People" cls="TextView" xy="540,2234" b="496,2215,584,2253"/>
+ <n t="Liked You" d="Liked You" cls="View" c="1" xy="756,2197" b="648,2120,864,2274"/>
+ <n d="Liked You" cls="View" xy="756,2197" b="648,2120,864,2274"/>
+ <n t="Liked You" cls="TextView" xy="756,2234" b="697,2215,816,2253"/>
+ <n t="Chats" d="Chats" cls="View" c="1" xy="972,2197" b="864,2120,1080,2274"/>
+ <n d="Chats" cls="View" xy="972,2197" b="864,2120,1080,2274"/>
+ <n t="Chats" cls="TextView" xy="972,2234" b="935,2215,1009,2253"/>
+</w>
+</hierarchy>

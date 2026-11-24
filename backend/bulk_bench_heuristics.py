@@ -2423,14 +2423,9 @@ def plan_bulk_swipe(
             "bulk_wrong_app",
         )
 
-    # Job start: leave leftover photo browser / thread / keyboard
-    recover = _recover_to_root_action(
-        app, ui_tree, history, planner, state=st, package=package, intent="swipe"
-    )
-    if recover:
-        return recover
-
     # CA-4: Bumble/Badoo fixed-spot like swipe (no per-card LLM / vision).
+    # r43: runs BEFORE the generic root recover — the fixed planner owns its
+    # own deck recovery (the generic one pressed Back on Bumble's top screen).
     if app in ("bumble", "badoo"):
         try:
             from bumble_fixed_swipe import (
@@ -2455,6 +2450,13 @@ def plan_bulk_swipe(
             )
             if fixed:
                 return fixed
+
+    # Job start: leave leftover photo browser / thread / keyboard
+    recover = _recover_to_root_action(
+        app, ui_tree, history, planner, state=st, package=package, intent="swipe"
+    )
+    if recover:
+        return recover
 
     deck_visible = _deck_visible(app, ui_tree)
     # Bumble photo browser (SuperSwipe only) — back out before deck checks

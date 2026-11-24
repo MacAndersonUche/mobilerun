@@ -7,7 +7,14 @@ import ModeSpeedPicker from '../components/ModeSpeedPicker';
 import LiveActivityFeed, {
   ActivityPayload,
 } from '../components/LiveActivityFeed';
-import { canRunApp, datingStartBody } from '../lib/datingRun';
+import {
+  canRunApp,
+  clampRunCount,
+  datingStartBody,
+  runCountCap,
+  runCountFor,
+  runCountLabel,
+} from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 
 type Speed = 'fast' | 'balanced' | 'careful';
@@ -192,8 +199,9 @@ export default function DatingPage() {
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
-  // Per run: Hinge sends this many; Hily caps at 5, Facebook Dating at 50
-  const [runCount, setRunCount] = useState(5);
+  // Per app, per run (each app card): swipes or messages. Saved per app on
+  // the server; Hily = likes after its 5 messages, Facebook Dating max 50.
+  const [runCounts, setRunCounts] = useState<Record<string, number>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
@@ -272,6 +280,11 @@ export default function DatingPage() {
         '/api/selectors/status',
         { apps: [] }
       );
+      const rc = await soft<{ counts?: Record<string, number> }>(
+        '/api/dating/run-counts',
+        { counts: {} }
+      );
+      setRunCounts(rc.counts || {});
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -375,7 +388,7 @@ export default function DatingPage() {
               deviceId,
               dryRun,
               contactScope,
-              count: runCount,
+              counts: runCounts,
               apps: onlyApp
                 ? [onlyApp]
                 : configApps.filter((a) => a.enabled).map((a) => a.package_name),
@@ -393,6 +406,20 @@ export default function DatingPage() {
       alert(detail);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveRunCount = async (pkg: string, value: number) => {
+    const n = clampRunCount(pkg, value);
+    setRunCounts((prev) => ({ ...prev, [pkg]: n }));
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/run-counts`,
+        { counts: { [pkg]: n } },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -639,20 +666,6 @@ export default function DatingPage() {
             <option value="both">Both</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 text-sm text-mute">
-          Per run
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={runCount}
-            onChange={(e) => setRunCount(Math.max(1, Number(e.target.value) || 1))}
-            className="mr-input w-20 text-sm"
-            data-testid="dating-run-count"
-            aria-label="Messages or swipes per app"
-            title="Hinge/BLK/Yubo/Bumble/Badoo: this many. Hily: 5 messages, then this many free likes. Facebook Dating max 50."
-          />
-        </label>
         {devices.length > 0 && (
           <select
             className="mr-input w-full text-sm sm:max-w-xs"
@@ -737,6 +750,28 @@ export default function DatingPage() {
                 )}
               </div>
             </div>
+            {canRunApp(app.package) && (
+              <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
+                <span>{runCountLabel(app.package)}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={runCountCap(app.package)}
+                  value={runCountFor(app.package, runCounts)}
+                  onChange={(e) =>
+                    setRunCounts((prev) => ({
+                      ...prev,
+                      [app.package]: clampRunCount(app.package, e.target.value),
+                    }))
+                  }
+                  onBlur={(e) => saveRunCount(app.package, Number(e.target.value))}
+                  className="mr-input w-20 text-sm"
+                  data-testid={`dating-run-count-${app.package}`}
+                  aria-label={`${app.name} ${runCountLabel(app.package)}`}
+                  title="Used by Start and by this app's Run button. Saved for this app."
+                />
+              </label>
+            )}
             <ProgressBar
               value={app.targets.opener_progress}
               max={app.targets.opener_target || 75}

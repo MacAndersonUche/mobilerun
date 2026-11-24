@@ -378,6 +378,204 @@ def _harmless_popup_action(
     return None
 
 
+
+MAX_RUN_SWIPES = 500
+# Consecutive recovery steps allowed between two likes before stopping.
+MAX_RECOVER_STEPS = 10
+_DECK_TAB = {"bumble": ("people", "discover"), "badoo": ("encounters",)}
+_DECK_TAB_ID = {"bumble": (), "badoo": ("nav_bar_button_encounters",)}
+# S21+ fallback (1080x2400) when the tab node is not in the dump.
+_DECK_TAB_XY = {"bumble": (540, 2197), "badoo": (324, 2200)}
+_APP_PKG = {"bumble": "com.bumble.app", "badoo": "com.badoo.mobile"}
+_LAUNCH = {
+    "bumble": "com.bumble.app/.ui.launcher.BumbleLauncherActivity",
+    "badoo": "com.badoo.mobile/.android.BadooActivity",
+}
+# Recovery ladder: index = recovery step (1-based, cycles).
+_RECOVER_LADDER = (
+    "tab", "scroll_top", "back", "tab", "relaunch",
+    "back", "tab", "scroll_top", "relaunch", "back",
+)
+
+
+def tree_packages(tree: str) -> List[str]:
+    m = re.search(r'packages="([^"]*)"', tree or "")
+    if not m:
+        return []
+    return [p.strip() for p in m.group(1).split(",") if p.strip()]
+
+
+def _deck_tab_xy(app: str, tree: str) -> Optional[Tuple[int, int]]:
+    """Center of the People/Discover (Bumble) or Encounters (Badoo) tab."""
+    want = _DECK_TAB.get(app, ())
+    ids = _DECK_TAB_ID.get(app, ())
+    best = None
+    for n in _visible_nodes(tree):
+        y = int(n.get("y") or 0)
+        if y < 1800:
+            continue
+        nid = str(n.get("id") or "").lower()
+        lab = (n.get("label") or "").strip().lower()
+        name = _tab_name(lab) if app == "bumble" else None
+        hit = (
+            any(i in nid for i in ids)
+            or lab in want
+            or (name is not None and name in want)
+            or any(lab == f"{w} {w}" for w in want)
+        )
+        if not hit:
+            continue
+        if bumble_fixed_guard(n.get("label") or ""):
+            continue
+        xy = (int(n["x"]), int(n["y"]))
+        # Prefer People over Discover on Bumble
+        if app == "bumble" and (lab.startswith("people")):
+            return xy
+        best = best or xy
+    return best
+
+
+def _bottom_nav_visible(tree: str) -> bool:
+    return sum(
+        1
+        for n in _visible_nodes(tree)
+        if int(n.get("y") or 0) >= 1800 and _tab_name(n.get("label") or "")
+    ) >= 3
+
+
+def _scroll_top_action(
+    app: str, sw: int, sh: int, planner: str, dry_run: bool, reason: str
+) -> Dict[str, Any]:
+    """Drag down on the card = scroll an expanded profile back to its top."""
+    x = int(round(540 * sw / REF_W))
+    return _fp(
+        {
+            "action": "swipe",
+            "x1": x,
+            "y1": int(round(700 * sh / REF_H)),
+            "x2": x,
+            "y2": int(round(1900 * sh / REF_H)),
+            "duration_ms": 350,
+            "reason": f"{reason} ({planner})",
+            "planner": planner,
+            "llm_provider": None,
+            "dry_run": bool(dry_run),
+            "_no_llm_handoff": True,
+        },
+        f"{app}_fixed_scroll_top",
+    )
+
+
+def _recover_action(
+    app: str,
+    tree: str,
+    bulk: Dict[str, Any],
+    planner: str,
+    dry_run: bool,
+) -> Dict[str, Any]:
+    """One step back toward the swipe deck. Free taps only (tab / Back)."""
+    label = "Bumble" if app == "bumble" else "Badoo"
+    surface = "People/Discover deck" if app == "bumble" else "Encounters deck"
+    n = int(bulk.get("_fixed_recover_n") or 0) + 1
+    bulk["_fixed_recover_n"] = n
+    # After recovery, scroll the card to the top again before the next like.
+    bulk["_fixed_top_done"] = False
+    if n > MAX_RECOVER_STEPS:
+        return _fail(
+            f"{label} fixed swipe: could not get back to the {surface} after "
+            f"{MAX_RECOVER_STEPS} tries — stop, no tap ({planner})",
+            planner,
+            dry_run,
+        )
+    base = {
+        "planner": planner,
+        "llm_provider": None,
+        "dry_run": bool(dry_run),
+        "_no_llm_handoff": True,
+    }
+    sw, sh = screen_size_from_tree(tree)
+    pkgs = tree_packages(tree)
+    want_pkg = _APP_PKG.get(app, "")
+    # App just launched but the dump is still the launcher / splash: wait.
+    if pkgs and want_pkg and want_pkg not in pkgs:
+        if n <= 2:
+            return _fp(
+                dict(
+                    base,
+                    action="wait",
+                    seconds=2.0,
+                    delay_s=2.0,
+                    reason=(
+                        f"{label} recover {n}: screen still shows "
+                        f"{pkgs[0]} — wait for {label} ({planner})"
+                    ),
+                ),
+                f"{app}_fixed_recover_wait",
+            )
+        step = "relaunch"
+    elif app == "bumble" and bumble_on_photo_browser(tree):
+        step = "back"
+    else:
+        step = _RECOVER_LADDER[(n - 1) % len(_RECOVER_LADDER)]
+    # Never press Back on the app's top screen (bottom nav showing): Back
+    # there closes the app (task_a9f0bd51c20dd507). Tab / scroll up instead.
+    if (
+        step == "back"
+        and _bottom_nav_visible(tree)
+        and not (app == "bumble" and bumble_on_photo_browser(tree))
+    ):
+        step = "tab" if n % 2 else "scroll_top"
+
+    if step == "tab":
+        xy = _deck_tab_xy(app, tree)
+        if xy is None and _bottom_nav_visible(tree):
+            fx, fy = _DECK_TAB_XY[app]
+            xy = (int(round(fx * sw / REF_W)), int(round(fy * sh / REF_H)))
+        if xy is not None:
+            return _fp(
+                dict(
+                    base,
+                    action="tap",
+                    x=xy[0],
+                    y=xy[1],
+                    label=_DECK_TAB[app][0].title(),
+                    reason=(
+                        f"{label} recover {n}: not on {surface} — tap "
+                        f"{_DECK_TAB[app][0].title()} tab ({planner})"
+                    ),
+                ),
+                f"{app}_fixed_recover_tab",
+            )
+        step = "back"
+    if step == "scroll_top":
+        return _scroll_top_action(
+            app, sw, sh, planner, dry_run,
+            f"{label} recover {n}: not on {surface} — scroll profile back up",
+        )
+    if step == "relaunch":
+        return _fp(
+            dict(
+                base,
+                action="open_app",
+                app=label,
+                package=want_pkg,
+                launch_activity=_LAUNCH[app],
+                open_mode="launch_intent",
+                reason=f"{label} recover {n}: relaunch {label} ({planner})",
+            ),
+            f"{app}_fixed_recover_open",
+        )
+    return _fp(
+        dict(
+            base,
+            action="press_button",
+            button="back",
+            reason=f"{label} recover {n}: not on {surface} — Back ({planner})",
+        ),
+        f"{app}_fixed_recover_back",
+    )
+
+
 def _fail(reason: str, planner: str, dry_run: bool) -> Dict[str, Any]:
     return _fp(
         {
@@ -493,9 +691,14 @@ def plan_fixed_swipe(
     st["swipe_mode"] = "fixed"
     st["bulk_swipe"] = bulk
     target = int(bulk.get("target") or 5)
-    cap = max(1, int(live_test_max_n or 5))
+    # r43: the per-run count is the target. Only a live_test job is capped
+    # (live_test_max_n); real runs go up to MAX_RUN_SWIPES.
+    if st.get("live_test"):
+        cap = max(1, int(st.get("live_test_max_n") or live_test_max_n or 5))
+    else:
+        cap = MAX_RUN_SWIPES
     if not dry_run:
-        target = min(target, cap)
+        target = max(1, min(target, cap))
         bulk["target"] = target
     done = int(bulk.get("done") or 0)
     hist = history or []
@@ -514,7 +717,6 @@ def plan_fixed_swipe(
         if hit is None:
             done += 1
             bulk["done"] = done
-            bulk["_fixed_back_once"] = False
         else:
             # Successful like may open a match — count it, then abort.
             if "match" in hit:
@@ -548,6 +750,7 @@ def plan_fixed_swipe(
 
     def _swipe_action(reason: str) -> Dict[str, Any]:
         bulk["awaiting_verify"] = True
+        bulk["_fixed_recover_n"] = 0
         st["bulk_swipe"] = bulk
         return _fp(
             {
@@ -625,35 +828,18 @@ def plan_fixed_swipe(
         else badoo_fixed_on_deck(ui_tree)
     )
     if not on_deck:
-        already = bool(bulk.get("_fixed_back_once"))
-        if not already:
-            bulk["_fixed_back_once"] = True
-            surface = (
-                "People/Discover deck" if app == "bumble" else "Encounters deck"
-            )
-            return _fp(
-                {
-                    "action": "press_button",
-                    "button": "back",
-                    "reason": (
-                        f"{label} fixed swipe: not on {surface} "
-                        f"— Back once ({planner})"
-                    ),
-                    "planner": planner,
-                    "llm_provider": None,
-                    "dry_run": bool(dry_run),
-                    "_no_llm_handoff": True,
-                },
-                f"{app}_fixed_back",
-            )
-        surface = (
-            "People/Discover deck" if app == "bumble" else "Encounters deck"
-        )
-        return _fail(
-            f"{label} fixed swipe: still not on {surface} after Back "
-            f"— stop ({planner})",
-            planner,
-            dry_run,
+        # r43: recover to the deck (tab / scroll up / Back / relaunch) instead
+        # of one Back then stop — never an LLM handoff, never a paid tap.
+        return _recover_action(app, ui_tree, bulk, planner, dry_run)
+
+    # r43: once per job (and after every recovery), scroll the card back to
+    # the top so an expanded / scrolled-down profile cannot block the swipe.
+    if not dry_run and not bulk.get("_fixed_top_done"):
+        bulk["_fixed_top_done"] = True
+        st["bulk_swipe"] = bulk
+        return _scroll_top_action(
+            app, sw, sh, planner, dry_run,
+            f"{label} fixed swipe: scroll card back to top before likes",
         )
 
     if dry_run:
