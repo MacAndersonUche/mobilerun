@@ -1,0 +1,25 @@
+<hierarchy windows="1" nodes="21" app_nodes="21" text_nodes="19" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1" kids="2">
+ <n d="filtersButton" i="finderFiltersButton" cls="View" c="1" xy="849,149" b="786,86,912,212"/>
+ <n d="filtersButton" cls="View" xy="849,149" b="812,112,886,186"/>
+ <n d="Rive Animation child" cls="View" xy="985,148" b="933,96,1038,201"/>
+ <n cls="View" s="1" xy="540,1169" b="0,233,1080,2106"/>
+ <n cls="View" s="1" xy="540,1159" b="21,233,1059,2085"/>
+ <n t="8" i="counterBadgeText" cls="TextView" xy="600,2020" b="579,1999,622,2041"/>
+ <n t="Finder" d="Finder" i="bottomNavTab_1" cls="View" c="1" xy="142,2190" b="42,2127,242,2253"/>
+ <n d="Finder" cls="View" xy="142,2169" b="105,2132,179,2206"/>
+ <n t="Finder" cls="TextView" xy="142,2229" b="103,2211,181,2248"/>
+ <n t="Chats" d="Chats" i="bottomNavTab_2" cls="View" c="1" xy="341,2190" b="242,2127,441,2253"/>
+ <n d="Chats" cls="View" xy="342,2169" b="305,2132,379,2206"/>
+ <n t="Chats" cls="TextView" xy="342,2229" b="305,2211,379,2248"/>
+ <n t="Discover" d="Discover" i="bottomNavTab_7" cls="View" c="1" xy="540,2190" b="441,2127,640,2253"/>
+ <n d="Discover" cls="View" xy="541,2169" b="504,2132,578,2206"/>
+ <n t="Discover" cls="TextView" xy="541,2229" b="487,2211,595,2248"/>
+ <n t="Activity" d="Activity" i="bottomNavTab_4" cls="View" c="1" xy="739,2190" b="640,2127,839,2253"/>
+ <n d="Activity" cls="View" xy="740,2169" b="703,2132,777,2206"/>
+ <n t="Activity" cls="TextView" xy="740,2229" b="693,2211,787,2248"/>
+ <n t="Me" d="Me" i="bottomNavTab_5" cls="View" c="1" xy="938,2190" b="839,2127,1038,2253"/>
+ <n d="Me" cls="View" xy="939,2169" b="902,2132,976,2206"/>
+ <n t="Me" cls="TextView" xy="938,2229" b="919,2211,958,2248"/>
+</w>
+</hierarchy>

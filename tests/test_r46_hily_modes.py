@@ -257,3 +257,33 @@ def test_run_counts_api_saves_modes_and_like_caps_per_mode(client):
         "device_id": "phone1", "dry_run": True, "apps": ["com.hily.app"]})
     assert r.status_code == 200, r.text
     assert r.json()["job"]["instruction"] == "fixed hily message 4 likes 25"
+
+
+# ---- r47: Finder with the card missing from the tree (prod 24 Nov 10:26) ----
+
+BARE = (FIX / "hily_finder_empty_a11y_r47.xml").read_text(encoding="utf-8")
+
+
+def test_r47_bare_finder_waits_then_likes_with_map_heart():
+    from backend.hily_fixed_run import finder_without_card_nodes
+
+    assert finder_without_card_nodes(BARE)
+    assert not finder_without_card_nodes(CHATS) and not finder_without_card_nodes(LIKES_SENT)
+    acts, st = _run("fixed hily likes 3", [BARE] * 5)
+    assert acts[0]["action"] == "wait"  # card loading — never re-tap the Finder tab
+    likes = acts[1:4]
+    assert all(a["fastpath_step"] == "hily_run_fixed_like_swipe" for a in likes)
+    assert all(_xy(a) == (750, 1959) for a in likes)
+    assert acts[4]["action"] == "done" and "3/3" in acts[4]["reason"]
+    assert all(_xy(a) not in (CRUSH_XY, DISCOVER_XY, (142, 2190)) for a in acts)
+
+
+def test_r47_bare_finder_routed_without_llm_or_repeat_stop():
+    st: Dict[str, Any] = {}
+    a = ca.plan_next_action("fixed hily likes 30", BARE, [], package="com.hily.app",
+                            agent_state=st)
+    assert a["planner"] == "hily_fixed_run" and a["action"] == "wait"
+    b = ca.plan_next_action("fixed hily likes 30", BARE, [], package="com.hily.app",
+                            agent_state=st)
+    assert _xy(b) == (750, 1959) and ca._is_fixed_swipe_action(b)
+    assert b["fastpath_step"].endswith("_fixed_like_swipe")  # same-tap exempt

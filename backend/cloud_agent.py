@@ -6870,11 +6870,21 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             fp = _tree_fingerprint(after_tree, after_pkg)
             prev_fp = state.get("last_tree_fp")
             tree_changed = not (prev_fp and prev_fp == fp)
-            if not tree_changed:
+            # r47: Hily's Finder card can be missing from the screen tree, so
+            # a real heart tap leaves the tree identical. Its fixed like taps
+            # count as UI progress (bounded by the mode's max likes + wall).
+            hily_like_tap = (
+                str(action.get("fastpath_step") or "") == "hily_run_fixed_like_swipe"
+                and kind == "tap"
+            )
+            if not tree_changed and not hily_like_tap:
                 state["no_progress_streak"] = (
                     int(state.get("no_progress_streak") or 0) + 1
                 )
                 verify_msg = (verify_msg + " · no_progress").strip(" ·")
+            elif not tree_changed:
+                state["no_progress_streak"] = 0
+                state["last_ui_progress_at"] = int(time.time())
             else:
                 state["no_progress_streak"] = 0
                 state["last_ui_progress_at"] = int(time.time())
