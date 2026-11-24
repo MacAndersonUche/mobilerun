@@ -938,6 +938,18 @@ def handler(event: Dict[str, Any], context: Any):
             return {"processed": 1, "job_id": event["job_id"]}
         return {"processed": 0, "error": "job not found"}
 
+    # r44: dating schedules — the 1-minute StepTick fires due ones first so
+    # the queued job is picked up by this same tick.
+    sched = []
+    try:
+        try:
+            from dating_schedule import fire_due
+        except ImportError:  # pragma: no cover
+            from backend.dating_schedule import fire_due  # type: ignore
+        sched = fire_due()
+    except Exception as e:
+        logger.warning("dating schedules tick failed: %s", e)
+
     due = list_due_jobs(limit=10)
     processed = 0
     errors = 0
@@ -964,4 +976,5 @@ def handler(event: Dict[str, Any], context: Any):
         "due": len(due),
         "errors": errors,
         "skipped": skipped,
+        "schedules": sched,
     }

@@ -3353,6 +3353,91 @@ def _save_run_counts(auth: Optional[dict], counts: Dict[str, Any]) -> Dict[str, 
     return merged
 
 
+class DatingScheduleBody(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    # [{"app": package or key, "runs": times per fire, "count": per run}]
+    items: Optional[List[Dict[str, Any]]] = None
+    time: Optional[str] = None  # HH:MM Europe/London
+    days: Optional[List[int]] = None  # Mon=0 … Sun=6; [] = every day
+    dry_run: Optional[bool] = None
+    device_id: Optional[str] = None
+
+
+def _sched_mod():
+    try:
+        import dating_schedule as ds  # type: ignore
+    except ImportError:
+        from backend import dating_schedule as ds  # type: ignore
+    return ds
+
+
+def _sched_body(body: DatingScheduleBody) -> Dict[str, Any]:
+    dump = body.dict() if hasattr(body, "dict") else body.model_dump()
+    return {k: v for k, v in dump.items() if v is not None}
+
+
+@app.get("/api/dating/schedules")
+async def list_dating_schedules(auth: Optional[dict] = Depends(optional_verify_token)):
+    """r44: per-app / combo dating run schedules with next run (London)."""
+    ds = _sched_mod()
+    return {
+        "schedules": [ds.with_next(s) for s in ds.load_all()],
+        "timezone": "Europe/London",
+    }
+
+
+@app.post("/api/dating/schedules")
+async def create_dating_schedule(
+    body: DatingScheduleBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    ds = _sched_mod()
+    raw = _sched_body(body)
+    raw["owner"] = _dating_user_id(auth)
+    try:
+        sch = ds.normalize(raw)
+    except ds.ScheduleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    all_s = ds.load_all()
+    if len(all_s) >= ds.MAX_SCHEDULES:
+        raise HTTPException(status_code=400, detail="Too many schedules")
+    all_s.append(sch)
+    ds.save_all(all_s)
+    return {"status": "created", "schedule": ds.with_next(sch)}
+
+
+@app.put("/api/dating/schedules/{schedule_id}")
+async def update_dating_schedule(
+    schedule_id: str,
+    body: DatingScheduleBody,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    ds = _sched_mod()
+    all_s = ds.load_all()
+    for i, cur in enumerate(all_s):
+        if cur.get("id") == schedule_id:
+            try:
+                all_s[i] = ds.normalize(_sched_body(body), existing=cur)
+            except ds.ScheduleError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            ds.save_all(all_s)
+            return {"status": "updated", "schedule": ds.with_next(all_s[i])}
+    raise HTTPException(status_code=404, detail="Schedule not found")
+
+
+@app.delete("/api/dating/schedules/{schedule_id}")
+async def delete_dating_schedule(
+    schedule_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    ds = _sched_mod()
+    all_s = ds.load_all()
+    keep = [s for s in all_s if s.get("id") != schedule_id]
+    if len(keep) == len(all_s):
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    ds.save_all(keep)
+    return {"status": "deleted", "id": schedule_id}
+
+
 @app.get("/api/dating/run-counts")
 async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
     """Per-app per-run numbers shown on each dating app card."""
