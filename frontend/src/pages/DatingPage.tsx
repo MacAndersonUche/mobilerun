@@ -7,8 +7,16 @@ import ModeSpeedPicker from '../components/ModeSpeedPicker';
 import LiveActivityFeed, {
   ActivityPayload,
 } from '../components/LiveActivityFeed';
-import { canRunApp, datingStartBody } from '../lib/datingRun';
+import {
+  canRunApp,
+  clampRunCount,
+  datingStartBody,
+  runCountCap,
+  runCountFor,
+  runCountLabel,
+} from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
+import DatingSchedules from '../components/DatingSchedules';
 
 type Speed = 'fast' | 'balanced' | 'careful';
 
@@ -192,8 +200,9 @@ export default function DatingPage() {
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
   const [dryRun, setDryRun] = useState(true);
-  // Per run: Hinge sends this many; Hily caps at 5, Facebook Dating at 50
-  const [runCount, setRunCount] = useState(5);
+  // Per app, per run (each app card): swipes or messages. Saved per app on
+  // the server; Hily = likes after its 5 messages, Facebook Dating max 50.
+  const [runCounts, setRunCounts] = useState<Record<string, number>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
@@ -272,6 +281,11 @@ export default function DatingPage() {
         '/api/selectors/status',
         { apps: [] }
       );
+      const rc = await soft<{ counts?: Record<string, number> }>(
+        '/api/dating/run-counts',
+        { counts: {} }
+      );
+      setRunCounts(rc.counts || {});
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -375,7 +389,7 @@ export default function DatingPage() {
               deviceId,
               dryRun,
               contactScope,
-              count: runCount,
+              counts: runCounts,
               apps: onlyApp
                 ? [onlyApp]
                 : configApps.filter((a) => a.enabled).map((a) => a.package_name),
@@ -393,6 +407,20 @@ export default function DatingPage() {
       alert(detail);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveRunCount = async (pkg: string, value: number) => {
+    const n = clampRunCount(pkg, value);
+    setRunCounts((prev) => ({ ...prev, [pkg]: n }));
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/run-counts`,
+        { counts: { [pkg]: n } },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -639,20 +667,6 @@ export default function DatingPage() {
             <option value="both">Both</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 text-sm text-mute">
-          Per run
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={runCount}
-            onChange={(e) => setRunCount(Math.max(1, Number(e.target.value) || 1))}
-            className="mr-input w-20 text-sm"
-            data-testid="dating-run-count"
-            aria-label="Messages or swipes per app"
-            title="Hinge/BLK/Yubo/Bumble/Badoo: this many. Hily: 5 messages, then this many free likes. Facebook Dating max 50."
-          />
-        </label>
         {devices.length > 0 && (
           <select
             className="mr-input w-full text-sm sm:max-w-xs"
@@ -685,26 +699,6 @@ export default function DatingPage() {
           max={globalMax}
           label={`Auto messages (openers + replies) · target range ${globalMin}–${globalMax}`}
         />
-        <div className="grid grid-cols-2 gap-4 pt-2">
-          <label className="text-sm">
-            Global min/day
-            <input
-              type="number"
-              value={globalMin}
-              onChange={(e) => setGlobalMin(Number(e.target.value))}
-              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
-            />
-          </label>
-          <label className="text-sm">
-            Global max/day
-            <input
-              type="number"
-              value={globalMax}
-              onChange={(e) => setGlobalMax(Number(e.target.value))}
-              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
-            />
-          </label>
-        </div>
       </div>
 
       {/* Per-app stats */}
@@ -719,7 +713,6 @@ export default function DatingPage() {
             <div className="flex justify-between items-start">
               <div>
                 <h4 className="font-semibold text-lg text-white">{app.name}</h4>
-                <p className="text-xs text-mute">{app.package}</p>
               </div>
               <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
                 <div>{app.inbox.unread} unread</div>
@@ -737,73 +730,58 @@ export default function DatingPage() {
                 )}
               </div>
             </div>
-            <ProgressBar
-              value={app.targets.opener_progress}
-              max={app.targets.opener_target || 75}
-              label="Openers vs daily target"
-            />
-            <div className="grid grid-cols-3 gap-2 text-sm">
-              <div className="bg-canvas-elev rounded p-2 text-center">
-                <div className="text-mute text-xs">Swipes</div>
-                <div className="font-semibold">{app.today.swipes}</div>
+            {canRunApp(app.package) && (
+              <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
+                <span>{runCountLabel(app.package)}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={runCountCap(app.package)}
+                  value={runCountFor(app.package, runCounts)}
+                  onChange={(e) =>
+                    setRunCounts((prev) => ({
+                      ...prev,
+                      [app.package]: clampRunCount(app.package, e.target.value),
+                    }))
+                  }
+                  onBlur={(e) => saveRunCount(app.package, Number(e.target.value))}
+                  className="mr-input w-20 text-sm"
+                  data-testid={`dating-run-count-${app.package}`}
+                  aria-label={`${app.name} ${runCountLabel(app.package)}`}
+                  title="Used by Start and by this app's Run button. Saved for this app."
+                />
+              </label>
+            )}
+            <details className="text-sm text-mute">
+              <summary className="cursor-pointer select-none">
+                Today: {app.today.swipes} swipes · {app.today.openers} openers ·{' '}
+                {app.today.replies} replies
+              </summary>
+              <div className="pt-2">
+                <ProgressBar
+                  value={app.targets.opener_progress}
+                  max={app.targets.opener_target || 75}
+                  label="Openers vs daily target"
+                />
               </div>
-              <div className="bg-canvas-elev rounded p-2 text-center">
-                <div className="text-mute text-xs">Openers</div>
-                <div className="font-semibold">{app.today.openers}</div>
-              </div>
-              <div className="bg-canvas-elev rounded p-2 text-center">
-                <div className="text-mute text-xs">Replies</div>
-                <div className="font-semibold">{app.today.replies}</div>
-              </div>
-            </div>
+            </details>
           </div>
         ))}
       </div>
 
-      {/* Global opener mode */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-lg font-semibold">Openers</h3>
-          <span className="text-xs text-mute">
-            Bucket now: {bucketNow} · enabled {enabledCount}/50
-          </span>
-        </div>
-        <p className="text-sm text-mute">
-          Templates save tokens on first-contact messages. Replies always use AI.
-          Respects caps, humanizer timing, and safety auto-pause.
-        </p>
-        <div className="flex overflow-hidden rounded-xl border border-line max-w-md">
-          <button
-            type="button"
-            className={`flex-1 px-3 py-2 text-sm ${
-              openerMode === 'templates' ? 'bg-rose-600' : 'bg-canvas-elev'
-            }`}
-            onClick={() => setOpenerMode('templates')}
-          >
-            Templates
-          </button>
-          <button
-            type="button"
-            className={`flex-1 px-3 py-2 text-sm ${
-              openerMode === 'ai' ? 'bg-rose-600' : 'bg-canvas-elev'
-            }`}
-            onClick={() => setOpenerMode('ai')}
-          >
-            AI
-          </button>
-        </div>
-        <div className="text-xs text-mute flex flex-wrap gap-3">
-          {Object.entries(bucketCounts).map(([b, n]) => (
-            <span key={b}>
-              {b}: {n}
-            </span>
-          ))}
-        </div>
-      </div>
+      {/* r44: schedule per-app / combo runs */}
+      <DatingSchedules
+        authHeaders={authHeaders}
+        deviceId={deviceId}
+        dryRun={dryRun}
+        runCounts={runCounts}
+        appName={(pkg) => datingAppDisplayName(pkg)}
+      />
 
       {/* App toggles + persona */}
       <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
-        <h3 className="text-lg font-semibold">Apps & Persona</h3>
+        <h3 className="text-lg font-semibold">Apps for Start</h3>
+        <p className="text-xs text-mute">Tap an app to include it in Start. Templates/AI = how first messages are written.</p>
         <div className="space-y-2">
           {configApps
             .filter((app) => !isSocialPackage(app.package_name))
@@ -849,6 +827,8 @@ export default function DatingPage() {
             </div>
           ))}
         </div>
+        <details className="text-sm">
+          <summary className="cursor-pointer select-none text-mute">AI opener persona</summary>
         <label className="block text-sm">
           Persona / style prompt (AI openers)
           <textarea
@@ -858,6 +838,7 @@ export default function DatingPage() {
             className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2 font-mono text-sm"
           />
         </label>
+        </details>
         <button
           onClick={saveConfig}
           disabled={loading}
@@ -865,6 +846,79 @@ export default function DatingPage() {
         >
           Save config
         </button>
+      </div>
+
+      {/* r44: rarely-changed settings, collapsed by default */}
+      <details className="space-y-4" data-testid="dating-advanced">
+        <summary className="cursor-pointer select-none rounded-lg border border-line bg-surface px-4 py-3 text-sm font-medium text-white">
+          Advanced settings (daily limits, openers, persona, date flow, selector cache)
+        </summary>
+        <div className="space-y-4 pt-4">
+      {/* Global daily limits */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <h3 className="text-lg font-semibold">Daily message limits</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="text-sm">
+            Global min/day
+            <input
+              type="number"
+              value={globalMin}
+              onChange={(e) => setGlobalMin(Number(e.target.value))}
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+          <label className="text-sm">
+            Global max/day
+            <input
+              type="number"
+              value={globalMax}
+              onChange={(e) => setGlobalMax(Number(e.target.value))}
+              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
+            />
+          </label>
+        </div>
+        <p className="text-xs text-mute">Saved with “Save config” under Apps.</p>
+      </div>
+
+      {/* Global opener mode */}
+      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-lg font-semibold">Openers</h3>
+          <span className="text-xs text-mute">
+            Bucket now: {bucketNow} · enabled {enabledCount}/50
+          </span>
+        </div>
+        <p className="text-sm text-mute">
+          Templates save tokens on first-contact messages. Replies always use AI.
+          Respects caps, humanizer timing, and safety auto-pause.
+        </p>
+        <div className="flex overflow-hidden rounded-xl border border-line max-w-md">
+          <button
+            type="button"
+            className={`flex-1 px-3 py-2 text-sm ${
+              openerMode === 'templates' ? 'bg-rose-600' : 'bg-canvas-elev'
+            }`}
+            onClick={() => setOpenerMode('templates')}
+          >
+            Templates
+          </button>
+          <button
+            type="button"
+            className={`flex-1 px-3 py-2 text-sm ${
+              openerMode === 'ai' ? 'bg-rose-600' : 'bg-canvas-elev'
+            }`}
+            onClick={() => setOpenerMode('ai')}
+          >
+            AI
+          </button>
+        </div>
+        <div className="text-xs text-mute flex flex-wrap gap-3">
+          {Object.entries(bucketCounts).map(([b, n]) => (
+            <span key={b}>
+              {b}: {n}
+            </span>
+          ))}
+        </div>
       </div>
 
       {/* Reply persona + date flow */}
@@ -1201,6 +1255,8 @@ export default function DatingPage() {
           ))
         )}
       </div>
+        </div>
+      </details>
     </div>
   );
 }

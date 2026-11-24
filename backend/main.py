@@ -3312,6 +3312,143 @@ class ModeStartBody(BaseModel):
     apps: Optional[List[str]] = None
     # Messages / swipes per app. Hinge uses it as-is; Hily caps at 5, FB at 50.
     count: Optional[int] = None
+    # r43: per-app per-run numbers from each app card (package -> n). Saved
+    # per user; when omitted, the saved numbers are used.
+    counts: Optional[Dict[str, int]] = None
+
+
+class RunCountsBody(BaseModel):
+    counts: Dict[str, int]
+
+
+def _load_run_counts(auth: Optional[dict]) -> Dict[str, int]:
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        from dating_run import clean_counts
+    except ImportError:
+        from backend.dating_run import clean_counts  # type: ignore
+    try:
+        data = get_user_setting(_dating_user_id(auth), "dating_run_counts") or {}
+    except Exception as e:  # pragma: no cover
+        logger.warning("run counts load failed: %s", e)
+        data = {}
+    return clean_counts(data.get("counts") if isinstance(data, dict) else None)
+
+
+def _save_run_counts(auth: Optional[dict], counts: Dict[str, Any]) -> Dict[str, int]:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+    try:
+        from dating_run import clean_counts
+    except ImportError:
+        from backend.dating_run import clean_counts  # type: ignore
+    merged = _load_run_counts(auth)
+    merged.update(clean_counts(counts))
+    save_user_setting(_dating_user_id(auth), "dating_run_counts", {"counts": merged})
+    return merged
+
+
+class DatingScheduleBody(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    # [{"app": package or key, "runs": times per fire, "count": per run}]
+    items: Optional[List[Dict[str, Any]]] = None
+    time: Optional[str] = None  # HH:MM Europe/London
+    days: Optional[List[int]] = None  # Mon=0 … Sun=6; [] = every day
+    dry_run: Optional[bool] = None
+    device_id: Optional[str] = None
+
+
+def _sched_mod():
+    try:
+        import dating_schedule as ds  # type: ignore
+    except ImportError:
+        from backend import dating_schedule as ds  # type: ignore
+    return ds
+
+
+def _sched_body(body: DatingScheduleBody) -> Dict[str, Any]:
+    dump = body.dict() if hasattr(body, "dict") else body.model_dump()
+    return {k: v for k, v in dump.items() if v is not None}
+
+
+@app.get("/api/dating/schedules")
+async def list_dating_schedules(auth: Optional[dict] = Depends(optional_verify_token)):
+    """r44: per-app / combo dating run schedules with next run (London)."""
+    ds = _sched_mod()
+    return {
+        "schedules": [ds.with_next(s) for s in ds.load_all()],
+        "timezone": "Europe/London",
+    }
+
+
+@app.post("/api/dating/schedules")
+async def create_dating_schedule(
+    body: DatingScheduleBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    ds = _sched_mod()
+    raw = _sched_body(body)
+    raw["owner"] = _dating_user_id(auth)
+    try:
+        sch = ds.normalize(raw)
+    except ds.ScheduleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    all_s = ds.load_all()
+    if len(all_s) >= ds.MAX_SCHEDULES:
+        raise HTTPException(status_code=400, detail="Too many schedules")
+    all_s.append(sch)
+    ds.save_all(all_s)
+    return {"status": "created", "schedule": ds.with_next(sch)}
+
+
+@app.put("/api/dating/schedules/{schedule_id}")
+async def update_dating_schedule(
+    schedule_id: str,
+    body: DatingScheduleBody,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    ds = _sched_mod()
+    all_s = ds.load_all()
+    for i, cur in enumerate(all_s):
+        if cur.get("id") == schedule_id:
+            try:
+                all_s[i] = ds.normalize(_sched_body(body), existing=cur)
+            except ds.ScheduleError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            ds.save_all(all_s)
+            return {"status": "updated", "schedule": ds.with_next(all_s[i])}
+    raise HTTPException(status_code=404, detail="Schedule not found")
+
+
+@app.delete("/api/dating/schedules/{schedule_id}")
+async def delete_dating_schedule(
+    schedule_id: str, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    ds = _sched_mod()
+    all_s = ds.load_all()
+    keep = [s for s in all_s if s.get("id") != schedule_id]
+    if len(keep) == len(all_s):
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    ds.save_all(keep)
+    return {"status": "deleted", "id": schedule_id}
+
+
+@app.get("/api/dating/run-counts")
+async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
+    """Per-app per-run numbers shown on each dating app card."""
+    return {"counts": _load_run_counts(auth)}
+
+
+@app.post("/api/dating/run-counts")
+async def set_run_counts(
+    body: RunCountsBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    return {"status": "saved", "counts": _save_run_counts(auth, body.counts)}
 
 
 def _kick_job(job_id: str) -> None:
@@ -3403,12 +3540,23 @@ async def _start_dating_apps_run(
             detail="Phone offline — open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
+    # Each app card's own number; fall back to the saved per-app numbers.
+    try:
+        counts = (
+            _save_run_counts(auth, body.counts)
+            if body.counts
+            else _load_run_counts(auth)
+        )
+    except Exception as e:
+        logger.warning("run counts save/load failed: %s", e)
+        counts = dict(body.counts or {})
     job = build_job(
         device_id=did,
         queue=queue,
         count=body.count,
         dry_run=dry_run,
         speed_preset=dating_mode_state.get("speed_preset") or "balanced",
+        counts=counts,
     )
     try:
         put_job(job)

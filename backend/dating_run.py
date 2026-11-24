@@ -56,7 +56,38 @@ def resolve_package(token: str) -> Optional[str]:
     return _BY_KEY.get(t)
 
 
-def run_count(pkg: str, count: Optional[int]) -> int:
+MAX_COUNT = 500
+
+
+def clean_counts(raw: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    """Per-app per-run counts keyed by package ({} when none / bad input)."""
+    out: Dict[str, int] = {}
+    for k, v in (raw or {}).items() if isinstance(raw, dict) else []:
+        pkg = resolve_package(str(k))
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if pkg and n > 0:
+            out[pkg] = min(MAX_COUNT, n)
+    return out
+
+
+def count_for(
+    pkg: str, count: Optional[int], counts: Optional[Dict[str, int]] = None
+) -> Optional[int]:
+    """The app's own per-run number (Hily#like uses Hily's), else ``count``."""
+    c = counts or {}
+    base = base_package(pkg)
+    if c.get(base):
+        return int(c[base])
+    return count
+
+
+def run_count(
+    pkg: str, count: Optional[int], counts: Optional[Dict[str, int]] = None
+) -> int:
+    count = count_for(pkg, count, counts)
     if pkg in _LIKE_STEPS:
         return max(1, int(count or 0) or DEFAULT_COUNT)
     _key, kind, cap = RUN_APPS[pkg]
@@ -67,8 +98,10 @@ def run_count(pkg: str, count: Optional[int]) -> int:
     return max(1, n or DEFAULT_COUNT)
 
 
-def instruction_for(pkg: str, count: Optional[int]) -> str:
-    n = run_count(pkg, count)
+def instruction_for(
+    pkg: str, count: Optional[int], counts: Optional[Dict[str, int]] = None
+) -> str:
+    n = run_count(pkg, count, counts)
     if pkg in _LIKE_STEPS:
         # Hily: buttons only (gesture swipe does not register) → free heart
         return f"swipe {n} on {RUN_APPS[base_package(pkg)][0]}"
@@ -105,10 +138,12 @@ def build_job(
     dry_run: bool,
     run_id: Optional[str] = None,
     speed_preset: str = "balanced",
+    counts: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Agent job for ``queue[0]``; the rest of the queue runs after it ends."""
     pkg = queue[0]
-    n = run_count(pkg, count)
+    counts = clean_counts(counts)
+    n = run_count(pkg, count, counts)
     now = int(time.time())
     job_id = f"task_{secrets.token_hex(8)}"
     return {
@@ -121,7 +156,7 @@ def build_job(
         "run_step": "like" if pkg in _LIKE_STEPS else "main",
         "status": "running",
         "device_id": device_id,
-        "instruction": instruction_for(pkg, count),
+        "instruction": instruction_for(pkg, count, counts),
         # ~6 planner steps per message/swipe plus app open + popups
         "max_steps": min(400, 6 * n + 15),
         "speed_preset": speed_preset,
@@ -131,6 +166,8 @@ def build_job(
         "next_run_at": now,
         "run_queue": list(queue[1:]),
         "run_count": int(count or 0),
+        # Per-app per-run numbers from the app cards (package -> n)
+        "run_counts": dict(counts),
         "state": {
             "steps": 0,
             "history": [],
@@ -158,6 +195,7 @@ def next_job_after(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         dry_run=bool(job.get("dry_run")),
         run_id=str(job.get("run_id") or job.get("job_id") or ""),
         speed_preset=str(job.get("speed_preset") or "balanced"),
+        counts=job.get("run_counts") if isinstance(job.get("run_counts"), dict) else None,
     )
 
 

@@ -1992,6 +1992,28 @@ def _same_tap_key(action: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _is_fixed_swipe_action(action: Dict[str, Any]) -> bool:
+    """r43: Bumble/Badoo fixed-spot planner step (same like coords by design)."""
+    if not isinstance(action, dict):
+        return False
+    step = str(action.get("fastpath_step") or action.get("_fastpath_step") or "")
+    planner = str(action.get("planner") or "").lower()
+    return bool(
+        step.startswith("bumble_fixed")
+        or step.startswith("badoo_fixed")
+        or planner in ("bumble_fixed", "badoo_fixed")
+    )
+
+
+def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
+    """r43: a Bumble/Badoo fixed-swipe job — never hand it to the LLM."""
+    inst = (instruction or "").lower()
+    if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
+        return True
+    st = state if isinstance(state, dict) else {}
+    return str(st.get("swipe_mode") or "").lower() == "fixed"
+
+
 def _planner_decision_key(action: Dict[str, Any]) -> Optional[str]:
     """Stable key for identical planner decisions (reason stem + coords)."""
     kind = str(action.get("action") or "").lower()
@@ -2132,6 +2154,11 @@ def plan_next_action(
 
         # r28: once handed off to LLM, stay there for the rest of the job.
         # Never let heuristics reclaim the turn (Yubo/BLK/Badoo/Hily bug).
+        if st_bulk.get("_bulk_llm_handoff") and _fixed_swipe_run(
+            instruction, st_bulk
+        ):
+            # r43: a crash / old guard set handoff — fixed runs never use LLM
+            st_bulk.pop("_bulk_llm_handoff", None)
         if st_bulk.get("_bulk_llm_handoff"):
             # Dry swipe only: identifying a real name is still verified success
             if (
@@ -2229,6 +2256,12 @@ def plan_next_action(
             # Heuristic "fail" that isn't a safety refuse → LLM handoff
             bak = str(bulk_act.get("action") or "").lower()
             br = (bulk_act.get("reason") or "").lower()
+            # r43: fixed Bumble/Badoo steps (incl. their clear 'not on deck'
+            # stop) are final — never an LLM handoff / vision swipes.
+            if _is_fixed_swipe_action(bulk_act):
+                st_bulk["bulk_stall_n"] = 0
+                st_bulk["bulk_last_progress_at"] = time.time()
+                return _guard(bulk_act)
             if bak == "fail" and not _is_policy_fail_no_stuck(
                 str(bulk_act.get("reason") or "")
             ):
@@ -5491,25 +5524,38 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             and kind not in ("done", "fail")
         ):
             # r26: hand off to LLM instead of hard-fail (Hily liked-you loop)
-            state["_bulk_llm_handoff"] = True
-            state["force_vision_once"] = True
-            state["same_decision_n"] = 0
-            state["last_decision_key"] = None
-            kind = "wait"
-            reason = (
-                f"same planner decision repeated ×{MAX_SAME_DECISION} "
-                f"({decision_key[:80]}) — hand off to LLM"
-            )
-            action = {
-                "action": "wait",
-                "seconds": 0.35,
-                "delay_s": 0.35,
-                "reason": reason,
-                "planner": "bulk_llm_handoff",
-                "needs_vision": True,
-                "_force_vision": True,
-                "_bulk_llm_handoff": True,
-            }
+            if _is_fixed_swipe_action(action) or _fixed_swipe_run(
+                instruction, state
+            ):
+                # r43: fixed runs stop with a clear reason, never LLM.
+                state["same_decision_n"] = 0
+                state["last_decision_key"] = None
+                kind = "fail"
+                reason = (
+                    f"Fixed swipe stuck: same step ×{MAX_SAME_DECISION} "
+                    f"({decision_key[:80]}) — stop, not on deck"
+                )
+                action = {"action": "fail", "reason": reason}
+            else:
+                state["_bulk_llm_handoff"] = True
+                state["force_vision_once"] = True
+                state["same_decision_n"] = 0
+                state["last_decision_key"] = None
+                kind = "wait"
+                reason = (
+                    f"same planner decision repeated ×{MAX_SAME_DECISION} "
+                    f"({decision_key[:80]}) — hand off to LLM"
+                )
+                action = {
+                    "action": "wait",
+                    "seconds": 0.35,
+                    "delay_s": 0.35,
+                    "reason": reason,
+                    "planner": "bulk_llm_handoff",
+                    "needs_vision": True,
+                    "_force_vision": True,
+                    "_bulk_llm_handoff": True,
+                }
             logger.info(
                 "same-decision → LLM handoff job=%s key=%s",
                 job.get("job_id"),
@@ -5521,6 +5567,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # trip on (a) no-progress + same coords OR (b) absolute consecutive repeats.
         pending_tap = _same_tap_key(action)
         same_coord_n = int(state.get("same_tap_streak") or 0)
+        # r43: fixed like swipes repeat the same coords by design (new card
+        # each time) — the planner bounds them by the per-run count.
+        if _is_fixed_swipe_action(action) and str(
+            action.get("fastpath_step") or ""
+        ).endswith("_fixed_like_swipe"):
+            pending_tap = None
         if (
             kind in ("tap", "swipe")
             and pending_tap

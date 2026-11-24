@@ -404,7 +404,10 @@ export class MobilerunStack extends cdk.Stack {
       `https://${wsApi.apiId}.execute-api.${this.region}.amazonaws.com/${wsStage.stageName}`
     );
 
-    // EventBridge: tick every 1 minute to advance step-driven jobs
+    // EventBridge: tick every 1 minute to advance step-driven jobs.
+    // r44: the same tick also fires due dating schedules
+    // (backend/dating_schedule.py fire_due, stored in the Settings table) —
+    // no extra rule needed.
     const rule = new events.Rule(this, 'StepTick', {
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
       description: 'Advance dating/agent step jobs without long Lambda holds',
