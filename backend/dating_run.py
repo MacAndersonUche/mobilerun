@@ -8,6 +8,9 @@ fixed swipe). Apps run one after another (``run_queue``), never in parallel.
 
 Per-app caps: Hinge = count from the trigger; Hily 5; Facebook Dating 50;
 BLK / Yubo = count; Bumble / Badoo = swipe count. WhatsApp is never run here.
+Hily: after its 5 first-contact messages the run keeps going with free
+heart likes only (``com.hily.app#like`` → bulk swipe, never a message,
+never Crush / paid).
 """
 
 from __future__ import annotations
@@ -29,6 +32,17 @@ RUN_APPS: Dict[str, Tuple[str, str, Optional[int]]] = {
     "com.badoo.mobile": ("badoo", "swipe", None),
 }
 _BY_KEY = {v[0]: k for k, v in RUN_APPS.items()}
+# Follow-up step queued right after an app's main job (likes only)
+LIKE_AFTER = {"com.hily.app": "com.hily.app#like"}
+_LIKE_STEPS = set(LIKE_AFTER.values())
+
+
+def base_package(item: str) -> str:
+    return str(item or "").split("#", 1)[0]
+
+
+def _known(item: str) -> bool:
+    return item in RUN_APPS or item in _LIKE_STEPS
 _ALIASES = {"facebook dating": "facebook", "fb": "facebook", "fb dating": "facebook"}
 
 
@@ -43,6 +57,8 @@ def resolve_package(token: str) -> Optional[str]:
 
 
 def run_count(pkg: str, count: Optional[int]) -> int:
+    if pkg in _LIKE_STEPS:
+        return max(1, int(count or 0) or DEFAULT_COUNT)
     _key, kind, cap = RUN_APPS[pkg]
     n = int(count or 0)
     if cap is not None:
@@ -52,8 +68,11 @@ def run_count(pkg: str, count: Optional[int]) -> int:
 
 
 def instruction_for(pkg: str, count: Optional[int]) -> str:
-    key, kind, _cap = RUN_APPS[pkg]
     n = run_count(pkg, count)
+    if pkg in _LIKE_STEPS:
+        # Hily: buttons only (gesture swipe does not register) → free heart
+        return f"swipe {n} on {RUN_APPS[base_package(pkg)][0]}"
+    key, kind, _cap = RUN_APPS[pkg]
     if kind == "swipe":
         return f"fixed swipe {n} on {key}"
     if key == "facebook":
@@ -71,6 +90,8 @@ def split_supported(apps: List[str]) -> Tuple[List[str], List[str]]:
         pkg = resolve_package(a)
         if pkg and pkg not in ok:
             ok.append(pkg)
+            if pkg in LIKE_AFTER:
+                ok.append(LIKE_AFTER[pkg])
         elif not pkg:
             bad.append(str(a))
     return ok, bad
@@ -96,7 +117,8 @@ def build_job(
         "mode": "dating",
         "dating_run": True,
         "run_id": run_id or job_id,
-        "dating_app": pkg,
+        "dating_app": base_package(pkg),
+        "run_step": "like" if pkg in _LIKE_STEPS else "main",
         "status": "running",
         "device_id": device_id,
         "instruction": instruction_for(pkg, count),
@@ -113,7 +135,7 @@ def build_job(
             "steps": 0,
             "history": [],
             "dry_run": bool(dry_run),
-            "current_app": pkg,
+            "current_app": base_package(pkg),
         },
         "ttl": now + 86400,
         "result": "Queued for cloud agent",
@@ -126,7 +148,7 @@ def next_job_after(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     if str(job.get("status") or "") not in ("completed", "failed"):
         return None
-    queue = [q for q in (job.get("run_queue") or []) if q in RUN_APPS]
+    queue = [q for q in (job.get("run_queue") or []) if _known(q)]
     if not queue:
         return None
     return build_job(

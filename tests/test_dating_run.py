@@ -163,3 +163,46 @@ def test_step_worker_chains_next_app(monkeypatch):
     job["status"] = "completed"
     step_worker._start_next_run_app(job)
     assert len(put) == 1 and put[0]["dating_app"] == "com.badoo.mobile"
+
+
+def test_hily_likes_after_five_messages():
+    ok, _ = dating_run.split_supported(["com.hily.app", "co.hinge.app"])
+    assert ok == ["com.hily.app", "com.hily.app#like", "co.hinge.app"]
+    job = dating_run.build_job(device_id="d1", queue=ok, count=12, dry_run=False)
+    assert job["instruction"] == "send 5 first contact messages on hily"
+    job["status"] = "completed"  # 5/5 sent (or allowance gone → failed, same)
+    like = dating_run.next_job_after(job)
+    assert like["run_step"] == "like"
+    assert like["dating_app"] == "com.hily.app"
+    goal = parse_bulk_goal(like["instruction"])
+    assert goal == {"kind": "swipe", "count": 12, "message": None, "app": "hily"}
+    assert like["run_queue"] == ["co.hinge.app"]
+    like["status"] = "failed"
+    assert dating_run.next_job_after(like)["dating_app"] == "co.hinge.app"
+
+
+def test_hily_like_step_never_messages_or_crush():
+    from backend.bulk_bench_heuristics import plan_bulk_swipe
+
+    tree = (
+        '<hierarchy><w id="active" p="com.hily.app">'
+        '<n i="com.hily.app:id/userNameAgeField" t="Amy, 24" cls="TextView" xy="300,1500" b="0,0,1,1"/>'
+        '<n i="com.hily.app:id/ActionButton_SKIP" d="Pass" cls="ImageView" c="1" xy="330,1959" b="0,0,1,1"/>'
+        '<n i="com.hily.app:id/ActionButton_CRUSH" d="Crush" cls="ImageView" c="1" xy="540,1959" b="0,0,1,1"/>'
+        '<n i="com.hily.app:id/ActionButton_LIKE" d="Like" cls="ImageView" c="1" xy="750,1959" b="0,0,1,1"/>'
+        "</w></hierarchy>"
+    )
+    st: Dict[str, Any] = {}
+    seen = []
+    for _ in range(4):
+        act = plan_bulk_swipe(
+            "swipe 3 on hily", tree, [], state=st, package="com.hily.app"
+        )
+        if not act:
+            break
+        seen.append(act)
+        assert act.get("action") not in ("type", "input_text")
+        if act.get("action") == "tap":
+            assert (act["x"], act["y"]) != (540, 1959)  # never Crush
+    taps = [a for a in seen if a.get("action") == "tap"]
+    assert any((a["x"], a["y"]) == (750, 1959) for a in taps)

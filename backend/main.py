@@ -3864,6 +3864,80 @@ async def get_social_activity(auth: Optional[dict] = Depends(optional_verify_tok
     return _activity_for_mode("social", social_mode_state.get("job_id"))
 
 
+class SocialRunBody(BaseModel):
+    device_id: Optional[str] = None
+    app: str
+    action: str  # message | reply
+    contact: Optional[str] = None
+    message: Optional[str] = None
+    dry_run: bool = True
+
+
+@app.post("/api/social/run")
+async def social_run(
+    body: SocialRunBody, auth: Optional[dict] = Depends(optional_verify_token)
+):
+    """Social page: message this person / reply to messages. No swipes or likes."""
+    try:
+        from social_run import build_job as build_social_job
+    except ImportError:
+        from backend.social_run import build_job as build_social_job  # type: ignore
+    try:
+        from device_push import device_is_reachable
+    except ImportError:
+        try:
+            from backend.device_push import device_is_reachable  # type: ignore
+        except ImportError:
+            device_is_reachable = lambda _d: False  # type: ignore
+    try:
+        from storage import put_job
+    except ImportError:
+        from backend.storage import put_job  # type: ignore
+
+    try:
+        job = build_social_job(
+            device_id=str(body.device_id or "").strip(),
+            pkg=str(body.app or "").strip().lower(),
+            action=str(body.action or "").strip().lower(),
+            contact=body.contact or "",
+            message=body.message or "",
+            dry_run=bool(body.dry_run),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    did = job["device_id"]
+    if not did or did == "default":
+        raise HTTPException(
+            status_code=400, detail="Pick your phone in the device list first"
+        )
+    mem = connected_devices.get(did) or {}
+    if not (mem.get("connected") or device_is_reachable(did)):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone offline — open MobileRun on the phone and wait "
+            "until Devices shows Connected",
+        )
+    try:
+        put_job(job)
+        _kick_job(job["job_id"])
+    except Exception as e:
+        logger.exception("Could not start social run: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"Could not start: {e}"
+        ) from e
+    _load_social_runtime(auth)
+    social_mode_state["running"] = True
+    social_mode_state["paused"] = False
+    social_mode_state["job_id"] = job["job_id"]
+    _save_social_runtime(auth)  # Stop may land on another Lambda
+    return {
+        "status": "started",
+        "state": social_mode_state,
+        "job": job,
+        "activity": _activity_for_mode("social", job["job_id"]),
+    }
+
+
 @app.post("/api/social/start")
 async def start_social_mode(
     body: Optional[ModeStartBody] = None,

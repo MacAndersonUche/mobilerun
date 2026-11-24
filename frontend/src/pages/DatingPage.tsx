@@ -8,6 +8,7 @@ import LiveActivityFeed, {
   ActivityPayload,
 } from '../components/LiveActivityFeed';
 import { canRunApp, datingStartBody } from '../lib/datingRun';
+import { isSocialPackage } from '../lib/socialRun';
 
 type Speed = 'fast' | 'balanced' | 'careful';
 
@@ -649,7 +650,7 @@ export default function DatingPage() {
             className="mr-input w-20 text-sm"
             data-testid="dating-run-count"
             aria-label="Messages or swipes per app"
-            title="Hinge/BLK/Yubo/Bumble/Badoo: this many. Hily max 5, Facebook Dating max 50."
+            title="Hinge/BLK/Yubo/Bumble/Badoo: this many. Hily: 5 messages, then this many free likes. Facebook Dating max 50."
           />
         </label>
         {devices.length > 0 && (
@@ -708,7 +709,9 @@ export default function DatingPage() {
 
       {/* Per-app stats */}
       <div className="grid md:grid-cols-2 gap-4">
-        {cardsForDatingApps(apps, configApps).map((app) => (
+        {cardsForDatingApps(apps, configApps)
+          .filter((app) => !isSocialPackage(app.package))
+          .map((app) => (
           <div
             key={app.package}
             className="bg-surface border border-line rounded-lg p-4 space-y-3"
@@ -802,7 +805,9 @@ export default function DatingPage() {
       <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
         <h3 className="text-lg font-semibold">Apps & Persona</h3>
         <div className="space-y-2">
-          {configApps.map((app) => (
+          {configApps
+            .filter((app) => !isSocialPackage(app.package_name))
+            .map((app) => (
             <div
               key={app.package_name}
               className="flex flex-wrap items-center gap-2 justify-between rounded-xl border border-line bg-canvas-elev px-3 py-2"
