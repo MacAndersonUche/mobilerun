@@ -14,7 +14,8 @@ const wa = socialRunBody({
   deviceId: 'd', app: 'com.whatsapp', action: 'message',
   contact: ' Jo ', message: ' hi ', dryRun: false,
 });
-assert.equal(wa.dry_run, true);
+assert.equal(wa.dry_run, false); // follows the toggle
+assert.equal(socialRunBody({ deviceId: 'd', app: 'com.whatsapp', action: 'reply', message: 'hi', dryRun: true }).dry_run, true);
 assert.equal(wa.contact, 'Jo');
 assert.equal(wa.message, 'hi');
 assert.equal('count' in wa, false);
