@@ -64,6 +64,10 @@ DEFAULT_APPS = [
         package_name="com.affinityapps.blk",  # real package
     ),
     AppProfile(
+        name="Tinder",
+        package_name="com.tinder",  # r49 runnable, r51b: was missing from this list
+    ),
+    AppProfile(
         name="Hily",
         package_name="com.hily.app",
     ),
@@ -80,6 +84,25 @@ DEFAULT_APPS = [
         daily_swipe_cap=40,
         daily_opener_target_min=20,
         daily_opener_target_max=50,
+    ),
+    # r51b: portal cards are built from /api/dating/config, which returns
+    # this list. r50 made these runnable but never added them here, so the
+    # live portal hid Boo, Breeze, Pure and 3Fun even after the Netlify deploy.
+    AppProfile(
+        name="Boo",
+        package_name="enterprises.dating.boo",
+    ),
+    AppProfile(
+        name="Breeze",
+        package_name="social.breeze.breeze_app",
+    ),
+    AppProfile(
+        name="Pure",
+        package_name="com.getpure.pure",
+    ),
+    AppProfile(
+        name="3Fun",
+        package_name="com.threesome.swingers.threefun",
     ),
     AppProfile(
         name="WhatsApp",
@@ -109,6 +132,22 @@ DEFAULT_APPS = [
 
 
 _PACKAGE_DISPLAY_NAMES = {app.package_name: app.name for app in DEFAULT_APPS}
+
+
+
+def ensure_default_apps(apps: Optional[List["AppProfile"]] = None) -> List["AppProfile"]:
+    """Keep any saved app rows, then append default profiles that are missing.
+
+    The dating portal renders whatever /api/dating/config returns, so new
+    runnable apps have to land in this merged list. Existing names, enabled
+    flags and caps are left untouched.
+    """
+    out: List[AppProfile] = list(apps or [])
+    have = {app.package_name for app in out}
+    for app in DEFAULT_APPS:
+        if app.package_name not in have:
+            out.append(app)
+    return out
 
 
 def display_name_for_package(package_name: str, app_name: Optional[str] = None) -> str:

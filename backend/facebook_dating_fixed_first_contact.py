@@ -161,17 +161,40 @@ _FEED_MARKERS = (
 FB_NAV_MAX = 6
 
 
+def _vis_blob(tree: str) -> str:
+    """Visible nodes only. r51: Facebook keeps the off-screen feed in the tree
+    (v="0", negative x: "What's on your mind?", "Story tray") while Dating is
+    showing — the raw tree text made Dating look like the feed."""
+    return " | ".join(
+        f"{n.get('desc') or ''} {n.get('text') or ''}".strip()
+        for n in _parse_compact_nodes(tree)
+    ).lower()
+
+
+def _nlab(n: Dict[str, Any]) -> str:
+    return str(n.get("desc") or n.get("text") or n.get("label") or "").strip()
+
+
+def _dating_home(tree: str) -> bool:
+    """Real 24 Nov 11:17 tree (task_18cd1e4745926294): header "Dating" +
+    "Dating settings" button + "Liked you · Friendship · Matches" chips."""
+    vb = _vis_blob(tree)
+    return "dating settings" in vb or ("liked you" in vb and any(
+        _nlab(n).lower() == "dating" and int(n.get("y") or 9999) < 300
+        for n in _parse_compact_nodes(tree)))
+
+
 def _in_dating(tree: str) -> bool:
-    """Facebook Dating screens (real 19–24 Nov trees): deck No, Thanks / Like,
-    profile photo button, photo comment sheet, Dating header."""
+    """Facebook Dating screens (real 19–24 Nov trees): Dating home, deck
+    No, Thanks / Like, profile photo button, photo comment sheet."""
     blob = _blob(tree)
     return (
         _on_comment_sheet(tree)
+        or _dating_home(tree)
         or "no, thanks" in blob
         or "profile_photo" in blob
         or "profile_circular_button" in blob
         or bool(re.search(r'd="profile picture, [^"]+, \d{2}', tree or "", re.I))
-        or 'd="dating"' in blob and "tab 4 of" not in blob
         or _on_explore_menu(tree)
     )
 
@@ -179,63 +202,70 @@ def _in_dating(tree: str) -> bool:
 def facebook_to_dating(
     tree: str, bulk: Dict[str, Any], planner: str
 ) -> Optional[Dict[str, Any]]:
-    """r50: Facebook opened on the main app (feed / a post), not Dating.
+    """Facebook is not on Dating → get there (never a blind tap).
 
-    24 Nov 10:55 (task_fd4408515608a893): Facebook resumed on a TSH Tennis
-    post viewer; the planner tapped the "card photo" (534,1004) and then the
-    post's Profile picture ×3 → same-step stop. Dating is the bottom tab
-    "Dating, tab 4 of 6" (real 19 Nov home tree) — close the post first,
-    tap that tab, else Menu → Dating, else Back (bounded)."""
+    r50 (10:55, task_fd4408515608a893): Facebook resumed on a post viewer.
+    r51 (11:17, task_18cd1e4745926294): (1) the first screen was the Samsung
+    home screen and the planner's fallback tapped (539,999) on it; (2) after
+    the real tap on "Dating, tab 4 of 6" Dating home was showing, but the
+    hidden feed nodes still in the tree said "feed", so it tapped the
+    non-clickable "Dating" header (529,133) ×3 → same-step stop.
+    Order: other app → open Facebook; post → Close; bottom "Dating, tab N of
+    6" (y > 1900); after Menu → the "Dating" shortcut; else Back (bounded)."""
     pk = re.search(r'packages="([^"]*)"', tree or "")
-    if not pk or "com.facebook.katana" not in pk.group(1):
-        return None
+    pkgs = pk.group(1) if pk else ""
+    base = {"planner": planner, "llm_provider": None}
+    if "com.facebook.katana" not in pkgs:
+        if not (tree or "").strip() or not pkgs:
+            return None
+        n_open = int(bulk.get("fb_open") or 0) + 1
+        bulk["fb_open"] = n_open
+        if n_open > 3:
+            return _fp({**base, "action": "fail",
+                        "reason": f"Facebook did not open (on {pkgs}) ({planner})"},
+                       "fb_dating_nav_open_failed")
+        return _fp({**base, "action": "open_app", "app": "Facebook",
+                    "package": "com.facebook.katana",
+                    "reason": f"On {pkgs.split(',')[0]}, not Facebook — open Facebook "
+                              f"(never tap blind) ({planner})"}, "fb_dating_nav_open")
     if _in_dating(tree):
         bulk["fb_nav"] = 0
         return None
-    blob = _blob(tree)
     nodes = _parse_compact_nodes(tree)
-
-    def lab(n: Dict[str, Any]) -> str:
-        return str(n.get("desc") or n.get("text") or n.get("label") or "").strip()
-
-    feedish = any(m in blob for m in _FEED_MARKERS) or "tab 1 of" in blob or (
-        "menu" in blob and "facebook logo" in blob)
     n_nav = int(bulk.get("fb_nav") or 0) + 1
     bulk["fb_nav"] = n_nav
-    base = {"planner": planner, "llm_provider": None}
     if n_nav > FB_NAV_MAX:
         return _fp({**base, "action": "fail",
                     "reason": f"Could not find Facebook Dating (bottom tab / Menu) after "
                               f"{FB_NAV_MAX} tries ({planner})"}, "fb_dating_nav_lost")
-    if bulk.get("fb_tab_tapped") and not any(m in blob for m in _FEED_MARKERS):
-        # Dating tab already opened and no feed on screen: Dating home (the
-        # tab bar can stay) — hand over to the Dating planner
-        bulk["fb_nav"] = 0
-        return None
     for n in nodes:
-        lo = lab(n).lower()
-        if (lo.startswith("dating, tab") or lo == "dating") and n.get("x") is not None:
+        lo = _nlab(n).lower()
+        if lo.startswith("dating, tab") and n.get("x") is not None \
+                and int(n.get("y") or 0) > 1900:
             bulk["fb_tab_tapped"] = True
             return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
-                        "reason": f"Open Facebook Dating — bottom tab '{lab(n)[:30]}' ({planner})"},
-                       "fb_dating_nav_tab")
-    if not feedish and not any(lab(n).lower() in ("close", "menu") for n in nodes):
-        return None  # unknown Facebook screen — let the Dating planner decide
+                        "reason": f"Open Facebook Dating — bottom tab '{_nlab(n)[:30]}' "
+                                  f"({planner})"}, "fb_dating_nav_tab")
+    if bulk.get("fb_menu_tried"):
+        for n in nodes:
+            if _nlab(n).lower() == "dating" and n.get("x") is not None \
+                    and int(n.get("y") or 0) > 250:
+                return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
+                            "reason": f"Facebook Menu → Dating shortcut ({planner})"},
+                           "fb_dating_nav_menu_dating")
     for n in nodes:
-        if lab(n).lower() == "close" and n.get("clickable") and n.get("x") is not None \
+        if _nlab(n).lower() == "close" and n.get("clickable") and n.get("x") is not None \
                 and int(n.get("y") or 9999) < 300:
             return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
                         "reason": f"Facebook post open, not Dating — Close it ({planner})"},
                        "fb_dating_nav_close_post")
     if not bulk.get("fb_menu_tried"):
         for n in nodes:
-            if lab(n).lower() == "menu" and n.get("x") is not None:
+            if _nlab(n).lower() == "menu" and n.get("x") is not None:
                 bulk["fb_menu_tried"] = True
                 return _fp({**base, "action": "tap", "x": int(n["x"]), "y": int(n["y"]),
                             "reason": f"No Dating tab — open the Facebook Menu ({planner})"},
                            "fb_dating_nav_menu")
-    if n_nav >= 3 and not bulk.get("fb_scrolled_top"):
-        bulk["fb_scrolled_top"] = True
     return _fp({**base, "action": "press_button", "button": "back",
                 "reason": f"Not in Facebook Dating — Back toward the tab bar ({planner})"},
                "fb_dating_nav_back")
@@ -280,10 +310,13 @@ def plan_facebook_dating_fixed_first_contact(
             "fb_dating_fc_done",
         )
 
-    nav = facebook_to_dating(ui_tree, bulk, planner)
-    if nav:
-        st["bulk_message_new"] = bulk
-        return nav
+    # r46/r51: after a photo tap the next tree can be a brief blank
+    # ("waiting for the comment box") — don't Back out of Dating.
+    if not int(bulk.get("awaiting_sheet") or 0):
+        nav = facebook_to_dating(ui_tree, bulk, planner)
+        if nav:
+            st["bulk_message_new"] = bulk
+            return nav
 
     if _on_explore_menu(ui_tree):
         return _fp(
@@ -491,6 +524,48 @@ def plan_facebook_dating_fixed_first_contact(
             "fb_dating_fc_wait_sheet",
         )
     bulk["awaiting_sheet"] = 0
+
+    # r51 (11:17, task_18cd1e4745926294): Dating home was on screen after
+    # the tab tap — header, "Dating settings", "Liked you · Friendship ·
+    # Matches" chips — but the compact tree had no profile photo / Like /
+    # No Thanks yet (empty ScrollView). Wait briefly for the card (verified
+    # 23 Nov: Ellie, 21 under those chips), then tap the card photo area.
+    # Never tap the non-clickable "Dating" header at (529,133).
+    if _dating_home(ui_tree) and not _has_like_pass(ui_tree):
+        waited = int(bulk.get("awaiting_card") or 0)
+        if waited < 2:
+            bulk["awaiting_card"] = waited + 1
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "delay_s": 1.0,
+                    "reason": (
+                        f"Dating home — waiting for a card to appear "
+                        f"({waited + 1}/2) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "fb_dating_fc_wait_card",
+            )
+        bulk["awaiting_card"] = 0
+        st["bulk_message_new"] = bulk
+        return _fp(
+            {
+                "action": "tap",
+                "x": CARD_PHOTO_XY[0],
+                "y": CARD_PHOTO_XY[1],
+                "reason": (
+                    f"Tap Facebook Dating card photo to open profile "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "fb_dating_fc_tap_card",
+        )
 
     if _has_like_pass(ui_tree) or "dating" in _blob(ui_tree) or "liked you" in _blob(ui_tree):
         return _fp(

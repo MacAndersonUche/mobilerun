@@ -2748,10 +2748,13 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
     from mobilerun.dating.config import (
         DatingModeConfig as ConfigModel,
         display_name_for_package,
+        ensure_default_apps,
     )
 
     _load_dating_runtime(auth)
     config = ConfigModel()
+    # r51b: always include newly runnable default apps; never drop saved rows
+    config.apps = ensure_default_apps(getattr(config, "apps", None))
     lib, _ = _load_opener_library(auth)
     df = _load_date_flow(auth)
     opener_mode = (
