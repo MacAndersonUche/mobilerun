@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="9" partial="false" empty="false" mode="compact" packages="com.getpure.pure">
+<w id="active" t="active" p="com.getpure.pure" f="1">
+ <n t="Rae, 26" xy="300,1500" b="60,1460,600,1540"/>
+ <n d="Like" c="1" xy="750,2000" b="670,1920,830,2080"/>
+ <n d="Chats" c="1" xy="900,2200" b="800,2140,1000,2260"/>
+</w>
+</hierarchy>

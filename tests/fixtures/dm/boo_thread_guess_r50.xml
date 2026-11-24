@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="9" partial="false" empty="false" mode="compact" packages="enterprises.dating.boo">
+<w id="active" t="active" p="enterprises.dating.boo" f="1">
+ <n t="Zoe" xy="400,150" b="200,100,600,200"/>
+ <n e="1" h="Type a message" cls="EditText" c="1" xy="460,2200" b="40,2140,880,2260"/>
+ <n d="Send" c="1" xy="980,2200" b="920,2140,1040,2260"/>
+</w>
+</hierarchy>

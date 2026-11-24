@@ -10,6 +10,9 @@ import {
   runCountLabel,
   sortDatingApps,
   RUNNABLE_APPS,
+  runModesOf,
+  runModeFor,
+  hasLikeCap,
 } from './datingRun.ts';
 
 assert.equal(canRunApp('co.hinge.app'), true);
@@ -110,6 +113,30 @@ console.log('datingRun ok');
   ).map(pk);
   assert.deepEqual(got, ['com.bumble.app', 'com.hily.app', 'co.hinge.app',
     'com.affinityapps.blk', 'com.tinder']);
-  assert.deepEqual(RUNNABLE_APPS.slice(-2), ['com.affinityapps.blk', 'com.tinder']);
+  assert.deepEqual(RUNNABLE_APPS.slice(-6, -4), ['com.affinityapps.blk', 'com.tinder']);
   assert.equal(canRunApp('com.tinder'), true);
+}
+
+// r50: new apps at the very bottom (after BLK, Tinder); Taimi stays put
+{
+  const pk = (a) => a.p;
+  const got = sortDatingApps(
+    ['com.getpure.pure', 'com.takimi.android', 'com.tinder', 'enterprises.dating.boo',
+     'com.affinityapps.blk', 'com.bumble.app', 'social.breeze.breeze_app',
+     'com.threesome.swingers.threefun'].map((p) => ({ p })),
+    pk
+  ).map(pk);
+  assert.deepEqual(got, ['com.takimi.android', 'com.bumble.app', 'com.affinityapps.blk',
+    'com.tinder', 'com.getpure.pure', 'enterprises.dating.boo', 'social.breeze.breeze_app',
+    'com.threesome.swingers.threefun']);
+  for (const p of ['enterprises.dating.boo', 'social.breeze.breeze_app', 'com.getpure.pure',
+    'com.threesome.swingers.threefun', 'com.takimi.android']) assert.equal(canRunApp(p), true);
+  assert.deepEqual(runModesOf('enterprises.dating.boo').map((m) => m.label),
+    ['Auto like', 'Auto message + like']);
+  assert.deepEqual(runModesOf('com.getpure.pure').map((m) => m.label), ['Auto tap', 'Auto message']);
+  assert.equal(runModesOf('social.breeze.breeze_app').length, 0);
+  assert.equal(runModeFor('com.takimi.android', {}), 'likes');
+  assert.equal(hasLikeCap('com.takimi.android', 'likes'), false);
+  assert.equal(hasLikeCap('enterprises.dating.boo', 'message_likes'), true);
+  assert.equal(hasLikeCap('com.hily.app', 'likes'), true);
 }

@@ -9,16 +9,33 @@ export const RUNNABLE_APPS = [
   'com.bumble.app',
   'com.badoo.mobile',
   'com.taggedapp',
+  'com.takimi.android', // r50: Taimi auto like / message + like
   // r49: Mac — Tinder and BLK at the bottom of the list
   'com.affinityapps.blk',
   'com.tinder', // r49 (CA-24): fixed auto-swipe
+  // r50: new apps at the very bottom
+  'enterprises.dating.boo',
+  'social.breeze.breeze_app',
+  'com.getpure.pure',
+  'com.threesome.swingers.threefun',
 ];
+// r50: new apps (Boo, Breeze, Pure, 3Fun) — below BLK and Tinder
+export const NEW_APPS_R50 = [
+  'enterprises.dating.boo',
+  'social.breeze.breeze_app',
+  'com.getpure.pure',
+  'com.threesome.swingers.threefun',
+];
+export const TAIMI_PKG = 'com.takimi.android';
+export const BOO_PKG = 'enterprises.dating.boo';
+export const PURE_PKG = 'com.getpure.pure';
 
 // r49: Mac (24 Nov) — "move Tinder and BLK to the bottom of the portal"
 export const BOTTOM_APPS = ['com.affinityapps.blk', 'com.tinder'];
 function bottomRank(pkg: string): number {
   const p = (pkg || '').toLowerCase();
   if (p.startsWith('com.tinder') || p.includes('tinder')) return 2;
+  if (NEW_APPS_R50.includes(p)) return 3; // r50: new apps at the very bottom
   if (p === 'com.affinityapps.blk' || p.endsWith('.blk')) return 1;
   return 0;
 }
@@ -35,6 +52,10 @@ export const TAGGED_PKG = 'com.taggedapp';
 // r46: Hily runs as "Likes only" or "Message + likes"
 export const HILY_PKG = 'com.hily.app';
 export type RunMode = 'swipe' | 'message' | 'likes' | 'message_likes';
+const LIKE_MSG_MODES: { value: RunMode; label: string }[] = [
+  { value: 'likes', label: 'Auto like' },
+  { value: 'message_likes', label: 'Auto message + like' },
+];
 export const RUN_MODES: Record<string, { value: RunMode; label: string }[]> = {
   [TAGGED_PKG]: [
     { value: 'swipe', label: 'Auto swipe' },
@@ -43,6 +64,13 @@ export const RUN_MODES: Record<string, { value: RunMode; label: string }[]> = {
   [HILY_PKG]: [
     { value: 'likes', label: 'Likes only' },
     { value: 'message_likes', label: 'Message + likes' },
+  ],
+  // r50
+  [TAIMI_PKG]: LIKE_MSG_MODES,
+  [BOO_PKG]: LIKE_MSG_MODES,
+  [PURE_PKG]: [
+    { value: 'likes', label: 'Auto tap' },
+    { value: 'message', label: 'Auto message' },
   ],
 };
 export function hasRunMode(pkg: string): boolean {
@@ -56,6 +84,7 @@ export function runModeFor(pkg: string, modes: Record<string, string>): RunMode 
   const hit = opts.find((o) => o.value === modes[pkg]);
   if (hit) return hit.value;
   if (pkg === HILY_PKG) return 'message_likes';
+  if (opts.length) return opts[0].value; // r50: Taimi / Boo / Pure → first mode
   return 'swipe';
 }
 
@@ -63,8 +92,11 @@ export function runModeFor(pkg: string, modes: Record<string, string>): RunMode 
 export const DEFAULT_LIKES = 30;
 export const LIKES_MAX = 500;
 export const HILY_MESSAGES_MAX = 5;
-export function hasLikeCap(pkg: string): boolean {
-  return pkg === HILY_PKG;
+export function hasLikeCap(pkg: string, mode?: string): boolean {
+  if (pkg === HILY_PKG) return true;
+  // r50: Taimi / Boo — Max likes only in "Auto message + like"
+  if (pkg === TAIMI_PKG || pkg === BOO_PKG) return mode === undefined || mode === 'message_likes';
+  return false;
 }
 export function likeCapKey(pkg: string, mode: string): string {
   return `${pkg}:${mode}`;
@@ -78,6 +110,8 @@ export function parseLikeCap(raw: unknown): CountParse {
   return parseCountInput(raw, LIKES_MAX, 'Max likes');
 }
 export function likeCapHint(pkg: string, mode: string): string {
+  if (pkg === TAIMI_PKG || pkg === BOO_PKG)
+    return `Max ${LIKES_MAX} · likes after the messages to new matches`;
   if (pkg !== HILY_PKG) return '';
   return mode === 'likes'
     ? `Max ${LIKES_MAX} · free hearts from Finder`
@@ -109,6 +143,11 @@ export function runCountLabel(pkg: string): string {
   if (pkg === 'com.hily.app') return 'Messages per run (max 5)';
   if (pkg === 'com.facebook.katana') return 'Messages per run (max 50)';
   if (pkg === TAGGED_PKG) return 'Swipes / messages per run';
+  if (pkg === 'com.tinder') return 'Swipes per run';
+  if (pkg === 'social.breeze.breeze_app' || pkg === 'com.threesome.swingers.threefun')
+    return 'Likes per run';
+  if (pkg === TAIMI_PKG || pkg === BOO_PKG || pkg === PURE_PKG)
+    return 'Likes / messages per run';
   return 'Messages per run';
 }
 

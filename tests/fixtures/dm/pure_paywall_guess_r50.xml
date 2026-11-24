@@ -1,0 +1,8 @@
+<hierarchy windows="1" nodes="9" partial="false" empty="false" mode="compact" packages="com.getpure.pure">
+<w id="active" t="active" p="com.getpure.pure" f="1">
+ <n t="Subscribe to chat on PURE" xy="540,600" b="100,550,980,650"/>
+ <n t="£12.99 / week" xy="540,800" b="100,750,980,850"/>
+ <n t="Continue" c="1" xy="540,1900" b="200,1850,880,1950"/>
+ <n d="Close" c="1" xy="80,150" b="20,90,140,210"/>
+</w>
+</hierarchy>

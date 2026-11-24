@@ -31,6 +31,8 @@ try:
     from dating_run import (
         DEFAULT_LIKES,
         HILY_MODES,
+        FIXED_APP_MODES,
+        LIKE_CAP_MODES,
         LIKE_AFTER,
         MAX_COUNT,
         MAX_LIKES,
@@ -42,6 +44,8 @@ except ImportError:  # pragma: no cover
     from backend.dating_run import (  # type: ignore
         DEFAULT_LIKES,
         HILY_MODES,
+        FIXED_APP_MODES,
+        LIKE_CAP_MODES,
         LIKE_AFTER,
         MAX_COUNT,
         MAX_LIKES,
@@ -115,6 +119,16 @@ def normalize(raw: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) ->
             except (TypeError, ValueError):
                 raise ScheduleError("max likes must be a number")
             item["likes"] = max(1, min(MAX_LIKES, likes))
+        if pkg in FIXED_APP_MODES:
+            # r50: Boo / Breeze / Taimi / Pure / 3Fun modes (+ Max likes)
+            modes_ok = FIXED_APP_MODES[pkg]
+            item["mode"] = mode if mode in modes_ok else modes_ok[0]
+            if item["mode"] in LIKE_CAP_MODES.get(pkg, ()):
+                try:
+                    likes = int(it.get("likes") or DEFAULT_LIKES)
+                except (TypeError, ValueError):
+                    raise ScheduleError("max likes must be a number")
+                item["likes"] = max(1, min(MAX_LIKES, likes))
         items.append(item)
     if not items:
         raise ScheduleError("pick at least one app")
@@ -239,6 +253,8 @@ def build_like_caps(s: Dict[str, Any]) -> Dict[str, int]:
         if it.get("app") == "com.hily.app" and it.get("likes"):
             mode = str(it.get("mode") or "message_likes")
             out[f"com.hily.app:{mode}"] = int(it["likes"])
+        elif it.get("app") in LIKE_CAP_MODES and it.get("likes") and it.get("mode"):
+            out[f"{it['app']}:{it['mode']}"] = int(it["likes"])  # r50
     return out
 
 

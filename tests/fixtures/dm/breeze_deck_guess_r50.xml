@@ -1,0 +1,7 @@
+<hierarchy windows="1" nodes="9" partial="false" empty="false" mode="compact" packages="social.breeze.breeze_app">
+<w id="active" t="active" p="social.breeze.breeze_app" f="1">
+ <n t="Lia, 24" xy="300,1500" b="60,1460,600,1540"/>
+ <n t="Like" c="1" xy="750,2000" b="600,1920,900,2080"/>
+ <n t="Not for me" c="1" xy="330,2000" b="180,1920,480,2080"/>
+</w>
+</hierarchy>

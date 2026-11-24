@@ -106,7 +106,7 @@ export default function DatingSchedules(props: Props) {
       if (!rr.ok) errs.push(rr.error);
       if (!rc.ok) errs.push(rc.error);
       let likes = i.likes;
-      if (hasLikeCap(i.app)) {
+      if (hasLikeCap(i.app, runModeFor(i.app, { [i.app]: i.mode || '' }))) {
         const rl = parseLikeCap(drafts[`${i.app}:likes`] ?? String(i.likes ?? DEFAULT_LIKES));
         if (!rl.ok) errs.push(`${name} ${rl.error}`);
         else likes = rl.n;
@@ -281,7 +281,7 @@ export default function DatingSchedules(props: Props) {
                           ))}
                         </select>
                       )}
-                      {hasLikeCap(pkg) && (
+                      {hasLikeCap(pkg, runModeFor(pkg, { [pkg]: it.mode || '' })) && (
                         <label className="flex items-center gap-1 text-xs text-mute">
                           Max likes
                           <input

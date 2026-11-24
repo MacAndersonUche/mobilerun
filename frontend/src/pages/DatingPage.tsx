@@ -86,6 +86,10 @@ const DATING_APP_NAMES: Record<string, string> = {
   'com.badoo.mobile': 'Badoo',
   'com.affinityapps.blk': 'BLK',
   'com.tinder': 'Tinder',
+  'enterprises.dating.boo': 'Boo',
+  'social.breeze.breeze_app': 'Breeze',
+  'com.getpure.pure': 'Pure',
+  'com.threesome.swingers.threefun': '3Fun',
   'com.hily.app': 'Hily',
   'co.hinge.app': 'Hinge',
   'com.taggedapp': 'Tagged',
@@ -883,14 +887,17 @@ export default function DatingPage() {
                 ))}
               </div>
             )}
-            {hasLikeCap(app.package) &&
+            {hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
               (() => {
                 const mode = runModeFor(app.package, runModes);
                 const key = likeCapKey(app.package, mode);
                 return (
                   <>
                     <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
-                      <span>Max likes ({mode === 'likes' ? 'Likes only' : 'Message + likes'})</span>
+                      <span>
+                        Max likes (
+                        {runModesOf(app.package).find((m) => m.value === mode)?.label || mode})
+                      </span>
                       <input
                         type="text"
                         inputMode="numeric"

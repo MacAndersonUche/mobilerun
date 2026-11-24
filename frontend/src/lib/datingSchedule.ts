@@ -59,7 +59,7 @@ export function scheduleBody(s: DatingSchedule) {
       runs: clampRuns(i.runs),
       count: clampRunCount(i.app, i.count),
       ...(hasRunMode(i.app) ? { mode: runModeFor(i.app, { [i.app]: i.mode || '' }) } : {}),
-      ...(hasLikeCap(i.app)
+      ...(hasLikeCap(i.app, runModeFor(i.app, { [i.app]: i.mode || '' }))
         ? { likes: Math.max(1, Math.min(LIKES_MAX, Math.floor(Number(i.likes) || DEFAULT_LIKES))) }
         : {}),
     }));
