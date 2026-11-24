@@ -76,6 +76,19 @@ def test_live_mbm_types_then_sends_not_crush():
     assert act2.get("action") == "tap"
     assert (act2.get("x"), act2.get("y")) == SEND_XY
     assert (act2.get("x"), act2.get("y")) != CRUSH_XY
+    # r45: counted once Hily confirms (sheet closed / box empty)
+    assert st["bulk_message_new"]["done"] == 0
+    assert st["bulk_message_new"]["awaiting_sent"] == "hey how are you"
+    plan_hily_fixed_first_contact(
+        "send 2 first contact messages on Hily",
+        (FIX / "hily_likes_sent.xml").read_text(encoding="utf-8"),
+        ["Hily Send first-contact 1/2"],
+        state=st,
+        package="com.hily.app",
+        dry_run=False,
+        message="hey how are you",
+        target=2,
+    )
     assert st["bulk_message_new"]["done"] == 1
 
 

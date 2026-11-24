@@ -21,9 +21,10 @@ const all = datingStartBody({
   counts: { 'co.hinge.app': 3, 'com.whatsapp': 9 },
   apps: ['com.whatsapp', 'co.hinge.app', 'com.hily.app', 'com.taggedapp'],
 });
-assert.deepEqual(all.apps, ['co.hinge.app', 'com.hily.app']);
+// r45: Tagged is runnable now (auto swipe / auto message)
+assert.deepEqual(all.apps, ['co.hinge.app', 'com.hily.app', 'com.taggedapp']);
 // Each app its own number; unset apps use the default 5; no socials
-assert.deepEqual(all.counts, { 'co.hinge.app': 3, 'com.hily.app': 5 });
+assert.deepEqual(all.counts, { 'co.hinge.app': 3, 'com.hily.app': 5, 'com.taggedapp': 5 });
 assert.equal(all.device_id, 'android_x');
 assert.equal('stand_in_package' in all, false);
 
@@ -58,4 +59,18 @@ console.log('datingRun ok');
   a(parseRunCount('com.bumble.app', '250').ok, 'bumble 250 ok');
   a(/50/.test(runCountHint('com.facebook.katana')), 'FB hint');
   console.log('r45 count input tests ok');
+}
+
+// r45: Tagged run mode
+{
+  const { datingStartBody, runModeFor, canRunApp } = await import('./datingRun.ts');
+  const a = (c, m) => { if (!c) throw new Error(m); };
+  a(canRunApp('com.taggedapp'), 'tagged runnable');
+  a(runModeFor('com.taggedapp', {}) === 'swipe', 'default swipe');
+  const b = datingStartBody({ deviceId: 'd', dryRun: false, contactScope: 'new',
+    counts: { 'com.taggedapp': 7 }, apps: ['com.taggedapp', 'com.bumble.app'],
+    modes: { 'com.taggedapp': 'message' } });
+  a(b.modes['com.taggedapp'] === 'message' && !('com.bumble.app' in b.modes), 'modes body');
+  a(b.counts['com.taggedapp'] === 7, 'tagged count');
+  console.log('r45 tagged mode tests ok');
 }

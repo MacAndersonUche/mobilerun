@@ -95,7 +95,11 @@ def normalize(raw: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) ->
         count = max(1, min(MAX_COUNT, count))
         if pkg == "com.facebook.katana":
             count = min(count, 50)
-        items.append({"app": pkg, "runs": runs, "count": count})
+        item = {"app": pkg, "runs": runs, "count": count}
+        mode = str(it.get("mode") or "").strip().lower()
+        if pkg == "com.taggedapp":
+            item["mode"] = mode if mode in ("swipe", "message") else "swipe"
+        items.append(item)
     if not items:
         raise ScheduleError("pick at least one app")
     t = str(raw.get("time", base.get("time")) or "").strip()
@@ -203,6 +207,15 @@ def build_queue(s: Dict[str, Any]) -> Tuple[List[str], Dict[str, int]]:
     return queue, counts
 
 
+def build_modes(s: Dict[str, Any]) -> Dict[str, str]:
+    """r45: per-app run mode from schedule items (Tagged swipe / message)."""
+    return {
+        it["app"]: str(it.get("mode"))
+        for it in s.get("items") or []
+        if it.get("mode")
+    }
+
+
 def run_active(device_id: str, jobs: List[Dict[str, Any]]) -> Optional[str]:
     """job_id of a running job on this device, if any."""
     for j in jobs or []:
@@ -305,6 +318,7 @@ def fire_due(
                 count=None,
                 dry_run=bool(s.get("dry_run", True)),
                 counts=counts,
+                modes=build_modes(s),
             )
             job["schedule_id"] = s.get("id")
             put_job(job)

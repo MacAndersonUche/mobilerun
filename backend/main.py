@@ -3315,10 +3315,14 @@ class ModeStartBody(BaseModel):
     # r43: per-app per-run numbers from each app card (package -> n). Saved
     # per user; when omitted, the saved numbers are used.
     counts: Optional[Dict[str, int]] = None
+    # r45: per-app run mode (Tagged: "swipe" | "message")
+    modes: Optional[Dict[str, str]] = None
 
 
 class RunCountsBody(BaseModel):
-    counts: Dict[str, int]
+    counts: Dict[str, int] = {}
+    # r45: per-app run mode, e.g. {"com.taggedapp": "message"}
+    modes: Optional[Dict[str, str]] = None
 
 
 def _load_run_counts(auth: Optional[dict]) -> Dict[str, int]:
@@ -3349,7 +3353,47 @@ def _save_run_counts(auth: Optional[dict], counts: Dict[str, Any]) -> Dict[str, 
         from backend.dating_run import clean_counts  # type: ignore
     merged = _load_run_counts(auth)
     merged.update(clean_counts(counts))
-    save_user_setting(_dating_user_id(auth), "dating_run_counts", {"counts": merged})
+    save_user_setting(
+        _dating_user_id(auth),
+        "dating_run_counts",
+        {"counts": merged, "modes": _load_run_modes(auth)},
+    )
+    return merged
+
+
+def _load_run_modes(auth: Optional[dict]) -> Dict[str, str]:
+    """r45: saved per-app run modes (Tagged: swipe | message)."""
+    try:
+        from storage import get_user_setting
+    except ImportError:
+        from backend.storage import get_user_setting  # type: ignore
+    try:
+        from dating_run import clean_modes
+    except ImportError:
+        from backend.dating_run import clean_modes  # type: ignore
+    try:
+        data = get_user_setting(_dating_user_id(auth), "dating_run_counts") or {}
+    except Exception:  # pragma: no cover
+        data = {}
+    return clean_modes(data.get("modes") if isinstance(data, dict) else None)
+
+
+def _save_run_modes(auth: Optional[dict], modes: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    try:
+        from storage import save_user_setting
+    except ImportError:
+        from backend.storage import save_user_setting  # type: ignore
+    try:
+        from dating_run import clean_modes
+    except ImportError:
+        from backend.dating_run import clean_modes  # type: ignore
+    merged = _load_run_modes(auth)
+    merged.update(clean_modes(modes))
+    save_user_setting(
+        _dating_user_id(auth),
+        "dating_run_counts",
+        {"counts": _load_run_counts(auth), "modes": merged},
+    )
     return merged
 
 
@@ -3441,14 +3485,16 @@ async def delete_dating_schedule(
 @app.get("/api/dating/run-counts")
 async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
     """Per-app per-run numbers shown on each dating app card."""
-    return {"counts": _load_run_counts(auth)}
+    return {"counts": _load_run_counts(auth), "modes": _load_run_modes(auth)}
 
 
 @app.post("/api/dating/run-counts")
 async def set_run_counts(
     body: RunCountsBody, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    return {"status": "saved", "counts": _save_run_counts(auth, body.counts)}
+    counts = _save_run_counts(auth, body.counts) if body.counts else _load_run_counts(auth)
+    modes = _save_run_modes(auth, body.modes) if body.modes else _load_run_modes(auth)
+    return {"status": "saved", "counts": counts, "modes": modes}
 
 
 def _kick_job(job_id: str) -> None:
@@ -3526,7 +3572,7 @@ async def _start_dating_apps_run(
         raise HTTPException(
             status_code=400,
             detail=f"No app with an auto run selected ({names}). "
-            "Supported: Hinge, Hily, Facebook Dating, BLK, Yubo, Bumble, Badoo.",
+            "Supported: Hinge, Hily, Facebook Dating, BLK, Yubo, Bumble, Badoo, Tagged.",
         )
     did = (device_id or "").strip()
     if not did or did == "default":
@@ -3550,6 +3596,15 @@ async def _start_dating_apps_run(
     except Exception as e:
         logger.warning("run counts save/load failed: %s", e)
         counts = dict(body.counts or {})
+    try:
+        modes = (
+            _save_run_modes(auth, body.modes)
+            if getattr(body, "modes", None)
+            else _load_run_modes(auth)
+        )
+    except Exception as e:
+        logger.warning("run modes save/load failed: %s", e)
+        modes = dict(getattr(body, "modes", None) or {})
     job = build_job(
         device_id=did,
         queue=queue,
@@ -3557,6 +3612,7 @@ async def _start_dating_apps_run(
         dry_run=dry_run,
         speed_preset=dating_mode_state.get("speed_preset") or "balanced",
         counts=counts,
+        modes=modes,
     )
     try:
         put_job(job)

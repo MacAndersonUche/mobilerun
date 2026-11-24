@@ -9,7 +9,18 @@ export const RUNNABLE_APPS = [
   'co.yellw.yellowapp',
   'com.bumble.app',
   'com.badoo.mobile',
+  'com.taggedapp',
 ];
+
+// r45: Tagged runs as auto swipe (free like) or auto message
+export const TAGGED_PKG = 'com.taggedapp';
+export type RunMode = 'swipe' | 'message';
+export function hasRunMode(pkg: string): boolean {
+  return pkg === TAGGED_PKG;
+}
+export function runModeFor(pkg: string, modes: Record<string, string>): RunMode {
+  return modes[pkg] === 'message' ? 'message' : 'swipe';
+}
 
 export function canRunApp(pkg: string): boolean {
   return RUNNABLE_APPS.includes(pkg);
@@ -30,6 +41,7 @@ export function runCountLabel(pkg: string): string {
   if (pkg === 'com.bumble.app' || pkg === 'com.badoo.mobile') return 'Swipes per run';
   if (pkg === 'com.hily.app') return 'Likes per run (after 5 messages)';
   if (pkg === 'com.facebook.katana') return 'Messages per run (max 50)';
+  if (pkg === TAGGED_PKG) return 'Swipes / messages per run';
   return 'Messages per run';
 }
 
@@ -77,11 +89,14 @@ export function datingStartBody(opts: {
   contactScope: string;
   counts: Record<string, number>;
   apps: string[];
+  modes?: Record<string, string>;
 }) {
   const apps = opts.apps.filter(canRunApp);
   const counts: Record<string, number> = {};
+  const modes: Record<string, RunMode> = {};
   apps.forEach((a) => {
     counts[a] = runCountFor(a, opts.counts);
+    if (hasRunMode(a)) modes[a] = runModeFor(a, opts.modes || {});
   });
   return {
     device_id: opts.deviceId || undefined,
@@ -89,6 +104,8 @@ export function datingStartBody(opts: {
     contact_scope: opts.contactScope,
     // Each app's own per-run number (saved per app on the server)
     counts,
+    // r45: per-app run mode (Tagged swipe / message)
+    modes,
     // Real apps only — never the mock stand-in, never WhatsApp
     apps,
   };

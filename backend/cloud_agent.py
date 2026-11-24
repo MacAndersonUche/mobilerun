@@ -2018,9 +2018,10 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     inst = (instruction or "").lower()
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
         return True
-    # r45: Yubo first-contact never uses the LLM (it tapped onto the paid
-    # Blast sheet, 24 Nov). Other apps keep their current fallback.
-    if "first contact" in inst and "yubo" in inst:
+    # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
+    # paid Blast sheet; Hily left for Google Messages; Hinge opened Matches
+    # chats and typed AI text, 24 Nov).
+    if "first contact" in inst and any(a in inst for a in ("yubo", "hily", "hinge")):
         return True
     st = state if isinstance(state, dict) else {}
     return str(st.get("swipe_mode") or "").lower() == "fixed"
@@ -2084,6 +2085,10 @@ def plan_next_action(
                 "new people",
                 "new matches",
                 "new contacts",
+                # r45: dating-run instruction "send 5 first contact messages
+                # on hily/yubo" never reached the fixed planners — the whole
+                # job went to the LLM (Hily opened Google Messages, Yubo Blast).
+                "first contact",
             )
         )
         or bool(
@@ -2117,6 +2122,25 @@ def plan_next_action(
             logger.warning("parse_bulk_goal skipped: %s", e)
             bulk_goal = None
     secure_folder_goal = "secure folder" in instr_l
+
+    # r45: Tagged fixed runs (auto swipe / auto message) — no LLM, never paid
+    if "fixed tagged" in instr_l:
+        try:
+            from tagged_fixed import plan_tagged_fixed
+        except ImportError:
+            from backend.tagged_fixed import plan_tagged_fixed  # type: ignore
+        st_tg = agent_state if isinstance(agent_state, dict) else {}
+        tg_act = plan_tagged_fixed(
+            instruction, ui_tree, history, state=st_tg, dry_run=dry_run
+        )
+        if tg_act:
+            try:
+                from message_text_guard import enforce_message_text as _enf_tg
+            except ImportError:
+                from backend.message_text_guard import (  # type: ignore
+                    enforce_message_text as _enf_tg,
+                )
+            return _enf_tg(tg_act, instruction, history=history)
 
     # Deterministic short-circuit: goal already visible → done (avoids tap loops)
     if not bulk_goal and not secure_folder_goal:
@@ -4694,7 +4718,8 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     history: List[str] = list(state.get("history") or [])
     steps_detail: List[Dict[str, Any]] = list(state.get("steps_detail") or [])
     now = int(time.time())
-    created = int(job.get("created_at") or now)
+    # r45: a job that waited for the phone starts its clocks when it starts
+    created = int(job.get("started_at") or job.get("created_at") or now)
     state["job_id"] = str(job.get("job_id") or "")
     # Seed UI-progress clock once so the 90s watchdog has a baseline
     state.setdefault("last_ui_progress_at", created)

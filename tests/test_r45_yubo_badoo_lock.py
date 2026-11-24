@@ -85,7 +85,8 @@ def test_send_not_counted_until_box_clears_then_retry_then_fail():
 
 def test_fixed_first_contact_runs_never_use_llm():
     assert _fixed_swipe_run(INST, {})
-    assert not _fixed_swipe_run("send 3 first contact messages on hinge", {})
+    assert _fixed_swipe_run("send 3 first contact messages on hinge", {})
+    assert not _fixed_swipe_run("send 3 first contact messages on blk", {})
     assert _is_fixed_swipe_action(
         {"planner": "yubo_fixed_first_contact_no_llm_handoff", "action": "tap"}
     )
@@ -205,3 +206,95 @@ def test_badoo_paid_popup_closed_not_bought():
 def test_badoo_deck_still_swipes():
     a = _badoo("badoo_encounters")
     assert a["action"] == "swipe"
+
+
+# ---- Hily: fixed planner, new people, Discover --------------------------
+
+from backend import cloud_agent as _ca  # noqa: E402
+from backend.hily_fixed_first_contact import (  # noqa: E402
+    DISCOVER_TAB_XY,
+    plan_hily_fixed_first_contact,
+)
+
+
+def test_dating_run_first_contact_reaches_fixed_planners_not_llm():
+    # Root cause: "send 5 first contact messages on hily" skipped the bulk
+    # planners entirely, so the LLM drove Hily (opened Google Messages).
+    t = (FIX / "hily_chats_r30.xml").read_text(encoding="utf-8")
+    a = _ca.plan_next_action(
+        "send 5 first contact messages on hily", t, ["Opened Hily"], None,
+        package="com.hily.app", dry_run=False, agent_state={},
+    )
+    assert a["planner"].startswith("hily_fixed_first_contact")
+    assert (a["x"], a["y"]) == (740, 2190)  # Activity, not a chat row
+
+
+def test_bank_text_passes_guard_for_fixed_planners():
+    t = (FIX / "hily_mbm.xml").read_text(encoding="utf-8")
+    a = _ca.plan_next_action(
+        "send 5 first contact messages on hily", t, ["Opened Hily"], None,
+        package="com.hily.app", dry_run=False, agent_state={},
+    )
+    assert a["action"] == "type" and a["text"] == "hey how are you"
+
+
+def test_hily_likes_sent_empty_goes_to_discover():
+    t = (FIX / "hily_likes_sent.xml").read_text(encoding="utf-8")
+    t = t.replace('d="chat_request"', 'd="photo"')
+    st = {"bulk_message_new": {"done": 2}}
+    a = plan_hily_fixed_first_contact(
+        "send 5 first contact messages on hily", t, [], state=st,
+        dry_run=False, message="hi miss", target=5,
+    )
+    assert (a["x"], a["y"]) == DISCOVER_TAB_XY
+
+
+def test_hily_discover_grid_opens_person_not_crush():
+    t = (FIX / "hily_top_picks_grid.xml").read_text(encoding="utf-8")
+    st = {"bulk_message_new": {"done": 2, "_via_discover": True}}
+    a = plan_hily_fixed_first_contact(
+        "send 5 first contact messages on hily", t, [], state=st,
+        dry_run=False, message="hi miss", target=5,
+    )
+    assert a["action"] == "tap"
+    assert (a["x"], a["y"]) != (900, 700)  # Crush icon
+
+
+# ---- Hinge: stuck in Matches → tap the H Discover tab -----------------
+
+from backend.hinge_fixed_first_contact import plan_hinge_fixed_first_contact  # noqa: E402
+
+
+def _hinge(name, hist=("Open Hinge Discover tab",)):
+    t = (FIX / f"{name}.xml").read_text(encoding="utf-8")
+    st = {"bulk_message_new": {"done": 1, "_opened_discover": True}}
+    return plan_hinge_fixed_first_contact(
+        "send 5 first contact messages on hinge", t, list(hist), state=st,
+        dry_run=False, message="hi miss", target=5,
+    )
+
+
+@pytest.mark.parametrize("name", ["hinge_matches_your_turn", "hinge_inbox"])
+def test_hinge_matches_taps_discover_h(name):
+    a = _hinge(name)
+    assert (a["action"], a["x"], a["y"]) == ("tap", 110, 2195)
+
+
+def test_hinge_chat_thread_backs_out():
+    a = _hinge("hinge_thread_composer")
+    assert a["action"] == "press_button" and a["button"] == "back"
+
+
+def test_hinge_discover_still_hearts():
+    a = _hinge("hinge_discover_da")
+    assert (a["x"], a["y"]) == (937, 1356)
+
+
+def test_hinge_dating_run_goes_to_fixed_planner():
+    t = (FIX / "hinge_matches_your_turn.xml").read_text(encoding="utf-8")
+    a = _ca.plan_next_action(
+        "send 5 first contact messages on hinge", t, ["Opened Hinge"], None,
+        package="co.hinge.app", dry_run=False, agent_state={},
+    )
+    assert a["planner"].startswith("hinge_fixed_first_contact")
+    assert (a["x"], a["y"]) == (110, 2195)

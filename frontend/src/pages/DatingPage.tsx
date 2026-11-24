@@ -11,6 +11,8 @@ import {
   canRunApp,
   parseRunCount,
   runCountHint,
+  hasRunMode,
+  runModeFor,
   datingStartBody,
   runCountFor,
   runCountLabel,
@@ -212,6 +214,8 @@ export default function DatingPage() {
   // r45: what is typed in each card's count box (free text until Start/blur)
   const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
   const [countErrors, setCountErrors] = useState<Record<string, string>>({});
+  // r45: per-app run mode (Tagged: auto swipe / auto message)
+  const [runModes, setRunModes] = useState<Record<string, string>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
@@ -290,11 +294,12 @@ export default function DatingPage() {
         '/api/selectors/status',
         { apps: [] }
       );
-      const rc = await soft<{ counts?: Record<string, number> }>(
+      const rc = await soft<{ counts?: Record<string, number>; modes?: Record<string, string> }>(
         '/api/dating/run-counts',
-        { counts: {} }
+        { counts: {}, modes: {} }
       );
       setRunCounts(rc.counts || {});
+      setRunModes(rc.modes || {});
       setStatus(statusRes.data);
       setApps(statsRes.data.apps || []);
       setTodayMessages(statsRes.data.today?.messages || 0);
@@ -420,6 +425,7 @@ export default function DatingPage() {
               dryRun,
               contactScope,
               counts,
+              modes: runModes,
               apps: onlyApp
                 ? [onlyApp]
                 : configApps.filter((a) => a.enabled).map((a) => a.package_name),
@@ -455,6 +461,19 @@ export default function DatingPage() {
       await axios.post(
         `${getBackendUrl()}/api/dating/run-counts`,
         { counts: { [pkg]: n } },
+        { headers: authHeaders() }
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const saveRunMode = async (pkg: string, mode: 'swipe' | 'message') => {
+    setRunModes((prev) => ({ ...prev, [pkg]: mode }));
+    try {
+      await axios.post(
+        `${getBackendUrl()}/api/dating/run-counts`,
+        { modes: { [pkg]: mode } },
         { headers: authHeaders() }
       );
     } catch (e) {
@@ -789,6 +808,29 @@ export default function DatingPage() {
                   title="Used by Start and by this app's Run button. Saved for this app."
                 />
               </label>
+            )}
+            {hasRunMode(app.package) && (
+              <div
+                className="flex overflow-hidden rounded-lg border border-line text-xs"
+                data-testid={`dating-run-mode-${app.package}`}
+                role="group"
+                aria-label={`${app.name} run mode`}
+              >
+                {(['swipe', 'message'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => saveRunMode(app.package, m)}
+                    className={`flex-1 px-2 py-1 ${
+                      runModeFor(app.package, runModes) === m
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-canvas-elev text-mute'
+                    }`}
+                  >
+                    {m === 'swipe' ? 'Auto swipe' : 'Auto message'}
+                  </button>
+                ))}
+              </div>
             )}
             {canRunApp(app.package) && (
               <div

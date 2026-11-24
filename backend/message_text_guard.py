@@ -101,6 +101,9 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
     return None
 
 
+CORE_MESSAGE_BANK = ("hey how are you", "hi miss", "hello miss", "good morning")
+
+
 def load_message_bank_texts(
     *,
     job: Optional[Dict[str, Any]] = None,
@@ -216,6 +219,11 @@ def allowed_message_texts(
             return allowed
     if user:
         allowed.append(user)
+    # r45: Mac's own first-contact bank is always allowed (the fixed Yubo /
+    # Hily planners type these; the disk opener bank does not list them).
+    for t in CORE_MESSAGE_BANK:
+        if t.lower() not in {a.lower() for a in allowed}:
+            allowed.append(t)
     for t in load_message_bank_texts(job=job, bank_paths=bank_paths):
         if t.lower() not in {a.lower() for a in allowed}:
             allowed.append(t)

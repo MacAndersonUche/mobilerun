@@ -95,7 +95,8 @@ def enforce_job_wall_clock(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Returns a failed job dict when the wall is exceeded, else None.
     """
     now = int(time.time())
-    created = int(job.get("created_at") or now)
+    # r45: a job that waited for the phone starts its clocks when it starts
+    created = int(job.get("started_at") or job.get("created_at") or now)
     state = job.get("state") if isinstance(job.get("state"), dict) else {}
     # Absolute job wall (r23: refuse 7+ min hangs)
     wall = min(int(JOB_WALL_S), int(_TASK_WALL_S))
@@ -818,6 +819,17 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
             except Exception:
                 pass
             return
+        # r45: first real step after waiting → start the clocks now, so the
+        # 90s no-progress wall does not count the time spent queued.
+        st_q = job.get("state") if isinstance(job.get("state"), dict) else {}
+        if job.get("first_deferred_at") and not job.get("started_at") and int(
+            st_q.get("steps") or 0
+        ) == 0:
+            nowq = int(time.time())
+            job["started_at"] = nowq
+            st_q["last_ui_progress_at"] = nowq
+            st_q["last_progress_at"] = nowq
+            job["state"] = st_q
     # Lease: second concurrent worker skips — prevents parallel swipes
     if job_id and not acquire_job_lease(job_id, owner):
         holder = "?"

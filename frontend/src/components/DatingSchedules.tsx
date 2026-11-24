@@ -6,6 +6,7 @@ import { getBackendUrl } from '../config';
 import {
   RUNNABLE_APPS,
   parseCountInput,
+  hasRunMode,
   parseRunCount,
   runCountFor,
   runCountHint,
@@ -244,6 +245,27 @@ export default function DatingSchedules(props: Props) {
                           data-testid={`schedule-count-${pkg}`}
                         />
                       </label>
+                      {hasRunMode(pkg) && (
+                        <select
+                          value={it.mode === 'message' ? 'message' : 'swipe'}
+                          onChange={(e) =>
+                            setEdit({
+                              ...edit,
+                              items: edit.items.map((i) =>
+                                i.app === pkg
+                                  ? { ...i, mode: e.target.value === 'message' ? 'message' : 'swipe' }
+                                  : i
+                              ),
+                            })
+                          }
+                          className="mr-input text-xs"
+                          data-testid={`schedule-mode-${pkg}`}
+                          aria-label={`${appName(pkg)} mode`}
+                        >
+                          <option value="swipe">Auto swipe</option>
+                          <option value="message">Auto message</option>
+                        </select>
+                      )}
                       <span className="text-xs text-mute">
                         runs max {MAX_RUNS_PER_APP} · {runCountHint(pkg)}
                       </span>
