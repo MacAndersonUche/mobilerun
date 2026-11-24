@@ -17,6 +17,8 @@ try:
     from dm_heuristics import (
         DM_APP_PROFILES,
         _fp,
+        compose_box_focused,
+        compose_box_text,
         hinge_dismiss_enable_prompt,
         hinge_dismiss_play_review,
         hinge_find_compose,
@@ -28,6 +30,8 @@ except ImportError:  # pragma: no cover
     from backend.dm_heuristics import (  # type: ignore
         DM_APP_PROFILES,
         _fp,
+        compose_box_focused,
+        compose_box_text,
         hinge_dismiss_enable_prompt,
         hinge_dismiss_play_review,
         hinge_find_compose,
@@ -129,6 +133,38 @@ def _on_paywall_sheet(tree: str) -> bool:
     return any(p in blob for p in _PAYWALL_SHEETS)
 
 
+def _send_like_action(tree: str, planner: str, reason_suffix: str) -> Dict[str, Any]:
+    """Send Like tap from the tree (or the verified map fallback) — never Rose.
+
+    Does not touch done/typed: the caller counts the send. A tree Send Like
+    that resolves inside the Rose bounds is never tapped; the verified map
+    coords (686, 1277) are used instead.
+    """
+    send = hinge_like_sheet_action(tree, planner=planner)
+    if send:
+        sx, sy = int(send.get("x") or 0), int(send.get("y") or 0)
+        if not in_rose_bounds(sx, sy):
+            send["reason"] = (
+                f"Hinge Send Like {reason_suffix} — never Rose ({planner})"
+            )
+            send["planner"] = planner
+            return send
+    return _fp(
+        {
+            "action": "tap",
+            "x": SEND_LIKE_XY[0],
+            "y": SEND_LIKE_XY[1],
+            "reason": (
+                f"Hinge Send Like {reason_suffix} (map xy) "
+                f"— never Rose ({planner})"
+            ),
+            "planner": planner,
+            "llm_provider": None,
+        },
+        "hinge_fixed_fc_send_xy",
+    )
+
+
 def plan_hinge_fixed_first_contact(
     instruction: str,
     ui_tree: str,
@@ -162,6 +198,17 @@ def plan_hinge_fixed_first_contact(
             },
             "hinge_fixed_fc_done",
         )
+
+    # Off the sheet: any post-send / per-profile state is stale (the sheet
+    # closed = the like went through, or this is a new profile). Clear it
+    # so a stale just_sent can never make the next profile wait and Back
+    # out of its sheet instead of typing.
+    if not hinge_on_like_sheet(ui_tree):
+        bulk.pop("just_sent", None)
+        bulk.pop("closing", None)
+        bulk["type_tries"] = 0
+        bulk["focus_tries"] = 0
+        bulk["send_retry"] = 0
 
     play = hinge_dismiss_play_review(ui_tree, planner=planner)
     if play:
@@ -223,85 +270,165 @@ def plan_hinge_fixed_first_contact(
                 },
                 "hinge_fixed_fc_dry_sheet",
             )
-        if not bulk.get("typed"):
-            compose = hinge_find_compose(ui_tree)
-            hist = " ".join(history[-12:]).lower()
-            already_focused = (
-                "comment" in hist or "typed" in hist or "type " in hist
+        # The comment, from the tree — never from history. Send Like is
+        # only tapped when the exact line is verified in the box.
+        box = compose_box_text(ui_tree)
+        # Already sent once for this profile but the line is still in the
+        # box: the Send Like tap missed. One more Send Like tap, never a
+        # retype, never a recount — then fail honestly.
+        if (bulk.get("just_sent") or bulk.get("closing")) and (
+            box.lower() == text.lower()
+        ):
+            if int(bulk.get("send_retry") or 0) < 1:
+                bulk["send_retry"] = 1
+                bulk["just_sent"] = True
+                bulk["closing"] = False
+                bulk["close_tries"] = 0
+                bulk["typed"] = False
+                bulk["awaiting_sheet"] = False
+                st["bulk_message_new"] = bulk
+                return _send_like_action(
+                    ui_tree,
+                    planner,
+                    f"again (comment still in the box) {done}/{target}",
+                )
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hinge comment did not send after a retry "
+                        f"— stop, nothing paid ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_not_sent",
             )
-            if compose and not already_focused and "focus" not in hist:
-                return _fp(
-                    {
-                        "action": "tap",
-                        "x": int(compose[0]),
-                        "y": int(compose[1]),
-                        "reason": f"Focus Add a comment field ({planner})",
-                        "planner": planner,
-                        "llm_provider": None,
-                    },
-                    "hinge_fixed_fc_focus_comment",
-                )
-            if not compose and not already_focused and "focus" not in hist:
-                return _fp(
-                    {
-                        "action": "tap",
-                        "x": COMMENT_XY[0],
-                        "y": COMMENT_XY[1],
-                        "reason": f"Focus Add a comment field (map xy) ({planner})",
-                        "planner": planner,
-                        "llm_provider": None,
-                    },
-                    "hinge_fixed_fc_focus_comment_xy",
-                )
-            bulk["typed"] = True
+        # Already sent for this profile and the box is empty: the sheet is
+        # closing. Do not re-type on it — wait, then Back out (bounded).
+        if bulk.get("just_sent"):
+            bulk["just_sent"] = False
+            bulk["closing"] = True
             st["bulk_message_new"] = bulk
             return _fp(
                 {
-                    "action": "type",
-                    "text": text,
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "delay_s": 1.0,
                     "reason": (
-                        f"Type like-sheet comment '{text}' for first contact "
+                        f"Send Like tapped — waiting for the sheet to close "
                         f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
-                    "clear": True,
                 },
-                "hinge_fixed_fc_type",
+                "hinge_fixed_fc_wait_close",
             )
-        send = hinge_like_sheet_action(ui_tree, planner=planner)
-        if send:
-            sx, sy = int(send.get("x") or 0), int(send.get("y") or 0)
-            if in_rose_bounds(sx, sy):
-                send = None
-            else:
-                bulk["done"] = done + 1
-                bulk["typed"] = False
-                bulk["awaiting_sheet"] = False
-                st["bulk_message_new"] = bulk
-                send["reason"] = (
-                    f"Hinge Send Like first-contact {bulk['done']}/{target} "
-                    f"— never Rose ({planner})"
+        if bulk.get("closing"):
+            tries = int(bulk.get("close_tries") or 0) + 1
+            bulk["close_tries"] = tries
+            st["bulk_message_new"] = bulk
+            if tries > 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Hinge like sheet did not close after Send Like "
+                            f"— stop ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hinge_fixed_fc_close_fail",
                 )
-                send["planner"] = planner
-                return send
-        bulk["done"] = done + 1
-        bulk["typed"] = False
-        bulk["awaiting_sheet"] = False
+            return _fp(
+                {
+                    "action": "press_button",
+                    "button": "back",
+                    "reason": f"Send Like tapped — dismiss the sheet ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_close_back",
+            )
+        if box.lower() == text.lower():
+            send = _send_like_action(
+                ui_tree, planner, f"first-contact {done + 1}/{target}"
+            )
+            bulk["done"] = done + 1
+            bulk["typed"] = False
+            bulk["awaiting_sheet"] = False
+            bulk["just_sent"] = True
+            bulk["close_tries"] = 0
+            bulk["type_tries"] = 0
+            bulk["focus_tries"] = 0
+            st["bulk_message_new"] = bulk
+            return send
+        # The line is not in the box yet: focus it first (tree-verified,
+        # not history), then paste it in one commit — never chunked
+        # human-paced typing on Discover. Bounded: after 2 failed types,
+        # stop honestly.
+        if not compose_box_focused(ui_tree):
+            compose = hinge_find_compose(ui_tree)
+            tries = int(bulk.get("focus_tries") or 0) + 1
+            bulk["focus_tries"] = tries
+            st["bulk_message_new"] = bulk
+            if tries > 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Hinge comment field never took focus "
+                            f"— stop, nothing sent ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hinge_fixed_fc_focus_fail",
+                )
+            xy = compose or COMMENT_XY
+            return _fp(
+                {
+                    "action": "tap",
+                    "x": int(xy[0]),
+                    "y": int(xy[1]),
+                    "reason": f"Focus Add a comment field ({planner})",
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_focus_comment",
+            )
+        tries = int(bulk.get("type_tries") or 0)
+        if tries >= 2:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hinge comment never landed in the box after 2 tries "
+                        f"— stop, nothing sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_type_fail",
+            )
+        bulk["type_tries"] = tries + 1
+        bulk["typed"] = True
         st["bulk_message_new"] = bulk
         return _fp(
             {
-                "action": "tap",
-                "x": SEND_LIKE_XY[0],
-                "y": SEND_LIKE_XY[1],
+                "action": "type",
+                "text": text,
                 "reason": (
-                    f"Hinge Send Like first-contact {bulk['done']}/{target} "
-                    f"(map xy) — never Rose ({planner})"
+                    f"Type like-sheet comment '{text}' (paste, one commit) "
+                    f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
+                "clear": True,
+                "humanize": False,
             },
-            "hinge_fixed_fc_send_xy",
+            "hinge_fixed_fc_type",
         )
 
     # Not on the like sheet — leave Likes You / Standouts, then tap the

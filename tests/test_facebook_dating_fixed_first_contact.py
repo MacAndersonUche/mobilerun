@@ -58,10 +58,31 @@ def test_live_types_mac_text_then_sends_not_heart():
     assert act is not None
     assert act.get("action") == "type"
     assert act.get("text") == "hi miss you look beautiful"
+    # Discover typing is a paste (one commit), never chunked human-paced.
+    assert act.get("humanize") is False
 
-    act2 = plan_facebook_dating_fixed_first_contact(
+    # The same empty box again: the type never landed, so Send must NOT be
+    # tapped and nothing must count as sent — retype, bounded.
+    act_empty = plan_facebook_dating_fixed_first_contact(
         "send 2 first contact messages on Facebook Dating",
         tree,
+        ["Type photo comment"],
+        state=st,
+        dry_run=False,
+        message=PHOTO_COMMENT_TEXT,
+        target=2,
+    )
+    assert act_empty is not None
+    assert act_empty.get("action") == "type"
+    assert st["bulk_message_new"]["done"] == 0
+
+    # Only once the line is verified in the box does Send happen.
+    typed_tree = (FIX / "fb_dating_comment_typed_r46.xml").read_text(
+        encoding="utf-8"
+    )
+    act2 = plan_facebook_dating_fixed_first_contact(
+        "send 2 first contact messages on Facebook Dating",
+        typed_tree,
         ["Type photo comment"],
         state=st,
         dry_run=False,

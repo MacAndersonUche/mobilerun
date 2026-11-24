@@ -4505,7 +4505,11 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
                     {
                         "text": text,
                         "clear": bool(action.get("clear")),
-                        "humanize": True,
+                        # Discover planners paste (humanize=False, one
+                        # commit) so a chunked human-paced type cannot
+                        # silently drop the line; everything else keeps
+                        # the human-paced default.
+                        "humanize": bool(action.get("humanize", True)),
                     },
                     timeout_s=45,
                 )
