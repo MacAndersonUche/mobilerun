@@ -33,6 +33,7 @@ try:
         hily_back_from_photo_viewer,
         hily_dismiss_popup,
         hily_like_action,
+        hily_on_chats_list,
         hily_on_finder,
         hily_on_mbm,
         hily_on_photo_viewer,
@@ -46,6 +47,7 @@ except ImportError:  # pragma: no cover
         hily_back_from_photo_viewer,
         hily_dismiss_popup,
         hily_like_action,
+        hily_on_chats_list,
         hily_on_finder,
         hily_on_mbm,
         hily_on_photo_viewer,
@@ -57,6 +59,7 @@ except ImportError:  # pragma: no cover
     )
 
 PLANNER = "hily_fixed_run"
+LIKE_XY = (750, 1959)  # verified S21 map; Crush (540,1959) is never tapped
 PKG = "com.hily.app"
 FINDER_TAB_XY = (142, 2190)
 MAX_RECOVER = 10
@@ -76,6 +79,24 @@ def parse_hily_instruction(instruction: str) -> Optional[Tuple[int, int]]:
     msgs = min(MESSAGE_CAP, int(m.group(1) or 0))
     likes = min(MAX_LIKES, max(int(m.group(2)), msgs, 1))
     return msgs, likes
+
+
+def finder_without_card_nodes(tree: str) -> bool:
+    """r47: the Finder screen whose card + buttons are not in the a11y tree.
+
+    24 Nov 10:26 (task_5d7be3ad4bd4dc93): Hily was on Finder — header
+    ``finderFiltersButton`` and the nav — but the card stack was an empty
+    scroller with no ActionButton_LIKE / name nodes, so ``hily_on_finder``
+    said no and the planner tapped the Finder tab 3× until the repeat guard
+    stopped the run.
+    """
+    t = tree or ""
+    if "finderFiltersButton" not in t or "bottomNavTab_1" not in t:
+        return False
+    low = t.lower()
+    if "chat_request" in low or "sendmessagebutton" in low or "textinput" in low:
+        return False
+    return not (hily_on_chats_list(t) or hily_on_mbm(t))
 
 
 def _act(kind: str, step: str, reason: str, dry_run: bool, **kw: Any) -> Dict[str, Any]:
@@ -177,7 +198,9 @@ def plan_hily_fixed_run(
         return _act("press_button", "hily_run_sheet_back",
                     "Close Hily paid/Crush sheet — Back, nothing bought", False, button="back")
 
-    if hily_on_finder(ui_tree, _log=False):
+    on_finder = hily_on_finder(ui_tree, _log=False)
+    bare_finder = not on_finder and finder_without_card_nodes(ui_tree)
+    if on_finder or bare_finder:
         hr["recover"] = 0
         if hr.get("awaiting_like"):
             hr["awaiting_like"] = False
@@ -190,7 +213,19 @@ def plan_hily_fixed_run(
             if likes >= max_likes:
                 return plan_hily_fixed_run(instruction, ui_tree, history, state=st,
                                            dry_run=dry_run, message=message)
-        like = hily_like_action(ui_tree, planner=PLANNER)
+        like = hily_like_action(ui_tree, planner=PLANNER) if on_finder else None
+        if bare_finder:
+            # Card still loading? wait once, then use the verified heart xy
+            if not hr.get("bare_waited"):
+                hr["bare_waited"] = True
+                return _act("wait", "hily_run_wait_card",
+                            "Hily Finder card not in the screen tree yet — wait",
+                            False, seconds=1.5, delay_s=1.5)
+            like = _act("tap", "hily_run_fixed_like_swipe",
+                        "Hily Finder free heart (map xy, card not in tree)", False,
+                        x=LIKE_XY[0], y=LIKE_XY[1])
+        else:
+            hr["bare_waited"] = False
         if like:
             hr["awaiting_like"] = True
             like["reason"] = f"Hily Finder free heart {likes + 1}/{target_likes} ({PLANNER})"
