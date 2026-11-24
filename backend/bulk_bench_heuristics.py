@@ -4496,13 +4496,15 @@ def plan_bulk_message_new(
             return fixed
 
     if app == "yubo":
+        # r46 (CA-18): message from the deck cards (Send a message → Direct →
+        # up arrow → sent → swipe right), never the Conversations tab.
         try:
-            from yubo_fixed_first_contact import (
-                plan_yubo_fixed_first_contact,
+            from yubo_card_first_contact import (
+                plan_yubo_card_first_contact as plan_yubo_fixed_first_contact,
             )
         except ImportError:
-            from backend.yubo_fixed_first_contact import (  # type: ignore
-                plan_yubo_fixed_first_contact,
+            from backend.yubo_card_first_contact import (  # type: ignore
+                plan_yubo_card_first_contact as plan_yubo_fixed_first_contact,
             )
         fixed = plan_yubo_fixed_first_contact(
             instruction,

@@ -1,0 +1,20 @@
+<hierarchy windows="1" nodes="20" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n cls="View" c="1" xy="540,1237" b="42,222,1038,2253"/>
+ <n cls="View" c="1" xy="225,678" b="107,531,343,825"/>
+ <n t="Blast" cls="TextView" xy="170,570" b="124,548,217,593"/>
+ <n cls="View" c="1" xy="540,678" b="422,531,658,825"/>
+ <n t="Super Blast" cls="TextView" xy="540,570" b="439,548,641,593"/>
+ <n cls="View" c="1" xy="855,678" b="708,494,1002,862"/>
+ <n t="Direct" cls="TextView" xy="802,543" b="729,515,875,572"/>
+ <n t="Hey" cls="TextView" xy="125,1187" b="84,1160,166,1214"/>
+ <n t="Hi" cls="TextView" xy="582,1187" b="560,1160,604,1214"/>
+ <n t="hey how are you" cls="EditText" c="1" e="1" f="1" xy="466,1334" b="42,1271,891,1397"/>
+ <n t="Send a message" cls="TextView" xy="250,1334" b="84,1307,417,1361"/>
+ <n cls="Button" c="1" xy="632,1334" b="585,1271,680,1397"/>
+ <n cls="Button" c="1" xy="727,1334" b="680,1271,775,1397"/>
+ <n cls="Button" c="1" xy="838,1334" b="775,1271,901,1397"/>
+ <n cls="View" c="1" xy="986,1335" b="923,1272,1049,1398"/>
+ <n cls="Button" c="1" xy="75,150" b="12,87,138,213"/>
+</w>
+</hierarchy>

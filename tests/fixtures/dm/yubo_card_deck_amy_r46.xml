@@ -1,0 +1,10 @@
+<hierarchy windows="1" nodes="20" partial="false" empty="false" mode="compact" packages="co.yellw.yellowapp">
+<w id="active" t="active" p="co.yellw.yellowapp" f="1">
+ <n t="150" cls="TextView" xy="840,158" b="812,138,869,179"/>
+ <n t="Amy" cls="TextView" xy="100,1680" b="42,1643,160,1720"/>
+ <n t="26" cls="TextView" xy="200,1680" b="170,1643,230,1720"/>
+ <n t="United Kingdom, Manchester" cls="TextView" xy="350,1770" b="90,1750,620,1790"/>
+ <n t="Send a message" cls="TextView" xy="210,2000" b="95,1974,428,2028"/>
+ <n cls="View" c="1" xy="1000,2000" b="950,1950,1050,2050"/>
+</w>
+</hierarchy>
