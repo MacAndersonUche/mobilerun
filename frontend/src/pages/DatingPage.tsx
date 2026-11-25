@@ -8,7 +8,6 @@ import LiveActivityFeed, {
   ActivityPayload,
 } from '../components/LiveActivityFeed';
 import {
-  canRunApp,
   parseRunCount,
   runCountHint,
   hasRunMode,
@@ -27,6 +26,11 @@ import {
   sortDatingApps,
   RUNNABLE_APPS,
   ensureRunnableConfigApps,
+  datingAppGroup,
+  groupDatingCards,
+  canRunFromCard,
+  isBlockedApp,
+  TAIMI_BLOCKED_NOTE,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -833,11 +837,19 @@ export default function DatingPage() {
         />
       </div>
 
-      {/* Per-app stats */}
-      <div className="grid md:grid-cols-2 gap-4">
-        {cardsForDatingApps(apps, configApps)
-          .filter((app) => !isSocialPackage(app.package))
-          .map((app) => (
+      {/* Per-app stats, grouped: works all the time, still needs fixing, apps to come */}
+      {groupDatingCards(
+        cardsForDatingApps(apps, configApps).filter(
+          (app) => !isSocialPackage(app.package)
+        )
+      ).map(({ group, apps: groupApps }) => (
+        <section key={group.id} aria-label={group.title} className="space-y-3">
+          <div>
+            <h3 className="text-lg font-semibold">{group.title}</h3>
+            <p className="text-xs text-mute">{group.subtitle}</p>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            {groupApps.map((app) => (
           <div
             key={app.package}
             className="bg-surface border border-line rounded-lg p-4 space-y-3"
@@ -845,10 +857,18 @@ export default function DatingPage() {
             <div className="flex justify-between items-start">
               <div>
                 <h4 className="font-semibold text-lg text-white">{app.name}</h4>
+                {datingAppGroup(app.package) === 'coming-soon' && (
+                  <span className="mt-1 inline-block rounded bg-surface-elev px-2 py-0.5 text-xs text-mute">
+                    Coming soon — no working driver yet
+                  </span>
+                )}
+                {isBlockedApp(app.package) && (
+                  <p className="mt-1 text-xs text-yellow-300">{TAIMI_BLOCKED_NOTE}</p>
+                )}
               </div>
               <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
                 <div>{app.inbox.unread} unread</div>
-                {canRunApp(app.package) && (
+                {canRunFromCard(app.package) && (
                   <button
                     type="button"
                     disabled={loading}
@@ -862,7 +882,7 @@ export default function DatingPage() {
                 )}
               </div>
             </div>
-            {canRunApp(app.package) && showsCount(app.package, runModes) && (
+            {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
               <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
                 <span>{runCountLabel(app.package)}</span>
                 <input
@@ -883,7 +903,7 @@ export default function DatingPage() {
                 />
               </label>
             )}
-            {hasRunMode(app.package) && (
+            {canRunFromCard(app.package) && hasRunMode(app.package) && (
               <div
                 className="flex overflow-hidden rounded-lg border border-line text-xs"
                 data-testid={`dating-run-mode-${app.package}`}
@@ -906,7 +926,8 @@ export default function DatingPage() {
                 ))}
               </div>
             )}
-            {hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
+            {canRunFromCard(app.package) &&
+              hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
               (() => {
                 const mode = runModeFor(app.package, runModes);
                 const key = likeCapKey(app.package, mode);
@@ -939,7 +960,7 @@ export default function DatingPage() {
                   </>
                 );
               })()}
-            {canRunApp(app.package) && showsCount(app.package, runModes) && (
+            {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
               <div
                 className={`-mt-1 px-3 text-xs ${countErrors[app.package] ? 'text-red-300' : 'text-mute'}`}
                 data-testid={`dating-run-count-hint-${app.package}`}
@@ -961,8 +982,10 @@ export default function DatingPage() {
               </div>
             </details>
           </div>
-        ))}
-      </div>
+            ))}
+          </div>
+        </section>
+      ))}
 
       {/* r44: schedule per-app / combo runs */}
       <DatingSchedules
