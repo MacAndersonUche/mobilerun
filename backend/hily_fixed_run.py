@@ -19,6 +19,14 @@ Coordinates (S21+ 1080x2400):
 The message part reuses ``plan_hily_fixed_first_contact`` (send confirm,
 allowance 0 → stop, paywall → Back, never Crush) with its Discover fallback
 switched off: when Likes sent has no envelopes left the message phase ends.
+
+Deck recovery (25 Nov 2026): the Finder tab tap is at the right coords
+(verified against Mac's 24 Nov video: the tab sits at (142, 2190)), but
+the live run tapped it 3x and the deck never appeared — the planner
+re-tapped every cycle with no wait, so the executor's same-decision guard
+stopped the run before the deck could load. Recovery is now a bounded
+ladder — tab, wait, Back, tab, wait — then an honest fail naming the
+screen state, never the same tap twice in a row.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ try:
         hily_on_mbm,
         hily_on_photo_viewer,
         hily_on_profile_sheet,
+        hily_on_top_picks_grid,
     )
     from hily_fixed_first_contact import _is_paywall, plan_hily_fixed_first_contact
 except ImportError:  # pragma: no cover
@@ -52,6 +61,7 @@ except ImportError:  # pragma: no cover
         hily_on_mbm,
         hily_on_photo_viewer,
         hily_on_profile_sheet,
+        hily_on_top_picks_grid,
     )
     from backend.hily_fixed_first_contact import (  # type: ignore
         _is_paywall,
@@ -74,6 +84,14 @@ FINDER_TAB_XY = (142, 2190)
 MAX_RECOVER = 10
 MAX_LIKES = 500
 MESSAGE_CAP = 5  # Hily free first messages per run
+
+# Finder recovery ladder, one rung per cycle (25 Nov 2026): the rungs are
+# deliberately all different, so the executor's same-decision guard can
+# never fire on recovery. n is the consecutive recovery count (1-based).
+_FINDER_RECOVER_LADDER = (
+    "tab", "wait", "back", "tab", "wait",
+    "back", "tab", "wait", "back", "tab",
+)
 
 _RE = re.compile(
     r"\bfixed\s+hily\s+(?:message\s+(\d+)\s+)?likes\s+(\d+)", re.I
@@ -106,6 +124,29 @@ def finder_without_card_nodes(tree: str) -> bool:
     if "chat_request" in low or "sendmessagebutton" in low or "textinput" in low:
         return False
     return not (hily_on_chats_list(t) or hily_on_mbm(t))
+
+
+def _deck_not_loaded(tree: str) -> bool:
+    """The Hily nav bar is up but no deck, chat list, composer or grid is
+    readable: the Finder deck is still loading (or empty). This is the
+    state the live run (25 Nov 00:52) was stuck in — ``finder_without_card_nodes``
+    needs the filters button, which is absent while the screen loads, so
+    the old code fell through to tapping the Finder tab every cycle. The
+    caller waits once here instead of tapping; the heart is never tapped
+    blind on an unreadable screen."""
+    t = tree or ""
+    if "bottomNavTab_1" not in t:
+        return False
+    if hily_on_finder(t, _log=False) or finder_without_card_nodes(t):
+        return False
+    if hily_on_mbm(t) or hily_on_chats_list(t) or hily_on_top_picks_grid(t):
+        return False
+    if hily_on_photo_viewer(t) or hily_on_profile_sheet(t):
+        return False
+    low = t.lower()
+    if "chat_request" in low or "sendmessagebutton" in low or "textinput" in low:
+        return False
+    return True
 
 
 def _act(kind: str, step: str, reason: str, dry_run: bool, **kw: Any) -> Dict[str, Any]:
@@ -230,6 +271,7 @@ def plan_hily_fixed_run(
     bare_finder = not on_finder and finder_without_card_nodes(ui_tree)
     if on_finder or bare_finder:
         hr["recover"] = 0
+        hr.pop("_deck_waited", None)  # deck loaded — the loading wait resets
         hr.pop("match", None)  # r49: back on Finder — match popup finished
         if hr.get("awaiting_like"):
             hr["awaiting_like"] = False
@@ -279,23 +321,48 @@ def plan_hily_fixed_run(
         if n_int <= 40:
             return ia
 
-    # Not on Finder → tap the Finder tab (never Back off the top screen)
+    # Deck still loading (or empty) — nav bar up, nothing readable. Wait
+    # once for it to render instead of tapping the Finder tab into a
+    # loading screen (live 25 Nov 00:52: tab tapped 3x, deck never came).
+    if _deck_not_loaded(ui_tree) and not hr.get("_deck_waited"):
+        hr["_deck_waited"] = True
+        return _act("wait", "hily_run_deck_wait",
+                    "Hily screen not readable yet — wait for the deck to load",
+                    False, seconds=1.5, delay_s=1.5)
+
+    # Not on Finder → bounded recovery ladder (tab, wait, Back, tab, wait,
+    # ...): every rung is different, so the executor's same-decision guard
+    # can never fire on recovery, and the run fails honestly naming the
+    # screen instead of "Fixed swipe stuck ... not on deck".
     n = int(hr.get("recover") or 0) + 1
     hr["recover"] = n
     if n > MAX_RECOVER:
         return _act("fail", "hily_run_lost",
                     f"Hily: could not get back to Finder after {MAX_RECOVER} tries "
-                    f"({likes} likes)", False)
+                    f"({likes} likes) — Finder tab tapped, waited and Backed, "
+                    f"deck never appeared", False)
     _drop_unverified_like(hr)  # r49: not Finder after the heart → not counted
     pkgs = re.search(r'packages="([^"]*)"', ui_tree or "")
     if (ui_tree or "").strip() and pkgs and PKG not in pkgs.group(1):
         return _act("open_app", "hily_run_open", "Open Hily", False, app="Hily", package=PKG)
+    rung = _FINDER_RECOVER_LADDER[(n - 1) % len(_FINDER_RECOVER_LADDER)]
+    if rung == "wait":
+        return _act("wait", "hily_run_finder_wait",
+                    "Hily Finder tab tapped — wait for the deck to load",
+                    False, seconds=1.5, delay_s=1.5)
+    if rung == "back":
+        return _act("press_button", "hily_run_finder_back",
+                    "Hily Finder deck not showing — Back to clear the screen",
+                    False, button="back")
+    # rung == "tab": tap the Finder tab (tree-resolved, else the map xy).
+    # The try number is in the reason so one tab tap never shares a
+    # decision key with the next.
+    tab_try = (n + 2) // 3
     c = _tree_id_center(ui_tree, "bottomNavTab_1", "id/bottomNavTab_1")
     if c:
-        return _act("tap", "hily_run_finder_tab", "Open Hily Finder tab", False,
+        return _act("tap", "hily_run_finder_tab",
+                    f"Open Hily Finder tab (try {tab_try})", False,
                     x=int(c[0]), y=int(c[1]))
-    if n % 3 == 0:
-        return _act("press_button", "hily_run_back", "Back toward Hily Finder", False,
-                    button="back")
-    return _act("tap", "hily_run_finder_tab_xy", "Open Hily Finder tab (map xy)", False,
+    return _act("tap", "hily_run_finder_tab_xy",
+                f"Open Hily Finder tab (map xy, try {tab_try})", False,
                 x=FINDER_TAB_XY[0], y=FINDER_TAB_XY[1])

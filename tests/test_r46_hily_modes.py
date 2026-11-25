@@ -129,6 +129,44 @@ def test_schedule_keeps_hily_mode_and_likes():
 # ---- planner ---------------------------------------------------------------
 
 
+# Nav bar up, no deck / chat / composer readable — the state the live run
+# (25 Nov 00:52) was stuck in: the Finder tab tap landed but the deck
+# never appeared, and the planner re-tapped the tab every cycle.
+NAV_ONLY = (
+    '<hierarchy packages="com.hily.app"><w p="com.hily.app">'
+    '<n i="bottomNavTab_1" d="Finder" c="1" xy="142,2190" b="60,2140,220,2240"/>'
+    '<n i="bottomNavTab_4" d="Activity" c="1" xy="740,2190" b="660,2140,820,2240"/>'
+    "</w></hierarchy>"
+)
+
+
+def test_finder_recovery_ladder_waits_then_fails_honestly():
+    # Live 25 Nov 00:52: Finder tab tapped 3x, deck never came, executor
+    # stopped the run ("Fixed swipe stuck ... not on deck"). Recovery is
+    # now a bounded ladder — deck wait, tab, wait, Back, tab, wait, ... —
+    # then an honest fail naming the screen. The executor's same-decision
+    # guard (ca._planner_decision_key, x3) must never fire on it.
+    acts, st = _run("fixed hily likes 3", [NAV_ONLY] * 12)
+    steps = [a["fastpath_step"] for a in acts]
+    assert steps[0] == "hily_run_deck_wait"  # wait for the deck, not a blind tap
+    assert steps[1] == "hily_run_finder_tab" and _xy(acts[1]) == (142, 2190)
+    assert steps[2] == "hily_run_finder_wait"
+    assert steps[3] == "hily_run_finder_back"
+    assert steps[4] == "hily_run_finder_tab"
+    assert acts[-1]["action"] == "fail"
+    assert "could not get back to Finder" in (acts[-1].get("reason") or "")
+    assert "deck never appeared" in (acts[-1].get("reason") or "")
+    for a in acts:
+        assert _xy(a) not in (CRUSH_XY, DISCOVER_XY)
+        assert a.get("llm_provider") is None
+    # Same-decision guard simulation: no decision key repeats 3x in a row.
+    keys = [ca._planner_decision_key(a) for a in acts]
+    for i in range(len(keys) - 2):
+        assert not (keys[i] and keys[i] == keys[i + 1] == keys[i + 2]), (
+            f"guard would fire at {i}: {keys[i]}"
+        )
+
+
 def test_likes_only_finder_hearts_then_done_never_crush():
     acts, st = _run("fixed hily likes 3", [CHATS] + [FINDER] * 5)
     assert acts[0]["fastpath_step"] == "hily_run_finder_tab"  # Finder, not Discover

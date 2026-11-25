@@ -190,3 +190,54 @@ def test_finder_opens_activity_not_crush():
     assert act.get("action") == "tap"
     assert (act.get("x"), act.get("y")) == ACTIVITY_TAB_XY
     assert (act.get("x"), act.get("y")) != CRUSH_XY
+
+
+def test_activity_tab_fails_after_three_misses():
+    # 25 Nov 2026: a tab tap that never lands repeated every cycle until
+    # the executor's same-decision guard stopped the run. Now bounded —
+    # 3 taps, then an honest fail.
+    tree = '<hierarchy><w p="com.hily.app" f="1"><n t="Jorgia, 28" i="userNameAgeField"/><n i="ActionButton_CRUSH" c="1" xy="540,1959"/><n i="ActionButton_LIKE" c="1" xy="750,1959"/><n d="Finder" xy="142,2190"/></w></hierarchy>'
+    st = {"bulk_message_new": {"done": 0}}
+    acts = [
+        plan_hily_fixed_first_contact(
+            "send 2 first contact messages on Hily",
+            tree,
+            ["Opened Hily"],
+            state=st,
+            dry_run=False,
+            message="hey how are you",
+            target=2,
+        )
+        for _ in range(4)
+    ]
+    assert [a["action"] for a in acts[:3]] == ["tap", "tap", "tap"]
+    assert all((a["x"], a["y"]) == ACTIVITY_TAB_XY for a in acts[:3])
+    assert acts[3]["action"] == "fail"
+    assert "Activity tab did not open" in (acts[3].get("reason") or "")
+    assert st["bulk_message_new"]["done"] == 0
+
+
+def test_likes_sent_tab_fails_after_three_misses():
+    tree = (
+        '<hierarchy packages="com.hily.app"><w p="com.hily.app">'
+        '<n t="Activity" xy="540,100"/><n t="Visitors" xy="540,300"/>'
+        "</w></hierarchy>"
+    )
+    st = {"bulk_message_new": {"done": 0}}
+    acts = [
+        plan_hily_fixed_first_contact(
+            "send 2 first contact messages on Hily",
+            tree,
+            ["Opened Hily", "Open Hily Activity"],
+            state=st,
+            dry_run=False,
+            message="hey how are you",
+            target=2,
+        )
+        for _ in range(4)
+    ]
+    assert [a["action"] for a in acts[:3]] == ["tap", "tap", "tap"]
+    assert all((a["x"], a["y"]) == (900, 265) for a in acts[:3])
+    assert acts[3]["action"] == "fail"
+    assert "Likes sent tab did not open" in (acts[3].get("reason") or "")
+    assert st["bulk_message_new"]["done"] == 0

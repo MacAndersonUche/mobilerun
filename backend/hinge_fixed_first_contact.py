@@ -4,9 +4,18 @@ Verified on the S21+ (1080x2400), 23 Nov 2026:
   Da  — comment "hey how are you" + Send Like (686, 1277)
   Presh — comment "hi miss" + Send Like (686, 1277)
 
-Discover often has an empty a11y tree, so the heart tap uses the stable
-photo-heart map (937, 1356) instead of per-card vision. Prompt-heart Y
-moves with prompt length and is not used. The like sheet itself has a11y.
+Discover often has an empty a11y tree, so the heart tap uses the photo-heart
+map instead of per-card vision. Prompt-heart Y moves with prompt length and
+is not used. The like sheet itself has a11y.
+
+The photo heart's X is stable (937) but its Y moves with the photo: 1010 on
+a short top photo, 1356 on the 23 Nov card, 1790 on a tall first photo
+(Mac's 24 Nov video, frames scene_003/004). A single fixed Y misses the
+heart on most cards — the live run (25 Nov 00:49) tapped (937, 1356) three
+times, no sheet ever opened, and the executor's same-decision guard stopped
+the run ("Fixed swipe stuck ... not on deck"). So the heart is tried down
+a short ladder, one position per cycle, and the run fails honestly when the
+ladder is exhausted instead of repeating the same tap.
 
 Video (24 Nov 2026, Mac by hand): after Send Like a "Send a Rose
 instead?" sheet can appear — dismiss it with "Send Like anyway", never
@@ -24,6 +33,7 @@ try:
     from dm_heuristics import (
         DM_APP_PROFILES,
         _fp,
+        _parse_compact_nodes,
         _tree_node_center,
         compose_box_focused,
         compose_box_text,
@@ -38,6 +48,7 @@ except ImportError:  # pragma: no cover
     from backend.dm_heuristics import (  # type: ignore
         DM_APP_PROFILES,
         _fp,
+        _parse_compact_nodes,
         _tree_node_center,
         compose_box_focused,
         compose_box_text,
@@ -57,6 +68,12 @@ MESSAGE_BANK = (
     "good morning",
 )
 PHOTO_HEART_XY = (937, 1356)
+# Heart Y ladder (25 Nov 2026): the heart sits at the bottom-right of the
+# visible photo/prompt, whose height varies by card — measured from Mac's
+# 24 Nov video: 1010 (short top photo), 1356 (23 Nov map), 1790 (tall
+# first photo). X is stable at 937 on all three.
+PHOTO_HEART_X = 937
+PHOTO_HEART_LADDER = (PHOTO_HEART_XY[1], 1010, 1790)
 SEND_LIKE_XY = (686, 1277)
 COMMENT_XY = (540, 1102)
 DISCOVER_TAB_XY = (110, 2195)
@@ -93,6 +110,21 @@ def in_rose_bounds(x: int, y: int) -> bool:
 
 def _low(tree: str) -> str:
     return (tree or "").lower()
+
+
+def _deck_readable(ui_tree: str) -> bool:
+    """True when the tree carries any readable node (a name, a label, an
+    id): the Discover deck has loaded. An empty tree means Hinge's a11y
+    is blank or the deck is still loading — the caller waits instead of
+    tapping the heart into a screen that has not rendered yet."""
+    try:
+        nodes = _parse_compact_nodes(ui_tree)
+    except Exception:
+        return False
+    return any(
+        (n.get("text") or n.get("label") or n.get("desc") or n.get("id") or "").strip()
+        for n in nodes
+    )
 
 
 def _on_likes_you(tree: str) -> bool:
@@ -203,6 +235,33 @@ def _send_like_action(tree: str, planner: str, reason_suffix: str) -> Dict[str, 
     )
 
 
+def _leave_likes_you(bulk: Dict[str, Any], planner: str) -> Dict[str, Any]:
+    """Tap the Discover tab to leave Likes You — bounded. If the tab tap
+    never lands, fail honestly instead of tapping it every cycle until the
+    executor's same-decision guard stops the run."""
+    tries = int(bulk.get("_likes_you_tries") or 0) + 1
+    bulk["_likes_you_tries"] = tries
+    if tries > 3:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Hinge still on Likes You after {tries - 1} Discover "
+                    f"tab taps — stop, nothing sent ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_fixed_fc_likes_you_fail",
+        )
+    act = hinge_open_discover_tab(planner=planner)
+    act["reason"] = (
+        f"Leave Hinge Likes You (Boost/HingeX showing) → Discover "
+        f"({planner})"
+    )
+    return act
+
+
 def plan_hinge_fixed_first_contact(
     instruction: str,
     ui_tree: str,
@@ -248,6 +307,15 @@ def plan_hinge_fixed_first_contact(
         bulk["focus_tries"] = 0
         bulk["send_retry"] = 0
 
+    # On the sheet the heart ladder already did its job — reset it for the
+    # next profile. (Never reset it off the sheet: the ladder only advances
+    # while the sheet stays closed.)
+    if hinge_on_like_sheet(ui_tree):
+        bulk["heart_tries"] = 0
+    # No longer on Likes You — the leave-Likes-You counter resets too.
+    if not _on_likes_you(ui_tree):
+        bulk.pop("_likes_you_tries", None)
+
     play = hinge_dismiss_play_review(ui_tree, planner=planner)
     if play:
         return play
@@ -256,12 +324,7 @@ def plan_hinge_fixed_first_contact(
         return popup
 
     if _on_likes_you(ui_tree) and not hinge_on_like_sheet(ui_tree):
-        act = hinge_open_discover_tab(planner=planner)
-        act["reason"] = (
-            f"Leave Hinge Likes You (Boost/HingeX showing) → Discover "
-            f"({planner})"
-        )
-        return act
+        return _leave_likes_you(bulk, planner)
 
     text = allowed_message(message)
 
@@ -529,12 +592,7 @@ def plan_hinge_fixed_first_contact(
     # Not on the like sheet — leave Likes You / Standouts, then tap the
     # photo heart. Never vision, never Dating Intent / Rewind / Rose.
     if _on_likes_you(ui_tree):
-        act = hinge_open_discover_tab(planner=planner)
-        act["reason"] = (
-            f"Leave Hinge Likes You (Boost/HingeX showing) → Discover "
-            f"({planner})"
-        )
-        return act
+        return _leave_likes_you(bulk, planner)
 
     if dry_run:
         bulk["done"] = target
@@ -601,17 +659,63 @@ def plan_hinge_fixed_first_contact(
         return act
     bulk["_recover_n"] = 0
 
+    # The deck needs a moment after the Discover tab tap: the live run
+    # tapped the heart straight into a still-loading screen. Wait once —
+    # but only when the tree shows nothing at all (a loaded deck, with
+    # card nodes, is tapped straight away).
+    if (
+        bulk.get("_opened_discover")
+        and not bulk.get("_discover_waited")
+        and not _deck_readable(ui_tree)
+    ):
+        bulk["_discover_waited"] = True
+        st["bulk_message_new"] = bulk
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 1.5,
+                "delay_s": 1.5,
+                "reason": (
+                    f"Hinge Discover tab tapped — wait for the deck to load "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_fixed_fc_discover_wait",
+        )
+
+    # Photo heart down the ladder: one position per cycle, verified by the
+    # sheet opening. Never repeat the same tap — the old code tapped
+    # (937, 1356) every cycle and the executor stopped the run at x3.
+    tries = int(bulk.get("heart_tries") or 0)
+    if tries >= len(PHOTO_HEART_LADDER):
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Hinge photo heart did not open the like sheet after "
+                    f"{tries} positions {PHOTO_HEART_LADDER} — card layout "
+                    f"changed or not on the Discover deck, stop ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_fixed_fc_heart_fail",
+        )
+    heart_y = PHOTO_HEART_LADDER[tries]
+    bulk["heart_tries"] = tries + 1
     bulk["awaiting_sheet"] = True
     bulk["typed"] = False
     st["bulk_message_new"] = bulk
     return _fp(
         {
             "action": "tap",
-            "x": PHOTO_HEART_XY[0],
-            "y": PHOTO_HEART_XY[1],
+            "x": PHOTO_HEART_X,
+            "y": heart_y,
             "reason": (
-                f"Hinge Discover photo heart {PHOTO_HEART_XY} to open "
-                f"like sheet ({planner})"
+                f"Hinge Discover photo heart ({PHOTO_HEART_X}, {heart_y}) "
+                f"to open like sheet — try {tries + 1}/{len(PHOTO_HEART_LADDER)} ({planner})"
             ),
             "planner": planner,
             "llm_provider": None,
@@ -623,6 +727,7 @@ def plan_hinge_fixed_first_contact(
 # Re-export map so tests and profiles stay in one place.
 HINGE_FIXED_MAP = {
     "photo_heart_xy": PHOTO_HEART_XY,
+    "photo_heart_ladder": PHOTO_HEART_LADDER,
     "send_like_xy": SEND_LIKE_XY,
     "comment_xy": COMMENT_XY,
     "discover_tab_xy": DISCOVER_TAB_XY,

@@ -170,6 +170,15 @@ def plan_hily_fixed_first_contact(
             "hily_fixed_fc_done",
         )
 
+    # Navigation landed — the tab-tap counters below reset. (25 Nov 2026:
+    # the Activity / Likes-sent taps used to repeat every cycle when they
+    # did not land, until the executor's same-decision guard stopped the
+    # run. They are now bounded and fail honestly instead.)
+    if _on_activity(ui_tree):
+        bulk["_activity_tries"] = 0
+    if _on_likes_sent(ui_tree):
+        bulk["_likes_sent_tries"] = 0
+
     pending = str(bulk.get("awaiting_sent") or "")
     if pending:
         box = ""
@@ -482,6 +491,22 @@ def plan_hily_fixed_first_contact(
         )
 
     if _on_activity(ui_tree) and not _on_likes_sent(ui_tree):
+        tries = int(bulk.get("_likes_sent_tries") or 0) + 1
+        bulk["_likes_sent_tries"] = tries
+        st["bulk_message_new"] = bulk
+        if tries > 3:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hily Likes sent tab did not open after 3 taps — "
+                        f"stop, nothing sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_fixed_fc_likes_sent_fail",
+            )
         return _fp(
             {
                 "action": "tap",
@@ -594,6 +619,22 @@ def plan_hily_fixed_first_contact(
         )
 
     # Finder / elsewhere — open Activity. Never tap deck Crush.
+    tries = int(bulk.get("_activity_tries") or 0) + 1
+    bulk["_activity_tries"] = tries
+    st["bulk_message_new"] = bulk
+    if tries > 3:
+        return _fp(
+            {
+                "action": "fail",
+                "reason": (
+                    f"Hily Activity tab did not open after 3 taps — stop, "
+                    f"nothing sent ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hily_fixed_fc_activity_fail",
+        )
     return _fp(
         {
             "action": "tap",
