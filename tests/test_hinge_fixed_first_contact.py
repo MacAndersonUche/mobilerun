@@ -6,7 +6,9 @@ from pathlib import Path
 
 from backend.bulk_bench_heuristics import parse_bulk_goal, plan_bulk_bench
 from backend.hinge_fixed_first_contact import (
+    COMMENT_XY,
     MESSAGE_BANK,
+    PHOTO_HEART_LADDER,
     PHOTO_HEART_XY,
     ROSE_BOUNDS,
     SEND_LIKE_XY,
@@ -371,3 +373,250 @@ def test_rose_popup_without_anyway_node_backs_out_never_map():
     assert act.get("button") == "back"
     assert act.get("x") is None
     assert st["bulk_message_new"]["done"] == 0
+
+
+def _blind_sheet_state(**extra):
+    bulk = {
+        "done": 0,
+        "typed": False,
+        "_opened_discover": True,
+        "_deck_seen": True,
+        "awaiting_sheet": True,
+        "heart_tries": 1,
+    }
+    bulk.update(extra)
+    return {"bulk_message_new": bulk}
+
+
+def test_blind_sheet_after_heart_tap_never_retaps_heart():
+    # 25 Nov 2026 (Mac, live): the comment box opened, nothing was typed,
+    # the box closed. Cause: the sheet opened but the tree stayed blind,
+    # so the planner fell through to the heart ladder and re-tapped the
+    # heart on the open sheet — which closes it. Now: wait once, focus
+    # the composer at its map position (bounded), then fail honestly.
+    # Never another heart tap while the sheet may be open.
+    tree = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
+    st = _blind_sheet_state()
+    hist = ["Opened Hinge", "Open Hinge Discover tab", "Hinge Discover photo heart"]
+    acts = [
+        plan_hinge_fixed_first_contact(
+            "send 2 first contact messages on Hinge",
+            tree,
+            hist,
+            state=st,
+            package="co.hinge.app",
+            dry_run=False,
+            message="hi miss",
+            target=2,
+        )
+        for _ in range(4)
+    ]
+    assert acts[0]["action"] == "wait"
+    assert acts[0].get("fastpath_step") == "hinge_fixed_fc_blind_sheet_wait"
+    assert acts[1]["action"] == "tap"
+    assert (acts[1]["x"], acts[1]["y"]) == COMMENT_XY
+    assert acts[2]["action"] == "tap"
+    assert (acts[2]["x"], acts[2]["y"]) == COMMENT_XY
+    assert acts[3]["action"] == "fail"
+    assert "never appeared" in (acts[3].get("reason") or "")
+    for a in acts:
+        assert (a.get("x"), a.get("y")) not in [
+            (937, y) for y in PHOTO_HEART_LADDER
+        ], "heart re-tapped while the sheet may be open"
+    assert st["bulk_message_new"]["done"] == 0  # nothing counted as sent
+
+
+def test_blind_sheet_then_box_appears_types_verified():
+    # Same start as above, but after the blind focus tap the tree shows
+    # the sheet: the normal verified type/send path takes over.
+    empty = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
+    sheet = (FIX / "hinge_like_sheet.xml").read_text(encoding="utf-8")
+    st = _blind_sheet_state()
+    hist = ["Opened Hinge", "Open Hinge Discover tab", "Hinge Discover photo heart"]
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        empty,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act["action"] == "wait"
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        empty,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act["action"] == "tap"
+    assert (act["x"], act["y"]) == COMMENT_XY
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        sheet,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "type"
+    assert act.get("text") == "hi miss"
+    assert act.get("humanize") is False  # paste, one commit
+    assert st["bulk_message_new"]["done"] == 0
+
+
+_SPARSE_SHEET_TREE = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!-- Like sheet, sparse tree: only the comment EditText shows (no Send Like node) -->
+<hierarchy>
+  <w p="co.hinge.app" a="1">
+    <n e="1" f="1" xy="540,1102" b="[95,1015][985,1190]" h="Add a comment" />
+  </w>
+</hierarchy>
+"""
+
+_SPARSE_SHEET_TYPED_TREE = _SPARSE_SHEET_TREE.replace(
+    'h="Add a comment" />', 't="hi miss" h="Add a comment" />'
+)
+
+
+def test_sparse_sheet_editable_only_still_types():
+    # Only the comment EditText is in the tree (no "Send Like" node):
+    # the sheet is still detected via the editable while a heart tap is
+    # outstanding, so the planner types instead of re-tapping the heart.
+    st = _blind_sheet_state()
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        _SPARSE_SHEET_TREE,
+        ["Opened Hinge", "Hinge Discover photo heart"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "type"
+    assert act.get("text") == "hi miss"
+    assert act.get("humanize") is False
+    assert st["bulk_message_new"]["done"] == 0
+
+
+def test_sparse_sheet_verified_text_sends_like_via_map():
+    # The line is verified in the box but the tree has no Send Like node:
+    # Send Like goes out at the verified map coords — never Rose.
+    st = _blind_sheet_state(typed=True)
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        _SPARSE_SHEET_TYPED_TREE,
+        ["Opened Hinge", "Type like-sheet comment"],
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == SEND_LIKE_XY
+    assert not in_rose_bounds(int(act["x"]), int(act["y"]))
+    assert st["bulk_message_new"]["done"] == 1
+
+
+def test_next_card_wait_after_send_before_next_heart():
+    # After Send Like the sheet closes: the next heart tap must wait for
+    # the next card when the tree is still blind, not fire into an empty
+    # screen and burn a ladder rung on a card that is not there yet.
+    typed = (FIX / "hinge_like_sheet_typed.xml").read_text(encoding="utf-8")
+    empty = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
+    st = _blind_sheet_state()
+    hist = ["Opened Hinge", "Hinge Discover photo heart", "Type like-sheet comment"]
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        typed,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == SEND_LIKE_XY
+    assert st["bulk_message_new"]["done"] == 1
+    assert st["bulk_message_new"]["just_sent"] is True
+    # Sheet closed, tree blind: wait for the next card, not a heart tap.
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        empty,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "wait"
+    assert act.get("fastpath_step") == "hinge_fixed_fc_discover_wait"
+    assert st["bulk_message_new"]["done"] == 1  # nothing double-counted
+    # After the wait the ladder resumes at rung 1 on the new card.
+    act = plan_hinge_fixed_first_contact(
+        "send 2 first contact messages on Hinge",
+        empty,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
+        message="hi miss",
+        target=2,
+    )
+    assert act is not None
+    assert act.get("action") == "tap"
+    assert (act.get("x"), act.get("y")) == PHOTO_HEART_XY
+
+
+def test_heart_ladder_rungs_have_distinct_decision_keys():
+    # The 08:50 live run died on "same step x3 (tap:937,1356|hinge
+    # discover photo heart (937, 1356) to open like sheet)" — the old
+    # code re-emitted one tap. The ladder must never produce the same
+    # decision key twice in a row: different coords AND a different
+    # reason stem per rung, so the executor's same-decision guard can
+    # never fire on the ladder itself.
+    tree = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
+    st = {"bulk_message_new": {"done": 0, "typed": False, "_opened_discover": True}}
+    hist = ["Opened Hinge", "Open Hinge Discover tab"]
+    acts = [
+        plan_bulk_bench(
+            "send 2 first contact messages on Hinge",
+            tree,
+            hist,
+            state=st,
+            package="co.hinge.app",
+            dry_run=False,
+        )
+        for _ in range(4)
+    ]
+    hearts = [
+        a
+        for a in acts
+        if a.get("action") == "tap"
+        and "photo heart" in (a.get("reason") or "").lower()
+    ]
+    assert len(hearts) == 3
+    assert [(a["x"], a["y"]) for a in hearts] == [
+        (937, y) for y in PHOTO_HEART_LADDER
+    ]
+    assert len({a.get("reason") for a in hearts}) == 3
+    assert all(
+        f"try {i + 1}/{len(PHOTO_HEART_LADDER)}" in (h.get("reason") or "")
+        for i, h in enumerate(hearts)
+    )

@@ -23,6 +23,18 @@ instead?" sheet can appear — dismiss it with "Send Like anyway", never
 anyway" tap is tree-resolved only: the map Send Like coords sit between
 the Rose button and the anyway link on that sheet, so a map fallback
 there could tap Rose.
+
+Blind sheet (25 Nov 2026, Mac watching his phone): the comment box
+opened, nothing was typed, the box closed. The sheet had opened but
+the tree stayed blind, so the planner fell through to the heart ladder
+and re-tapped the heart on the open sheet — which closes it. A heart
+tap that opened the sheet sets awaiting_sheet; while that is set and
+the tree is blind, the planner never re-taps the heart: it waits once
+for the sheet to render, then focuses the comment composer at its map
+position (bounded). As soon as the tree shows the box, the normal
+verified type/send runs. If the box never appears, it fails honestly
+— never blind-type, never blind-send, because the IME path accepts
+text unverified and the tree is the only read-back.
 """
 
 from __future__ import annotations
@@ -32,6 +44,7 @@ from typing import Any, Dict, List, Optional
 try:
     from dm_heuristics import (
         DM_APP_PROFILES,
+        _compose_editable,
         _fp,
         _parse_compact_nodes,
         _tree_node_center,
@@ -47,6 +60,7 @@ try:
 except ImportError:  # pragma: no cover
     from backend.dm_heuristics import (  # type: ignore
         DM_APP_PROFILES,
+        _compose_editable,
         _fp,
         _parse_compact_nodes,
         _tree_node_center,
@@ -125,6 +139,22 @@ def _deck_readable(ui_tree: str) -> bool:
         (n.get("text") or n.get("label") or n.get("desc") or n.get("id") or "").strip()
         for n in nodes
     )
+
+
+def _sheet_open(tree: str, bulk: Dict[str, Any]) -> bool:
+    """The like sheet is up: detected in the tree, or the comment box is
+    present while a heart tap is outstanding. Hinge's sheet usually has
+    a11y, but on a sparse tree only the focused comment EditText may
+    show — that is still the sheet, and the planner must type into it,
+    not re-tap the heart."""
+    if hinge_on_like_sheet(tree):
+        return True
+    if bulk.get("awaiting_sheet"):
+        try:
+            return _compose_editable(tree) is not None
+        except Exception:
+            return False
+    return False
 
 
 def _on_likes_you(tree: str) -> bool:
@@ -296,22 +326,38 @@ def plan_hinge_fixed_first_contact(
             "hinge_fixed_fc_done",
         )
 
+    # The deck has rendered at least once: a later blind tree means the
+    # like sheet (or a render gap), not a deck that never loaded. The
+    # blind-sheet recovery below is gated on this — a heart tap into a
+    # deck that never rendered cannot have opened a sheet.
+    if _deck_readable(ui_tree):
+        bulk["_deck_seen"] = True
+
     # Off the sheet: any post-send / per-profile state is stale (the sheet
     # closed = the like went through, or this is a new profile). Clear it
     # so a stale just_sent can never make the next profile wait and Back
     # out of its sheet instead of typing.
-    if not hinge_on_like_sheet(ui_tree):
+    if not _sheet_open(ui_tree, bulk):
+        had_send = bool(bulk.get("just_sent") or bulk.get("closing"))
         bulk.pop("just_sent", None)
         bulk.pop("closing", None)
         bulk["type_tries"] = 0
         bulk["focus_tries"] = 0
         bulk["send_retry"] = 0
+        if had_send:
+            # The send went through and the sheet closed: the next card
+            # needs a moment to render. Re-arm the deck wait so the
+            # next heart tap does not fire into an empty screen and burn
+            # a ladder rung on a card that is not there yet.
+            bulk.pop("_discover_waited", None)
 
     # On the sheet the heart ladder already did its job — reset it for the
     # next profile. (Never reset it off the sheet: the ladder only advances
     # while the sheet stays closed.)
-    if hinge_on_like_sheet(ui_tree):
+    if _sheet_open(ui_tree, bulk):
         bulk["heart_tries"] = 0
+        bulk.pop("_sheet_waited", None)
+        bulk.pop("_blind_focus_tries", None)
     # No longer on Likes You — the leave-Likes-You counter resets too.
     if not _on_likes_you(ui_tree):
         bulk.pop("_likes_you_tries", None)
@@ -406,7 +452,7 @@ def plan_hinge_fixed_first_contact(
         bulk["awaiting_sheet"] = True
         st["bulk_message_new"] = bulk
 
-    if on_sheet and hinge_on_like_sheet(ui_tree):
+    if on_sheet and _sheet_open(ui_tree, bulk):
         if dry_run:
             bulk["done"] = target
             bulk["typed"] = True
@@ -587,6 +633,73 @@ def plan_hinge_fixed_first_contact(
                 "humanize": False,
             },
             "hinge_fixed_fc_type",
+        )
+
+    # The sheet may be open but the tree blind. A heart tap that opened
+    # the sheet sets awaiting_sheet; if the next tree is empty, the old
+    # code fell through to the heart ladder and re-tapped the heart on
+    # the open sheet — which closes it (Mac watched exactly this on
+    # 25 Nov 2026: the comment box opened, nothing was typed, the box
+    # closed). Never re-tap the heart while the sheet may be open:
+    # wait once for it to render, then focus the comment composer at
+    # its map position (bounded). As soon as the tree shows the box,
+    # the sheet block above takes over and the normal verified
+    # type/send runs. If the box never appears, fail honestly — never
+    # blind-type, never blind-send. Gated on _deck_seen: a heart tap
+    # into a deck that never rendered cannot have opened a sheet, so
+    # that case still falls through to the ladder below.
+    if (
+        bulk.get("awaiting_sheet")
+        and bulk.get("_deck_seen")
+        and not _deck_readable(ui_tree)
+    ):
+        if not bulk.get("_sheet_waited"):
+            bulk["_sheet_waited"] = True
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "wait",
+                    "seconds": 1.0,
+                    "delay_s": 1.0,
+                    "reason": (
+                        f"Hinge like sheet may be open but the tree is "
+                        f"blind — wait for it to render ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_blind_sheet_wait",
+            )
+        tries = int(bulk.get("_blind_focus_tries") or 0) + 1
+        bulk["_blind_focus_tries"] = tries
+        st["bulk_message_new"] = bulk
+        if tries > 2:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hinge like sheet opened but the comment box "
+                        f"never appeared in the tree — stop, nothing "
+                        f"sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_blind_sheet_fail",
+            )
+        return _fp(
+            {
+                "action": "tap",
+                "x": COMMENT_XY[0],
+                "y": COMMENT_XY[1],
+                "reason": (
+                    f"Focus Add a comment composer — like sheet open "
+                    f"but tree blind ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_fixed_fc_blind_focus",
         )
 
     # Not on the like sheet — leave Likes You / Standouts, then tap the
