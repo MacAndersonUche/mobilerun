@@ -57,6 +57,96 @@ export function ensureRunnableConfigApps<T extends { package_name: string }>(
   return [...(configApps || []), ...extra];
 }
 
+// Dating page groups: move an app between groups by moving its package
+// between these three lists — nothing else needs to change.
+// - works: apps that run all the time (top of the page)
+// - needs-fixing: drivers exist but these still fail or need work; Taimi is
+//   blocked (FLAG_SECURE makes its screenshots black) and must not be runnable
+// - coming-soon: no working driver yet — cards show as coming soon, no Run
+export type DatingAppGroupId = 'works' | 'needs-fixing' | 'coming-soon';
+export interface DatingAppGroupDef {
+  id: DatingAppGroupId;
+  title: string;
+  subtitle: string;
+  packages: string[];
+}
+export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
+  {
+    id: 'works',
+    title: 'Works all the time',
+    subtitle: 'These run reliably — trigger them any time.',
+    packages: ['com.badoo.mobile', 'com.bumble.app'],
+  },
+  {
+    id: 'needs-fixing',
+    title: 'Still needs fixing',
+    subtitle: 'Drivers exist but these still fail or need work.',
+    packages: [
+      'co.hinge.app',
+      'com.hily.app',
+      'co.yellw.yellowapp',
+      'com.taggedapp',
+      'com.affinityapps.blk',
+      'com.facebook.katana',
+      'com.takimi.android',
+    ],
+  },
+  {
+    id: 'coming-soon',
+    title: 'Apps to come',
+    subtitle: 'No working driver yet — coming soon, cannot run.',
+    packages: [
+      'com.tinder',
+      'enterprises.dating.boo',
+      'social.breeze.breeze_app',
+      'com.getpure.pure',
+      'com.threesome.swingers.threefun',
+    ],
+  },
+];
+
+export function datingAppGroup(pkg: string): DatingAppGroupId | null {
+  const hit = DATING_APP_GROUPS.find((g) => g.packages.includes(pkg));
+  return hit ? hit.id : null;
+}
+
+/** Taimi is blocked: FLAG_SECURE makes its screenshots black, so the bot cannot see the screen. */
+export const TAIMI_BLOCKED_NOTE =
+  'Blocked — screenshots come out black (FLAG_SECURE), so the bot cannot see the screen.';
+export function isBlockedApp(pkg: string): boolean {
+  return pkg === TAIMI_PKG;
+}
+
+/** Whether this app's card gets working Run / count / mode controls. */
+export function canRunFromCard(pkg: string): boolean {
+  if (!canRunApp(pkg)) return false;
+  if (isBlockedApp(pkg)) return false;
+  if (datingAppGroup(pkg) === 'coming-soon') return false;
+  return true;
+}
+
+/** Split cards into the three page groups, in group order; within a group
+ * cards follow the group's package list. A card in no group (e.g. a new app
+ * the backend adds later) falls into "Still needs fixing" so it never
+ * vanishes from the page. */
+export function groupDatingCards<T extends { package: string }>(
+  cards: T[]
+): { group: DatingAppGroupDef; apps: T[] }[] {
+  const byPkg = new Map(cards.map((c) => [c.package, c]));
+  const out = DATING_APP_GROUPS.map((group) => ({
+    group,
+    apps: group.packages
+      .map((pkg) => byPkg.get(pkg))
+      .filter((c): c is T => Boolean(c)),
+  }));
+  const grouped = new Set(DATING_APP_GROUPS.flatMap((g) => g.packages));
+  const ungrouped = cards.filter((c) => !grouped.has(c.package));
+  if (ungrouped.length) {
+    out.find((g) => g.group.id === 'needs-fixing')?.apps.push(...ungrouped);
+  }
+  return out.filter((g) => g.apps.length > 0);
+}
+
 // r45: Tagged runs as auto swipe (free like) or auto message
 export const TAGGED_PKG = 'com.taggedapp';
 // r46: Hily runs as "Likes only" or "Message + likes"

@@ -158,3 +158,63 @@ console.log('datingRun ok');
   assert.equal(again.filter((a) => a.package_name === 'enterprises.dating.boo').length, 1);
   console.log('r51b ensureRunnableConfigApps tests ok');
 }
+
+// Dating page groups: works all the time / still needs fixing / apps to come
+{
+  const {
+    datingAppGroup,
+    groupDatingCards,
+    canRunFromCard,
+    isBlockedApp,
+    DATING_APP_GROUPS,
+  } = await import('./datingRun.ts');
+  const a = (c, m) => { if (!c) throw new Error(m); };
+  a(datingAppGroup('com.badoo.mobile') === 'works', 'Badoo works');
+  a(datingAppGroup('com.bumble.app') === 'works', 'Bumble works');
+  a(datingAppGroup('co.hinge.app') === 'needs-fixing', 'Hinge needs fixing');
+  a(datingAppGroup('com.hily.app') === 'needs-fixing', 'Hily needs fixing');
+  a(datingAppGroup('co.yellw.yellowapp') === 'needs-fixing', 'Yubo needs fixing');
+  a(datingAppGroup('com.taggedapp') === 'needs-fixing', 'Tagged needs fixing');
+  a(datingAppGroup('com.affinityapps.blk') === 'needs-fixing', 'BLK needs fixing');
+  a(datingAppGroup('com.facebook.katana') === 'needs-fixing', 'Facebook needs fixing');
+  a(datingAppGroup('com.takimi.android') === 'needs-fixing', 'Taimi needs fixing');
+  a(datingAppGroup('com.tinder') === 'coming-soon', 'Tinder coming soon');
+  a(datingAppGroup('enterprises.dating.boo') === 'coming-soon', 'Boo coming soon');
+  a(datingAppGroup('social.breeze.breeze_app') === 'coming-soon', 'Breeze coming soon');
+  a(datingAppGroup('com.getpure.pure') === 'coming-soon', 'Pure coming soon');
+  a(datingAppGroup('com.threesome.swingers.threefun') === 'coming-soon', '3Fun coming soon');
+  a(datingAppGroup('com.whatsapp') === null, 'WhatsApp in no group');
+  a(isBlockedApp('com.takimi.android'), 'Taimi blocked');
+  a(!isBlockedApp('com.badoo.mobile'), 'Badoo not blocked');
+  a(canRunFromCard('com.badoo.mobile'), 'Badoo card runnable');
+  a(canRunFromCard('com.bumble.app'), 'Bumble card runnable');
+  a(canRunFromCard('co.hinge.app'), 'Hinge card still runnable');
+  a(!canRunFromCard('com.takimi.android'), 'Taimi card not runnable');
+  a(!canRunFromCard('com.tinder'), 'Tinder card not runnable');
+  a(!canRunFromCard('com.threesome.swingers.threefun'), '3Fun card not runnable');
+  a(!canRunFromCard('com.whatsapp'), 'WhatsApp card not runnable');
+  // groups in order; within a group, cards follow the group's package list
+  const grouped = groupDatingCards([
+    { package: 'com.threesome.swingers.threefun' },
+    { package: 'com.bumble.app' },
+    { package: 'com.tinder' },
+    { package: 'co.hinge.app' },
+    { package: 'com.badoo.mobile' },
+    { package: 'enterprises.dating.boo' },
+  ]);
+  assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'needs-fixing', 'coming-soon']);
+  assert.deepEqual(grouped[0].apps.map((x) => x.package), ['com.badoo.mobile', 'com.bumble.app']);
+  assert.deepEqual(grouped[1].apps.map((x) => x.package), ['co.hinge.app']);
+  assert.deepEqual(grouped[2].apps.map((x) => x.package), [
+    'com.tinder', 'enterprises.dating.boo', 'com.threesome.swingers.threefun',
+  ]);
+  // an app in no group falls into "Still needs fixing", never vanishes
+  const withNew = groupDatingCards([{ package: 'com.example.new' }, { package: 'com.badoo.mobile' }]);
+  assert.deepEqual(withNew.map((g) => g.group.id), ['works', 'needs-fixing']);
+  assert.deepEqual(withNew[1].apps.map((x) => x.package), ['com.example.new']);
+  // every runnable app is in exactly one group
+  const allGrouped = DATING_APP_GROUPS.flatMap((g) => g.packages);
+  assert.equal(new Set(allGrouped).size, allGrouped.length, 'no app in two groups');
+  RUNNABLE_APPS.forEach((pkg) => assert.ok(allGrouped.includes(pkg), pkg + ' in a group'));
+  console.log('dating page groups tests ok');
+}
