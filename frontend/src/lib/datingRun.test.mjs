@@ -113,8 +113,13 @@ console.log('datingRun ok');
   ).map(pk);
   assert.deepEqual(got, ['com.bumble.app', 'com.hily.app', 'co.hinge.app',
     'com.affinityapps.blk', 'com.tinder']);
-  assert.deepEqual(RUNNABLE_APPS.slice(-6, -4), ['com.affinityapps.blk', 'com.tinder']);
+  // BLK then Tinder sit just above the r50+ coming-soon tail (Boo…MeetMe)
+  const blkAt = RUNNABLE_APPS.indexOf('com.affinityapps.blk');
+  assert.deepEqual(RUNNABLE_APPS.slice(blkAt, blkAt + 2), [
+    'com.affinityapps.blk', 'com.tinder',
+  ]);
   assert.equal(canRunApp('com.tinder'), true);
+  assert.equal(canRunApp('com.myyearbook.m'), true);
 }
 
 // r50: new apps at the very bottom (after BLK, Tinder); Taimi stays put
@@ -184,6 +189,7 @@ console.log('datingRun ok');
   a(datingAppGroup('social.breeze.breeze_app') === 'coming-soon', 'Breeze coming soon');
   a(datingAppGroup('com.getpure.pure') === 'coming-soon', 'Pure coming soon');
   a(datingAppGroup('com.threesome.swingers.threefun') === 'coming-soon', '3Fun coming soon');
+  a(datingAppGroup('com.myyearbook.m') === 'coming-soon', 'MeetMe coming soon');
   a(datingAppGroup('com.whatsapp') === null, 'WhatsApp in no group');
   a(isBlockedApp('com.takimi.android'), 'Taimi blocked');
   a(!isBlockedApp('com.badoo.mobile'), 'Badoo not blocked');
@@ -196,6 +202,7 @@ console.log('datingRun ok');
   a(!canRunFromCard('com.takimi.android'), 'Taimi card not runnable');
   a(!canRunFromCard('com.tinder'), 'Tinder card not runnable');
   a(!canRunFromCard('com.threesome.swingers.threefun'), '3Fun card not runnable');
+  a(!canRunFromCard('com.myyearbook.m'), 'MeetMe card not runnable');
   a(!canRunFromCard('com.whatsapp'), 'WhatsApp card not runnable');
   // groups in order; within a group, cards follow the group's package list
   const grouped = groupDatingCards([
@@ -209,6 +216,7 @@ console.log('datingRun ok');
     { package: 'com.taggedapp' },
     { package: 'com.affinityapps.blk' },
     { package: 'enterprises.dating.boo' },
+    { package: 'com.myyearbook.m' },
   ]);
   assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'needs-fixing', 'coming-soon']);
   assert.deepEqual(grouped[0].apps.map((x) => x.package), [
@@ -218,6 +226,7 @@ console.log('datingRun ok');
   assert.deepEqual(grouped[1].apps.map((x) => x.package), ['com.affinityapps.blk']);
   assert.deepEqual(grouped[2].apps.map((x) => x.package), [
     'com.tinder', 'enterprises.dating.boo', 'com.threesome.swingers.threefun',
+    'com.myyearbook.m',
   ]);
   // an app in no group falls into "Still needs fixing", never vanishes
   const withNew = groupDatingCards([{ package: 'com.example.new' }, { package: 'com.badoo.mobile' }]);
@@ -230,23 +239,22 @@ console.log('datingRun ok');
   console.log('dating page groups tests ok');
 }
 
-// Apps to come collapsible only: default collapsed; localStorage remembers
+// Collapsibles always start collapsed: clear any remembered expanded pref
 {
   const {
-    readAppsToComeExpanded,
-    writeAppsToComeExpanded,
+    clearCollapsibleExpandedPrefs,
     APPS_TO_COME_EXPANDED_KEY,
   } = await import('./datingRun.ts');
-  const mem = new Map();
+  const mem = new Map([[APPS_TO_COME_EXPANDED_KEY, '1']]);
   const storage = {
     getItem: (k) => (mem.has(k) ? mem.get(k) : null),
     setItem: (k, v) => { mem.set(k, String(v)); },
+    removeItem: (k) => { mem.delete(k); },
   };
-  assert.equal(readAppsToComeExpanded(storage), false, 'apps to come default collapsed');
-  writeAppsToComeExpanded(true, storage);
-  assert.equal(mem.get(APPS_TO_COME_EXPANDED_KEY), '1');
-  assert.equal(readAppsToComeExpanded(storage), true, 'apps to come expanded after write');
-  writeAppsToComeExpanded(false, storage);
-  assert.equal(readAppsToComeExpanded(storage), false, 'apps to come collapsed after write');
-  console.log('apps to come expanded tests ok');
+  assert.equal(mem.get(APPS_TO_COME_EXPANDED_KEY), '1', 'stale expanded pref present');
+  clearCollapsibleExpandedPrefs(storage);
+  assert.equal(mem.has(APPS_TO_COME_EXPANDED_KEY), false, 'stale expanded pref cleared');
+  clearCollapsibleExpandedPrefs(storage); // idempotent
+  assert.equal(mem.has(APPS_TO_COME_EXPANDED_KEY), false, 'clear is idempotent');
+  console.log('collapsible start-collapsed tests ok');
 }

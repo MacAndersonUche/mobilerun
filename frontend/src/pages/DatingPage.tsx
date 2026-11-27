@@ -31,8 +31,7 @@ import {
   canRunFromCard,
   isBlockedApp,
   TAIMI_BLOCKED_NOTE,
-  readAppsToComeExpanded,
-  writeAppsToComeExpanded,
+  clearCollapsibleExpandedPrefs,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -98,6 +97,7 @@ const DATING_APP_NAMES: Record<string, string> = {
   'social.breeze.breeze_app': 'Breeze',
   'com.getpure.pure': 'Pure',
   'com.threesome.swingers.threefun': '3Fun',
+  'com.myyearbook.m': 'MeetMe',
   'com.hily.app': 'Hily',
   'co.hinge.app': 'Hinge',
   'com.taggedapp': 'Tagged',
@@ -255,9 +255,13 @@ export default function DatingPage() {
   const [likeErrors, setLikeErrors] = useState<Record<string, string>>({});
   // First-contact only — reply checking/tracking removed from dating runs.
   const contactScope = 'new' as const;
-  const [appsToComeExpanded, setAppsToComeExpanded] = useState(() =>
-    readAppsToComeExpanded()
-  );
+  // Always collapsed on load — never restore expanded from localStorage (#94
+  // left phones expanded after a prior open). Session toggle only.
+  const [appsToComeExpanded, setAppsToComeExpanded] = useState(false);
+  const [appsForStartExpanded, setAppsForStartExpanded] = useState(false);
+  useEffect(() => {
+    clearCollapsibleExpandedPrefs();
+  }, []);
   const [deviceId, setDeviceId] = useState('');
   const [devices, setDevices] = useState<
     Array<{ device_id: string; name?: string; connected?: boolean }>
@@ -866,13 +870,7 @@ export default function DatingPage() {
                     aria-expanded={appsToComeExpanded}
                     aria-controls="dating-apps-to-come-panel"
                     data-testid="dating-apps-to-come-toggle"
-                    onClick={() => {
-                      setAppsToComeExpanded((prev) => {
-                        const next = !prev;
-                        writeAppsToComeExpanded(next);
-                        return next;
-                      });
-                    }}
+                    onClick={() => setAppsToComeExpanded((prev) => !prev)}
                   >
                     {appsToComeExpanded ? (
                       <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
@@ -1046,10 +1044,38 @@ export default function DatingPage() {
         appName={(pkg) => datingAppDisplayName(pkg)}
       />
 
-      {/* App toggles + persona */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-4">
-        <h3 className="text-lg font-semibold">Apps for Start</h3>
-        <p className="text-xs text-mute">Tap an app to include it in Start. Templates/AI = how first messages are written.</p>
+      {/* App toggles + persona — collapsed on every page load */}
+      <div
+        className="bg-surface border border-line rounded-lg space-y-4 overflow-hidden"
+        data-testid="dating-apps-for-start"
+      >
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-canvas-elev"
+          aria-expanded={appsForStartExpanded}
+          aria-controls="dating-apps-for-start-panel"
+          data-testid="dating-apps-for-start-toggle"
+          onClick={() => setAppsForStartExpanded((prev) => !prev)}
+        >
+          {appsForStartExpanded ? (
+            <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
+          ) : (
+            <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
+          )}
+          <span className="min-w-0">
+            <span className="block text-lg font-semibold text-white">Apps for Start</span>
+            <span className="block text-xs text-mute">
+              Tap an app to include it in Start. Templates/AI = how first messages are written.
+            </span>
+          </span>
+        </button>
+        {appsForStartExpanded && (
+        <div
+          id="dating-apps-for-start-panel"
+          className="space-y-4 px-4 pb-4"
+          role="region"
+          aria-label="Apps for Start"
+        >
         <div className="space-y-2">
           {sortDatingApps(configApps, (a) => a.package_name)
             .filter((app) => !isSocialPackage(app.package_name))
@@ -1114,6 +1140,8 @@ export default function DatingPage() {
         >
           Save config
         </button>
+        </div>
+        )}
       </div>
 
       {/* r44: rarely-changed settings, collapsed by default */}

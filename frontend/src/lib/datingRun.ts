@@ -18,6 +18,7 @@ export const RUNNABLE_APPS = [
   'social.breeze.breeze_app',
   'com.getpure.pure',
   'com.threesome.swingers.threefun',
+  'com.myyearbook.m', // MeetMe — Apps to come (no working driver yet)
 ];
 // r50: new apps (Boo, Breeze, Pure, 3Fun) — below BLK and Tinder
 export const NEW_APPS_R50 = [
@@ -26,6 +27,7 @@ export const NEW_APPS_R50 = [
   'com.getpure.pure',
   'com.threesome.swingers.threefun',
 ];
+export const MEETME_PKG = 'com.myyearbook.m';
 export const TAIMI_PKG = 'com.takimi.android';
 export const BOO_PKG = 'enterprises.dating.boo';
 export const PURE_PKG = 'com.getpure.pure';
@@ -108,6 +110,7 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
       'social.breeze.breeze_app',
       'com.getpure.pure',
       'com.threesome.swingers.threefun',
+      'com.myyearbook.m',
     ],
   },
 ];
@@ -117,32 +120,20 @@ export function datingAppGroup(pkg: string): DatingAppGroupId | null {
   return hit ? hit.id : null;
 }
 
-/** localStorage key for the Dating page "Apps to come" collapsible. */
+/**
+ * Legacy localStorage key from #94. Collapsible sections now always start
+ * collapsed on every page load — never restore expanded from storage.
+ */
 export const APPS_TO_COME_EXPANDED_KEY = 'dating_apps_to_come_expanded';
 
-/** Read whether Apps to come is expanded. Default collapsed when unset. */
-export function readAppsToComeExpanded(
-  storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
-): boolean {
-  try {
-    const raw = storage?.getItem(APPS_TO_COME_EXPANDED_KEY);
-    if (raw === '1' || raw === 'true') return true;
-    if (raw === '0' || raw === 'false') return false;
-  } catch {
-    /* private mode / unavailable */
-  }
-  return false;
-}
-
-/** Persist Apps to come expanded state. */
-export function writeAppsToComeExpanded(
-  expanded: boolean,
-  storage: Pick<Storage, 'setItem'> | null | undefined = globalThis.localStorage
+/** Drop any remembered expanded preference so reloads stay collapsed. */
+export function clearCollapsibleExpandedPrefs(
+  storage: Pick<Storage, 'removeItem'> | null | undefined = globalThis.localStorage
 ): void {
   try {
-    storage?.setItem(APPS_TO_COME_EXPANDED_KEY, expanded ? '1' : '0');
+    storage?.removeItem(APPS_TO_COME_EXPANDED_KEY);
   } catch {
-    /* ignore */
+    /* private mode / unavailable */
   }
 }
 
