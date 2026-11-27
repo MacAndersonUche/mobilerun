@@ -286,6 +286,10 @@ def build_job(
     n = run_count(pkg, count, counts)
     max_steps = min(400, 6 * n + 15)
     wall_s = 0
+    if pkg == "com.facebook.katana":
+        # photo → Say something → type → Send, plus Dating-tab nav
+        max_steps = min(400, 10 * n + 25)
+        wall_s = min(3600, 180 + 90 * n)
     if pkg == "co.hinge.app":
         # r53: blind inline panel — heart, wait, focus, type, Send Like,
         # Rose check, next card ≈ 8 steps per message + app open/popups

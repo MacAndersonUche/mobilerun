@@ -42,7 +42,9 @@ def test_heart_opens_comment_box_not_profile_scrollview():
     # stays: the photo centre must be the real photo, never the bio.
     assert _profile_photo_center(PROD) == PHOTO_XY  # was (540,1174) = the bio
     a = _p(PROD, {})
-    assert a["fastpath_step"] == "fb_dating_fc_tap_photo" and (a["x"], a["y"]) != LIKE_XY
+    assert (
+        a["fastpath_step"] == "fb_dating_fc_tap_photo" and (a["x"], a["y"]) != LIKE_XY
+    )
 
 
 def test_typed_box_still_counts_as_comment_sheet():
@@ -52,13 +54,19 @@ def test_typed_box_still_counts_as_comment_sheet():
 
 def test_full_flow_two_comments_then_done():
     st: dict = {}
-    seq = [PROD, BLANK, SHEET, TYPED, ELLIE, SHEET, TYPED, ELLIE]
+    zoe = ELLIE.replace("Ellie, 21", "Zoe, 27").replace("Ellie", "Zoe")
+    seq = [PROD, BLANK, SHEET, TYPED, ELLIE, SHEET, TYPED, zoe]
     acts = [_p(t, st) for t in seq]
     steps = [a["fastpath_step"] for a in acts]
     assert steps == [
-        "fb_dating_fc_tap_photo", "fb_dating_fc_wait_sheet", "fb_dating_fc_type",
-        "fb_dating_fc_send", "fb_dating_fc_tap_photo", "fb_dating_fc_type",
-        "fb_dating_fc_send", "fb_dating_fc_done",
+        "fb_dating_fc_tap_photo",
+        "fb_dating_fc_wait_sheet",
+        "fb_dating_fc_type",
+        "fb_dating_fc_send",
+        "fb_dating_fc_tap_photo",
+        "fb_dating_fc_type",
+        "fb_dating_fc_send",
+        "fb_dating_fc_done",
     ]
     assert acts[2]["text"] == "hi miss you look beautiful"
     assert (acts[3]["x"], acts[3]["y"]) == SEND_XY
@@ -87,7 +95,8 @@ def test_not_sent_retries_send_once_never_retypes():
     assert a["fastpath_step"] == "fb_dating_fc_send_retry"
     a = _p(TYPED, st, target=5)
     assert a["action"] == "fail"
-    assert st["bulk_message_new"]["done"] == 1
+    # Send never landed (text stayed in the box) — do not count it.
+    assert st["bulk_message_new"]["done"] == 0
 
 
 def test_cap_50_and_routed_without_llm():
@@ -95,8 +104,13 @@ def test_cap_50_and_routed_without_llm():
     a = plan_facebook_dating_fixed_first_contact(INSTR, SHEET, [], state=st, target=80)
     assert a["action"] == "type"
     st2: dict = {}
-    b = ca.plan_next_action(INSTR, PROD, [], package="com.facebook.katana", agent_state=st2)
-    assert b["fastpath_step"] == "fb_dating_fc_tap_photo" and (b["x"], b["y"]) != LIKE_XY
+    b = ca.plan_next_action(
+        INSTR, PROD, [], package="com.facebook.katana", agent_state=st2
+    )
+    assert (
+        b["fastpath_step"] == "fb_dating_fc_tap_photo" and (b["x"], b["y"]) != LIKE_XY
+    )
     assert ca._is_fixed_swipe_action(b)
     from backend.dating_run import run_count
+
     assert run_count("com.facebook.katana", 80) == 50

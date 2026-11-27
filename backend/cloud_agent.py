@@ -214,9 +214,8 @@ def _som_indexed_tree(tree: str, *, limit: int = 6000) -> str:
     idx = 0
     for n in nodes:
         lab = (
-            (n.get("text") or n.get("label") or n.get("desc") or n.get("hint") or "")
-            .strip()
-        )
+            n.get("text") or n.get("label") or n.get("desc") or n.get("hint") or ""
+        ).strip()
         x = int(n.get("x") or 0)
         y = int(n.get("y") or 0)
         if x <= 0 and y <= 0 and not lab:
@@ -1031,9 +1030,7 @@ def apply_live_test_guard(
 
     # Never tap billing / Terms / Elite Pack small print
     if _action_is_billing_or_terms_tap(action, kind):
-        new_reason = (
-            f"[LIVE TEST] blocked billing/terms tap — Back instead ({reason})"
-        )
+        new_reason = f"[LIVE TEST] blocked billing/terms tap — Back instead ({reason})"
         logger.info("%s", new_reason)
         return (
             "press_button",
@@ -1086,9 +1083,7 @@ def apply_live_test_guard(
     # Like jobs: never tap pass / X / close (r28 BLK tapped bottom-left X)
     is_pass = _action_is_pass_control(action, kind)
     if like_job and is_pass:
-        new_reason = (
-            f"[LIVE TEST] blocked pass/X in like job — skipped ({reason})"
-        )
+        new_reason = f"[LIVE TEST] blocked pass/X in like job — skipped ({reason})"
         logger.info("%s", new_reason)
         return (
             "wait",
@@ -1138,9 +1133,7 @@ def apply_live_test_guard(
     if is_send:
         done_m = int(st.get("live_messages_done") or 0)
         if done_m >= cap:
-            new_reason = (
-                f"[LIVE TEST] message cap reached ({done_m}/{cap}) — stop"
-            )
+            new_reason = f"[LIVE TEST] message cap reached ({done_m}/{cap}) — stop"
             return (
                 "done",
                 new_reason,
@@ -1450,7 +1443,9 @@ def _instruction_is_like_or_swipe_job(
         return True
     j = job if isinstance(job, dict) else {}
     if j.get("live_test") and (
-        "like" in low or "swipe" in low or (isinstance(g, dict) and g.get("kind") == "swipe")
+        "like" in low
+        or "swipe" in low
+        or (isinstance(g, dict) and g.get("kind") == "swipe")
     ):
         return True
     return False
@@ -1497,9 +1492,7 @@ def apply_like_job_no_type_guard(
 
     app_key = detect_dm_app(instruction or "") or ""
     if app_key and app_key in DM_APP_PROFILES:
-        app_name = str(
-            DM_APP_PROFILES[app_key].get("open_label") or app_key
-        ).strip()
+        app_name = str(DM_APP_PROFILES[app_key].get("open_label") or app_key).strip()
     if (
         launcher
         and text
@@ -1513,9 +1506,7 @@ def apply_like_job_no_type_guard(
         )
     ):
         # Still prefer open_app by package/intent over typed search
-        new_reason = (
-            f"[LIKE JOB] rewrite launcher type '{text}' → open_app({app_name})"
-        )
+        new_reason = f"[LIKE JOB] rewrite launcher type '{text}' → open_app({app_name})"
         return (
             "open_app",
             new_reason,
@@ -2027,12 +2018,16 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     inst = (instruction or "").lower()
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
         return True
-    if "fixed hily" in inst or "fixed tinder" in inst or "fixed app " in inst:  # r46/r49/r50
+    if (
+        "fixed hily" in inst or "fixed tinder" in inst or "fixed app " in inst
+    ):  # r46/r49/r50
         return True
     # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
     # paid Blast sheet; Hily left for Google Messages; Hinge opened Matches
     # chats and typed AI text, 24 Nov).
-    if "first contact" in inst and any(a in inst for a in ("yubo", "hily", "hinge")):
+    if "first contact" in inst and any(
+        a in inst for a in ("yubo", "hily", "hinge", "facebook")
+    ):
         return True
     st = state if isinstance(state, dict) else {}
     return str(st.get("swipe_mode") or "").lower() == "fixed"
@@ -2136,15 +2131,20 @@ def plan_next_action(
 
     # r50: paid popups (price / premium / Gold / Boost / coins / credits /
     # VIP / Blast…) are closed before any fixed planner step — every app.
-    if ("fixed " in instr_l or "first contact" in instr_l
-            or _fixed_swipe_run(instruction, agent_state)) and not any(
-                p in (ui_tree or "").lower() for p in ("out of likes",)):
+    if (
+        "fixed " in instr_l
+        or "first contact" in instr_l
+        or _fixed_swipe_run(instruction, agent_state)
+    ) and not any(p in (ui_tree or "").lower() for p in ("out of likes",)):
         try:
             from paid_popup import paid_popup_action
         except ImportError:
             from backend.paid_popup import paid_popup_action  # type: ignore
-        pp = paid_popup_action(ui_tree, "paid_popup_guard",
-                               agent_state if isinstance(agent_state, dict) else None)
+        pp = paid_popup_action(
+            ui_tree,
+            "paid_popup_guard",
+            agent_state if isinstance(agent_state, dict) else None,
+        )
         if pp:
             return pp
 
@@ -2156,7 +2156,11 @@ def plan_next_action(
             from backend.tagged_fixed import plan_tagged_fixed  # type: ignore
         st_tg = agent_state if isinstance(agent_state, dict) else {}
         tg_act = plan_tagged_fixed(
-            instruction, ui_tree, history, state=st_tg, dry_run=dry_run,
+            instruction,
+            ui_tree,
+            history,
+            state=st_tg,
+            dry_run=dry_run,
             message=_instruction_text(instruction),
         )
         if tg_act:
@@ -2175,10 +2179,17 @@ def plan_next_action(
         except ImportError:
             from backend.fixed_like_run import plan_fixed_like_run  # type: ignore
         st_fl = agent_state if isinstance(agent_state, dict) else {}
-        fl_act = plan_fixed_like_run(instruction, ui_tree, history, state=st_fl, dry_run=dry_run)
+        fl_act = plan_fixed_like_run(
+            instruction, ui_tree, history, state=st_fl, dry_run=dry_run
+        )
         if fl_act is None:
-            fl_act = {"action": "wait", "reason": "Fixed app run: waiting for a readable screen",
-                      "planner": "fixed_like_run", "llm_provider": None, "_no_llm_handoff": True}
+            fl_act = {
+                "action": "wait",
+                "reason": "Fixed app run: waiting for a readable screen",
+                "planner": "fixed_like_run",
+                "llm_provider": None,
+                "_no_llm_handoff": True,
+            }
         try:
             from message_text_guard import enforce_message_text as _enf_fl
         except ImportError:
@@ -2223,7 +2234,11 @@ def plan_next_action(
             from backend.hily_fixed_run import plan_hily_fixed_run  # type: ignore
         st_hy = agent_state if isinstance(agent_state, dict) else {}
         hy_act = plan_hily_fixed_run(
-            instruction, ui_tree, history, state=st_hy, dry_run=dry_run,
+            instruction,
+            ui_tree,
+            history,
+            state=st_hy,
+            dry_run=dry_run,
             message=_instruction_text(instruction),
         )
         if hy_act is None:
@@ -2290,9 +2305,7 @@ def plan_next_action(
 
         # r28: once handed off to LLM, stay there for the rest of the job.
         # Never let heuristics reclaim the turn (Yubo/BLK/Badoo/Hily bug).
-        if st_bulk.get("_bulk_llm_handoff") and _fixed_swipe_run(
-            instruction, st_bulk
-        ):
+        if st_bulk.get("_bulk_llm_handoff") and _fixed_swipe_run(instruction, st_bulk):
             # r43: a crash / old guard set handoff — fixed runs never use LLM
             st_bulk.pop("_bulk_llm_handoff", None)
         if st_bulk.get("_bulk_llm_handoff"):
@@ -2302,9 +2315,7 @@ def plan_next_action(
                 and isinstance(bulk_goal, dict)
                 and bulk_goal.get("kind") == "swipe"
             ):
-                named = _visible_dry_swipe_card_name(
-                    instruction, ui_tree, st_bulk
-                )
+                named = _visible_dry_swipe_card_name(instruction, ui_tree, st_bulk)
                 if not named and image_b64:
                     named = _maybe_vision_swipe_card_name(
                         instruction, image_b64, st_bulk
@@ -2341,9 +2352,7 @@ def plan_next_action(
                 )
             except Exception as bulk_err:
                 # r26: never raise out of heuristics — hand off to LLM
-                logger.warning(
-                    "plan_bulk_bench raised → LLM handoff: %s", bulk_err
-                )
+                logger.warning("plan_bulk_bench raised → LLM handoff: %s", bulk_err)
                 if _fixed_swipe_run(instruction, st_bulk):
                     return _guard(
                         {
@@ -2363,8 +2372,7 @@ def plan_next_action(
                         "seconds": 0.35,
                         "delay_s": 0.35,
                         "reason": (
-                            f"Heuristic exception — hand off to LLM "
-                            f"({bulk_err})"
+                            f"Heuristic exception — hand off to LLM " f"({bulk_err})"
                         ),
                         "planner": "bulk_llm_handoff",
                         "needs_vision": True,
@@ -2439,17 +2447,20 @@ def plan_next_action(
                         "dry_run": bool(dry_run),
                     }
                 )
-            if bulk_act.get("_bulk_llm_handoff") or bulk_act.get(
-                "fastpath_step"
-            ) == "bulk_compose_not_found_handoff":
+            if (
+                bulk_act.get("_bulk_llm_handoff")
+                or bulk_act.get("fastpath_step") == "bulk_compose_not_found_handoff"
+            ):
                 st_bulk["_bulk_llm_handoff"] = True
             now_ts = time.time()
             # Dry swipe: identifying a real card name is already success —
             # never let handoff/LLM swipe past a verified name on screen.
-            if dry_run and isinstance(bulk_goal, dict) and bulk_goal.get("kind") == "swipe":
-                named = _visible_dry_swipe_card_name(
-                    instruction, ui_tree, st_bulk
-                )
+            if (
+                dry_run
+                and isinstance(bulk_goal, dict)
+                and bulk_goal.get("kind") == "swipe"
+            ):
+                named = _visible_dry_swipe_card_name(instruction, ui_tree, st_bulk)
                 if not named and image_b64:
                     named = _maybe_vision_swipe_card_name(
                         instruction, image_b64, st_bulk
@@ -2513,13 +2524,10 @@ def plan_next_action(
             )
             bulk_kind = str(bulk_act.get("action") or "").lower()
             handoff = (
-                bool(st_bulk.get("_bulk_llm_handoff"))
-                or stall >= 2
-                or timed_stall
+                bool(st_bulk.get("_bulk_llm_handoff")) or stall >= 2 or timed_stall
             )
             defer_to_vision = bool(image_b64) and (
-                handoff
-                or (wants_vis and bulk_kind in ("wait", "fail"))
+                handoff or (wants_vis and bulk_kind in ("wait", "fail"))
             )
             if handoff and not image_b64:
                 # Ask outer step loop to fetch screenshot + replan via LLM
@@ -2588,9 +2596,7 @@ def plan_next_action(
 
     # Deterministic SMS send path (accel-off emu trees are often too thin for LLM)
     if not bulk_llm:
-        msg_heur = _heuristic_messaging_send(
-            instruction, ui_tree, history, package
-        )
+        msg_heur = _heuristic_messaging_send(instruction, ui_tree, history, package)
         if msg_heur:
             return _guard(msg_heur)
 
@@ -2664,9 +2670,7 @@ def plan_next_action(
         dry_hint = BULK_DRY_RUN_LLM_HINT + "\n"
     # Set-of-marks indexes when screenshot/handoff — matches original agent loop
     use_som = bool(image_b64 or bulk_llm)
-    tree_block = (
-        _som_indexed_tree(ui_tree) if use_som else _compress_tree(ui_tree)
-    )
+    tree_block = _som_indexed_tree(ui_tree) if use_som else _compress_tree(ui_tree)
     user = (
         f"GOAL: {instruction}\n\n"
         f"RECENT ACTIONS:\n{hist}\n\n"
@@ -2737,7 +2741,9 @@ def plan_next_action(
             ak = str(action.get("action") or "").lower()
             if ak in ("swipe", "tap", "done") or action.get("dry_run_verified"):
                 named = _visible_dry_swipe_card_name(
-                    instruction, ui_tree, agent_state if isinstance(agent_state, dict) else None
+                    instruction,
+                    ui_tree,
+                    agent_state if isinstance(agent_state, dict) else None,
                 )
                 if named and (
                     ak in ("swipe",)
@@ -2760,9 +2766,7 @@ def plan_next_action(
     guarded = _guard(action)
     _log_step_decision(
         job_id=str(
-            (agent_state or {}).get("job_id")
-            if isinstance(agent_state, dict)
-            else ""
+            (agent_state or {}).get("job_id") if isinstance(agent_state, dict) else ""
         ),
         step=int(
             (agent_state or {}).get("steps") or 0
@@ -3915,10 +3919,9 @@ def _record_dry_chat_verified(
     """Bump distinct-chat dry progress when compose/editable is confirmed."""
     if not isinstance(state, dict):
         return
-    name = (
-        str(action.get("contact") or action.get("last_name") or action.get("name") or "")
-        .strip()
-    )
+    name = str(
+        action.get("contact") or action.get("last_name") or action.get("name") or ""
+    ).strip()
     if not name:
         # Try to pull a name from the reason: "… for Tosin" / "chat with Hannah"
         m = re.search(
@@ -4005,7 +4008,6 @@ def _visible_dry_swipe_card_name(
     return None
 
 
-
 def hinge_name_from_vision_reply(text: str) -> Optional[str]:
     """Parse a first name from a 'ONLY the first name or NONE' vision reply."""
     raw = (text or "").strip()
@@ -4068,7 +4070,6 @@ def _maybe_vision_hinge_card_name(
         st["_hinge_vision_name"] = name
         st["current_profile_name"] = name
     return name
-
 
 
 def _maybe_vision_bumble_card_name(
@@ -4176,7 +4177,6 @@ def _salvage_dry_swipe_done(
     }
 
 
-
 def _bumble_photo_browser_override(
     *,
     instruction: str,
@@ -4201,10 +4201,14 @@ def _bumble_photo_browser_override(
     if not bumble_on_photo_browser(ui_tree or ""):
         return None
     act = action if isinstance(action, dict) else {}
-    if str(act.get("action") or "").lower() in (
-        "press_button",
-        "back",
-    ) and str(act.get("button") or "back").lower() == "back":
+    if (
+        str(act.get("action") or "").lower()
+        in (
+            "press_button",
+            "back",
+        )
+        and str(act.get("button") or "back").lower() == "back"
+    ):
         return None
     return bumble_back_from_photo_browser(planner="bumble_firewall")
 
@@ -4230,8 +4234,7 @@ def _log_step_decision(
         planner,
         kind,
         reason,
-        (action or {}).get("_stall_n")
-        or "",
+        (action or {}).get("_stall_n") or "",
         bool((action or {}).get("_bulk_llm_handoff")),
     )
 
@@ -4318,7 +4321,9 @@ def _resolve_internal_planner_action(
             dry_run=dry_run,
             agent_state=state,
         )
-        if isinstance(planned, dict) and str(planned.get("action") or "").lower() not in (
+        if isinstance(planned, dict) and str(
+            planned.get("action") or ""
+        ).lower() not in (
             "",
             "_vision_retry",
             "_reconnect_wait",
@@ -4338,8 +4343,7 @@ def _resolve_internal_planner_action(
         "seconds": 0.4,
         "delay_s": 0.4,
         "reason": (
-            f"Vision retry → LLM handoff "
-            f"({action.get('reason') or 'stuck'})"
+            f"Vision retry → LLM handoff " f"({action.get('reason') or 'stuck'})"
         ),
         "planner": "bulk_llm_handoff",
         "needs_vision": True,
@@ -4958,8 +4962,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     # Also fail when wall exceeded from job start even before first step lands
     # (r23: steps>=1 gate let first long step burn past 90s unchecked).
     try:
-        _ui_wall = max(int(NO_PROGRESS_TIMEOUT_S),
-                       min(300, int(job.get("ui_wall_s") or 0)))
+        _ui_wall = max(
+            int(NO_PROGRESS_TIMEOUT_S), min(300, int(job.get("ui_wall_s") or 0))
+        )
     except (TypeError, ValueError):
         _ui_wall = int(NO_PROGRESS_TIMEOUT_S)
     if now - last_ui > _ui_wall and (
@@ -5717,9 +5722,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             and kind not in ("done", "fail")
         ):
             # r26: hand off to LLM instead of hard-fail (Hily liked-you loop)
-            if _is_fixed_swipe_action(action) or _fixed_swipe_run(
-                instruction, state
-            ):
+            if _is_fixed_swipe_action(action) or _fixed_swipe_run(instruction, state):
                 # r43: fixed runs stop with a clear reason, never LLM.
                 state["same_decision_n"] = 0
                 state["last_decision_key"] = None
@@ -5977,9 +5980,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                     if kind in ("_vision_retry", "_reconnect_wait"):
                         try:
                             if not locals().get("image_b64"):
-                                image_b64 = _fetch_screenshot_b64(
-                                    device_id, job=job
-                                )
+                                image_b64 = _fetch_screenshot_b64(device_id, job=job)
                         except Exception:
                             image_b64 = None
                         action = _resolve_internal_planner_action(
@@ -5989,9 +5990,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             history=history,
                             state=state,
                             package=str(tree_info.get("package") or ""),
-                            dry_run=bool(
-                                job.get("dry_run") or state.get("dry_run")
-                            ),
+                            dry_run=bool(job.get("dry_run") or state.get("dry_run")),
                             image_b64=image_b64,
                         )
                         kind = str(action.get("action") or "").lower()
@@ -6084,10 +6083,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         )
         if yubo_back and kind not in ("done", "fail", "back", "press_button"):
             # Also block stuck-recovery billing taps
-            if (
-                _action_is_billing_or_terms_tap(action if isinstance(action, dict) else {}, kind)
-                or is_yubo_reactions_or_elite_paywall(ui_tree)
-            ):
+            if _action_is_billing_or_terms_tap(
+                action if isinstance(action, dict) else {}, kind
+            ) or is_yubo_reactions_or_elite_paywall(ui_tree):
                 action = yubo_back
                 kind = "press_button"
                 reason = str(yubo_back.get("reason") or reason)
@@ -6106,9 +6104,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if _action_is_billing_or_terms_tap(
             action if isinstance(action, dict) else {}, kind
         ):
-            new_reason = (
-                f"Blocked billing/terms tap — Back instead ({reason})"
-            )
+            new_reason = f"Blocked billing/terms tap — Back instead ({reason})"
             action = {
                 "action": "press_button",
                 "button": "back",
@@ -6137,9 +6133,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # Snapshot card name before like tap for post-verify
             if state.get("_pending_live_like"):
                 app_for_like = _bulk_swipe_app_from_instruction(instruction) or ""
-                snapshot_live_like_card_name(
-                    state, ui_tree=ui_tree, app=app_for_like
-                )
+                snapshot_live_like_card_name(state, ui_tree=ui_tree, app=app_for_like)
             _log_step_decision(
                 job_id=str(job.get("job_id") or ""),
                 step=step,
@@ -6219,9 +6213,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
         if kind == "done":
             # Always capture a final screenshot for dry-run compose verification
-            if not shot_key and (
-                is_dry or action.get("screenshot")
-            ):
+            if not shot_key and (is_dry or action.get("screenshot")):
                 try:
                     final_b64 = _fetch_screenshot_b64(device_id, job=job)
                     if final_b64:
@@ -6684,9 +6676,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 except ImportError:
                     from backend.dm_heuristics import blk_dismiss_popup  # type: ignore
                 try:
-                    dismiss = blk_dismiss_popup(
-                        ui_tree, planner="tap_firewall_upsell"
-                    )
+                    dismiss = blk_dismiss_popup(ui_tree, planner="tap_firewall_upsell")
                 except Exception:
                     dismiss = None
                 if not dismiss:
@@ -6757,9 +6747,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 return job
             if "tap firewall" in err_l or "message text guard" in err_l:
                 # Other firewall refuses → LLM handoff (never raise / never hold lease)
-                logger.warning(
-                    "safety refuse → LLM handoff (no hard fail): %s", err
-                )
+                logger.warning("safety refuse → LLM handoff (no hard fail): %s", err)
                 state["steps"] = step + 1
                 state["last_progress_at"] = int(time.time())
                 state["last_action"] = f"firewall_handoff: {err}"
@@ -6972,9 +6960,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 if verify_pending_live_like(
                     state, ui_tree=after_tree, app=app_for_like
                 ):
-                    verify_msg = (
-                        (verify_msg or "") + " · live_like_verified"
-                    ).strip(" ·")
+                    verify_msg = ((verify_msg or "") + " · live_like_verified").strip(
+                        " ·"
+                    )
                     # Cap reached after verified like → complete
                     cap_n = int(
                         job.get("live_test_max_n")
@@ -6994,9 +6982,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                             _end_job_cleanup(job, device_id, call_device)
                             return job
                 else:
-                    verify_msg = (
-                        (verify_msg or "") + " · live_like_unverified"
-                    ).strip(" ·")
+                    verify_msg = ((verify_msg or "") + " · live_like_unverified").strip(
+                        " ·"
+                    )
             # Deterministic post-action checks for type / send (no vision)
             if kind in ("type", "type_text", "input_text"):
                 typed = str(action.get("text") or "")
@@ -7049,34 +7037,43 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             # a real heart tap leaves the tree identical. Its fixed like taps
             # count as UI progress (bounded by the mode's max likes + wall).
             hily_like_tap = (
-                str(action.get("fastpath_step") or "") == "hily_run_fixed_like_swipe"
-                and kind == "tap"
-            ) or (
-                # r49: Tinder right-swipe (card may not be in the tree either)
-                str(action.get("fastpath_step") or "") == "tinder_fixed_like_swipe"
-                and kind == "swipe"
-            ) or (
-                # r50: generic fixed like taps (card may not be in the tree)
-                str(action.get("fastpath_step") or "") == "fixed_like_tap_like_swipe"
-                and kind == "tap"
-            ) or (
-                # r53 (27 Nov 2026, task_a8c6f811a1f3fb2d): Hinge Discover
-                # (and its like sheet) has a blind tree, so the Discover tab,
-                # photo-heart and comment-focus taps leave the tree identical
-                # and the 90s wall / stuck recovery killed the run right as
-                # the sheet opened. These taps are bounded by the planner's
-                # own ladders (tab x4, heart x3, focus x2).
-                str(action.get("fastpath_step") or "") in (
-                    "hinge_open_discover",
-                    "hinge_fixed_fc_photo_heart",
-                    "hinge_fixed_fc_blind_focus",
-                    "hinge_fixed_fc_focus_comment",
-                    "hinge_fixed_fc_bc_send",
+                (
+                    str(action.get("fastpath_step") or "")
+                    == "hily_run_fixed_like_swipe"
+                    and kind == "tap"
                 )
-                and kind == "tap"
-            ) or (
-                str(action.get("fastpath_step") or "") == "hinge_fixed_fc_bc_type"
-                and kind == "type"
+                or (
+                    # r49: Tinder right-swipe (card may not be in the tree either)
+                    str(action.get("fastpath_step") or "") == "tinder_fixed_like_swipe"
+                    and kind == "swipe"
+                )
+                or (
+                    # r50: generic fixed like taps (card may not be in the tree)
+                    str(action.get("fastpath_step") or "")
+                    == "fixed_like_tap_like_swipe"
+                    and kind == "tap"
+                )
+                or (
+                    # r53 (27 Nov 2026, task_a8c6f811a1f3fb2d): Hinge Discover
+                    # (and its like sheet) has a blind tree, so the Discover tab,
+                    # photo-heart and comment-focus taps leave the tree identical
+                    # and the 90s wall / stuck recovery killed the run right as
+                    # the sheet opened. These taps are bounded by the planner's
+                    # own ladders (tab x4, heart x3, focus x2).
+                    str(action.get("fastpath_step") or "")
+                    in (
+                        "hinge_open_discover",
+                        "hinge_fixed_fc_photo_heart",
+                        "hinge_fixed_fc_blind_focus",
+                        "hinge_fixed_fc_focus_comment",
+                        "hinge_fixed_fc_bc_send",
+                    )
+                    and kind == "tap"
+                )
+                or (
+                    str(action.get("fastpath_step") or "") == "hinge_fixed_fc_bc_type"
+                    and kind == "type"
+                )
             )
             if not tree_changed and not hily_like_tap:
                 state["no_progress_streak"] = (
@@ -7388,9 +7385,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
                 sync_dating_stats_from_job(job, before=_dating_stats_before)
             except Exception:
-                logger.exception(
-                    "dating stats sync failed job=%s", job.get("job_id")
-                )
+                logger.exception("dating stats sync failed job=%s", job.get("job_id"))
 
 
 def _step_worker_target() -> Optional[str]:
@@ -7435,8 +7430,19 @@ def _is_dating_job(job: Dict[str, Any], instr_l: str) -> bool:
     return any(
         k in instr_l
         for k in (
-            "first contact", "dating", "hinge", "hily", "tagged", "bumble",
-            "badoo", "yubo", "tinder", "facebook", "blk", "taimi", "fixed ",
+            "first contact",
+            "dating",
+            "hinge",
+            "hily",
+            "tagged",
+            "bumble",
+            "badoo",
+            "yubo",
+            "tinder",
+            "facebook",
+            "blk",
+            "taimi",
+            "fixed ",
         )
     )
 
@@ -7536,22 +7542,36 @@ def _type_on_keyboard(device_id: str, action: Dict[str, Any]) -> str:
         probe,
         instr,
         job=action.get("_job") if isinstance(action.get("_job"), dict) else None,
-        history=action.get("_history") if isinstance(action.get("_history"), list) else None,
+        history=(
+            action.get("_history") if isinstance(action.get("_history"), list) else None
+        ),
     )
     if str(guarded.get("action") or "").lower() == "fail":
         raise RuntimeError(str(guarded.get("reason") or "message text guard"))
     text = str(guarded.get("text") or action.get("text") or "")
     low = text.lower()
     if not low or any(ch not in _HONEYBOARD_KEYS for ch in low):
-        raise RuntimeError(f"type_keys: only letters and spaces can be keyed ({text!r})")
+        raise RuntimeError(
+            f"type_keys: only letters and spaces can be keyed ({text!r})"
+        )
     # Clear what is already in the box (a failed earlier run left text) with
     # Backspace; harmless on an empty field.
     for _ in range(max(0, min(40, int(action.get("clear_keys") or 0)))):
-        call_device(device_id, "tap", {"x": _HONEYBOARD_BACKSPACE[0], "y": _HONEYBOARD_BACKSPACE[1]}, timeout_s=12)
+        call_device(
+            device_id,
+            "tap",
+            {"x": _HONEYBOARD_BACKSPACE[0], "y": _HONEYBOARD_BACKSPACE[1]},
+            timeout_s=12,
+        )
         time.sleep(0.08)
     if action.get("lower_first") and text[:1].islower():
         # Samsung auto-capitalises the first letter of an empty box: Shift off
-        call_device(device_id, "tap", {"x": _HONEYBOARD_SHIFT[0], "y": _HONEYBOARD_SHIFT[1]}, timeout_s=12)
+        call_device(
+            device_id,
+            "tap",
+            {"x": _HONEYBOARD_SHIFT[0], "y": _HONEYBOARD_SHIFT[1]},
+            timeout_s=12,
+        )
         time.sleep(0.15)
     for ch in low:
         x, y = _HONEYBOARD_KEYS[ch]
