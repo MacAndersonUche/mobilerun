@@ -76,7 +76,13 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     title: 'Works all the time',
     subtitle: 'These run reliably — trigger them any time.',
     // Hily: verified live 5/5 via Activity > Likes sent (r53, 27 Nov 2026)
-    packages: ['com.badoo.mobile', 'com.bumble.app', 'com.hily.app'],
+    // Yubo: verified live 5/5 Direct sends (r54, 27 Nov 2026)
+    packages: [
+      'com.badoo.mobile',
+      'com.bumble.app',
+      'com.hily.app',
+      'co.yellw.yellowapp',
+    ],
   },
   {
     id: 'needs-fixing',
@@ -84,7 +90,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     subtitle: 'Drivers exist but these still fail or need work.',
     packages: [
       'co.hinge.app',
-      'co.yellw.yellowapp',
       'com.taggedapp',
       'com.affinityapps.blk',
       'com.facebook.katana',
