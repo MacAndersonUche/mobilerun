@@ -104,7 +104,13 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
     return None
 
 
-CORE_MESSAGE_BANK = ("hey how are you", "hi miss", "hello miss", "good morning", "good evening beautiful")
+CORE_MESSAGE_BANK = (
+    "hey how are you",
+    "hi miss",
+    "hello miss",
+    "good morning",
+    "good evening beautiful",
+)
 
 
 def load_message_bank_texts(

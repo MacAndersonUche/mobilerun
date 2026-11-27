@@ -663,16 +663,18 @@ def _resolve_send_icon_at(tree: str, x: int, y: int) -> Optional[Dict[str, Any]]
 def _tagged_send_zone(action: Dict[str, Any], tree: str, x: int, y: int) -> bool:
     """Keyboard-open Tagged send arrow when the compact dump omitted the icon."""
     blob = (
-        str(action.get("reason") or "")
-        + " "
-        + str(action.get("fastpath_step") or "")
+        str(action.get("reason") or "") + " " + str(action.get("fastpath_step") or "")
     ).lower()
     if "send arrow" not in blob and "tagged_fixed_send" not in blob:
         return False
     if not (940 <= x <= 1050 and 1200 <= y <= 1450):
         return False
     low = (tree or "").lower()
-    return "your message" in low or "etmessageedittext" in low or "make the first move" in low
+    return (
+        "your message" in low
+        or "etmessageedittext" in low
+        or "make the first move" in low
+    )
 
 
 def guard_tap_action(

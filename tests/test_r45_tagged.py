@@ -40,26 +40,52 @@ def _plan(inst, tree, st, dry=False):
 
 def test_parse_and_instruction():
     assert parse_tagged_instruction("fixed tagged message 3") == ("message", 3)
-    assert instruction_for("com.taggedapp", None, {"com.taggedapp": 4}, {"com.taggedapp": "message"}) == "fixed tagged message 4"
+    assert (
+        instruction_for(
+            "com.taggedapp", None, {"com.taggedapp": 4}, {"com.taggedapp": "message"}
+        )
+        == "fixed tagged message 4"
+    )
     assert instruction_for("com.taggedapp", 6, None, None) == "fixed tagged swipe 6"
-    assert clean_modes({"tagged": "message", "bumble": "message", "x": "y"}) == {"com.taggedapp": "message"}
+    assert clean_modes({"tagged": "message", "bumble": "message", "x": "y"}) == {
+        "com.taggedapp": "message"
+    }
     ok, bad = split_supported(["tagged"])
     assert ok == ["com.taggedapp"] and not bad
-    j = build_job(device_id="d", queue=["com.taggedapp"], count=None, dry_run=True,
-                  counts={"com.taggedapp": 2}, modes={"com.taggedapp": "message"})
-    assert j["instruction"] == "fixed tagged message 2" and j["run_modes"] == {"com.taggedapp": "message"}
+    j = build_job(
+        device_id="d",
+        queue=["com.taggedapp"],
+        count=None,
+        dry_run=True,
+        counts={"com.taggedapp": 2},
+        modes={"com.taggedapp": "message"},
+    )
+    assert j["instruction"] == "fixed tagged message 2" and j["run_modes"] == {
+        "com.taggedapp": "message"
+    }
 
 
 def test_schedule_keeps_tagged_mode():
-    s = normalize({"items": [{"app": "tagged", "runs": 1, "count": 3, "mode": "message"}],
-                   "time": "20:00", "days": [], "dry_run": True, "device_id": "d"})
+    s = normalize(
+        {
+            "items": [{"app": "tagged", "runs": 1, "count": 3, "mode": "message"}],
+            "time": "20:00",
+            "days": [],
+            "dry_run": True,
+            "device_id": "d",
+        }
+    )
     assert build_modes(s) == {"com.taggedapp": "message"}
 
 
 def test_swipe_taps_free_like_counts_and_stops():
     st = {}
     a = _plan("fixed tagged swipe 2", DECK, st)
-    assert (a["action"], a["x"], a["y"]) == ("tap", 860, 1908)  # likeBtn, never chat/Go Live
+    assert (a["action"], a["x"], a["y"]) == (
+        "tap",
+        860,
+        1908,
+    )  # likeBtn, never chat/Go Live
     _plan("fixed tagged swipe 2", DECK, st)
     a = _plan("fixed tagged swipe 2", DECK, st)
     assert a["action"] == "done" and st["tagged_fixed"]["done"] == 2
@@ -133,16 +159,25 @@ def test_paid_popup_closed_never_bought():
 
 
 def test_off_screen_recovers_by_tab_not_back():
-    chats = _tree('<n i="tab_chats" xy="756,2200" b="[680,2130][840,2270]" c="1" />'
-                  '<n i="tab_match_game" xy="540,2200" b="[460,2130][620,2270]" c="1" />'
-                  '<n i="conversationList" xy="540,1000" b="[0,200][1080,2100]" />')
+    chats = _tree(
+        '<n i="tab_chats" xy="756,2200" b="[680,2130][840,2270]" c="1" />'
+        '<n i="tab_match_game" xy="540,2200" b="[460,2130][620,2270]" c="1" />'
+        '<n i="conversationList" xy="540,1000" b="[0,200][1080,2100]" />'
+    )
     a = _plan("fixed tagged swipe 2", chats, {})
     assert (a["action"], a["x"], a["y"]) == ("tap", 540, 2200)
 
 
 def test_cloud_agent_routes_tagged_without_llm():
-    a = ca.plan_next_action("fixed tagged swipe 3", DECK, ["Opened Tagged"], None,
-                            package="com.taggedapp", dry_run=False, agent_state={})
+    a = ca.plan_next_action(
+        "fixed tagged swipe 3",
+        DECK,
+        ["Opened Tagged"],
+        None,
+        package="com.taggedapp",
+        dry_run=False,
+        agent_state={},
+    )
     assert a["planner"] == "tagged_fixed" and (a["x"], a["y"]) == (860, 1908)
 
 
@@ -151,6 +186,7 @@ EXISTING = (FIX / "tagged_existing_naomi_r55.xml").read_text(encoding="utf-8")
 
 def test_send_arrow_finds_imSendMessageButton():
     from backend.tagged_fixed import _send_xy, on_existing_thread, _thread_name
+
     xy = _send_xy(EXISTING)
     assert xy == (995, 1302), xy
     assert on_existing_thread(EXISTING)
@@ -167,9 +203,8 @@ def test_existing_thread_clears_and_skips_never_sends():
     assert a.get("text") == ""
     # The message-text guard must not rewrite this back into a bank line
     from backend.message_text_guard import enforce_message_text
-    guarded = enforce_message_text(
-        a, 'fixed tagged message 5 "good evening beautiful"'
-    )
+
+    guarded = enforce_message_text(a, 'fixed tagged message 5 "good evening beautiful"')
     assert guarded.get("text") == "" and guarded.get("_text_source") == "clear_only"
     # After the clear, Back — never the send arrow
     empty = EXISTING.replace('t="good evening beautiful"', 't=""')
@@ -189,6 +224,7 @@ FIRST = (FIX / "tagged_first_move_leidy_r57.xml").read_text(encoding="utf-8")
 
 def test_send_arrow_on_first_move_screen():
     from backend.tagged_fixed import _send_xy, on_existing_thread, _thread_name
+
     assert _send_xy(FIRST) == (995, 1323)
     assert not on_existing_thread(FIRST)
     assert _thread_name(FIRST) == "leidy"
@@ -197,6 +233,7 @@ def test_send_arrow_on_first_move_screen():
 def test_send_arrow_fallback_when_button_omitted():
     """Compact dumps may drop the non-clickable send ImageView."""
     from backend.tagged_fixed import _send_xy
+
     stripped = "\n".join(
         ln for ln in FIRST.splitlines() if "imSendMessageButton" not in ln
     )
@@ -215,6 +252,7 @@ def test_focus_composer_when_keyboard_is_closed():
         '<n i="imSendMessageButton" cls="ImageView" xy="995,2187" b="[943,2130][1048,2250]" />'
     )
     from backend.tagged_fixed import _send_xy
+
     assert _send_xy(closed) is None
     st = {"tagged_fixed": {"done": 0, "phase": "compose"}}
     a = _plan("fixed tagged message 1", closed, st)
@@ -224,11 +262,18 @@ def test_focus_composer_when_keyboard_is_closed():
 
 def test_tap_firewall_allows_nonclickable_send_icon():
     from backend.tap_firewall import guard_tap_action
+
     tree = (FIX / "tagged_first_move_leidy_r57.xml").read_text(encoding="utf-8")
     a = guard_tap_action(
-        {"action": "tap", "x": 995, "y": 1323, "planner": "tagged_fixed",
-         "reason": "Tagged send arrow — message 1/5 (tagged_fixed)"},
-        tree, dry_run=False,
+        {
+            "action": "tap",
+            "x": 995,
+            "y": 1323,
+            "planner": "tagged_fixed",
+            "reason": "Tagged send arrow — message 1/5 (tagged_fixed)",
+        },
+        tree,
+        dry_run=False,
     )
     assert a["action"] == "tap", a
     assert (a["x"], a["y"]) == (995, 1323)
@@ -248,6 +293,7 @@ def test_counts_send_before_existing_hook_then_green_heart():
         '<n i="imSendMessageButton" xy="995,1320" b="[950,1270][1040,1370]" />'
     )
     from backend.tagged_fixed import on_existing_thread, sent_bubble, _thread_name
+
     assert sent_bubble(sent, "hi miss")
     # Only our just-sent line — not a prior conversation like Naomi.
     assert not on_existing_thread(sent, "hi miss")
@@ -324,8 +370,13 @@ def test_skip_names_backs_out_without_typing():
         'xy="500,1320" b="[40,1270][900,1370]" />'
         '<n i="imSendMessageButton" xy="995,1320" b="[950,1270][1040,1370]" />'
     )
-    st = {"tagged_fixed": {"done": 0, "phase": "deck",
-                          "skip_names": ["Ana A", "Gaby J", "muñequita", "leidy"]}}
+    st = {
+        "tagged_fixed": {
+            "done": 0,
+            "phase": "deck",
+            "skip_names": ["Ana A", "Gaby J", "muñequita", "leidy"],
+        }
+    }
     inst = "fixed tagged message 1"
     _plan(inst, DECK, st)
     a = _plan(inst, first, st)
@@ -336,11 +387,18 @@ def test_skip_names_backs_out_without_typing():
 
 def test_vision_yes_confirms_sent_bubble():
     st = {
-        "tagged_fixed": {"done": 0, "phase": "compose", "awaiting_sent": "hi miss",
-                         "name": "Gaby J"},
+        "tagged_fixed": {
+            "done": 0,
+            "phase": "compose",
+            "awaiting_sent": "hi miss",
+            "name": "Gaby J",
+        },
         "bulk_message_new": {
-            "_vision_last": {"ok": True, "raw": "YES, a sent bubble.",
-                             "tag": "tagged_sent_bubble"},
+            "_vision_last": {
+                "ok": True,
+                "raw": "YES, a sent bubble.",
+                "tag": "tagged_sent_bubble",
+            },
         },
     }
     # Box still has text and the tree has no bubble — vision says it sent.
