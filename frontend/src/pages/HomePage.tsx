@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { Heart, Smartphone, ChevronRight } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
-import { Card, EmptyState, LoadingBlock } from '../components/ui';
+import { Card } from '../components/ui';
 import AccountSheet from '../components/AccountSheet';
 import { useAuth } from '../auth';
 
@@ -96,43 +96,11 @@ export default function HomePage() {
         </Link>
       </div>
 
-      <Card>
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Smartphone size={18} className="text-accent" />
-            <h2 className="font-medium">Devices</h2>
-          </div>
-          <Link to="/devices" className="flex items-center gap-1 text-sm text-accent">
-            Manage <ChevronRight size={14} />
-          </Link>
-        </div>
-        {devices === null ? (
-          <LoadingBlock />
-        ) : error ? (
-          <EmptyState title={error} hint="Check Settings → Backend URL" />
-        ) : devices.length === 0 ? (
-          <EmptyState
-            title="No devices yet"
-            hint="Scan the APK download QR, then sign in on the phone with the same account."
-            action={
-              <Link to="/devices" className="mr-btn-primary text-sm">
-                Download APK
-              </Link>
-            }
-          />
-        ) : (
-          <div className="flex flex-wrap gap-4 text-sm">
-            <div>
-              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-ok" />
-              Online {online}
-            </div>
-            <div>
-              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-red-500" />
-              Offline {offline}
-            </div>
-          </div>
-        )}
-      </Card>
+      {error && (
+        <p className="text-sm text-mute" role="status">
+          {error} — check Settings → Backend URL
+        </p>
+      )}
 
       <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
     </div>
