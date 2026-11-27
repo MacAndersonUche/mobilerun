@@ -226,23 +226,32 @@ console.log('datingRun ok');
   console.log('dating page groups tests ok');
 }
 
-// Apps to run collapsible: default expanded; localStorage remembers
+// Apps to run / Apps to come collapsibles: default expanded; localStorage remembers
 {
   const {
     readAppsToRunExpanded,
     writeAppsToRunExpanded,
     APPS_TO_RUN_EXPANDED_KEY,
+    readAppsToComeExpanded,
+    writeAppsToComeExpanded,
+    APPS_TO_COME_EXPANDED_KEY,
   } = await import('./datingRun.ts');
   const mem = new Map();
   const storage = {
     getItem: (k) => (mem.has(k) ? mem.get(k) : null),
     setItem: (k, v) => { mem.set(k, String(v)); },
   };
-  assert.equal(readAppsToRunExpanded(storage), true, 'default expanded');
+  assert.equal(readAppsToRunExpanded(storage), true, 'apps to run default expanded');
   writeAppsToRunExpanded(false, storage);
   assert.equal(mem.get(APPS_TO_RUN_EXPANDED_KEY), '0');
-  assert.equal(readAppsToRunExpanded(storage), false, 'collapsed after write');
+  assert.equal(readAppsToRunExpanded(storage), false, 'apps to run collapsed after write');
   writeAppsToRunExpanded(true, storage);
-  assert.equal(readAppsToRunExpanded(storage), true, 'expanded after write');
-  console.log('apps to run expanded tests ok');
+  assert.equal(readAppsToRunExpanded(storage), true, 'apps to run expanded after write');
+  assert.equal(readAppsToComeExpanded(storage), true, 'apps to come default expanded');
+  writeAppsToComeExpanded(false, storage);
+  assert.equal(mem.get(APPS_TO_COME_EXPANDED_KEY), '0');
+  assert.equal(readAppsToComeExpanded(storage), false, 'apps to come collapsed after write');
+  writeAppsToComeExpanded(true, storage);
+  assert.equal(readAppsToComeExpanded(storage), true, 'apps to come expanded after write');
+  console.log('apps to run/come expanded tests ok');
 }

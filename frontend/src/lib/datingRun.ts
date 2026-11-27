@@ -118,13 +118,15 @@ export function datingAppGroup(pkg: string): DatingAppGroupId | null {
 
 /** localStorage key for the Dating page "Apps to run" collapsible. */
 export const APPS_TO_RUN_EXPANDED_KEY = 'dating_apps_to_run_expanded';
+/** localStorage key for the Dating page "Apps to come" collapsible. */
+export const APPS_TO_COME_EXPANDED_KEY = 'dating_apps_to_come_expanded';
 
-/** Read whether Apps to run is expanded. Default true when unset / invalid. */
-export function readAppsToRunExpanded(
-  storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
+function readExpandedFlag(
+  key: string,
+  storage: Pick<Storage, 'getItem'> | null | undefined
 ): boolean {
   try {
-    const raw = storage?.getItem(APPS_TO_RUN_EXPANDED_KEY);
+    const raw = storage?.getItem(key);
     if (raw === '0' || raw === 'false') return false;
     if (raw === '1' || raw === 'true') return true;
   } catch {
@@ -133,16 +135,46 @@ export function readAppsToRunExpanded(
   return true;
 }
 
+function writeExpandedFlag(
+  key: string,
+  expanded: boolean,
+  storage: Pick<Storage, 'setItem'> | null | undefined
+): void {
+  try {
+    storage?.setItem(key, expanded ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Read whether Apps to run is expanded. Default true when unset / invalid. */
+export function readAppsToRunExpanded(
+  storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
+): boolean {
+  return readExpandedFlag(APPS_TO_RUN_EXPANDED_KEY, storage);
+}
+
 /** Persist Apps to run expanded state. */
 export function writeAppsToRunExpanded(
   expanded: boolean,
   storage: Pick<Storage, 'setItem'> | null | undefined = globalThis.localStorage
 ): void {
-  try {
-    storage?.setItem(APPS_TO_RUN_EXPANDED_KEY, expanded ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
+  writeExpandedFlag(APPS_TO_RUN_EXPANDED_KEY, expanded, storage);
+}
+
+/** Read whether Apps to come is expanded. Default true when unset / invalid. */
+export function readAppsToComeExpanded(
+  storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
+): boolean {
+  return readExpandedFlag(APPS_TO_COME_EXPANDED_KEY, storage);
+}
+
+/** Persist Apps to come expanded state. */
+export function writeAppsToComeExpanded(
+  expanded: boolean,
+  storage: Pick<Storage, 'setItem'> | null | undefined = globalThis.localStorage
+): void {
+  writeExpandedFlag(APPS_TO_COME_EXPANDED_KEY, expanded, storage);
 }
 
 /** Taimi is blocked: FLAG_SECURE makes its screenshots black, so the bot cannot see the screen. */
