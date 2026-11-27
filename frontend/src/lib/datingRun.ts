@@ -95,7 +95,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     title: 'Still needs fixing',
     subtitle: 'Drivers exist but these still fail or need work.',
     packages: [
-      'com.affinityapps.blk',
       'com.facebook.katana',
       'com.takimi.android',
     ],
@@ -111,6 +110,8 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
       'com.getpure.pure',
       'com.threesome.swingers.threefun',
       'com.myyearbook.m',
+      // Mac (27 Nov): move BLK out of Still needs fixing into Apps to come
+      'com.affinityapps.blk',
     ],
   },
 ];
