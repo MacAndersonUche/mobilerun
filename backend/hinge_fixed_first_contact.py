@@ -81,14 +81,18 @@ MESSAGE_BANK = (
     "hi miss",
     "hello miss",
     "good morning",
+    "good evening beautiful",
 )
 PHOTO_HEART_XY = (937, 1356)
-# Heart Y ladder (25 Nov 2026): the heart sits at the bottom-right of the
-# visible photo/prompt, whose height varies by card — measured from Mac's
-# 24 Nov video: 1010 (short top photo), 1356 (23 Nov map), 1790 (tall
-# first photo). X is stable at 937 on all three.
+# Heart Y ladder: the heart sits at the bottom-right of the visible
+# photo, whose height varies by card. 25 Nov 2026 (Mac's 24 Nov video):
+# 1010 (short top photo), 1356 (23 Nov map), 1790 (tall first photo).
+# 27 Nov 2026 live (S21+): 1356 hit Kelly and Hephzibah; Tronella's
+# "Signals" banner sat the heart at ~1528, so 1356 missed. X is 937.
+# 1790 is last: on a short card it is near the prompt row — only used
+# after earlier rungs (and a vision miss) show the sheet is not open.
 PHOTO_HEART_X = 937
-PHOTO_HEART_LADDER = (PHOTO_HEART_XY[1], 1010, 1790)
+PHOTO_HEART_LADDER = (PHOTO_HEART_XY[1], 1528, 1180, 1010, 1680, 1790)
 SEND_LIKE_XY = (686, 1277)
 COMMENT_XY = (540, 1102)
 # r53: inline like panel — "Add a comment" box centre below the photo heart
@@ -134,7 +138,9 @@ def _foreign_tree(tree: str) -> str:
     if not pkgs or HINGE_PKG in pkgs:
         return ""
     # System UI alone (notification shade / IME) is not a foreign app
-    if all(p in ("com.android.systemui", "com.samsung.android.honeyboard") for p in pkgs):
+    if all(
+        p in ("com.android.systemui", "com.samsung.android.honeyboard") for p in pkgs
+    ):
         return ""
     return pkgs[0]
 
@@ -185,7 +191,11 @@ def _on_likes_you(tree: str) -> bool:
     blob = _low(tree)
     if "likes you" in blob:
         return True
-    if "upgrade to hingex" in blob and "boost" in blob and not hinge_on_like_sheet(tree):
+    if (
+        "upgrade to hingex" in blob
+        and "boost" in blob
+        and not hinge_on_like_sheet(tree)
+    ):
         return True
     return False
 
@@ -200,7 +210,10 @@ def _off_discover(tree: str) -> Optional[str]:
         from backend.dm_heuristics import _parse_compact_nodes as _pc  # type: ignore
     nodes = _pc(tree)
     labels = [
-        (str(n.get("label") or n.get("text") or "").strip().lower(), int(n.get("y") or 0))
+        (
+            str(n.get("label") or n.get("text") or "").strip().lower(),
+            int(n.get("y") or 0),
+        )
         for n in nodes
     ]
     top = {lab for lab, y in labels if 0 < y < 300}
@@ -213,7 +226,11 @@ def _off_discover(tree: str) -> Optional[str]:
     # 1:1 thread: a Message composer near the bottom, no Discover sheet
     for n in nodes:
         lab = str(n.get("label") or n.get("desc") or n.get("hint") or "").lower()
-        if n.get("editable") and ("message" in lab or "type" in lab) and "send a message" not in blob:
+        if (
+            n.get("editable")
+            and ("message" in lab or "type" in lab)
+            and "send a message" not in blob
+        ):
             return "thread"
     if "matches" in top or "your turn" in blob or "their turn" in blob:
         return "Matches"
@@ -307,9 +324,7 @@ def _send_like_action(tree: str, planner: str, reason_suffix: str) -> Dict[str, 
     if send:
         sx, sy = int(send.get("x") or 0), int(send.get("y") or 0)
         if not in_rose_bounds(sx, sy):
-            send["reason"] = (
-                f"Hinge Send Like {reason_suffix} — never Rose ({planner})"
-            )
+            send["reason"] = f"Hinge Send Like {reason_suffix} — never Rose ({planner})"
             send["planner"] = planner
             return send
     return _fp(
@@ -318,8 +333,7 @@ def _send_like_action(tree: str, planner: str, reason_suffix: str) -> Dict[str, 
             "x": SEND_LIKE_XY[0],
             "y": SEND_LIKE_XY[1],
             "reason": (
-                f"Hinge Send Like {reason_suffix} (map xy) "
-                f"— never Rose ({planner})"
+                f"Hinge Send Like {reason_suffix} (map xy) " f"— never Rose ({planner})"
             ),
             "planner": planner,
             "llm_provider": None,
@@ -349,8 +363,7 @@ def _leave_likes_you(bulk: Dict[str, Any], planner: str) -> Dict[str, Any]:
         )
     act = hinge_open_discover_tab(planner=planner)
     act["reason"] = (
-        f"Leave Hinge Likes You (Boost/HingeX showing) → Discover "
-        f"({planner})"
+        f"Leave Hinge Likes You (Boost/HingeX showing) → Discover " f"({planner})"
     )
     return act
 
@@ -521,8 +534,16 @@ def plan_hinge_fixed_first_contact(
             # tapped and Hinge asks "Send a Rose instead?" — confirm the
             # free like with "Send Like anyway" and count it now.
             bulk["done"] = done + 1
-            bulk.update({"_bc": "", "typed": False, "awaiting_sheet": False,
-                         "heart_tries": 0, "_blind_focus_tries": 0, "_bc_wait": 0})
+            bulk.update(
+                {
+                    "_bc": "",
+                    "typed": False,
+                    "awaiting_sheet": False,
+                    "heart_tries": 0,
+                    "_blind_focus_tries": 0,
+                    "_bc_wait": 0,
+                }
+            )
             bulk.pop("_sheet_waited", None)
             bulk.pop("_discover_waited", None)
             bulk.pop("_vision_last", None)
@@ -803,7 +824,27 @@ def plan_hinge_fixed_first_contact(
         and bulk.get("_deck_seen")
         and not _deck_readable(ui_tree)
     ):
-        if not bulk.get("_sheet_waited"):
+        # r53n (27 Nov 2026, Tronella): an empty tree is not proof the
+        # like sheet is open. The heart tap at 1356 missed (Signals
+        # banner sat the heart at ~1528); the tree stayed empty with no
+        # keyboard, and the old path assumed a sheet and gave up without
+        # trying the rest of the ladder. A keyboard-up tree, or a
+        # screenshot that shows the comment/Send Like panel, is the
+        # evidence the sheet opened. A screenshot of the Discover card
+        # (no panel) is a heart miss — clear awaiting_sheet and continue
+        # the ladder. Never re-tap the heart while vision says the
+        # panel is open (that closes it: 25 Nov).
+        sheet_vis = _vision_answer(bulk, "hinge_sheet_open")
+        kb_up = _keyboard_up(ui_tree)
+        if sheet_vis is False and not kb_up:
+            bulk["awaiting_sheet"] = False
+            bulk.pop("_sheet_waited", None)
+            bulk.pop("_blind_focus_tries", None)
+            bulk.pop("_sheet_vision_tries", None)
+            bulk.pop("_vision_last", None)
+            st["bulk_message_new"] = bulk
+            # Fall through to the next heart-Y rung.
+        elif not bulk.get("_sheet_waited"):
             bulk["_sheet_waited"] = True
             st["bulk_message_new"] = bulk
             return _fp(
@@ -817,49 +858,59 @@ def plan_hinge_fixed_first_contact(
                     ),
                     "planner": planner,
                     "llm_provider": None,
+                    "_vision_check": _SHEET_OPEN_VISION,
+                    "_vision_tag": "hinge_sheet_open",
                 },
                 "hinge_fixed_fc_blind_sheet_wait",
             )
-        tries = int(bulk.get("_blind_focus_tries") or 0) + 1
-        bulk["_blind_focus_tries"] = tries
-        st["bulk_message_new"] = bulk
-        if tries > 2:
+        elif sheet_vis is False and not kb_up:
+            # Already handled above; keep the branch exhaustive.
+            pass
+        elif kb_up or sheet_vis is True or sheet_vis is None:
+            # Sheet is open (keyboard or vision YES), or vision has not
+            # answered yet. If vision is still unknown after the wait,
+            # stay conservative: focus the composer, never re-tap the
+            # heart (25 Nov: re-tapping closed the open sheet).
+            tries = int(bulk.get("_blind_focus_tries") or 0) + 1
+            bulk["_blind_focus_tries"] = tries
+            st["bulk_message_new"] = bulk
+            if tries > 2:
+                return _fp(
+                    {
+                        "action": "fail",
+                        "reason": (
+                            f"Hinge like sheet opened but the comment box "
+                            f"never appeared in the tree — stop, nothing "
+                            f"sent ({planner})"
+                        ),
+                        "planner": planner,
+                        "llm_provider": None,
+                    },
+                    "hinge_fixed_fc_blind_sheet_fail",
+                )
+            # r53 (27 Nov 2026, Mac watching): on today's Discover the like
+            # panel opens inline under the photo — "Add a comment" sits ~200px
+            # below the photo heart that opened it, with the Rose + Send Like
+            # row below that. The old fixed COMMENT_XY (540, 1102) was on the
+            # photo, so the box opened but was never focused or typed into.
+            # Focus relative to the heart rung that opened the panel; the
+            # Rose row is far lower (heart_y + ~380) and is never tapped here.
+            hy = int(bulk.get("_heart_y") or 0)
+            fy = min(2050, hy + COMMENT_BELOW_HEART) if hy else COMMENT_XY[1]
             return _fp(
                 {
-                    "action": "fail",
+                    "action": "tap",
+                    "x": COMMENT_XY[0],
+                    "y": fy,
                     "reason": (
-                        f"Hinge like sheet opened but the comment box "
-                        f"never appeared in the tree — stop, nothing "
-                        f"sent ({planner})"
+                        f"Focus Add a comment composer — like sheet open "
+                        f"but tree blind ({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
                 },
-                "hinge_fixed_fc_blind_sheet_fail",
+                "hinge_fixed_fc_blind_focus",
             )
-        # r53 (27 Nov 2026, Mac watching): on today's Discover the like
-        # panel opens inline under the photo — "Add a comment" sits ~200px
-        # below the photo heart that opened it, with the Rose + Send Like
-        # row below that. The old fixed COMMENT_XY (540, 1102) was on the
-        # photo, so the box opened but was never focused or typed into.
-        # Focus relative to the heart rung that opened the panel; the
-        # Rose row is far lower (heart_y + ~380) and is never tapped here.
-        hy = int(bulk.get("_heart_y") or 0)
-        fy = min(2050, hy + COMMENT_BELOW_HEART) if hy else COMMENT_XY[1]
-        return _fp(
-            {
-                "action": "tap",
-                "x": COMMENT_XY[0],
-                "y": fy,
-                "reason": (
-                    f"Focus Add a comment composer — like sheet open "
-                    f"but tree blind ({planner})"
-                ),
-                "planner": planner,
-                "llm_provider": None,
-            },
-            "hinge_fixed_fc_blind_focus",
-        )
 
     # Not on the like sheet — leave Likes You / Standouts, then tap the
     # photo heart. Never vision, never Dating Intent / Rewind / Rose.
@@ -926,8 +977,7 @@ def plan_hinge_fixed_first_contact(
             )
         act = hinge_open_discover_tab(planner=planner)
         act["reason"] = (
-            f"Open Hinge Discover tab again — the last tap did not run "
-            f"({planner})"
+            f"Open Hinge Discover tab again — the last tap did not run " f"({planner})"
         )
         return act
 
@@ -1015,6 +1065,10 @@ def plan_hinge_fixed_first_contact(
     bulk["heart_tries"] = tries + 1
     bulk["awaiting_sheet"] = True
     bulk["typed"] = False
+    bulk.pop("_sheet_waited", None)
+    bulk.pop("_blind_focus_tries", None)
+    bulk.pop("_sheet_vision_tries", None)
+    bulk.pop("_vision_last", None)
     st["bulk_message_new"] = bulk
     return _fp(
         {
@@ -1049,6 +1103,36 @@ def _keyboard_up(tree: str) -> bool:
     return "honeyboard" in pk or "inputmethod" in pk
 
 
+def _vision_answer(bulk: Dict[str, Any], tag: str) -> Optional[bool]:
+    """YES/NO from the last screenshot check, or None if missing/failed.
+
+    An empty raw string is a failed call, not a NO — never treat that
+    as evidence the sheet is (or is not) open.
+    """
+    vlast = (
+        bulk.get("_vision_last") if isinstance(bulk.get("_vision_last"), dict) else {}
+    )
+    if vlast.get("tag") != tag:
+        return None
+    if not str(vlast.get("raw") or "").strip():
+        return None
+    return bool(vlast.get("ok"))
+
+
+# r53n: screenshot questions. YES = the like/comment panel is visible.
+_SHEET_OPEN_VISION = (
+    "Hinge dating app screenshot. Is the like/comment panel open under the "
+    "photo — an 'Add a comment' (or typed comment) text box with a 'Send Like' "
+    "button and a small rose button? If you only see a Discover profile card "
+    "(filters, photo, no comment box), answer NO. Reply YES or NO only."
+)
+_PANEL_OPEN_VISION = (
+    "Hinge dating app screenshot. Is the comment text box and the 'Send Like' "
+    "button still visible under the photo? If a new Discover profile card is "
+    "showing and the comment panel is gone, answer NO. Reply YES or NO only."
+)
+
+
 def _blind_compose_step(
     ui_tree: str,
     history: List[str],
@@ -1067,13 +1151,21 @@ def _blind_compose_step(
     except Exception:
         hinge_edit = False
     kb = _keyboard_up(ui_tree)
-    vlast = bulk.get("_vision_last") if isinstance(bulk.get("_vision_last"), dict) else {}
+    vlast = (
+        bulk.get("_vision_last") if isinstance(bulk.get("_vision_last"), dict) else {}
+    )
 
     def _fail(why: str, step: str) -> Dict[str, Any]:
         bulk["_bc"] = "failed"
         st["bulk_message_new"] = bulk
-        return _fp({**base, "action": "fail",
-                    "reason": f"{why} — stop, nothing more sent ({planner})"}, step)
+        return _fp(
+            {
+                **base,
+                "action": "fail",
+                "reason": f"{why} — stop, nothing more sent ({planner})",
+            },
+            step,
+        )
 
     if phase == "failed":
         return _fail("Hinge blind compose already failed", "hinge_fixed_fc_bc_failed")
@@ -1089,80 +1181,157 @@ def _blind_compose_step(
         st["bulk_message_new"] = bulk
         # r53 (live 27 Nov 2026): a11y SET_TEXT cannot reach Hinge's comment
         # box (no node), so type it on the on-screen keyboard key by key.
-        return _fp({**base, "action": "type_keys", "text": text, "clear_keys": 24,
-                    "lower_first": True,
-                    "reason": f"Type Hinge comment '{text}' on the keyboard into the focused "
-                              f"Add a comment box (inline panel, tree blind) ({planner})"},
-                   "hinge_fixed_fc_bc_type")
+        return _fp(
+            {
+                **base,
+                "action": "type_keys",
+                "text": text,
+                "clear_keys": 24,
+                "lower_first": True,
+                "reason": f"Type Hinge comment '{text}' on the keyboard into the focused "
+                f"Add a comment box (inline panel, tree blind) ({planner})",
+            },
+            "hinge_fixed_fc_bc_type",
+        )
 
     if phase == "typed":
         landed = any(
             str(h).lower().startswith(f'typed "{text.lower()}"') for h in history[-4:]
         )
         if not landed:
-            return _fail(f"Hinge comment '{text}' did not land in the box",
-                         "hinge_fixed_fc_bc_type_fail")
+            return _fail(
+                f"Hinge comment '{text}' did not land in the box",
+                "hinge_fixed_fc_bc_type_fail",
+            )
         if not kb:
-            return _fail("Keyboard closed before Send Like — comment box lost focus",
-                         "hinge_fixed_fc_bc_kb_lost")
+            return _fail(
+                "Keyboard closed before Send Like — comment box lost focus",
+                "hinge_fixed_fc_bc_kb_lost",
+            )
         bulk["_bc"] = "send_tapped"
         bulk.pop("_vision_last", None)
         st["bulk_message_new"] = bulk
-        return _fp({**base, "action": "tap", "x": SEND_LIKE_XY[0], "y": SEND_LIKE_XY[1],
-                    "label": "Send Like",
-                    "reason": f"Hinge Send Like with comment '{text}' verified on screen "
-                              f"— never Rose ({planner})",
-                    "_vision_check": (
-                        "Hinge dating app screenshot. Under the photo there is a comment text box, "
-                        "and below it a small rose button and a wide 'Send Like' button. Does the "
-                        f"comment text box contain the typed words \"{text}\" (ignore capitalisation, "
-                        "underlines and the cursor)? Reply YES or NO only."),
-                    "_vision_gate": True, "_vision_tag": "hinge_comment_typed"},
-                   "hinge_fixed_fc_bc_send")
+        return _fp(
+            {
+                **base,
+                "action": "tap",
+                "x": SEND_LIKE_XY[0],
+                "y": SEND_LIKE_XY[1],
+                "label": "Send Like",
+                "reason": f"Hinge Send Like with comment '{text}' verified on screen "
+                f"— never Rose ({planner})",
+                "_vision_check": (
+                    "Hinge dating app screenshot. Under the photo there is a comment text box, "
+                    "and below it a small rose button and a wide 'Send Like' button. Does the "
+                    f'comment text box contain the typed words "{text}" (ignore capitalisation, '
+                    "underlines and the cursor)? Reply YES or NO only."
+                ),
+                "_vision_gate": True,
+                "_vision_tag": "hinge_comment_typed",
+            },
+            "hinge_fixed_fc_bc_send",
+        )
 
-    if phase == "send_tapped":
-        if vlast.get("tag") == "hinge_comment_typed" and not vlast.get("ok"):
-            return _fail(f"Screenshot did not show '{text}' in the comment box, Send Like "
-                         f"not tapped", "hinge_fixed_fc_bc_verify_fail")
-        if _on_rose_popup(ui_tree):
-            return None  # tree-resolved "Send Like anyway" handled by caller
-        if kb:
-            n = int(bulk.get("_bc_wait") or 0) + 1
-            bulk["_bc_wait"] = n
-            st["bulk_message_new"] = bulk
-            if n > 2:
-                return _fail("Send Like tapped but the comment panel stayed open",
-                             "hinge_fixed_fc_bc_not_sent")
-            return _fp({**base, "action": "wait", "seconds": 1.5, "delay_s": 1.5,
-                        "reason": f"Send Like tapped — waiting for the panel to close ({planner})"},
-                       "hinge_fixed_fc_bc_wait")
-        # Keyboard gone: confirm on the screenshot it was not a Rose upsell
+    def _probe_after_send() -> Dict[str, Any]:
+        # Keyboard gone, or vision shows the comment panel has closed
+        # (the tree can still list honeyboard after the deck has already
+        # advanced — 27 Nov, Hephzibah). Probe for a Rose upsell, then count.
         bulk["_bc"] = "probe"
         bulk.pop("_vision_last", None)
         st["bulk_message_new"] = bulk
-        return _fp({**base, "action": "wait", "seconds": 0.5, "delay_s": 0.5,
-                    "reason": f"Send Like tapped — check the screen for a Rose popup ({planner})",
-                    "_vision_check": (
-                        "This is a Hinge dating app screenshot. Is a popup or sheet visible "
-                        "that offers to send a Rose (for example 'Send a Rose instead?' or a "
-                        "'Send Like anyway' link)? Reply YES or NO only."),
-                    "_vision_tag": "hinge_rose_probe"},
-                   "hinge_fixed_fc_bc_probe")
+        return _fp(
+            {
+                **base,
+                "action": "wait",
+                "seconds": 0.5,
+                "delay_s": 0.5,
+                "reason": f"Send Like tapped — check the screen for a Rose popup ({planner})",
+                "_vision_check": (
+                    "This is a Hinge dating app screenshot. Is a popup or sheet visible "
+                    "that offers to send a Rose (for example 'Send a Rose instead?' or a "
+                    "'Send Like anyway' link)? Reply YES or NO only."
+                ),
+                "_vision_tag": "hinge_rose_probe",
+            },
+            "hinge_fixed_fc_bc_probe",
+        )
+
+    if phase == "send_tapped":
+        if vlast.get("tag") == "hinge_comment_typed" and not vlast.get("ok"):
+            return _fail(
+                f"Screenshot did not show '{text}' in the comment box, Send Like "
+                f"not tapped",
+                "hinge_fixed_fc_bc_verify_fail",
+            )
+        if _on_rose_popup(ui_tree):
+            return None  # tree-resolved "Send Like anyway" handled by caller
+        # r53n: do not fail "panel stayed open" just because a stale tree
+        # still lists the keyboard. A screenshot of the next Discover card
+        # (comment panel gone) means the like went through.
+        panel_vis = _vision_answer(bulk, "hinge_panel_open")
+        if panel_vis is False:
+            return _probe_after_send()
+        if kb or panel_vis is True:
+            n = int(bulk.get("_bc_wait") or 0) + 1
+            bulk["_bc_wait"] = n
+            st["bulk_message_new"] = bulk
+            if n > 2 and panel_vis is True:
+                return _fail(
+                    "Send Like tapped but the comment panel stayed open",
+                    "hinge_fixed_fc_bc_not_sent",
+                )
+            if n > 3 and panel_vis is None:
+                return _fail(
+                    "Send Like tapped but the comment panel stayed open",
+                    "hinge_fixed_fc_bc_not_sent",
+                )
+            return _fp(
+                {
+                    **base,
+                    "action": "wait",
+                    "seconds": 1.5,
+                    "delay_s": 1.5,
+                    "reason": f"Send Like tapped — waiting for the panel to close ({planner})",
+                    "_vision_check": _PANEL_OPEN_VISION,
+                    "_vision_tag": "hinge_panel_open",
+                },
+                "hinge_fixed_fc_bc_wait",
+            )
+        # Keyboard gone: confirm on the screenshot it was not a Rose upsell
+        return _probe_after_send()
 
     if phase == "probe":
         if vlast.get("tag") == "hinge_rose_probe" and vlast.get("ok"):
-            return _fail("Hinge showed a Rose popup after Send Like and it is not in the "
-                         "screen tree — left for you, never tapped near Rose",
-                         "hinge_fixed_fc_bc_rose")
+            return _fail(
+                "Hinge showed a Rose popup after Send Like and it is not in the "
+                "screen tree — left for you, never tapped near Rose",
+                "hinge_fixed_fc_bc_rose",
+            )
         done = int(bulk.get("done") or 0) + 1
-        bulk.update({"done": done, "_bc": "", "typed": False, "awaiting_sheet": False,
-                     "heart_tries": 0, "_blind_focus_tries": 0, "_bc_wait": 0})
+        bulk.update(
+            {
+                "done": done,
+                "_bc": "",
+                "typed": False,
+                "awaiting_sheet": False,
+                "heart_tries": 0,
+                "_blind_focus_tries": 0,
+                "_bc_wait": 0,
+            }
+        )
         bulk.pop("_sheet_waited", None)
         bulk.pop("_discover_waited", None)
         bulk.pop("_vision_last", None)
         st["bulk_message_new"] = bulk
-        return _fp({**base, "action": "wait", "seconds": 1.5, "delay_s": 1.5,
-                    "reason": f"Hinge comment like sent {done} — panel closed, next card "
-                              f"loading ({planner})"},
-                   "hinge_fixed_fc_bc_sent")
+        return _fp(
+            {
+                **base,
+                "action": "wait",
+                "seconds": 1.5,
+                "delay_s": 1.5,
+                "reason": f"Hinge comment like sent {done} — panel closed, next card "
+                f"loading ({planner})",
+            },
+            "hinge_fixed_fc_bc_sent",
+        )
     return None
