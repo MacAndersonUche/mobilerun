@@ -191,7 +191,14 @@ def plan_hily_fixed_run(
         return None
     msgs, max_likes = parsed
     st = state if isinstance(state, dict) else {}
-    hr = st.setdefault("hily_run", {"likes": 0, "sent": 0, "phase": "likes1"})
+    # r53 (Mac, 27 Nov 2026: "I wanna send messages, not like"): a message
+    # run sends its N messages from Activity → Likes sent → envelope and
+    # finishes — never a bare Finder like before or after. Likes only
+    # mode is unchanged.
+    hr = st.setdefault(
+        "hily_run",
+        {"likes": 0, "sent": 0, "phase": "message" if msgs else "likes1"},
+    )
     st["hily_run"] = hr
     likes = int(hr.get("likes") or 0)
     phase = str(hr.get("phase") or "likes1")
@@ -222,17 +229,23 @@ def plan_hily_fixed_run(
         out_of_targets = step in ("hily_fixed_fc_to_discover", "hily_fixed_fc_no_targets",
                                   "hily_fixed_fc_discover_none")
         stopped = (a or {}).get("stopped_reason") in ("allowance_exhausted", "paywall_done")
-        if a is None or (a.get("action") == "done") or out_of_targets:
-            hr["phase"] = "likes2"
+        if a is None or (a.get("action") == "done") or out_of_targets or (
+            stopped and a.get("action") != "press_button"
+        ):
+            hr["phase"] = "finished"
             hr["msg_end"] = (
                 f"sent {sent}/{msgs}" + (" (no more Likes-sent envelopes)" if out_of_targets else "")
             )
-            phase = "likes2"
-        elif stopped and a.get("action") != "press_button":
-            hr["phase"] = "likes2"
-            phase = "likes2"
+            return _act(
+                "done", "hily_run_done",
+                f"Hily message run finished: {hr['msg_end']} — no bare likes",
+                False,
+            )
         else:
             return _mark(a)
+    if phase == "finished":
+        return _act("done", "hily_run_done",
+                    f"Hily message run finished: {hr.get('msg_end') or ''}", False)
 
     target_likes = msgs if (phase == "likes1" and msgs) else max_likes
     if likes >= target_likes and phase == "likes1" and msgs:

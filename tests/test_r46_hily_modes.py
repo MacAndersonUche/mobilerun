@@ -181,36 +181,36 @@ def test_likes_only_finder_hearts_then_done_never_crush():
 
 
 def test_message_and_likes_full_cycle():
+    # r53 (Mac, 27 Nov 2026: "I wanna send messages, not like"): a message run
+    # sends its N messages from Likes sent and finishes — no Finder likes.
     trees = [
-        FINDER, FINDER, FINDER,         # 2 likes (counted on the next Finder)
-        LIKES_SENT, MBM, MBM_TYPED,     # envelope → type → send 1 (box verified)
+        FINDER,                         # → Activity
+        LIKES_SENT, MBM, MBM_TYPED,     # envelope → type → send 1
         LIKES_SENT, LIKES_SENT, MBM, MBM_TYPED,  # confirm 1, envelope, type, send 2
-        LIKES_SENT,                     # confirm 2 → back to Finder
-        CHATS, FINDER, FINDER, FINDER,  # Finder tab, likes 3,4 → done
+        LIKES_SENT,                     # confirm 2 → done
     ]
     acts, st = _run("fixed hily message 2 likes 4", trees)
     steps = [a["fastpath_step"] for a in acts]
-    assert steps[:3] == ["hily_run_fixed_like_swipe", "hily_run_fixed_like_swipe",
-                         "hily_fixed_fc_activity"]
-    assert _xy(acts[2]) == (740, 2190)
-    assert steps[3] == "hily_fixed_fc_open_request" and _xy(acts[3]) == (445, 925)
+    assert steps[0] == "hily_fixed_fc_activity" and _xy(acts[0]) == (740, 2190)
+    assert steps[1] == "hily_fixed_fc_open_request" and _xy(acts[1]) == (445, 925)
     typed = [a for a in acts if a["action"] == "type"]
     assert len(typed) == 2 and all(a["text"] == "hey how are you" for a in typed)
     assert steps.count("hily_fixed_fc_send") == 2
     assert st["hily_run"]["sent"] == 2
-    assert steps[10] == "hily_run_finder_tab_xy" and _xy(acts[10]) == FINDER_TAB_XY
-    assert acts[-1]["action"] == "done"
-    assert "4/4 likes" in acts[-1]["reason"] and "sent 2/2" in acts[-1]["reason"]
+    assert not any(s.startswith("hily_run_fixed_like") for s in steps)  # never a bare like
+    assert acts[-1]["action"] == "done" and "sent 2/2" in acts[-1]["reason"]
     for a in acts:
         assert _xy(a) not in (CRUSH_XY, DISCOVER_XY)
         assert a["planner"] == "hily_fixed_run" and a.get("_no_llm_handoff")
 
 
-def test_no_envelopes_left_goes_back_to_finder_not_discover():
-    st = {"hily_run": {"likes": 2, "sent": 0, "phase": "message"}}
+def test_no_envelopes_left_finishes_without_likes():
+    st = {"hily_run": {"likes": 0, "sent": 1, "phase": "message",
+                       "fc": {"bulk_message_new": {"done": 1, "_ls_tapped": True,
+                                                   "_ls_scrolls": 4}}}}
     a = plan_hily_fixed_run("fixed hily message 2 likes 5", LIKES_SENT_EMPTY, [], state=st)
-    assert st["hily_run"]["phase"] == "likes2"
-    assert _xy(a) == FINDER_TAB_XY
+    assert st["hily_run"]["phase"] == "finished"
+    assert a["action"] == "done"
     assert "no more Likes-sent envelopes" in st["hily_run"]["msg_end"]
 
 

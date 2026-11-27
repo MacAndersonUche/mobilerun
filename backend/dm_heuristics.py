@@ -3222,12 +3222,21 @@ def hily_on_profile_sheet(tree: str) -> bool:
         "finderCardUser",
     ):
         return False
+    # r53 (live 27 Nov 2026): the Activity → Likes grid carries "Crush"
+    # badges on people's cards, and a lower card runs behind the bottom nav.
+    # That is a list, not a covering sheet — Back there left Activity.
+    if "activitytabtitle" in blob or (
+        "likes sent" in blob and "visitors" in blob and "bottomnavtab_4" in blob
+    ):
+        return False
     # Sheet Crush sits over the bottom-nav band (y≳2100), covering Chats taps
     for n in _parse_compact_nodes(tree):
         lab = (n.get("label") or "").lower()
         nid = str(n.get("id") or "").lower()
         if "crush" not in lab and "crush" not in nid:
             continue
+        if nid.endswith("center_item_card") or nid.endswith("badgetext"):
+            continue  # a person's card / badge in a grid, not sheet chrome
         y = int(n.get("y") or 0)
         y2 = int(n.get("y2") or 0)
         if y >= 2100 or y2 >= 2180:

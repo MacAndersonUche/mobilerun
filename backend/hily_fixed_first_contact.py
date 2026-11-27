@@ -98,9 +98,32 @@ def _is_paywall(tree: str) -> bool:
     return any(n in blob for n in needles)
 
 
-def _on_likes_sent(tree: str) -> bool:
+def _on_likes_tab(tree: str) -> bool:
+    """Activity → Likes (people who liked Mac): cards carry like/show, no envelopes.
+
+    The "Likes sent" tab header is visible on every Activity tab, so the
+    header alone never proves Likes sent is open (r53 live run: the run read
+    the Likes tab as an empty Likes sent and finished 0/5).
+    """
+    if _first_chat_request(tree):
+        return False
+    for n in _parse_compact_nodes(tree):
+        d = str(n.get("desc") or "").strip().lower()
+        if d in ("like", "show") and n.get("clickable"):
+            return True
+    return False
+
+
+def _on_likes_sent(tree: str, bulk: Optional[Dict[str, Any]] = None) -> bool:
     blob = _blob(tree)
-    return "likes sent" in blob and "activity" in blob
+    if not ("likes sent" in blob and "activity" in blob):
+        return False
+    if _first_chat_request(tree):
+        return True
+    if _on_likes_tab(tree):
+        return False
+    # No envelopes and no Likes-tab cards: only trust it once we tapped the tab
+    return bool(bulk is None or bulk.get("_ls_tapped"))
 
 
 def _on_activity(tree: str) -> bool:
@@ -176,7 +199,7 @@ def plan_hily_fixed_first_contact(
     # run. They are now bounded and fail honestly instead.)
     if _on_activity(ui_tree):
         bulk["_activity_tries"] = 0
-    if _on_likes_sent(ui_tree):
+    if _on_likes_sent(ui_tree, bulk):
         bulk["_likes_sent_tries"] = 0
 
     pending = str(bulk.get("awaiting_sent") or "")
@@ -474,6 +497,8 @@ def plan_hily_fixed_first_contact(
     req = _first_chat_request(ui_tree)
     if req and _on_activity(ui_tree):
         bulk["typed"] = False
+        bulk["_ls_scrolls"] = 0
+        bulk.pop("_ls_names", None)
         st["bulk_message_new"] = bulk
         return _fp(
             {
@@ -490,9 +515,10 @@ def plan_hily_fixed_first_contact(
             "hily_fixed_fc_open_request",
         )
 
-    if _on_activity(ui_tree) and not _on_likes_sent(ui_tree):
+    if _on_activity(ui_tree) and not _on_likes_sent(ui_tree, bulk):
         tries = int(bulk.get("_likes_sent_tries") or 0) + 1
         bulk["_likes_sent_tries"] = tries
+        bulk["_ls_tapped"] = True
         st["bulk_message_new"] = bulk
         if tries > 3:
             return _fp(
@@ -586,7 +612,33 @@ def plan_hily_fixed_first_contact(
                 "hily_fixed_fc_discover_tab",
             )
 
-    if _on_likes_sent(ui_tree) and not req:
+    if _on_likes_sent(ui_tree, bulk) and not req:
+        # r53 (live 27 Nov 2026): after 4 sends the next people sat in the
+        # grid row behind the bottom nav — scroll Likes sent before calling
+        # it empty. Stop scrolling once the visible names stop changing.
+        names = "|".join(
+            str(n.get("text") or "") for n in _parse_compact_nodes(ui_tree)
+            if str(n.get("id") or "").lower().endswith("center_name")
+        )
+        scrolls = int(bulk.get("_ls_scrolls") or 0)
+        if scrolls < 4 and names != str(bulk.get("_ls_names") or "\x00"):
+            bulk["_ls_scrolls"] = scrolls + 1
+            bulk["_ls_names"] = names
+            st["bulk_message_new"] = bulk
+            return _fp(
+                {
+                    "action": "swipe",
+                    "x1": 540, "y1": 1800, "x2": 540, "y2": 900,
+                    "duration_ms": 450,
+                    "reason": (
+                        f"Scroll Hily Likes sent for more envelopes "
+                        f"({done}/{cap} sent) ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hily_fixed_fc_likes_sent_scroll",
+            )
         bulk["_via_discover"] = True
         st["bulk_message_new"] = bulk
         return _fp(
@@ -621,6 +673,7 @@ def plan_hily_fixed_first_contact(
     # Finder / elsewhere — open Activity. Never tap deck Crush.
     tries = int(bulk.get("_activity_tries") or 0) + 1
     bulk["_activity_tries"] = tries
+    bulk["_ls_tapped"] = False
     st["bulk_message_new"] = bulk
     if tries > 3:
         return _fp(
