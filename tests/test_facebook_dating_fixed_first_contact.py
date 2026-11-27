@@ -110,8 +110,8 @@ def test_profile_taps_heart_to_open_comment_box():
     )
     assert act is not None
     assert act.get("action") == "tap"
-    assert (act.get("x"), act.get("y")) == LIKE_XY
-    assert "heart" in (act.get("reason") or "").lower()
+    assert (act.get("x"), act.get("y")) != LIKE_XY
+    assert "photo" in (act.get("reason") or "").lower()  # r53: never the heart
 
 
 def test_explore_backs_out_not_spotlight_or_crush():

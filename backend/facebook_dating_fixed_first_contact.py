@@ -660,7 +660,10 @@ def plan_facebook_dating_fixed_first_contact(
     # Card or profile: tap the purple heart first (video flow) — it opens
     # the profile from the deck and the comment box from the profile.
     # Fall back to the photo tap when the heart node is not in the tree.
-    like = _like_center(ui_tree)
+    # r53 (Mac's 27 Nov video + "never a bare like"): the photo tap opens
+    # "Say something about this photo..." — the heart is never tapped on a
+    # card or profile, so a plain Like can never go out without the text.
+    like = None
     if like:
         bulk["awaiting_sheet"] = 1
         st["bulk_message_new"] = bulk

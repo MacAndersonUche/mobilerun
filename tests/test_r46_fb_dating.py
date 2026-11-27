@@ -42,7 +42,7 @@ def test_heart_opens_comment_box_not_profile_scrollview():
     # stays: the photo centre must be the real photo, never the bio.
     assert _profile_photo_center(PROD) == PHOTO_XY  # was (540,1174) = the bio
     a = _p(PROD, {})
-    assert a["fastpath_step"] == "fb_dating_fc_tap_like" and (a["x"], a["y"]) == LIKE_XY
+    assert a["fastpath_step"] == "fb_dating_fc_tap_photo" and (a["x"], a["y"]) != LIKE_XY
 
 
 def test_typed_box_still_counts_as_comment_sheet():
@@ -56,16 +56,16 @@ def test_full_flow_two_comments_then_done():
     acts = [_p(t, st) for t in seq]
     steps = [a["fastpath_step"] for a in acts]
     assert steps == [
-        "fb_dating_fc_tap_like", "fb_dating_fc_wait_sheet", "fb_dating_fc_type",
-        "fb_dating_fc_send", "fb_dating_fc_tap_like", "fb_dating_fc_type",
+        "fb_dating_fc_tap_photo", "fb_dating_fc_wait_sheet", "fb_dating_fc_type",
+        "fb_dating_fc_send", "fb_dating_fc_tap_photo", "fb_dating_fc_type",
         "fb_dating_fc_send", "fb_dating_fc_done",
     ]
     assert acts[2]["text"] == "hi miss you look beautiful"
     assert (acts[3]["x"], acts[3]["y"]) == SEND_XY
-    # Video flow: the two opener taps ARE the heart (LIKE_XY) — they open
-    # the comment box, never a bare like. Never tap Pass.
-    assert (acts[0]["x"], acts[0]["y"]) == LIKE_XY
-    assert (acts[4]["x"], acts[4]["y"]) == LIKE_XY
+    # r53 (Mac: never a bare like): the opener taps are the photo, never the heart
+    # Never tap Pass.
+    assert (acts[0]["x"], acts[0]["y"]) != LIKE_XY  # r53: photo, never the heart
+    assert (acts[4]["x"], acts[4]["y"]) != LIKE_XY
     for a in acts:
         assert (a.get("x"), a.get("y")) != PASS_XY
         assert a.get("llm_provider") is None
@@ -96,7 +96,7 @@ def test_cap_50_and_routed_without_llm():
     assert a["action"] == "type"
     st2: dict = {}
     b = ca.plan_next_action(INSTR, PROD, [], package="com.facebook.katana", agent_state=st2)
-    assert b["fastpath_step"] == "fb_dating_fc_tap_like" and (b["x"], b["y"]) == LIKE_XY
+    assert b["fastpath_step"] == "fb_dating_fc_tap_photo" and (b["x"], b["y"]) != LIKE_XY
     assert ca._is_fixed_swipe_action(b)
     from backend.dating_run import run_count
     assert run_count("com.facebook.katana", 80) == 50
