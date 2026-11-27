@@ -180,9 +180,9 @@ console.log('datingRun ok');
   a(datingAppGroup('co.yellw.yellowapp') === 'works', 'Yubo works (verified live 5/5)');
   a(datingAppGroup('co.hinge.app') === 'works', 'Hinge works (verified live 5/5 r53n)');
   a(datingAppGroup('com.taggedapp') === 'works', 'Tagged works (messages sending)');
+  a(datingAppGroup('com.facebook.katana') === 'works', 'Facebook works (verified live 5/5)');
   a(DATING_APP_GROUPS.find((g) => g.id === 'works')?.title === 'Working', 'Working label');
-  a(datingAppGroup('com.affinityapps.blk') === 'needs-fixing', 'BLK needs fixing');
-  a(datingAppGroup('com.facebook.katana') === 'needs-fixing', 'Facebook needs fixing');
+  a(datingAppGroup('com.affinityapps.blk') === 'coming-soon', 'BLK coming soon');
   a(datingAppGroup('com.takimi.android') === 'needs-fixing', 'Taimi needs fixing');
   a(datingAppGroup('com.tinder') === 'coming-soon', 'Tinder coming soon');
   a(datingAppGroup('enterprises.dating.boo') === 'coming-soon', 'Boo coming soon');
@@ -199,8 +199,10 @@ console.log('datingRun ok');
   a(canRunFromCard('co.yellw.yellowapp'), 'Yubo card runnable');
   a(canRunFromCard('co.hinge.app'), 'Hinge card runnable');
   a(canRunFromCard('com.taggedapp'), 'Tagged card runnable');
+  a(canRunFromCard('com.facebook.katana'), 'Facebook card runnable');
   a(!canRunFromCard('com.takimi.android'), 'Taimi card not runnable');
   a(!canRunFromCard('com.tinder'), 'Tinder card not runnable');
+  a(!canRunFromCard('com.affinityapps.blk'), 'BLK card not runnable');
   a(!canRunFromCard('com.threesome.swingers.threefun'), '3Fun card not runnable');
   a(!canRunFromCard('com.myyearbook.m'), 'MeetMe card not runnable');
   a(!canRunFromCard('com.whatsapp'), 'WhatsApp card not runnable');
@@ -215,18 +217,20 @@ console.log('datingRun ok');
     { package: 'co.yellw.yellowapp' },
     { package: 'com.taggedapp' },
     { package: 'com.affinityapps.blk' },
+    { package: 'com.facebook.katana' },
+    { package: 'com.takimi.android' },
     { package: 'enterprises.dating.boo' },
     { package: 'com.myyearbook.m' },
   ]);
   assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'needs-fixing', 'coming-soon']);
   assert.deepEqual(grouped[0].apps.map((x) => x.package), [
     'com.badoo.mobile', 'com.bumble.app', 'com.hily.app', 'co.yellw.yellowapp',
-    'co.hinge.app', 'com.taggedapp',
+    'co.hinge.app', 'com.taggedapp', 'com.facebook.katana',
   ]);
-  assert.deepEqual(grouped[1].apps.map((x) => x.package), ['com.affinityapps.blk']);
+  assert.deepEqual(grouped[1].apps.map((x) => x.package), ['com.takimi.android']);
   assert.deepEqual(grouped[2].apps.map((x) => x.package), [
     'com.tinder', 'enterprises.dating.boo', 'com.threesome.swingers.threefun',
-    'com.myyearbook.m',
+    'com.myyearbook.m', 'com.affinityapps.blk',
   ]);
   // an app in no group falls into "Still needs fixing", never vanishes
   const withNew = groupDatingCards([{ package: 'com.example.new' }, { package: 'com.badoo.mobile' }]);

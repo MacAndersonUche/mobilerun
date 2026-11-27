@@ -81,6 +81,7 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     // Yubo: verified live 5/5 Direct sends (r54, 27 Nov 2026)
     // Hinge: verified live 5/5 with r53n heart ladder (27 Nov 2026)
     // Tagged: Mac confirmed messages sending on phone (27 Nov 2026)
+    // Facebook Dating: verified live 5/5 photo-comment first-contact (r63–r66, 27 Nov 2026)
     packages: [
       'com.badoo.mobile',
       'com.bumble.app',
@@ -88,6 +89,7 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
       'co.yellw.yellowapp',
       'co.hinge.app',
       'com.taggedapp',
+      'com.facebook.katana',
     ],
   },
   {
@@ -95,8 +97,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     title: 'Still needs fixing',
     subtitle: 'Drivers exist but these still fail or need work.',
     packages: [
-      'com.affinityapps.blk',
-      'com.facebook.katana',
       'com.takimi.android',
     ],
   },
@@ -111,6 +111,8 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
       'com.getpure.pure',
       'com.threesome.swingers.threefun',
       'com.myyearbook.m',
+      // Mac (27 Nov): move BLK out of Still needs fixing into Apps to come
+      'com.affinityapps.blk',
     ],
   },
 ];
