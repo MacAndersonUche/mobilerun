@@ -1,0 +1,9 @@
+<hierarchy windows="1" nodes="8" partial="false" empty="false" mode="compact" packages="com.takimi.android">
+<w id="active" t="active" p="com.takimi.android" f="1">
+ <n t="Send Instant Chat" xy="540,400" b="120,360,960,440"/>
+ <n t="Catch their eye by sending Instant Chat" xy="540,520" b="80,480,1000,560"/>
+ <n t="Add an intro (optional)" xy="540,900" b="80,860,1000,940"/>
+ <n e="1" h="Add an intro (optional)" xy="540,1100" b="80,1040,1000,1160"/>
+ <n t="Send Instant Chat" c="1" xy="540,1800" b="200,1740,880,1860"/>
+</w>
+</hierarchy>

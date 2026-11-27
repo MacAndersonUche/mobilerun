@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+ <node index="0" text="" class="android.widget.FrameLayout" package="com.takimi.android" content-desc="" clickable="false" bounds="[0,0][1080,2400]">
+  <node index="0" text="10 left" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[618,124][709,167]"/>
+  <node index="1" text="Eleanor" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[74,1507][355,1612]"/>
+  <node index="2" text="Private Pics" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[110,1617][279,1660]"/>
+  <node index="3" text="Curated for you" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[352,1617][573,1660]"/>
+  <node index="4" text="" class="android.view.ViewGroup" package="com.takimi.android" content-desc="Heyy Eleanor" clickable="true" bounds="[75,1707][470,1812]">
+   <node index="0" text="Heyy Eleanor" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[170,1739][439,1781]"/>
+  </node>
+  <node index="5" text="Katie" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[121,1507][315,1612]"/>
+  <node index="6" text="" class="android.view.ViewGroup" package="com.takimi.android" content-desc="Katie, hi how r u?" clickable="true" bounds="[75,1707][533,1812]">
+   <node index="0" text="Katie, hi how r u?" class="android.widget.TextView" package="com.takimi.android" content-desc="" clickable="false" bounds="[170,1739][502,1781]"/>
+  </node>
+  <node index="7" text="" class="android.view.ViewGroup" package="com.takimi.android" content-desc="" clickable="true" bounds="[210,1875][431,2022]"/>
+  <node index="8" text="" class="android.view.ViewGroup" package="com.takimi.android" content-desc="" clickable="true" bounds="[431,1875][651,2022]"/>
+  <node index="9" text="" class="android.view.ViewGroup" package="com.takimi.android" content-desc="" clickable="true" bounds="[651,1875][872,2022]"/>
+  <node index="10" text="People" class="android.widget.TextView" package="com.takimi.android" content-desc="People" clickable="false" selected="true" bounds="[493,2190][586,2232]"/>
+  <node index="11" text="Chats" class="android.widget.TextView" package="com.takimi.android" content-desc="Chats, New notification" clickable="true" bounds="[934,2190][1010,2232]"/>
+ </node>
+</hierarchy>

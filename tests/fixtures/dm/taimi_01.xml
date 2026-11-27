@@ -1,0 +1,19 @@
+<hierarchy windows="1" nodes="22" partial="false" empty="false" mode="compact" packages="com.takimi.android">
+<w id="active" t="active" p="com.takimi.android" f="1">
+ <n t="10 left" xy="663,145" b="618,124,709,167"/>
+ <n t="Eleanor" xy="214,1559" b="74,1507,355,1612"/>
+ <n t="Private Pics" xy="194,1638" b="110,1617,279,1660"/>
+ <n t="Curated for you" xy="462,1638" b="352,1617,573,1660"/>
+ <n d="Heyy Eleanor" t="Heyy Eleanor" c="1" xy="272,1759" b="75,1707,470,1812"/>
+ <n t="Katie" xy="218,1559" b="121,1507,315,1612"/>
+ <n d="Katie, hi how r u?" t="Katie, hi how r u?" c="1" xy="304,1759" b="75,1707,533,1812"/>
+ <n c="1" xy="320,1948" b="210,1875,431,2022"/>
+ <n c="1" xy="541,1948" b="431,1875,651,2022"/>
+ <n c="1" xy="761,1948" b="651,1875,872,2022"/>
+ <n d="Profile" c="1" xy="108,2168" b="0,2063,216,2274"/>
+ <n d="Trending" c="1" xy="324,2168" b="216,2063,432,2274"/>
+ <n d="People" t="People" c="1" xy="540,2168" b="432,2063,648,2274"/>
+ <n d="Likes, New notification" c="1" xy="756,2168" b="648,2063,864,2274"/>
+ <n d="Chats, New notification" c="1" xy="972,2168" b="864,2063,1080,2274"/>
+</w>
+</hierarchy>

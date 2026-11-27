@@ -656,6 +656,9 @@ class MobilerunAccessibilityService : AccessibilityService() {
     }
 
     /** Back-compat string dump used by older callers. */
+    @Volatile
+    private var forceFullModeHint: Boolean = false
+
     fun getUITree(): String = getUITreeDetailed(allowCache = true).tree
 
     /**
@@ -669,14 +672,19 @@ class MobilerunAccessibilityService : AccessibilityService() {
     fun getUITreeDetailed(
         allowCache: Boolean = true,
         preferredPackage: String? = null,
+        forceFullMode: Boolean = false,
     ): TreeResult {
         refreshPreferredPackageHint()
         if (!preferredPackage.isNullOrBlank()) {
             setPreferredPackageHint(preferredPackage.trim())
         }
+        if (forceFullMode) {
+            forceFullModeHint = true
+        }
         val hint = preferredPkgHint
         val gen = contentGeneration.get()
-        if (allowCache) {
+        // r70: a forced full walk must not reuse a cached empty compact dump.
+        if (allowCache && !forceFullMode) {
             synchronized(cacheLock) {
                 val hit = cachedResult
                 if (
@@ -913,9 +921,21 @@ class MobilerunAccessibilityService : AccessibilityService() {
     private fun dumpUITreeCompact(deadlineMs: Long): TreeResult {
         // First pass: compact (interactive / text / desc). If too thin for the
         // *app* window (exclude SystemUI bars), re-walk in full mode.
+        val forceFull = forceFullModeHint
+        forceFullModeHint = false
+        if (forceFull) {
+            Log.i(TAG, "forced fullMode UI tree walk")
+            return dumpUITreeWalk(deadlineMs, fullMode = true)
+        }
         val compact = dumpUITreeWalk(deadlineMs, fullMode = false)
         val appUseful = compact.appNodes
-        if (appUseful >= MIN_USEFUL_NODES || compact.empty) {
+        // r70: compact.empty used to return immediately, which skipped the
+        // fullMode re-walk that finds ~200 Taimi nodes. Keep the empty
+        // short-circuit for other screens (avoids a 6-7s hang on a true
+        // empty root), but retry unfiltered when Taimi is the hinted app
+        // or compact is only thin, not empty.
+        val retryEmpty = preferredPkgHint.orEmpty().contains("takimi", ignoreCase = true)
+        if (appUseful >= MIN_USEFUL_NODES || (compact.empty && !retryEmpty)) {
             return compact
         }
         val remaining = deadlineMs - SystemClock.elapsedRealtime()

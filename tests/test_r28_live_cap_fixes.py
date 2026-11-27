@@ -325,13 +325,12 @@ def test_sticky_llm_handoff_skips_heuristics(monkeypatch):
 
 
 def test_taimi_hinge_unsupported_fail_fast():
-    a = unsupported_app_fail_action("taimi like 5 profiles")
-    assert a and a.get("action") == "fail"
-    assert "unsupported" in (a.get("reason") or "").lower() or "FLAG_SECURE" in (
-        a.get("reason") or ""
-    )
-    # r30: Hinge is attempted (real messages were sent 22 Nov). Only Taimi
-    # stays fail-fast (FLAG_SECURE).
+    # r68: Taimi is no longer fail-fast. FLAG_SECURE only blacks
+    # screenshots; the a11y tree is readable.
+    assert unsupported_app_fail_action("taimi like 5 profiles") is None
+    assert unsupported_app_fail_action(
+        'send 1 first contact messages on taimi "good evening beautiful"'
+    ) is None
     b = unsupported_app_fail_action("hinge auto-swipe 5 profiles")
     assert b is None
 
@@ -341,7 +340,7 @@ def test_taimi_hinge_unsupported_fail_fast():
         [],
         dry_run=True,
     )
-    assert act and act.get("action") == "fail"
-    assert act.get("unsupported_app") == "taimi" or "unsupported" in (
-        act.get("reason") or ""
-    ).lower() or "FLAG_SECURE" in (act.get("reason") or "")
+    assert not act or act.get("unsupported_app") != "taimi"
+    if act:
+        assert "FLAG_SECURE" not in (act.get("reason") or "")
+        assert "unsupported" not in (act.get("reason") or "").lower()

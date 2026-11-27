@@ -1734,9 +1734,13 @@ class BackendClient(private val context: Context) {
                                     ?: params?.get("package") as? String
                                     ?: lastOpenedPackage
                                 )?.trim()?.takeIf { it.isNotEmpty() }
+                            val mode = (params?.get("mode") as? String).orEmpty()
+                            val forceFull = mode.equals("full", ignoreCase = true) ||
+                                mode.equals("uiautomator", ignoreCase = true)
                             var detailed = a11yService.getUITreeDetailed(
-                                allowCache = true,
+                                allowCache = !forceFull,
                                 preferredPackage = prefer,
+                                forceFullMode = forceFull,
                             )
                             // Wrong FG: rebuild once, but NEVER mark a non-empty
                             // dump as empty (launcher-only with sticky hint was
@@ -1751,6 +1755,7 @@ class BackendClient(private val context: Context) {
                                 detailed = a11yService.getUITreeDetailed(
                                     allowCache = false,
                                     preferredPackage = prefer,
+                                    forceFullMode = forceFull || detailed.empty,
                                 )
                             }
                             val tree = detailed.tree

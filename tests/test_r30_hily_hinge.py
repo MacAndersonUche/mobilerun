@@ -97,9 +97,11 @@ def test_existing_chat_rows_skip_paige_mbm():
 def test_hinge_is_not_instruction_fail_fast():
     assert unsupported_app_fail_action("like 5 profiles on Hinge") is None
     assert unsupported_app_fail_action("reply good morning to 1 existing chat on Hinge") is None
-    taimi = unsupported_app_fail_action("taimi like 5 profiles")
-    assert taimi and taimi.get("action") == "fail"
-    assert taimi.get("unsupported_app") == "taimi"
+    # r68: Taimi trees work; first-contact / likes are no longer fail-fast.
+    assert unsupported_app_fail_action("taimi like 5 profiles") is None
+    assert unsupported_app_fail_action(
+        'send 1 first contact messages on taimi "good evening beautiful"'
+    ) is None
 
     act = plan_bulk_bench(
         "like 5 profiles on Hinge",

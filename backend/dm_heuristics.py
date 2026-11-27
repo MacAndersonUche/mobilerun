@@ -1098,8 +1098,9 @@ def _parse_one_node(
     hint = _attr(attrs, "h", "hint")
     xy = _attr(attrs, "xy")
     b = _attr(attrs, "b", "bounds")
-    editable = _attr(attrs, "e") in ("1", "true", "True")
-    clickable = _attr(attrs, "c") in ("1", "true", "True")
+    editable = _attr(attrs, "e", "editable") in ("1", "true", "True")
+    # Compact uses c="1"; uiautomator / full dumps use clickable="true".
+    clickable = _attr(attrs, "c", "clickable") in ("1", "true", "True")
     # v="0" marks isVisibleToUser=false (OEM invisible parents still dump children)
     vis_attr = _attr(attrs, "v", "visible")
     visible = vis_attr not in ("0", "false", "False")
