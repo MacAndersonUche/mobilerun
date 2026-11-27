@@ -75,7 +75,8 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     id: 'works',
     title: 'Works all the time',
     subtitle: 'These run reliably — trigger them any time.',
-    packages: ['com.badoo.mobile', 'com.bumble.app'],
+    // Hily: verified live 5/5 via Activity > Likes sent (r53, 27 Nov 2026)
+    packages: ['com.badoo.mobile', 'com.bumble.app', 'com.hily.app'],
   },
   {
     id: 'needs-fixing',
@@ -83,7 +84,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     subtitle: 'Drivers exist but these still fail or need work.',
     packages: [
       'co.hinge.app',
-      'com.hily.app',
       'co.yellw.yellowapp',
       'com.taggedapp',
       'com.affinityapps.blk',
@@ -108,6 +108,35 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
 export function datingAppGroup(pkg: string): DatingAppGroupId | null {
   const hit = DATING_APP_GROUPS.find((g) => g.packages.includes(pkg));
   return hit ? hit.id : null;
+}
+
+/** localStorage key for the Dating page "Apps to run" collapsible. */
+export const APPS_TO_RUN_EXPANDED_KEY = 'dating_apps_to_run_expanded';
+
+/** Read whether Apps to run is expanded. Default true when unset / invalid. */
+export function readAppsToRunExpanded(
+  storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
+): boolean {
+  try {
+    const raw = storage?.getItem(APPS_TO_RUN_EXPANDED_KEY);
+    if (raw === '0' || raw === 'false') return false;
+    if (raw === '1' || raw === 'true') return true;
+  } catch {
+    /* private mode / unavailable */
+  }
+  return true;
+}
+
+/** Persist Apps to run expanded state. */
+export function writeAppsToRunExpanded(
+  expanded: boolean,
+  storage: Pick<Storage, 'setItem'> | null | undefined = globalThis.localStorage
+): void {
+  try {
+    storage?.setItem(APPS_TO_RUN_EXPANDED_KEY, expanded ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Taimi is blocked: FLAG_SECURE makes its screenshots black, so the bot cannot see the screen. */

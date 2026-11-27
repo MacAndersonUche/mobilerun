@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, Play, Pause, Square, RefreshCw } from 'lucide-react';
+import { Heart, Play, Pause, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
@@ -31,6 +31,8 @@ import {
   canRunFromCard,
   isBlockedApp,
   TAIMI_BLOCKED_NOTE,
+  readAppsToRunExpanded,
+  writeAppsToRunExpanded,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -252,6 +254,9 @@ export default function DatingPage() {
   const [likeErrors, setLikeErrors] = useState<Record<string, string>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
+  );
+  const [appsToRunExpanded, setAppsToRunExpanded] = useState(() =>
+    readAppsToRunExpanded()
   );
   const [deviceId, setDeviceId] = useState('');
   const [devices, setDevices] = useState<
@@ -838,154 +843,181 @@ export default function DatingPage() {
       </div>
 
       {/* Per-app stats, grouped: works all the time, still needs fixing, apps to come */}
-      {groupDatingCards(
-        cardsForDatingApps(apps, configApps).filter(
-          (app) => !isSocialPackage(app.package)
-        )
-      ).map(({ group, apps: groupApps }) => (
-        <section key={group.id} aria-label={group.title} className="space-y-3">
-          <div>
-            <h3 className="text-lg font-semibold">{group.title}</h3>
-            <p className="text-xs text-mute">{group.subtitle}</p>
-          </div>
-          <div className="grid md:grid-cols-2 gap-4">
-            {groupApps.map((app) => (
-          <div
-            key={app.package}
-            className="bg-surface border border-line rounded-lg p-4 space-y-3"
-          >
-            <div className="flex justify-between items-start">
-              <div>
-                <h4 className="font-semibold text-lg text-white">{app.name}</h4>
-                {datingAppGroup(app.package) === 'coming-soon' && (
-                  <span className="mt-1 inline-block rounded bg-surface-elev px-2 py-0.5 text-xs text-mute">
-                    Coming soon — no working driver yet
-                  </span>
-                )}
-                {isBlockedApp(app.package) && (
-                  <p className="mt-1 text-xs text-yellow-300">{TAIMI_BLOCKED_NOTE}</p>
-                )}
-              </div>
-              <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
-                <div>{app.inbox.unread} unread</div>
-                {canRunFromCard(app.package) && (
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={() => control('start', app.package)}
-                    className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50"
-                    data-testid={`dating-run-${app.package}`}
-                    title={`Run only ${app.name}`}
-                  >
-                    <Play size={12} /> Run
-                  </button>
-                )}
-              </div>
-            </div>
-            {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
-              <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
-                <span>{runCountLabel(app.package)}</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={
-                    countDrafts[app.package] ??
-                    String(runCounts[app.package] ?? runCountFor(app.package, runCounts))
-                  }
-                  onChange={(e) =>
-                    setCountDrafts((prev) => ({ ...prev, [app.package]: e.target.value }))
-                  }
-                  onBlur={(e) => saveRunCount(app.package, e.target.value)}
-                  className="mr-input w-20 text-sm"
-                  data-testid={`dating-run-count-${app.package}`}
-                  aria-label={`${app.name} ${runCountLabel(app.package)}`}
-                  title="Used by Start and by this app's Run button. Saved for this app."
-                />
-              </label>
-            )}
-            {canRunFromCard(app.package) && hasRunMode(app.package) && (
-              <div
-                className="flex overflow-hidden rounded-lg border border-line text-xs"
-                data-testid={`dating-run-mode-${app.package}`}
-                role="group"
-                aria-label={`${app.name} run mode`}
-              >
-                {runModesOf(app.package).map((m) => (
-                  <button
-                    key={m.value}
-                    type="button"
-                    onClick={() => saveRunMode(app.package, m.value)}
-                    className={`flex-1 px-2 py-1 ${
-                      runModeFor(app.package, runModes) === m.value
-                        ? 'bg-rose-600 text-white'
-                        : 'bg-canvas-elev text-mute'
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {canRunFromCard(app.package) &&
-              hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
-              (() => {
-                const mode = runModeFor(app.package, runModes);
-                const key = likeCapKey(app.package, mode);
-                return (
-                  <>
+      <section className="space-y-3" data-testid="dating-apps-to-run">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-4 py-3 text-left hover:bg-canvas-elev"
+          aria-expanded={appsToRunExpanded}
+          aria-controls="dating-apps-to-run-panel"
+          data-testid="dating-apps-to-run-toggle"
+          onClick={() => {
+            setAppsToRunExpanded((prev) => {
+              const next = !prev;
+              writeAppsToRunExpanded(next);
+              return next;
+            });
+          }}
+        >
+          {appsToRunExpanded ? (
+            <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
+          ) : (
+            <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
+          )}
+          <span className="text-lg font-semibold text-white">Apps to run</span>
+        </button>
+        {appsToRunExpanded && (
+          <div id="dating-apps-to-run-panel" className="space-y-6" role="region" aria-label="Apps to run">
+            {groupDatingCards(
+              cardsForDatingApps(apps, configApps).filter(
+                (app) => !isSocialPackage(app.package)
+              )
+            ).map(({ group, apps: groupApps }) => (
+              <section key={group.id} aria-label={group.title} className="space-y-3">
+                <div>
+                  <h3 className="text-lg font-semibold">{group.title}</h3>
+                  <p className="text-xs text-mute">{group.subtitle}</p>
+                </div>
+                <div className="grid md:grid-cols-2 gap-4">
+                  {groupApps.map((app) => (
+                <div
+                  key={app.package}
+                  className="bg-surface border border-line rounded-lg p-4 space-y-3"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="font-semibold text-lg text-white">{app.name}</h4>
+                      {datingAppGroup(app.package) === 'coming-soon' && (
+                        <span className="mt-1 inline-block rounded bg-surface-elev px-2 py-0.5 text-xs text-mute">
+                          Coming soon — no working driver yet
+                        </span>
+                      )}
+                      {isBlockedApp(app.package) && (
+                        <p className="mt-1 text-xs text-yellow-300">{TAIMI_BLOCKED_NOTE}</p>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
+                      <div>{app.inbox.unread} unread</div>
+                      {canRunFromCard(app.package) && (
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={() => control('start', app.package)}
+                          className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+                          data-testid={`dating-run-${app.package}`}
+                          title={`Run only ${app.name}`}
+                        >
+                          <Play size={12} /> Run
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
                     <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
-                      <span>
-                        Max likes (
-                        {runModesOf(app.package).find((m) => m.value === mode)?.label || mode})
-                      </span>
+                      <span>{runCountLabel(app.package)}</span>
                       <input
                         type="text"
                         inputMode="numeric"
-                        value={likeDrafts[key] ?? String(likeCapFor(app.package, mode, likeCaps))}
-                        onChange={(e) =>
-                          setLikeDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                        value={
+                          countDrafts[app.package] ??
+                          String(runCounts[app.package] ?? runCountFor(app.package, runCounts))
                         }
-                        onBlur={(e) => saveLikeCap(key, e.target.value)}
+                        onChange={(e) =>
+                          setCountDrafts((prev) => ({ ...prev, [app.package]: e.target.value }))
+                        }
+                        onBlur={(e) => saveRunCount(app.package, e.target.value)}
                         className="mr-input w-20 text-sm"
-                        data-testid={`dating-like-cap-${app.package}-${mode}`}
-                        aria-label={`${app.name} max likes`}
-                        title="Saved separately for each mode."
+                        data-testid={`dating-run-count-${app.package}`}
+                        aria-label={`${app.name} ${runCountLabel(app.package)}`}
+                        title="Used by Start and by this app's Run button. Saved for this app."
                       />
                     </label>
+                  )}
+                  {canRunFromCard(app.package) && hasRunMode(app.package) && (
                     <div
-                      className={`-mt-1 px-3 text-xs ${likeErrors[key] ? 'text-red-300' : 'text-mute'}`}
+                      className="flex overflow-hidden rounded-lg border border-line text-xs"
+                      data-testid={`dating-run-mode-${app.package}`}
+                      role="group"
+                      aria-label={`${app.name} run mode`}
                     >
-                      {likeErrors[key] || likeCapHint(app.package, mode)}
+                      {runModesOf(app.package).map((m) => (
+                        <button
+                          key={m.value}
+                          type="button"
+                          onClick={() => saveRunMode(app.package, m.value)}
+                          className={`flex-1 px-2 py-1 ${
+                            runModeFor(app.package, runModes) === m.value
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-canvas-elev text-mute'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
                     </div>
-                  </>
-                );
-              })()}
-            {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
-              <div
-                className={`-mt-1 px-3 text-xs ${countErrors[app.package] ? 'text-red-300' : 'text-mute'}`}
-                data-testid={`dating-run-count-hint-${app.package}`}
-              >
-                {countErrors[app.package] || runCountHint(app.package)}
-              </div>
-            )}
-            <details className="text-sm text-mute">
-              <summary className="cursor-pointer select-none">
-                Today: {app.today.swipes} swipes · {app.today.openers} openers ·{' '}
-                {app.today.replies} replies
-              </summary>
-              <div className="pt-2">
-                <ProgressBar
-                  value={app.targets.opener_progress}
-                  max={app.targets.opener_target || 75}
-                  label="Openers vs daily target"
-                />
-              </div>
-            </details>
-          </div>
+                  )}
+                  {canRunFromCard(app.package) &&
+                    hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
+                    (() => {
+                      const mode = runModeFor(app.package, runModes);
+                      const key = likeCapKey(app.package, mode);
+                      return (
+                        <>
+                          <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
+                            <span>
+                              Max likes (
+                              {runModesOf(app.package).find((m) => m.value === mode)?.label || mode})
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={likeDrafts[key] ?? String(likeCapFor(app.package, mode, likeCaps))}
+                              onChange={(e) =>
+                                setLikeDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                              }
+                              onBlur={(e) => saveLikeCap(key, e.target.value)}
+                              className="mr-input w-20 text-sm"
+                              data-testid={`dating-like-cap-${app.package}-${mode}`}
+                              aria-label={`${app.name} max likes`}
+                              title="Saved separately for each mode."
+                            />
+                          </label>
+                          <div
+                            className={`-mt-1 px-3 text-xs ${likeErrors[key] ? 'text-red-300' : 'text-mute'}`}
+                          >
+                            {likeErrors[key] || likeCapHint(app.package, mode)}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
+                    <div
+                      className={`-mt-1 px-3 text-xs ${countErrors[app.package] ? 'text-red-300' : 'text-mute'}`}
+                      data-testid={`dating-run-count-hint-${app.package}`}
+                    >
+                      {countErrors[app.package] || runCountHint(app.package)}
+                    </div>
+                  )}
+                  <details className="text-sm text-mute">
+                    <summary className="cursor-pointer select-none">
+                      Today: {app.today.swipes} swipes · {app.today.openers} openers ·{' '}
+                      {app.today.replies} replies
+                    </summary>
+                    <div className="pt-2">
+                      <ProgressBar
+                        value={app.targets.opener_progress}
+                        max={app.targets.opener_target || 75}
+                        label="Openers vs daily target"
+                      />
+                    </div>
+                  </details>
+                </div>
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
-        </section>
-      ))}
+        )}
+      </section>
 
       {/* r44: schedule per-app / combo runs */}
       <DatingSchedules
