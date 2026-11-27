@@ -127,6 +127,19 @@ def is_foreign_overlay_package(pkg: str, target_package: str = "") -> bool:
     return any(m in p for m in _FOREIGN_OVERLAY_MARKERS)
 
 
+_IME_MARKERS: Tuple[str, ...] = (
+    "com.samsung.android.honeyboard",
+    "com.google.android.inputmethod",
+    "com.touchtype.swiftkey",
+    "inputmethod",
+)
+
+
+def _is_ime_package(pkg: str) -> bool:
+    p = (pkg or "").lower()
+    return bool(p) and any(m in p for m in _IME_MARKERS)
+
+
 def packages_in_tree(ui_tree: str) -> List[str]:
     """Unique package names from ``packages=`` attr and ``<w p=...>`` windows."""
     tree = ui_tree or ""
@@ -190,6 +203,25 @@ def detect_foreign_overlay(
     # Launcher/home → not a dismissable overlay (open_app instead)
     if active and is_launcher_package(active):
         return None
+    # r53 (27 Nov 2026, task_bcfe1e117d926e6e): the keyboard over the
+    # target app is part of typing, not an overlay. Back-dismissing it on
+    # Hinge's like sheet pressed Back twice — keyboard, then the sheet and
+    # Hinge itself — so the comment was never sent. Only an IME that is in
+    # front with no target window at all is treated as foreign.
+    pkgs_all = packages_in_tree(ui_tree)
+    target_listed = any(_pkg_matches_target(p, target) for p in pkgs_all)
+    if target_listed and (
+        not active or _is_ime_package(active) or _pkg_matches_target(active, target)
+    ):
+        others = [
+            p for p in pkgs_all
+            if not _pkg_matches_target(p, target) and not _is_ime_package(p)
+        ]
+        if not others and (not active or _is_ime_package(active)
+                           or _pkg_matches_target(active, target)):
+            rep = (reported_package or "").strip()
+            if not rep or _is_ime_package(rep) or _pkg_matches_target(rep, target):
+                return None
     if active and is_foreign_overlay_package(active, target):
         return active
     if active and not _pkg_matches_target(active, target):

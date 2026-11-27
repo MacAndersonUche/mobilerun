@@ -14,7 +14,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("mobilerun.cloud_agent")
 
@@ -1271,7 +1271,7 @@ def apply_dry_run_send_guard(
     elif _action_looks_like_paid(action, kind):
         blocked = True
         would = "paid tap"
-    elif k in ("type", "input_text", "set_text"):
+    elif k in ("type", "input_text", "set_text", "type_keys"):
         # Never type into a real thread in dry_run (shows "typing…" to peer).
         # Empty clear-only was previously used; now we refuse all composer type.
         text = str((action or {}).get("text") or "")
@@ -2156,7 +2156,8 @@ def plan_next_action(
             from backend.tagged_fixed import plan_tagged_fixed  # type: ignore
         st_tg = agent_state if isinstance(agent_state, dict) else {}
         tg_act = plan_tagged_fixed(
-            instruction, ui_tree, history, state=st_tg, dry_run=dry_run
+            instruction, ui_tree, history, state=st_tg, dry_run=dry_run,
+            message=_instruction_text(instruction),
         )
         if tg_act:
             try:
@@ -2222,7 +2223,8 @@ def plan_next_action(
             from backend.hily_fixed_run import plan_hily_fixed_run  # type: ignore
         st_hy = agent_state if isinstance(agent_state, dict) else {}
         hy_act = plan_hily_fixed_run(
-            instruction, ui_tree, history, state=st_hy, dry_run=dry_run
+            instruction, ui_tree, history, state=st_hy, dry_run=dry_run,
+            message=_instruction_text(instruction),
         )
         if hy_act is None:
             hy_act = {
@@ -4471,6 +4473,8 @@ def execute_action(device_id: str, action: Dict[str, Any]) -> str:
         if isinstance(raw, dict) and isinstance(raw.get("timing"), dict):
             action["_timing"] = raw["timing"]
         return "Swiped"
+    if kind == "type_keys":
+        return _type_on_keyboard(device_id, action)
     if kind in ("type", "type_text", "input_text"):
         # Final gate: bank / user text only (defense in depth vs LLM rewrite)
         try:
@@ -4953,8 +4957,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     last_ui = int(state.get("last_ui_progress_at") or created)
     # Also fail when wall exceeded from job start even before first step lands
     # (r23: steps>=1 gate let first long step burn past 90s unchecked).
-    if now - last_ui > NO_PROGRESS_TIMEOUT_S and (
-        int(state.get("steps") or 0) >= 1 or now - created > NO_PROGRESS_TIMEOUT_S
+    try:
+        _ui_wall = max(int(NO_PROGRESS_TIMEOUT_S),
+                       min(300, int(job.get("ui_wall_s") or 0)))
+    except (TypeError, ValueError):
+        _ui_wall = int(NO_PROGRESS_TIMEOUT_S)
+    if now - last_ui > _ui_wall and (
+        int(state.get("steps") or 0) >= 1 or now - created > _ui_wall
     ):
         job["status"] = "failed"
         job["error"] = (
@@ -5896,6 +5905,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         # sheet to close) is not "stuck" — stuck recovery pressed Back on the
         # Yubo deck, which exits the app (24 Nov 10:28).
         fixed_wait = kind == "wait" and bool(action.get("_no_llm_handoff"))
+        # r53 (live 27 Nov 2026): on dating runs stuck recovery replaced the
+        # fixed planner's step with a vision-LLM tap, which tapped a friends
+        # banner and "Send a smile" on Facebook Dating and pressed Back out
+        # of Hinge. Fixed dating planners bound their own retries.
+        if _dating_fixed_no_llm(job, instruction, action, state):
+            fixed_wait = True
         if (
             np_streak >= MAX_NO_PROGRESS
             and kind not in ("done", "fail")
@@ -6266,7 +6281,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             low_reason = (reason or "").lower()
             # Intentional policy/safety fails from per-app rules / tap firewall —
             # honor them. stuck_recovery must NOT replace working refuse paths.
-            if _is_policy_fail_no_stuck(reason):
+            if _is_policy_fail_no_stuck(reason) or _dating_fixed_no_llm(
+                job, instruction, action, state
+            ):
                 pass  # fall through to hard-fail below
             # Planner often fails on transient/contact/no-send states — convert
             # to a real recovery action instead of spinning on empty returns.
@@ -6301,7 +6318,12 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
 
                 if fail_n < 16 and not _shf(state):
                     instr_l = (instruction or "").lower()
-                    sms_goal = any(
+                    # r53: dating runs say "send 5 first contact messages on
+                    # hinge" — that word must never route a dating job into
+                    # the SMS E2E recovery (it opened Google Messages and
+                    # would type non-bank text). SMS recovery is only for
+                    # non-dating jobs.
+                    sms_goal = not _is_dating_job(job, instr_l) and any(
                         k in instr_l
                         for k in (
                             "messages",
@@ -6529,6 +6551,49 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 action=action,
                 phase="resolve_internal",
             )
+        # r53: screenshot gate for apps whose UI tree is blind (Hinge
+        # Discover's inline like panel is Compose with no semantics). A
+        # planner sets ``_vision_check`` (YES/NO prompt); with
+        # ``_vision_gate`` a NO replaces the action with a wait and the
+        # planner stops honestly next cycle. Result goes to
+        # state["bulk_message_new"]["_vision_last"].
+        if isinstance(action, dict) and action.get("_vision_check"):
+            _vok, _vraw = False, ""
+            try:
+                _vimg = _fetch_screenshot_b64(device_id, job=job)
+                if _vimg:
+                    _vraw = (
+                        _call_openai(str(action["_vision_check"]), image_b64=_vimg)
+                        or ""
+                    ).strip()
+                    _vok = _vraw.upper().startswith("YES")
+            except Exception as _verr:
+                logger.warning("vision gate failed: %s", _verr)
+            _vb = state.setdefault("bulk_message_new", {})
+            if isinstance(_vb, dict):
+                _vb["_vision_last"] = {
+                    "ok": _vok,
+                    "raw": _vraw[:80],
+                    "tag": str(action.get("_vision_tag") or ""),
+                }
+            history.append(
+                f"vision_check[{action.get('_vision_tag') or ''}]="
+                f"{'YES' if _vok else 'NO'} ({_vraw[:40]})"
+            )
+            if action.get("_vision_gate") and not _vok:
+                action = {
+                    "action": "wait",
+                    "seconds": 0.5,
+                    "delay_s": 0.5,
+                    "reason": (
+                        f"Screenshot check failed ({action.get('_vision_tag')}) "
+                        f"— tap not made ({planner})"
+                    ),
+                    "planner": action.get("planner") or planner,
+                    "llm_provider": None,
+                }
+                kind = "wait"
+                reason = str(action["reason"])
         try:
             summary = execute_action(device_id, action)
         except RuntimeError as e:
@@ -6684,8 +6749,9 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 state["steps"] = step + 1
                 state["last_progress_at"] = int(time.time())
                 state["last_action"] = f"firewall_handoff: {err}"
-                state["_bulk_llm_handoff"] = True
-                state["force_vision_once"] = True
+                if not _dating_fixed_no_llm(job, instruction, action, state):
+                    state["_bulk_llm_handoff"] = True
+                    state["force_vision_once"] = True
                 state["same_decision_n"] = 0
                 history.append(f"firewall_handoff: {err}")
                 state["history"] = history[-40:]
@@ -6696,12 +6762,29 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 job["updated_at"] = int(time.time())
                 _kick_self(job.get("job_id"), job=job)
                 return job
+            if _blind_type_unreachable(action, err_l) or (
+                kind == "fail" and _dating_fixed_no_llm(job, instruction, action, state)
+            ):
+                # Hinge's inline comment box has no accessibility node; a11y
+                # SET_TEXT cannot reach it. Stop cleanly instead of letting
+                # stuck recovery press Back out of the app (r53 live run).
+                job["status"] = "failed"
+                job["error"] = _BLIND_TYPE_ERROR if kind != "fail" else err
+                state["steps"] = step + 1
+                state["last_action"] = f"blind_type_unreachable: {err}"
+                history.append(f"blind_type_unreachable: {err}")
+                state["history"] = history[-40:]
+                job["state"] = state
+                job["completed_at"] = int(time.time())
+                job["updated_at"] = int(time.time())
+                return job
             # Unknown execute errors → hand off, don't re-raise into lease leak
             logger.warning("execute RuntimeError → handoff: %s", err)
             state["steps"] = step + 1
             state["last_action"] = f"exec_handoff: {err}"
-            state["_bulk_llm_handoff"] = True
-            state["force_vision_once"] = True
+            if not _dating_fixed_no_llm(job, instruction, action, state):
+                state["_bulk_llm_handoff"] = True
+                state["force_vision_once"] = True
             history.append(f"exec_handoff: {err}")
             state["history"] = history[-40:]
             job["state"] = state
@@ -6962,6 +7045,24 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
                 # r50: generic fixed like taps (card may not be in the tree)
                 str(action.get("fastpath_step") or "") == "fixed_like_tap_like_swipe"
                 and kind == "tap"
+            ) or (
+                # r53 (27 Nov 2026, task_a8c6f811a1f3fb2d): Hinge Discover
+                # (and its like sheet) has a blind tree, so the Discover tab,
+                # photo-heart and comment-focus taps leave the tree identical
+                # and the 90s wall / stuck recovery killed the run right as
+                # the sheet opened. These taps are bounded by the planner's
+                # own ladders (tab x4, heart x3, focus x2).
+                str(action.get("fastpath_step") or "") in (
+                    "hinge_open_discover",
+                    "hinge_fixed_fc_photo_heart",
+                    "hinge_fixed_fc_blind_focus",
+                    "hinge_fixed_fc_focus_comment",
+                    "hinge_fixed_fc_bc_send",
+                )
+                and kind == "tap"
+            ) or (
+                str(action.get("fastpath_step") or "") == "hinge_fixed_fc_bc_type"
+                and kind == "type"
             )
             if not tree_changed and not hily_like_tap:
                 state["no_progress_streak"] = (
@@ -7293,3 +7394,138 @@ def _kick_self(job_id: Optional[str], job: Optional[Dict[str, Any]] = None) -> N
     except Exception as e:
         logger.warning("kick step worker failed: %s", e)
 
+
+def _is_dating_job(job: Dict[str, Any], instr_l: str) -> bool:
+    """r53: a dating / social run (never the SMS E2E recovery)."""
+    if job.get("dating_run") or str(job.get("mode") or "") == "dating":
+        return True
+    if str(job.get("kind") or "") == "dating" or job.get("dating_app"):
+        return True
+    return any(
+        k in instr_l
+        for k in (
+            "first contact", "dating", "hinge", "hily", "tagged", "bumble",
+            "badoo", "yubo", "tinder", "facebook", "blk", "taimi", "fixed ",
+        )
+    )
+
+
+def _instruction_text(instruction: str) -> str:
+    """r53: Mac's exact quoted text from the run instruction ('' = bank)."""
+    try:
+        from message_text_guard import extract_quoted_message_text as _q
+    except ImportError:
+        from backend.message_text_guard import (  # type: ignore
+            extract_quoted_message_text as _q,
+        )
+    try:
+        return _q(instruction or "") or ""
+    except Exception:
+        return ""
+
+
+_BLIND_TYPE_ERROR = (
+    "Hinge's 'Add a comment' box is not exposed to accessibility, so the "
+    "phone's keyboard can't be typed into by Mobilerun. Enable 'Mobilerun "
+    "Keyboard' in Android Settings → Keyboard list so typing goes through "
+    "the IME, then rerun. Nothing was sent."
+)
+
+
+def _blind_type_unreachable(action: Dict[str, Any], err_l: str) -> bool:
+    """True when a blind-compose type step failed for lack of a focused field."""
+    step = str((action or {}).get("fastpath_step") or "")
+    if not step.endswith("_bc_type"):
+        return False
+    return "focus a text field" in err_l or "input_text failed" in err_l
+
+
+def _dating_fixed_no_llm(
+    job: Dict[str, Any],
+    instruction: str,
+    action: Optional[Dict[str, Any]],
+    state: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """r53: a dating run driven by a fixed planner never falls to the LLM.
+
+    Stuck recovery and execute-error handoffs used to give the screen to a
+    vision LLM. On Mac's phone that LLM tapped a Facebook "match as friends"
+    banner and "Send a smile" (a bare like), and pressed Back out of Hinge.
+    A fixed dating planner bounds its own retries and fails honestly.
+    """
+    try:
+        if not _is_dating_job(job or {}, str(instruction or "").lower()):
+            return False
+    except Exception:
+        return False
+    a = action if isinstance(action, dict) else {}
+    if _is_fixed_swipe_action(a) or a.get("_no_llm_handoff"):
+        return True
+    planner = str(a.get("planner") or "").lower()
+    if "no_llm_handoff" in planner or "_fixed" in planner:
+        return True
+    return False
+
+
+# r53: Samsung Keyboard (Honeyboard) QWERTY with number row, S21+ 1080x2400,
+# measured from the live Hinge screenshot (keyboard up, 27 Nov 2026).
+_HONEYBOARD_KEYS: Dict[str, Tuple[int, int]] = {}
+for _row, _y, _xs in (
+    ("qwertyuiop", 1736, (68, 173, 278, 383, 488, 593, 698, 803, 908, 1013)),
+    ("asdfghjkl", 1886, (120, 225, 330, 435, 540, 645, 750, 855, 960)),
+    ("zxcvbnm", 2036, (225, 330, 435, 540, 645, 750, 855)),
+):
+    for _ch, _x in zip(_row, _xs):
+        _HONEYBOARD_KEYS[_ch] = (_x, _y)
+_HONEYBOARD_KEYS[" "] = (540, 2186)
+_HONEYBOARD_BACKSPACE = (990, 2036)
+_HONEYBOARD_SHIFT = (86, 2036)
+
+
+def _type_on_keyboard(device_id: str, action: Dict[str, Any]) -> str:
+    """Type bank / Mac's text by tapping on-screen keyboard keys.
+
+    For fields with no accessibility node (Hinge's Compose comment box),
+    where a11y SET_TEXT has nothing to target. Letters and spaces only, the
+    message text guard still applies, and every tap stays inside the
+    keyboard band (y 1700-2200) — never Done, never the app above.
+    """
+    try:
+        from device_rpc import call_device
+    except ImportError:
+        from backend.device_rpc import call_device  # type: ignore
+    try:
+        from message_text_guard import enforce_message_text
+    except ImportError:
+        from backend.message_text_guard import enforce_message_text  # type: ignore
+    instr = str(action.get("_instruction") or action.get("instruction") or "")
+    probe = dict(action)
+    probe["action"] = "type"
+    guarded = enforce_message_text(
+        probe,
+        instr,
+        job=action.get("_job") if isinstance(action.get("_job"), dict) else None,
+        history=action.get("_history") if isinstance(action.get("_history"), list) else None,
+    )
+    if str(guarded.get("action") or "").lower() == "fail":
+        raise RuntimeError(str(guarded.get("reason") or "message text guard"))
+    text = str(guarded.get("text") or action.get("text") or "")
+    low = text.lower()
+    if not low or any(ch not in _HONEYBOARD_KEYS for ch in low):
+        raise RuntimeError(f"type_keys: only letters and spaces can be keyed ({text!r})")
+    # Clear what is already in the box (a failed earlier run left text) with
+    # Backspace; harmless on an empty field.
+    for _ in range(max(0, min(40, int(action.get("clear_keys") or 0)))):
+        call_device(device_id, "tap", {"x": _HONEYBOARD_BACKSPACE[0], "y": _HONEYBOARD_BACKSPACE[1]}, timeout_s=12)
+        time.sleep(0.08)
+    if action.get("lower_first") and text[:1].islower():
+        # Samsung auto-capitalises the first letter of an empty box: Shift off
+        call_device(device_id, "tap", {"x": _HONEYBOARD_SHIFT[0], "y": _HONEYBOARD_SHIFT[1]}, timeout_s=12)
+        time.sleep(0.15)
+    for ch in low:
+        x, y = _HONEYBOARD_KEYS[ch]
+        call_device(device_id, "tap", {"x": int(x), "y": int(y)}, timeout_s=12)
+        time.sleep(0.12)
+    action["text"] = text
+    action["_via"] = "keyboard_keys"
+    return f'Typed "{text[:48]}"'

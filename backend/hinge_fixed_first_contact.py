@@ -39,6 +39,7 @@ text unverified and the tree is the only read-back.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 try:
@@ -90,6 +91,9 @@ PHOTO_HEART_X = 937
 PHOTO_HEART_LADDER = (PHOTO_HEART_XY[1], 1010, 1790)
 SEND_LIKE_XY = (686, 1277)
 COMMENT_XY = (540, 1102)
+# r53: inline like panel — "Add a comment" box centre below the photo heart
+# (27 Nov 2026 S21+: heart (937, 1356) → box [94,1476][984,1647]).
+COMMENT_BELOW_HEART = 200
 DISCOVER_TAB_XY = (110, 2195)
 ROSE_BOUNDS = (95, 1225, 355, 1330)
 
@@ -115,6 +119,24 @@ def allowed_message(text: str) -> str:
     if raw:
         return raw
     return MESSAGE_BANK[0]
+
+
+HINGE_PKG = "co.hinge.app"
+
+
+def _foreign_tree(tree: str) -> str:
+    """Package of a tree that is not Hinge's ('' when it is Hinge's or
+    unknown). Uses the hierarchy ``packages`` attribute only."""
+    m = re.search(r'\bpackages="([^"]*)"', tree or "")
+    if not m:
+        return ""
+    pkgs = [p.strip() for p in m.group(1).split(",") if p.strip()]
+    if not pkgs or HINGE_PKG in pkgs:
+        return ""
+    # System UI alone (notification shade / IME) is not a foreign app
+    if all(p in ("com.android.systemui", "com.samsung.android.honeyboard") for p in pkgs):
+        return ""
+    return pkgs[0]
 
 
 def in_rose_bounds(x: int, y: int) -> bool:
@@ -149,6 +171,8 @@ def _sheet_open(tree: str, bulk: Dict[str, Any]) -> bool:
     not re-tap the heart."""
     if hinge_on_like_sheet(tree):
         return True
+    if _is_thread(tree):
+        return False
     if bulk.get("awaiting_sheet"):
         try:
             return _compose_editable(tree) is not None
@@ -181,6 +205,11 @@ def _off_discover(tree: str) -> Optional[str]:
     ]
     top = {lab for lab, y in labels if 0 < y < 300}
     blob = " ".join(lab for lab, _y in labels)
+    # r53 (27 Nov 2026): Megan's existing chat ("Ask them out" / "End the
+    # chat" / "Press and hold to reply") was read as the like sheet and
+    # "hello how are you" was typed into it. Those markers are a 1:1 thread.
+    if _is_thread(tree):
+        return "thread"
     # 1:1 thread: a Message composer near the bottom, no Discover sheet
     for n in nodes:
         lab = str(n.get("label") or n.get("desc") or n.get("hint") or "").lower()
@@ -195,6 +224,40 @@ def _off_discover(tree: str) -> Optional[str]:
     if {"edit profile", "preview"} & top or "my profile" in blob:
         return "Profile"
     return None
+
+
+_THREAD_MARKERS = (
+    "ask them out",
+    "end the chat",
+    "press and hold to reply",
+    "send a message",
+)
+
+
+def _is_thread(tree: str) -> bool:
+    """An existing Hinge chat (never a first-contact target)."""
+    if hinge_on_like_sheet(tree):
+        return False
+    blob = " ".join(
+        f"{n.get('text') or ''} {n.get('desc') or ''} {n.get('label') or ''} {n.get('hint') or ''}"
+        for n in _parse_compact_nodes(tree or "")
+    ).lower()
+    if any(m in blob for m in _THREAD_MARKERS[:3]):
+        return True
+    if " you: " in f" {blob} " and "send a message" in blob:
+        return True
+    return False
+
+
+def _discover_tab_executed(history: List[str]) -> bool:
+    """The Discover tab tap really ran (an executed ``tap(x,y) — …`` entry),
+    not just planned — a stuck-recovery wait or a firewall soft-skip can
+    replace it, and the planner must not assume it is on Discover."""
+    for h in history[-12:]:
+        hl = str(h).lower()
+        if hl.startswith("tap(") and "discover tab" in hl:
+            return True
+    return False
 
 
 def _on_rose_popup(tree: str) -> bool:
@@ -326,6 +389,62 @@ def plan_hinge_fixed_first_contact(
             "hinge_fixed_fc_done",
         )
 
+    # r53 (27 Nov 2026, task_4e04f0f22cca5077): right after Hinge opened,
+    # the phone served the cached Samsung launcher tree (same 6385 bytes,
+    # "cached": true) while Hinge's Matches tab was on screen. The planner
+    # read the launcher's search box as the comment field, tapped the
+    # "heart" into Matches and then "focused" (540, 437) — a match row.
+    # A tree from another app is stale: wait for Hinge's own tree, then
+    # reopen Hinge (bounded). Never tap Hinge coordinates off a foreign tree.
+    foreign = _foreign_tree(ui_tree)
+    if foreign:
+        n_f = int(bulk.get("_foreign_n") or 0) + 1
+        bulk["_foreign_n"] = n_f
+        st["bulk_message_new"] = bulk
+        if n_f > 6:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hinge never showed its own screen (still {foreign}) "
+                        f"— stop, nothing sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_foreign_fail",
+            )
+        if n_f % 3 == 0:
+            return _fp(
+                {
+                    "action": "open_app",
+                    "app": "Hinge",
+                    "package": HINGE_PKG,
+                    "reason": (
+                        f"Screen still reads {foreign}, not Hinge — reopen "
+                        f"Hinge ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_foreign_open",
+            )
+        return _fp(
+            {
+                "action": "wait",
+                "seconds": 1.5,
+                "delay_s": 1.5,
+                "reason": (
+                    f"Tree is from {foreign}, not Hinge (stale) — wait for "
+                    f"Hinge's screen, never tap off it ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+            },
+            "hinge_fixed_fc_foreign_wait",
+        )
+    bulk.pop("_foreign_n", None)
+
     # The deck has rendered at least once: a later blind tree means the
     # like sheet (or a render gap), not a deck that never loaded. The
     # blind-sheet recovery below is gated on this — a heart tap into a
@@ -397,6 +516,18 @@ def plan_hinge_fixed_first_contact(
                 },
                 "hinge_fixed_fc_rose_back",
             )
+        if str(bulk.get("_bc") or "") in ("send_tapped", "probe"):
+            # r53 blind compose: Send Like (with the verified comment) was
+            # tapped and Hinge asks "Send a Rose instead?" — confirm the
+            # free like with "Send Like anyway" and count it now.
+            bulk["done"] = done + 1
+            bulk.update({"_bc": "", "typed": False, "awaiting_sheet": False,
+                         "heart_tries": 0, "_blind_focus_tries": 0, "_bc_wait": 0})
+            bulk.pop("_sheet_waited", None)
+            bulk.pop("_discover_waited", None)
+            bulk.pop("_vision_last", None)
+            st["bulk_message_new"] = bulk
+            return anyway
         if bulk.get("just_sent") or bulk.get("closing"):
             # Send Like already went through and was counted — this tap
             # only confirms it as a free like. Never recount.
@@ -648,6 +779,25 @@ def plan_hinge_fixed_first_contact(
     # blind-type, never blind-send. Gated on _deck_seen: a heart tap
     # into a deck that never rendered cannot have opened a sheet, so
     # that case still falls through to the ladder below.
+    # r53 blind compose (27 Nov 2026, Mac watching): Hinge's inline like
+    # panel is Compose with no semantics — the comment box, Send Like and
+    # Rose never appear in the tree, even with the keyboard up. The box was
+    # opened and focused but nothing was typed. With the keyboard up after
+    # the focus tap: type the exact text (the phone reads the field back
+    # and fails the type if it did not land), confirm on a screenshot that
+    # the box shows exactly that text, then tap Send Like at its keyboard-up
+    # spot (686, 1277) — the Rose button is at x <= 355 on that row and is
+    # never tapped. The send counts only when the panel closes.
+    bc = _blind_compose_step(ui_tree, history, bulk, st, text, planner)
+    if bc is not None:
+        return bc
+
+    # r53: Discover is blind on the S21+ today, so _deck_seen never set and
+    # a heart tap that DID open the inline panel fell through to the next
+    # ladder rung (1010, then 1790 — next to the Send Like row: a bare-like
+    # risk). A Discover tab tap that really ran counts as the deck seen.
+    if _discover_tab_executed(history):
+        bulk["_deck_seen"] = True
     if (
         bulk.get("awaiting_sheet")
         and bulk.get("_deck_seen")
@@ -687,11 +837,20 @@ def plan_hinge_fixed_first_contact(
                 },
                 "hinge_fixed_fc_blind_sheet_fail",
             )
+        # r53 (27 Nov 2026, Mac watching): on today's Discover the like
+        # panel opens inline under the photo — "Add a comment" sits ~200px
+        # below the photo heart that opened it, with the Rose + Send Like
+        # row below that. The old fixed COMMENT_XY (540, 1102) was on the
+        # photo, so the box opened but was never focused or typed into.
+        # Focus relative to the heart rung that opened the panel; the
+        # Rose row is far lower (heart_y + ~380) and is never tapped here.
+        hy = int(bulk.get("_heart_y") or 0)
+        fy = min(2050, hy + COMMENT_BELOW_HEART) if hy else COMMENT_XY[1]
         return _fp(
             {
                 "action": "tap",
                 "x": COMMENT_XY[0],
-                "y": COMMENT_XY[1],
+                "y": fy,
                 "reason": (
                     f"Focus Add a comment composer — like sheet open "
                     f"but tree blind ({planner})"
@@ -736,6 +895,41 @@ def plan_hinge_fixed_first_contact(
             st["bulk_message_new"] = bulk
             act = hinge_open_discover_tab(planner=planner)
             return act
+    # r53: the first Discover tab tap was planned but never ran (the
+    # executor's stuck recovery replaced it with a wait; Hinge stayed on
+    # Matches, whose tree is blind, and the photo-heart ladder then tapped
+    # a match row). On a blind tree, re-issue the tab tap until history
+    # shows it executed (bounded) before any heart tap.
+    if (
+        bulk.get("_opened_discover")
+        and not _deck_readable(ui_tree)
+        and not _discover_tab_executed(history)
+        and not bulk.get("awaiting_sheet")
+        and int(bulk.get("done") or 0) == 0
+        and int(bulk.get("heart_tries") or 0) == 0
+    ):
+        n_tab = int(bulk.get("_tab_retry") or 0) + 1
+        bulk["_tab_retry"] = n_tab
+        st["bulk_message_new"] = bulk
+        if n_tab > 4:
+            return _fp(
+                {
+                    "action": "fail",
+                    "reason": (
+                        f"Hinge Discover tab tap never ran — stop before "
+                        f"any blind heart tap, nothing sent ({planner})"
+                    ),
+                    "planner": planner,
+                    "llm_provider": None,
+                },
+                "hinge_fixed_fc_tab_fail",
+            )
+        act = hinge_open_discover_tab(planner=planner)
+        act["reason"] = (
+            f"Open Hinge Discover tab again — the last tap did not run "
+            f"({planner})"
+        )
+        return act
 
     # r45 (Mac: "stuck in Matches, doesn't click the Discover H"): off
     # Discover → a chat thread backs out; Matches / Standouts / Profile tap
@@ -817,6 +1011,7 @@ def plan_hinge_fixed_first_contact(
             "hinge_fixed_fc_heart_fail",
         )
     heart_y = PHOTO_HEART_LADDER[tries]
+    bulk["_heart_y"] = heart_y
     bulk["heart_tries"] = tries + 1
     bulk["awaiting_sheet"] = True
     bulk["typed"] = False
@@ -846,3 +1041,128 @@ HINGE_FIXED_MAP = {
     "discover_tab_xy": DISCOVER_TAB_XY,
     "rose_button_bounds": ROSE_BOUNDS,
 }
+
+
+def _keyboard_up(tree: str) -> bool:
+    m = re.search(r'\bpackages="([^"]*)"', tree or "")
+    pk = m.group(1) if m else ""
+    return "honeyboard" in pk or "inputmethod" in pk
+
+
+def _blind_compose_step(
+    ui_tree: str,
+    history: List[str],
+    bulk: Dict[str, Any],
+    st: Dict[str, Any],
+    text: str,
+    planner: str,
+) -> Optional[Dict[str, Any]]:
+    """Type → screenshot-verify → Send Like on Hinge's blind inline panel."""
+    phase = str(bulk.get("_bc") or "")
+    base = {"planner": planner, "llm_provider": None}
+    if hinge_on_like_sheet(ui_tree) or _is_thread(ui_tree):
+        return None  # readable sheet → normal verified path; thread → Back
+    try:
+        hinge_edit = _compose_editable(ui_tree) is not None
+    except Exception:
+        hinge_edit = False
+    kb = _keyboard_up(ui_tree)
+    vlast = bulk.get("_vision_last") if isinstance(bulk.get("_vision_last"), dict) else {}
+
+    def _fail(why: str, step: str) -> Dict[str, Any]:
+        bulk["_bc"] = "failed"
+        st["bulk_message_new"] = bulk
+        return _fp({**base, "action": "fail",
+                    "reason": f"{why} — stop, nothing more sent ({planner})"}, step)
+
+    if phase == "failed":
+        return _fail("Hinge blind compose already failed", "hinge_fixed_fc_bc_failed")
+
+    if not phase:
+        # r53 (live 27 Nov 2026, Aaliyah): the photo heart opens the inline
+        # panel with "Add a comment" already focused and the keyboard up —
+        # no separate focus tap needed. Keyboard up after the heart = focused.
+        if not (bulk.get("awaiting_sheet") and kb and not hinge_edit):
+            return None
+        bulk["_bc"] = "typed"
+        bulk["typed"] = True
+        st["bulk_message_new"] = bulk
+        # r53 (live 27 Nov 2026): a11y SET_TEXT cannot reach Hinge's comment
+        # box (no node), so type it on the on-screen keyboard key by key.
+        return _fp({**base, "action": "type_keys", "text": text, "clear_keys": 24,
+                    "lower_first": True,
+                    "reason": f"Type Hinge comment '{text}' on the keyboard into the focused "
+                              f"Add a comment box (inline panel, tree blind) ({planner})"},
+                   "hinge_fixed_fc_bc_type")
+
+    if phase == "typed":
+        landed = any(
+            str(h).lower().startswith(f'typed "{text.lower()}"') for h in history[-4:]
+        )
+        if not landed:
+            return _fail(f"Hinge comment '{text}' did not land in the box",
+                         "hinge_fixed_fc_bc_type_fail")
+        if not kb:
+            return _fail("Keyboard closed before Send Like — comment box lost focus",
+                         "hinge_fixed_fc_bc_kb_lost")
+        bulk["_bc"] = "send_tapped"
+        bulk.pop("_vision_last", None)
+        st["bulk_message_new"] = bulk
+        return _fp({**base, "action": "tap", "x": SEND_LIKE_XY[0], "y": SEND_LIKE_XY[1],
+                    "label": "Send Like",
+                    "reason": f"Hinge Send Like with comment '{text}' verified on screen "
+                              f"— never Rose ({planner})",
+                    "_vision_check": (
+                        "Hinge dating app screenshot. Under the photo there is a comment text box, "
+                        "and below it a small rose button and a wide 'Send Like' button. Does the "
+                        f"comment text box contain the typed words \"{text}\" (ignore capitalisation, "
+                        "underlines and the cursor)? Reply YES or NO only."),
+                    "_vision_gate": True, "_vision_tag": "hinge_comment_typed"},
+                   "hinge_fixed_fc_bc_send")
+
+    if phase == "send_tapped":
+        if vlast.get("tag") == "hinge_comment_typed" and not vlast.get("ok"):
+            return _fail(f"Screenshot did not show '{text}' in the comment box, Send Like "
+                         f"not tapped", "hinge_fixed_fc_bc_verify_fail")
+        if _on_rose_popup(ui_tree):
+            return None  # tree-resolved "Send Like anyway" handled by caller
+        if kb:
+            n = int(bulk.get("_bc_wait") or 0) + 1
+            bulk["_bc_wait"] = n
+            st["bulk_message_new"] = bulk
+            if n > 2:
+                return _fail("Send Like tapped but the comment panel stayed open",
+                             "hinge_fixed_fc_bc_not_sent")
+            return _fp({**base, "action": "wait", "seconds": 1.5, "delay_s": 1.5,
+                        "reason": f"Send Like tapped — waiting for the panel to close ({planner})"},
+                       "hinge_fixed_fc_bc_wait")
+        # Keyboard gone: confirm on the screenshot it was not a Rose upsell
+        bulk["_bc"] = "probe"
+        bulk.pop("_vision_last", None)
+        st["bulk_message_new"] = bulk
+        return _fp({**base, "action": "wait", "seconds": 0.5, "delay_s": 0.5,
+                    "reason": f"Send Like tapped — check the screen for a Rose popup ({planner})",
+                    "_vision_check": (
+                        "This is a Hinge dating app screenshot. Is a popup or sheet visible "
+                        "that offers to send a Rose (for example 'Send a Rose instead?' or a "
+                        "'Send Like anyway' link)? Reply YES or NO only."),
+                    "_vision_tag": "hinge_rose_probe"},
+                   "hinge_fixed_fc_bc_probe")
+
+    if phase == "probe":
+        if vlast.get("tag") == "hinge_rose_probe" and vlast.get("ok"):
+            return _fail("Hinge showed a Rose popup after Send Like and it is not in the "
+                         "screen tree — left for you, never tapped near Rose",
+                         "hinge_fixed_fc_bc_rose")
+        done = int(bulk.get("done") or 0) + 1
+        bulk.update({"done": done, "_bc": "", "typed": False, "awaiting_sheet": False,
+                     "heart_tries": 0, "_blind_focus_tries": 0, "_bc_wait": 0})
+        bulk.pop("_sheet_waited", None)
+        bulk.pop("_discover_waited", None)
+        bulk.pop("_vision_last", None)
+        st["bulk_message_new"] = bulk
+        return _fp({**base, "action": "wait", "seconds": 1.5, "delay_s": 1.5,
+                    "reason": f"Hinge comment like sent {done} — panel closed, next card "
+                              f"loading ({planner})"},
+                   "hinge_fixed_fc_bc_sent")
+    return None

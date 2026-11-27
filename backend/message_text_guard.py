@@ -37,6 +37,9 @@ def extract_quoted_message_text(instruction: str) -> Optional[str]:
         r"(?:and\s+)?(?:say|send|tell|text)\s*[:\-]?\s*[\"'](.+?)[\"']",
         # r45: '... first contact messages on facebook dating "hi miss …"'
         r"messages?\s+on\s+[\w ]+?\s+\"([^\"]{1,500})\"\s*$",
+        # r53: portal fixed runs carry Mac's text as a trailing quote,
+        # e.g. 'fixed tagged message 5 "hello how are you"'
+        r"^\s*fixed\s+[\w ]+?\s+\"([^\"]{1,500})\"\s*$",
     )
     for pat in patterns:
         m = re.search(pat, text, re.I)

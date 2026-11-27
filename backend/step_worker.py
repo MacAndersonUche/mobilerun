@@ -115,11 +115,12 @@ def enforce_job_wall_clock(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # No UI progress wall — use last_ui_progress_at (not busywork last_progress_at)
     last_ui = int(state.get("last_ui_progress_at") or created)
     steps = int(state.get("steps") or 0)
-    if now - last_ui > int(STEP_WALL_S) and steps >= 1:
+    ui_wall = job_ui_wall_s(job, int(STEP_WALL_S))
+    if now - last_ui > ui_wall and steps >= 1:
         return _fail_job_timeout(
             job,
             error=(
-                f"No UI progress for {STEP_WALL_S}s "
+                f"No UI progress for {ui_wall}s "
                 f"(last_ui_progress_at={last_ui}; StepWorker hard wall)"
             ),
             last_action="no_progress_timeout",
@@ -524,7 +525,7 @@ def run_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if refresh_job_cancel_status(updated):
             break
         # Per-invoke wall + no-progress re-check between chained steps
-        if time.time() - invoke_t0 > float(STEP_WALL_S):
+        if time.time() - invoke_t0 > float(job_ui_wall_s(updated, int(STEP_WALL_S))):
             updated = _fail_job_timeout(
                 updated,
                 error=f"StepWorker invoke exceeded {STEP_WALL_S}s wall",
@@ -1020,3 +1021,15 @@ def handler(event: Dict[str, Any], context: Any):
         "skipped": skipped,
         "schedules": sched,
     }
+
+
+def job_ui_wall_s(job: Dict[str, Any], default: int) -> int:
+    """r53: per-job no-UI-progress wall. Hinge Discover's tree is blind, so
+    each step goes through the empty-tree recovery (rebind + screenshot),
+    and one step can take longer than 90s while the run is healthy. A job
+    may carry ``ui_wall_s`` (bounded at 300s); everything else keeps 90s."""
+    try:
+        extra = int((job or {}).get("ui_wall_s") or 0)
+    except (TypeError, ValueError):
+        extra = 0
+    return max(int(default), min(300, extra))
