@@ -56,8 +56,11 @@ TAGGED_PKG = "com.taggedapp"
 TAGGED_MODES = ("swipe", "message")
 HILY_PKG = "com.hily.app"
 HILY_MODES = ("likes", "message_likes")  # Likes only | Message + likes
-DEFAULT_MODE = {TAGGED_PKG: "swipe", HILY_PKG: "message_likes",
-                **{k: v[0] for k, v in FIXED_APP_MODES.items()}}
+DEFAULT_MODE = {
+    TAGGED_PKG: "swipe",
+    HILY_PKG: "message_likes",
+    **{k: v[0] for k, v in FIXED_APP_MODES.items()},
+}
 RUN_MODES = {TAGGED_PKG: TAGGED_MODES, HILY_PKG: HILY_MODES, **FIXED_APP_MODES}
 # Apps with a "Max likes" box per mode (Hily: both; Boo / Taimi: Message + like)
 LIKE_CAP_MODES: Dict[str, Tuple[str, ...]] = {
@@ -113,6 +116,8 @@ def hily_plan(
         return mode, 0, likes
     msgs = run_count(HILY_PKG, count, counts)
     return mode, msgs, max(likes, msgs)
+
+
 def fixed_app_plan(
     pkg: str,
     count: Optional[int],
@@ -139,7 +144,9 @@ def fixed_app_plan(
 
 
 _BY_KEY = {v[0]: k for k, v in RUN_APPS.items()}
-_BY_KEY.update({"3fun": "com.threesome.swingers.threefun", "takimi": "com.takimi.android"})
+_BY_KEY.update(
+    {"3fun": "com.threesome.swingers.threefun", "takimi": "com.takimi.android"}
+)
 # Follow-up step queued right after an app's main job (likes only)
 # r46: Hily likes run inside its own job (hily_fixed_run); the old
 # ``com.hily.app#like`` step stays known so queued runs still finish.
@@ -153,6 +160,8 @@ def base_package(item: str) -> str:
 
 def _known(item: str) -> bool:
     return item in RUN_APPS or item in _LIKE_STEPS
+
+
 _ALIASES = {"facebook dating": "facebook", "fb": "facebook", "fb dating": "facebook"}
 
 
@@ -237,7 +246,7 @@ def instruction_for(
         return f"fixed swipe {n} on {key}"
     if key == "facebook":
         return (
-            f'send {n} first contact messages on facebook dating '
+            f"send {n} first contact messages on facebook dating "
             f'"hi miss you look beautiful"'
         )
     return f"send {n} first contact messages on {key}"
@@ -285,6 +294,9 @@ def build_job(
         # r48: ~7 steps per card (open, Direct, type, send, popup, swipe,
         # next card); 6n+15 ran out at card 5 on 24 Nov
         max_steps = min(400, 9 * n + 20)
+        # Default AGENT_JOB_WALL_S is 600s; 5 cards with popups/waits
+        # can exceed that (same class of fail as Hinge 27 Nov).
+        wall_s = min(3600, 180 + 120 * n)
     if pkg in FIXED_APP_MODES:
         _m, msgs, likes = fixed_app_plan(pkg, count, counts, modes, like_caps)
         max_steps = min(1500, 3 * likes + 8 * msgs + 30)
@@ -354,7 +366,9 @@ def next_job_after(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         dry_run=bool(job.get("dry_run")),
         run_id=str(job.get("run_id") or job.get("job_id") or ""),
         speed_preset=str(job.get("speed_preset") or "balanced"),
-        counts=job.get("run_counts") if isinstance(job.get("run_counts"), dict) else None,
+        counts=(
+            job.get("run_counts") if isinstance(job.get("run_counts"), dict) else None
+        ),
         modes=job.get("run_modes") if isinstance(job.get("run_modes"), dict) else None,
         like_caps=(
             job.get("run_like_caps")
