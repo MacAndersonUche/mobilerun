@@ -1,0 +1,43 @@
+<hierarchy windows="1" nodes="39" app_nodes="39" text_nodes="6" needs_vision="false" partial="false" empty="false" mode="full" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.taggedapp">
+<w id="active" t="active" p="com.taggedapp" f="1" kids="2">
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="LinearLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="com.taggedapp:id/action_bar_root" cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="android:id/content" cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="com.taggedapp:id/fragmentContainer" cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="com.taggedapp:id/llMainLayout" cls="LinearLayout" xy="540,741" b="0,75,1080,1408"/>
+ <n i="com.taggedapp:id/iToolbarMessageFragment" cls="LinearLayout" xy="540,148" b="0,75,1080,222"/>
+ <n i="com.taggedapp:id/subToolbarMessageFragment" cls="ViewGroup" xy="540,148" b="0,75,1080,222"/>
+ <n cls="LinearLayout" xy="225,148" b="0,101,450,196"/>
+ <n i="com.taggedapp:id/llToolbarName" cls="LinearLayout" xy="225,148" b="0,101,450,196"/>
+ <n i="com.taggedapp:id/backBtn" cls="ImageView" c="1" xy="74,148" b="32,106,116,190"/>
+ <n t="8" i="com.taggedapp:id/conversationsCount" cls="TextView" xy="132,148" b="116,115,148,181"/>
+ <n i="com.taggedapp:id/openProfile" cls="FrameLayout" c="1" xy="227,148" b="180,101,275,196"/>
+ <n i="com.taggedapp:id/userIcon" cls="ImageView" xy="227,148" b="180,101,275,196"/>
+ <n t="leidy" i="com.taggedapp:id/userName" cls="TextView" xy="373,148" b="317,115,429,181"/>
+ <n cls="LinearLayoutCompat" xy="1027,148" b="975,75,1080,222"/>
+ <n d="More options" cls="ImageView" c="1" xy="1027,148" b="975,85,1080,211"/>
+ <n i="com.taggedapp:id/messagingContainer" cls="LinearLayout" xy="540,815" b="0,222,1080,1408"/>
+ <n cls="FrameLayout" xy="540,730" b="0,222,1080,1238"/>
+ <n i="com.taggedapp:id/llEmptyView" cls="LinearLayout" xy="540,730" b="0,222,1080,1238"/>
+ <n i="com.taggedapp:id/cvEmptyLayout" cls="ComposeView" xy="540,730" b="0,222,1080,1238"/>
+ <n cls="View" xy="540,730" b="0,222,1080,1238"/>
+ <n cls="View" c="1" xy="540,605" b="435,500,645,710"/>
+ <n cls="View" xy="540,605" b="435,500,645,710"/>
+ <n t="Say hello" cls="TextView" xy="540,810" b="414,773,666,848"/>
+ <n t="Make the first move with leidy!" cls="TextView" xy="540,894" b="253,869,827,919"/>
+ <n i="com.taggedapp:id/cRecordingWaveContainer" cls="ComposeView" v="0" xy="540,1206" b="540,1175,540,1238"/>
+ <n cls="View" v="0" xy="540,1175" b="540,1175,540,1175"/>
+ <n i="com.taggedapp:id/vInputLayoutDivider" cls="View" xy="540,1238" b="0,1238,1080,1239"/>
+ <n i="com.taggedapp:id/clSendMessageBar" cls="ViewGroup" xy="540,1323" b="0,1239,1080,1408"/>
+ <n i="com.taggedapp:id/clTextMessageBar" cls="ViewGroup" xy="487,1323" b="32,1271,943,1376"/>
+ <n i="com.taggedapp:id/ibOpenAttachments" cls="Button" c="1" xy="84,1323" b="32,1271,137,1376"/>
+ <n i="com.taggedapp:id/ibGiftsButton" cls="Button" c="1" xy="210,1323" b="158,1271,263,1376"/>
+ <n t="good evening beautiful" h="Your message" i="com.taggedapp:id/etMessageEditText" cls="EditText" it="180289" c="1" e="1" f="1" xy="603,1323" b="284,1271,922,1376"/>
+ <n i="com.taggedapp:id/imSendMessageButton" cls="ImageView" xy="995,1323" b="943,1271,1048,1376"/>
+ <n i="com.taggedapp:id/suspendedChatContent" cls="ComposeView" v="0" xy="0,1408" b="0,1408,0,1408"/>
+ <n cls="View" v="0" xy="0,1408" b="0,1408,0,1408"/>
+ <n i="android:id/navigationBarBackground" cls="View" v="0" xy="540,2337" b="0,2274,1080,2400"/>
+</w>
+</hierarchy>

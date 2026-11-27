@@ -297,6 +297,10 @@ def build_job(
         # Default AGENT_JOB_WALL_S is 600s; 5 cards with popups/waits
         # can exceed that (same class of fail as Hinge 27 Nov).
         wall_s = min(3600, 180 + 120 * n)
+    if pkg == TAGGED_PKG:
+        # 27 Nov: photo → Your message → send → Back → green heart
+        max_steps = min(400, 10 * n + 20)
+        wall_s = min(3600, 180 + 90 * n)
     if pkg in FIXED_APP_MODES:
         _m, msgs, likes = fixed_app_plan(pkg, count, counts, modes, like_caps)
         max_steps = min(1500, 3 * likes + 8 * msgs + 30)

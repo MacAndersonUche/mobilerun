@@ -104,7 +104,13 @@ def extract_user_message_text(instruction: str) -> Optional[str]:
     return None
 
 
-CORE_MESSAGE_BANK = ("hey how are you", "hi miss", "hello miss", "good morning")
+CORE_MESSAGE_BANK = (
+    "hey how are you",
+    "hi miss",
+    "hello miss",
+    "good morning",
+    "good evening beautiful",
+)
 
 
 def load_message_bank_texts(
@@ -279,6 +285,14 @@ def enforce_message_text(
     kind = str(action.get("action") or "").lower()
     if kind not in ("type", "type_text", "input_text"):
         return action
+
+    # Composer clear only (not a message body). Used to wipe leftover
+    # text in an existing Tagged chat we must not send.
+    if action.get("_clear_only") or action.get("clear_only"):
+        out = dict(action)
+        out["text"] = ""
+        out["_text_source"] = "clear_only"
+        return out
 
     if is_contact_or_search_type(action, history):
         action = dict(action)

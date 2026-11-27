@@ -636,6 +636,47 @@ def _detect_app_from_tree(tree: str) -> Optional[str]:
     return detect_dm_app(tree) or None
 
 
+_SEND_ICON_ID_TAILS = (
+    "imsendmessagebutton",
+    "send_button",
+    "sendbutton",
+    "btnsend",
+    "btn_send",
+    "send_message_button",
+)
+
+
+def _resolve_send_icon_at(tree: str, x: int, y: int) -> Optional[Dict[str, Any]]:
+    """Tagged's send arrow is an ImageView often not marked clickable.
+
+    27 Nov: a correct tap at (995, 1302) on imSendMessageButton was
+    'unresolved' by the clickable-only resolver, so the first-move
+    message never left the box.
+    """
+    for n in _all_nodes_at(tree, x, y, clickable_only=False):
+        tail = str(n.get("id") or "").lower().rsplit("/", 1)[-1]
+        if tail in _SEND_ICON_ID_TAILS or tail.endswith("sendmessagebutton"):
+            return n
+    return None
+
+
+def _tagged_send_zone(action: Dict[str, Any], tree: str, x: int, y: int) -> bool:
+    """Keyboard-open Tagged send arrow when the compact dump omitted the icon."""
+    blob = (
+        str(action.get("reason") or "") + " " + str(action.get("fastpath_step") or "")
+    ).lower()
+    if "send arrow" not in blob and "tagged_fixed_send" not in blob:
+        return False
+    if not (940 <= x <= 1050 and 1200 <= y <= 1450):
+        return False
+    low = (tree or "").lower()
+    return (
+        "your message" in low
+        or "etmessageedittext" in low
+        or "make the first move" in low
+    )
+
+
 def guard_tap_action(
     action: Dict[str, Any],
     tree: str,
@@ -761,6 +802,8 @@ def guard_tap_action(
         }
 
     resolved = resolve_topmost_clickable_at(tree, x, y)
+    if resolved is None:
+        resolved = _resolve_send_icon_at(tree, x, y)
     # Unlabeled / vision coords: snap to nearest node bounds when clickable miss
     if resolved is None:
         resolved = resolve_nearest_node_at(tree, x, y, pad=64)
@@ -771,6 +814,10 @@ def guard_tap_action(
                 y,
                 (resolved.get("label") or resolved.get("id") or "?")[:48],
             )
+    if resolved is None and _tagged_send_zone(action, tree, x, y):
+        out = dict(action)
+        out["_tap_firewall"] = "tagged_send_zone"
+        return out
 
     # (2) Overlay up → refuse nav / underneath taps (Chats under Crush sheet).
     try:
