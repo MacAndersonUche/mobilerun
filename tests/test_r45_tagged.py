@@ -232,3 +232,118 @@ def test_tap_firewall_allows_nonclickable_send_icon():
     )
     assert a["action"] == "tap", a
     assert (a["x"], a["y"]) == (995, 1323)
+
+
+def test_counts_send_before_existing_hook_then_green_heart():
+    """After send, a new bubble used to look like an existing chat.
+
+    The job must count first, Back, then the green heart — never X.
+    """
+    sent = _tree(
+        '<n i="userName" t="Gaby J" xy="540,140" b="[200,80][880,200]" />'
+        '<n i="tvMessageText" t="hi miss" xy="700,900" b="[400,850][1000,950]" />'
+        '<n i="clOuterMessageItem" t="hi miss" xy="700,900" b="[400,850][1000,950]" />'
+        '<n e="1" h="Your message" t="" c="1" i="etMessageEditText" '
+        'xy="500,1320" b="[40,1270][900,1370]" />'
+        '<n i="imSendMessageButton" xy="995,1320" b="[950,1270][1040,1370]" />'
+    )
+    from backend.tagged_fixed import on_existing_thread, sent_bubble, _thread_name
+    assert sent_bubble(sent, "hi miss")
+    # Only our just-sent line — not a prior conversation like Naomi.
+    assert not on_existing_thread(sent, "hi miss")
+    assert _thread_name(sent) == "Gaby J"
+
+    st = {}
+    inst = "fixed tagged message 1"
+    _plan(inst, DECK, st)  # open photo (card name is Casey)
+    _plan(inst, THREAD.format(t=""), st)  # type
+    a = _plan(inst, THREAD.format(t="hi miss"), st)  # send
+    assert a["fastpath_step"] == "tagged_fixed_send"
+    # Bubble appeared — old hook would have skipped; now count + Back.
+    a = _plan(inst, sent, st)
+    assert a["action"] == "press_button" and a["button"] == "back"
+    assert a["fastpath_step"] == "tagged_fixed_thread_back"
+    assert a.get("_vision_tag") == "tagged_sent_bubble"
+    assert st["tagged_fixed"]["sent_this"] is True
+    assert st["tagged_fixed"]["name"] == "Gaby J"
+    a = _plan(inst, DECK, st)  # green heart even though stack says Casey
+    assert a["fastpath_step"] == "tagged_fixed_like_after"
+    assert (a["x"], a["y"]) == (860, 1908)
+    assert st["tagged_fixed"]["done"] == 1
+    a = _plan(inst, DECK, st)
+    assert a["action"] == "done"
+
+
+def test_name_comes_from_opened_thread_not_stack():
+    thread = _tree(
+        '<n i="userName" t="Gaby J" xy="540,140" b="[200,80][880,200]" />'
+        '<n t="Say hello" xy="540,810" b="[414,773][666,848]" />'
+        '<n t="Make the first move with Gaby J!" xy="540,894" b="[253,869][827,919]" />'
+        '<n i="llEmptyView" xy="540,730" b="[0,222][1080,1238]" />'
+        '<n e="1" h="Your message" t="" c="1" i="etMessageEditText" '
+        'xy="500,1320" b="[40,1270][900,1370]" />'
+        '<n i="imSendMessageButton" xy="995,1320" b="[950,1270][1040,1370]" />'
+    )
+    st = {}
+    inst = "fixed tagged message 1"
+    _plan(inst, DECK, st)
+    assert st["tagged_fixed"]["name"] == "Casey"
+    a = _plan(inst, thread, st)
+    assert a["action"] == "type" and a["text"] == "hi miss"
+    assert st["tagged_fixed"]["name"] == "Gaby J"
+
+
+def test_already_sent_bubble_does_not_remessage():
+    """A chat that already has tonight's line must not be sent again."""
+    sent = _tree(
+        '<n i="userName" t="Ana A" xy="540,140" b="[200,80][880,200]" />'
+        '<n i="tvMessageText" t="hi miss" xy="700,900" b="[400,850][1000,950]" />'
+        '<n e="1" h="Your message" t="" c="1" i="etMessageEditText" '
+        'xy="500,1320" b="[40,1270][900,1370]" />'
+        '<n i="imSendMessageButton" xy="995,1320" b="[950,1270][1040,1370]" />'
+    )
+    st = {}
+    inst = "fixed tagged message 1"
+    a = _plan(inst, sent, st)
+    assert a["action"] == "press_button" and a["button"] == "back"
+    assert a["fastpath_step"] == "tagged_fixed_existing_back"
+    assert a["action"] != "type"
+    a = _plan(inst, DECK, st)
+    assert a["fastpath_step"] == "tagged_fixed_skip_existing"
+    assert (a["x"], a["y"]) == (220, 1908)
+    assert st["tagged_fixed"]["done"] == 0
+
+
+def test_skip_names_backs_out_without_typing():
+    first = _tree(
+        '<n i="userName" t="leidy" xy="540,140" b="[200,80][880,200]" />'
+        '<n t="Say hello" xy="540,810" b="[414,773][666,848]" />'
+        '<n t="Make the first move with leidy!" xy="540,894" b="[253,869][827,919]" />'
+        '<n i="llEmptyView" xy="540,730" b="[0,222][1080,1238]" />'
+        '<n e="1" h="Your message" t="" c="1" i="etMessageEditText" '
+        'xy="500,1320" b="[40,1270][900,1370]" />'
+        '<n i="imSendMessageButton" xy="995,1320" b="[950,1270][1040,1370]" />'
+    )
+    st = {"tagged_fixed": {"done": 0, "phase": "deck",
+                          "skip_names": ["Ana A", "Gaby J", "muñequita", "leidy"]}}
+    inst = "fixed tagged message 1"
+    _plan(inst, DECK, st)
+    a = _plan(inst, first, st)
+    assert a["action"] == "press_button" and a["button"] == "back"
+    assert "will not message" in a["reason"]
+    assert st["tagged_fixed"]["done"] == 0
+
+
+def test_vision_yes_confirms_sent_bubble():
+    st = {
+        "tagged_fixed": {"done": 0, "phase": "compose", "awaiting_sent": "hi miss",
+                         "name": "Gaby J"},
+        "bulk_message_new": {
+            "_vision_last": {"ok": True, "raw": "YES, a sent bubble.",
+                             "tag": "tagged_sent_bubble"},
+        },
+    }
+    # Box still has text and the tree has no bubble — vision says it sent.
+    a = _plan("fixed tagged message 1", THREAD.format(t="hi miss"), st)
+    assert a["action"] == "press_button" and a["button"] == "back"
+    assert st["tagged_fixed"]["sent_this"] is True
