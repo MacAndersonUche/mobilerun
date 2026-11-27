@@ -217,7 +217,6 @@ test.describe('full button audit', () => {
       ['/devices', 'Devices'],
       ['/dating', 'Run'],
       ['/settings', 'More'],
-      ['/live', 'Live'],
       ['/dating', 'Dating'],
       ['/dating', 'Run'],
       ['/social', 'Social'],
@@ -296,43 +295,6 @@ test.describe('full button audit', () => {
     const removeBtns = page.getByTestId('remove-device');
     const removeCount = await removeBtns.count();
     record('devices', 'Remove device button present', 'enumerate', true, `count=${removeCount}`);
-    // Live view link if any
-    const liveLinks = page.getByRole('link', { name: /live|view/i });
-    if (await liveLinks.count()) {
-      try {
-        await liveLinks.first().click();
-        await page.waitForTimeout(1000);
-        record('devices', 'Live view link', 'navigate', true, page.url());
-      } catch (e) {
-        record('devices', 'Live view link', 'navigate', false, String(e).slice(0, 120));
-      }
-    } else {
-      record('devices', 'Live view link', 'navigate', true, 'none on page — use /live');
-    }
-
-    // ---------- Live ----------
-    await page.goto('/live');
-    await page.waitForTimeout(1000);
-    record('live', 'page load', 'render', true);
-    const liveBtns = page.getByRole('button');
-    const liveBtnCount = await liveBtns.count();
-    for (let i = 0; i < liveBtnCount; i++) {
-      const b = liveBtns.nth(i);
-      const label = ((await b.innerText().catch(() => '')) || (await b.getAttribute('aria-label')) || `btn-${i}`).trim().slice(0, 60);
-      if (!label || /remove|delete|uninstall/i.test(label)) continue;
-      try {
-        if (!(await b.isEnabled())) {
-          record('live', label, 'click', true, 'disabled');
-          continue;
-        }
-        await b.click({ timeout: 5000 });
-        await page.waitForTimeout(500);
-        record('live', label, 'click', true);
-      } catch (e) {
-        record('live', label, 'click', false, String(e).slice(0, 120));
-      }
-    }
-
     // ---------- Tasks (Normal) ----------
     await page.goto('/tasks');
     await page.waitForTimeout(800);

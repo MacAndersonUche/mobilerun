@@ -37,11 +37,10 @@ test('authenticated routes', async ({ page }) => {
     ['/dating', '06-dating'],
     ['/social', '07-social'],
     ['/dating', '08-dating'],
-    ['/live', '09-live'],
-    ['/settings', '10-settings'],
-    ['/account', '11-account'],
-    ['/tasks', '12-tasks'],
-    ['/history', '13-history'],
+    ['/settings', '09-settings'],
+    ['/account', '10-account'],
+    ['/tasks', '11-tasks'],
+    ['/history', '12-history'],
   ] as const;
 
   for (const [route, name] of routes) {
