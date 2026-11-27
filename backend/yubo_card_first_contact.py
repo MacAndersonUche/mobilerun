@@ -124,7 +124,11 @@ def _pill(tree: str) -> Tuple[int, int]:
         if n.get("editable"):
             continue
         t = (n.get("text") or n.get("label") or "").strip().lower()
-        if t == "send a message" and int(n.get("y") or 0) > 1500 and int(n.get("x") or 0) < 800:
+        if (
+            t == "send a message"
+            and int(n.get("y") or 0) > 1500
+            and int(n.get("x") or 0) < 800
+        ):
             return (int(n["x"]), int(n["y"]))
     return SEND_PILL_XY
 
@@ -132,10 +136,28 @@ def _pill(tree: str) -> Tuple[int, int]:
 def _like_swipe(card: str, n: int) -> Dict[str, Any]:
     x1, y1, x2, y2, dur = DM_APP_PROFILES["yubo"]["like_swipe"]
     return _act(
-        "swipe", "yubo_card_fixed_like_swipe",
+        "swipe",
+        "yubo_card_fixed_like_swipe",
         f"Swipe {card or 'this card'} right after the message (card {n})",
-        x1=x1, y1=y1, x2=x2, y2=y2, duration_ms=dur,
+        x1=x1,
+        y1=y1,
+        x2=x2,
+        y2=y2,
+        duration_ms=dur,
     )
+
+
+def _stop_if_sends_missed(yc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """If Direct never left the box on 2 cards, stop — don't burn more."""
+    if int(yc.get("sent") or 0) == 0 and int(yc.get("unconfirmed") or 0) >= 2:
+        return _act(
+            "fail",
+            "yubo_card_send_missed",
+            "Direct send did not go — the text stayed in the box on 2 cards "
+            "(the send tap missed the up arrow, or a paywall blocked it). "
+            "Stopped, nothing confirmed.",
+        )
+    return None
 
 
 def plan_yubo_card_first_contact(
@@ -160,21 +182,37 @@ def plan_yubo_card_first_contact(
     st.setdefault("bulk_message_new", {})["done"] = sent
 
     if sent >= cap and phase == "open":
-        return _act("done", "yubo_card_done",
-                    f"Yubo first contact finished {sent}/{cap} from deck cards"
-                    + (f" ({yc.get('unconfirmed')} unconfirmed)" if yc.get("unconfirmed") else ""))
+        return _act(
+            "done",
+            "yubo_card_done",
+            f"Yubo first contact finished {sent}/{cap} from deck cards"
+            + (
+                f" ({yc.get('unconfirmed')} unconfirmed)"
+                if yc.get("unconfirmed")
+                else ""
+            ),
+        )
 
     if dry_run:
-        return _act("done", "yubo_card_dry",
-                    f"[DRY RUN] Yubo: per card would open Send a message → Direct "
-                    f"(never Blast) → type '{text}' → up arrow → wait for sent → "
-                    f"swipe right, {cap} cards — nothing tapped",
-                    dry_run=True, dry_run_verified=True, would_send_text=text)
+        return _act(
+            "done",
+            "yubo_card_dry",
+            f"[DRY RUN] Yubo: per card would open Send a message → Direct "
+            f"(never Blast) → type '{text}' → up arrow → wait for sent → "
+            f"swipe right, {cap} cards — nothing tapped",
+            dry_run=True,
+            dry_run_verified=True,
+            would_send_text=text,
+        )
 
     # Paid upsells (Infinity / HyperSurge) — Back, never Continue/Unlock
     if _on_paywall(ui_tree) and not on_send_sheet(ui_tree):
-        return _act("press_button", "yubo_card_paywall_back",
-                    "Yubo paid upsell — Back, nothing bought", button="back")
+        return _act(
+            "press_button",
+            "yubo_card_paywall_back",
+            "Yubo paid upsell — Back, nothing bought",
+            button="back",
+        )
 
     sheet = on_send_sheet(ui_tree)
 
@@ -186,8 +224,10 @@ def plan_yubo_card_first_contact(
         # closed every time, none counted, waits tripped stuck-Back). The
         # sheet still open with an empty box also means it went.
         closed_to_deck = not sheet and yubo_on_deck(ui_tree, _log=False)
-        if (sent_seen(ui_tree, text) and not box) or closed_to_deck or (
-            sheet and not box and not blast_selected(ui_tree)
+        if (
+            (sent_seen(ui_tree, text) and not box)
+            or closed_to_deck
+            or (sheet and not box and not blast_selected(ui_tree))
         ):
             yc["sent"] = sent = sent + 1
             st["bulk_message_new"]["done"] = sent
@@ -200,54 +240,95 @@ def plan_yubo_card_first_contact(
                 yc["send_retry"] = tries + 1
                 xy = _send_right_of_composer(ui_tree) or SEND_XY
                 if xy not in _PAID_XY:
-                    return _act("tap", "yubo_card_send_retry",
-                                f"'{text}' still in the box — tap the up arrow again",
-                                x=int(xy[0]), y=int(xy[1]))
+                    return _act(
+                        "tap",
+                        "yubo_card_send_retry",
+                        f"'{text}' still in the box — tap the up arrow again",
+                        x=int(xy[0]),
+                        y=int(xy[1]),
+                    )
             yc["phase"] = "swipe"
             yc["unconfirmed"] = int(yc.get("unconfirmed") or 0) + 1
+            stopped = _stop_if_sends_missed(yc)
+            if stopped:
+                return stopped
             phase = "swipe"
         else:
             w = int(yc.get("waits") or 0) + 1
             yc["waits"] = w
             if w <= MAX_SENT_WAITS:
-                return _act("wait", "yubo_card_wait_sent",
-                            f"Waiting for the sent message to show ({w}/{MAX_SENT_WAITS})",
-                            seconds=1.5, delay_s=1.5)
+                return _act(
+                    "wait",
+                    "yubo_card_wait_sent",
+                    f"Waiting for the sent message to show ({w}/{MAX_SENT_WAITS})",
+                    seconds=1.5,
+                    delay_s=1.5,
+                )
             # no sent signal — not counted; still move on (never message twice)
             yc["unconfirmed"] = int(yc.get("unconfirmed") or 0) + 1
             yc["phase"] = "swipe"
             yc["waits"] = 0
+            stopped = _stop_if_sends_missed(yc)
+            if stopped:
+                return stopped
             phase = "swipe"
 
     # ---- the send sheet ----
     if sheet:
         if phase == "swipe":
             # Message done for this card: close the sheet back to the card
-            return _act("press_button", "yubo_card_close_sheet",
-                        "Close the send sheet back to the card", button="back")
-        if blast_selected(ui_tree) or yubo_direct_sheet_action(ui_tree, planner=PLANNER):
+            return _act(
+                "press_button",
+                "yubo_card_close_sheet",
+                "Close the send sheet back to the card",
+                button="back",
+            )
+        if blast_selected(ui_tree) or yubo_direct_sheet_action(
+            ui_tree, planner=PLANNER
+        ):
             n = int(yc.get("direct_tries") or 0) + 1
             yc["direct_tries"] = n
             if n > MAX_DIRECT_TRIES:
-                return _act("fail", "yubo_card_blast_stop",
-                            f"Sheet stays on paid Blast after {MAX_DIRECT_TRIES} Direct "
-                            f"taps — stop, nothing sent")
+                return _act(
+                    "fail",
+                    "yubo_card_blast_stop",
+                    f"Sheet stays on paid Blast after {MAX_DIRECT_TRIES} Direct "
+                    f"taps — stop, nothing sent",
+                )
             sel = yubo_direct_sheet_action(ui_tree, planner=PLANNER)
-            xy = (sel["x"], sel["y"]) if sel and sel.get("action") == "tap" else DIRECT_XY
-            return _act("tap", "yubo_card_select_direct",
-                        "Select Direct (Blast is paid, never send on it)",
-                        x=int(xy[0]), y=int(xy[1]))
+            xy = (
+                (sel["x"], sel["y"])
+                if sel and sel.get("action") == "tap"
+                else DIRECT_XY
+            )
+            return _act(
+                "tap",
+                "yubo_card_select_direct",
+                "Select Direct (Blast is paid, never send on it)",
+                x=int(xy[0]),
+                y=int(xy[1]),
+            )
         yc["direct_tries"] = 0
         box = composer_text(ui_tree)
         if box.lower() != text.lower():
             if yc.get("typed_n", 0) >= 2:
-                return _act("fail", "yubo_card_type_failed",
-                            f"Text box shows '{box[:30]}' not '{text}' after 2 tries — stop")
+                return _act(
+                    "fail",
+                    "yubo_card_type_failed",
+                    f"Text box shows '{box[:30]}' not '{text}' after 2 tries — stop",
+                )
             yc["typed_n"] = int(yc.get("typed_n") or 0) + 1
-            return _act("type", "yubo_card_type",
-                        f"Type '{text}' in the Direct box", text=text, clear=True)
+            return _act(
+                "type",
+                "yubo_card_type",
+                f"Type '{text}' in the Direct box",
+                text=text,
+                clear=True,
+            )
         if blast_selected(ui_tree):  # belt and braces
-            return _act("fail", "yubo_card_refuse_blast", "Blast selected at send — refuse")
+            return _act(
+                "fail", "yubo_card_refuse_blast", "Blast selected at send — refuse"
+            )
         xy = _send_right_of_composer(ui_tree) or SEND_XY
         if xy in _PAID_XY:
             xy = SEND_XY
@@ -256,9 +337,14 @@ def plan_yubo_card_first_contact(
         yc["waits"] = 0
         yc["send_retry"] = 0
         yc["typed_n"] = 0
-        return _act("tap", "yubo_card_send",
-                    f"Tap the up arrow — Direct '{text}' to {yc.get('card') or 'this card'} "
-                    f"({sent + 1}/{cap})", x=int(xy[0]), y=int(xy[1]))
+        return _act(
+            "tap",
+            "yubo_card_send",
+            f"Tap the up arrow — Direct '{text}' to {yc.get('card') or 'this card'} "
+            f"({sent + 1}/{cap})",
+            x=int(xy[0]),
+            y=int(xy[1]),
+        )
 
     # ---- the deck ----
     if yubo_on_deck(ui_tree, _log=False):
@@ -274,48 +360,83 @@ def plan_yubo_card_first_contact(
                 n = int(yc.get("swipes") or 1)
                 if n == 1:
                     yc["swipes"] = 2
-                    return _act("wait", "yubo_card_wait_next",
-                                f"Waiting for the next card after {name}",
-                                seconds=1.0, delay_s=1.0)
+                    return _act(
+                        "wait",
+                        "yubo_card_wait_next",
+                        f"Waiting for the next card after {name}",
+                        seconds=1.0,
+                        delay_s=1.0,
+                    )
                 if n == 2:
                     yc["swipes"] = 3
                     return _like_swipe(name, int(yc.get("cards") or 0))
-                return _act("fail", "yubo_card_stuck",
-                            f"Card {name} did not move after 2 swipes — stop")
+                return _act(
+                    "fail",
+                    "yubo_card_stuck",
+                    f"Card {name} did not move after 2 swipes — stop",
+                )
             yc["phase"] = phase = "open"
             if sent >= cap:
                 return plan_yubo_card_first_contact(
-                    instruction, ui_tree, history, state=st, package=package,
-                    dry_run=dry_run, message=message, target=target)
+                    instruction,
+                    ui_tree,
+                    history,
+                    state=st,
+                    package=package,
+                    dry_run=dry_run,
+                    message=message,
+                    target=target,
+                )
         # open this card's send box — never more than N up-arrow taps in total
         cards = int(yc.get("cards") or 0)
         attempts = int(yc.get("attempts") or 0)
         if attempts >= cap or cards >= cap + 5:
-            return _act("done", "yubo_card_no_more",
-                        f"Yubo: {sent}/{cap} confirmed after {attempts} sends — stop "
-                        f"({yc.get('unconfirmed') or 0} without a sent signal; never "
-                        f"more than {cap} sends)",
-                        stopped_reason="unconfirmed_sends")
+            return _act(
+                "done",
+                "yubo_card_no_more",
+                f"Yubo: {sent}/{cap} confirmed after {attempts} sends — stop "
+                f"({yc.get('unconfirmed') or 0} without a sent signal; never "
+                f"more than {cap} sends)",
+                stopped_reason="unconfirmed_sends",
+            )
         yc["cards"] = cards + 1
         yc["card"] = name
         yc["typed_n"] = 0
         xy = _pill(ui_tree)
-        return _act("tap", "yubo_card_open_send",
-                    f"Open {name or 'this card'}'s Send a message box", x=xy[0], y=xy[1])
+        return _act(
+            "tap",
+            "yubo_card_open_send",
+            f"Open {name or 'this card'}'s Send a message box",
+            x=xy[0],
+            y=xy[1],
+        )
 
     # ---- elsewhere (Chat list, a conversation, another app) → deck tab ----
     n = int(yc.get("recover") or 0) + 1
     yc["recover"] = n
     if n > MAX_RECOVER:
-        return _act("fail", "yubo_card_lost",
-                    f"Could not get back to the Yubo deck after {MAX_RECOVER} tries")
+        return _act(
+            "fail",
+            "yubo_card_lost",
+            f"Could not get back to the Yubo deck after {MAX_RECOVER} tries",
+        )
     pkgs = re.search(r'packages="([^"]*)"', ui_tree or "")
     if (ui_tree or "").strip() and pkgs and PKG not in pkgs.group(1):
-        return _act("open_app", "yubo_card_open_app", "Open Yubo", app="Yubo", package=PKG)
+        return _act(
+            "open_app", "yubo_card_open_app", "Open Yubo", app="Yubo", package=PKG
+        )
     if phase == "awaiting_sent":
-        return _act("wait", "yubo_card_wait_sent",
-                    f"Waiting for the sent message to show (screen {n})",
-                    seconds=1.0, delay_s=1.0)
-    return _act("tap", "yubo_card_deck_tab",
-                f"Open the Yubo deck tab (never Conversations) — try {n}",
-                x=DECK_TAB_XY[0], y=DECK_TAB_XY[1])
+        return _act(
+            "wait",
+            "yubo_card_wait_sent",
+            f"Waiting for the sent message to show (screen {n})",
+            seconds=1.0,
+            delay_s=1.0,
+        )
+    return _act(
+        "tap",
+        "yubo_card_deck_tab",
+        f"Open the Yubo deck tab (never Conversations) — try {n}",
+        x=DECK_TAB_XY[0],
+        y=DECK_TAB_XY[1],
+    )

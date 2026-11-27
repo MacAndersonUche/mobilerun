@@ -36,6 +36,7 @@ MESSAGE_BANK = (
     "hi miss",
     "hello miss",
     "good morning",
+    "good evening beautiful",
 )
 CHAT_TAB_XY = (341, 2194)
 SEND_XY = (1008, 1336)
@@ -82,15 +83,19 @@ def _on_chat_list(tree: str) -> bool:
 
 def _on_paywall(tree: str) -> bool:
     blob = _blob(tree)
-    return any(
-        n in blob
-        for n in (
-            "unlock infinity",
-            "infinity pack",
-            "launch a hypersurge",
-            "get up to x10 more messages",
+    return (
+        any(
+            n in blob
+            for n in (
+                "unlock infinity",
+                "infinity pack",
+                "launch a hypersurge",
+                "get up to x10 more messages",
+            )
         )
-    ) and "say hello to" not in blob and not _on_chat_list(tree)
+        and "say hello to" not in blob
+        and not _on_chat_list(tree)
+    )
 
 
 _BLAST_MARKERS = (
@@ -128,6 +133,13 @@ def _composer(tree: str) -> Optional[Tuple[int, int]]:
 
 
 def _send_right_of_composer(tree: str) -> Optional[Tuple[int, int]]:
+    """Purple up-arrow just to the right of the composer, level with it.
+
+    27 Nov prod: a Samsung Keyboard key at ~(1013, 1469) also sits to the
+    right and slightly below the box. The old scan took the last matching
+    node, so Direct sends missed the arrow (y~1335) and the text stayed
+    in the box.
+    """
     edit = None
     for n in _parse_compact_nodes(tree):
         if n.get("editable"):
@@ -138,19 +150,30 @@ def _send_right_of_composer(tree: str) -> Optional[Tuple[int, int]]:
     ey1, ey2 = edit.get("y1"), edit.get("y2")
     if ex2 is None or ey1 is None or ey2 is None:
         return SEND_XY
+    mid_y = (int(ey1) + int(ey2)) / 2
     best = None
+    best_score = None
     for n in _parse_compact_nodes(tree):
-        if n is edit or n.get("editable"):
+        if n.get("editable"):
             continue
         x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
         if None in (x1, y1, x2, y2):
             continue
         if int(x1) < int(ex2) - 20:
             continue
-        if int(y2) < int(ey1) - 40 or int(y1) > int(ey2) + 40:
+        # Must overlap the composer vertically. A keyboard key just
+        # below the box (y≈1465 on the S21+) is not the arrow.
+        if int(y2) < int(ey1) or int(y1) > int(ey2):
             continue
-        # Gift / camera sit left of the field; this is the right-hand send.
-        best = (int(n["x"]), int(n["y"]))
+        w = int(x2) - int(x1)
+        h = int(y2) - int(y1)
+        if w > 250 or h > 250:
+            continue
+        cx, cy = int(n["x"]), int(n["y"])
+        score = abs(cy - mid_y)
+        if best_score is None or score < best_score:
+            best_score = score
+            best = (cx, cy)
     return best
 
 
