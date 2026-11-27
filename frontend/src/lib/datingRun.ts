@@ -78,12 +78,14 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     // Hily: verified live 5/5 via Activity > Likes sent (r53, 27 Nov 2026)
     // Yubo: verified live 5/5 Direct sends (r54, 27 Nov 2026)
     // Hinge: verified live 5/5 with r53n heart ladder (27 Nov 2026)
+    // Tagged: Mac confirmed messages sending on phone (27 Nov 2026)
     packages: [
       'com.badoo.mobile',
       'com.bumble.app',
       'com.hily.app',
       'co.yellw.yellowapp',
       'co.hinge.app',
+      'com.taggedapp',
     ],
   },
   {
@@ -91,7 +93,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     title: 'Still needs fixing',
     subtitle: 'Drivers exist but these still fail or need work.',
     packages: [
-      'com.taggedapp',
       'com.affinityapps.blk',
       'com.facebook.katana',
       'com.takimi.android',
