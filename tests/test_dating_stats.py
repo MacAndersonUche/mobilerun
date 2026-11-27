@@ -50,7 +50,7 @@ def test_dating_stats_swipe_recording():
 
 
 def test_dating_stats_message_recording():
-    """Test opener vs reply recording."""
+    """First-contact messages count as openers; reply tracking removed."""
     with tempfile.TemporaryDirectory() as tmpdir:
         stats_file = Path(tmpdir) / "stats.json"
         stats = DatingStats(app_stats={}, stats_file=stats_file)
@@ -59,11 +59,11 @@ def test_dating_stats_message_recording():
         stats.record_message("co.hinge.app", "Hinge", is_opener=False)
 
         app_stats = stats.app_stats["co.hinge.app"]
-        assert app_stats.openers_sent_today == 1
-        assert app_stats.replies_sent_today == 1
-        assert app_stats.total_openers == 1
-        assert app_stats.total_replies == 1
+        assert app_stats.openers_sent_today == 2
+        assert app_stats.total_openers == 2
         assert stats.messages_today_all == 2
+        # Summary never surfaces reply counts
+        assert stats.get_summary()["apps"][0]["today"]["replies"] == 0
 
 
 def test_dating_stats_inbox_update():

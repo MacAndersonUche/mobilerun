@@ -5080,6 +5080,20 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     step_t0 = time.time()
+    # Snapshot dating counters so we can persist deltas to DatingStats
+    # (dashboard Today totals). Dry-run is skipped inside the sync helper.
+    _dating_stats_before = None
+    try:
+        try:
+            from dating_stats_io import _counter_snapshot as _dating_snap
+        except ImportError:
+            from backend.dating_stats_io import (  # type: ignore
+                _counter_snapshot as _dating_snap,
+            )
+
+        _dating_stats_before = _dating_snap(state)
+    except Exception:
+        _dating_stats_before = None
     try:
         prefer_pkg = _instruction_target_package(instruction, state)
         tree_info = _fetch_ui_tree_retry(
@@ -7360,6 +7374,23 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
             job["updated_at"] = int(time.time())
             _kick_self(job.get("job_id"), job=job)
         return job
+    finally:
+        # Persist any first-contact / like counter deltas onto DatingStats
+        # so the dashboard Today totals match tonight's real sends.
+        if _dating_stats_before is not None:
+            try:
+                try:
+                    from dating_stats_io import sync_dating_stats_from_job
+                except ImportError:
+                    from backend.dating_stats_io import (  # type: ignore
+                        sync_dating_stats_from_job,
+                    )
+
+                sync_dating_stats_from_job(job, before=_dating_stats_before)
+            except Exception:
+                logger.exception(
+                    "dating stats sync failed job=%s", job.get("job_id")
+                )
 
 
 def _step_worker_target() -> Optional[str]:
