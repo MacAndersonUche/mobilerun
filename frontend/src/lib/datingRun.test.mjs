@@ -183,7 +183,7 @@ console.log('datingRun ok');
   a(datingAppGroup('com.facebook.katana') === 'works', 'Facebook works (verified live 5/5)');
   a(DATING_APP_GROUPS.find((g) => g.id === 'works')?.title === 'Working', 'Working label');
   a(datingAppGroup('com.affinityapps.blk') === 'coming-soon', 'BLK coming soon');
-  a(datingAppGroup('com.takimi.android') === 'needs-fixing', 'Taimi needs fixing');
+  a(datingAppGroup('com.takimi.android') === 'coming-soon', 'Taimi coming soon');
   a(datingAppGroup('com.tinder') === 'coming-soon', 'Tinder coming soon');
   a(datingAppGroup('enterprises.dating.boo') === 'coming-soon', 'Boo coming soon');
   a(datingAppGroup('social.breeze.breeze_app') === 'coming-soon', 'Breeze coming soon');
@@ -222,19 +222,18 @@ console.log('datingRun ok');
     { package: 'enterprises.dating.boo' },
     { package: 'com.myyearbook.m' },
   ]);
-  assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'needs-fixing', 'coming-soon']);
+  assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'coming-soon']);
   assert.deepEqual(grouped[0].apps.map((x) => x.package), [
     'com.badoo.mobile', 'com.bumble.app', 'com.hily.app', 'co.yellw.yellowapp',
     'co.hinge.app', 'com.taggedapp', 'com.facebook.katana',
   ]);
-  assert.deepEqual(grouped[1].apps.map((x) => x.package), ['com.takimi.android']);
-  assert.deepEqual(grouped[2].apps.map((x) => x.package), [
+  assert.deepEqual(grouped[1].apps.map((x) => x.package), [
     'com.tinder', 'enterprises.dating.boo', 'com.threesome.swingers.threefun',
-    'com.myyearbook.m', 'com.affinityapps.blk',
+    'com.myyearbook.m', 'com.affinityapps.blk', 'com.takimi.android',
   ]);
-  // an app in no group falls into "Still needs fixing", never vanishes
+  // an app in no group falls into "Apps to come", never vanishes
   const withNew = groupDatingCards([{ package: 'com.example.new' }, { package: 'com.badoo.mobile' }]);
-  assert.deepEqual(withNew.map((g) => g.group.id), ['works', 'needs-fixing']);
+  assert.deepEqual(withNew.map((g) => g.group.id), ['works', 'coming-soon']);
   assert.deepEqual(withNew[1].apps.map((x) => x.package), ['com.example.new']);
   // every runnable app is in exactly one group
   const allGrouped = DATING_APP_GROUPS.flatMap((g) => g.packages);
