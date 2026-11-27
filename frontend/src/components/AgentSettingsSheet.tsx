@@ -105,7 +105,7 @@ export default function AgentSettingsSheet({
           </div>
           {devices.length === 0 && (
             <p className="text-xs text-mute">
-              Online / Busy / Offline counts appear on Home after the APK links.
+              Online / offline counts appear on the Home Devices card after the APK links.
             </p>
           )}
         </div>

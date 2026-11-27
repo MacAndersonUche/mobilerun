@@ -29,6 +29,9 @@ test('authenticated routes', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible({
     timeout: 15000,
   });
+  // One Devices nav card under Run — no separate summary "Manage" card
+  await expect(page.getByRole('link', { name: /Devices/i })).toHaveCount(1);
+  await expect(page.getByRole('link', { name: /^Manage$/i })).toHaveCount(0);
   await shot(page, '03-home');
 
   const routes = [
