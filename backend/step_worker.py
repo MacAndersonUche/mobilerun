@@ -303,61 +303,37 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     swipe_cap = int(caps.get("swipe_cap", 50))
     reply_cap = int(caps.get("reply_cap", 50))
 
-    scope = str(
-        job.get("contact_scope") or state.get("contact_scope") or "both"
-    ).lower()
-    total_msgs = openers + replies
+    # Dating runs are first-contact only — never spend steps on reply checks.
+    scope = "new"
+    total_msgs = openers  # replies no longer counted toward the daily cap
     if total_msgs >= global_max:
         job["status"] = "completed"
         job["completed_at"] = int(time.time())
         return job
-    if scope == "new" and openers >= opener_target and swipes >= swipe_cap:
-        job["status"] = "completed"
-        job["completed_at"] = int(time.time())
-        return job
-    if scope == "existing" and replies >= reply_cap:
-        job["status"] = "completed"
-        job["completed_at"] = int(time.time())
-        return job
-    if scope == "both" and openers >= opener_target and replies >= reply_cap:
+    if openers >= opener_target and swipes >= swipe_cap:
         job["status"] = "completed"
         job["completed_at"] = int(time.time())
         return job
 
     humanizer = _humanizer_for_job(job)
 
-    # Prefer openers until target, then replies — always sequential (one per tick)
-    # contact_scope: new → openers/likes only; existing → replies only; both → mix
+    # Openers then swipes only — reply tracking removed from dating mode.
     dry = bool(job.get("dry_run", False))
-    if scope == "existing":
-        action = "reply"
-        state["replies_sent"] = replies + 1
-        gap = humanizer.sample_message_gap_seconds()
-    elif scope == "new":
-        if openers < opener_target:
-            action = "opener"
-            state["openers_sent"] = openers + 1
-            gap = humanizer.sample_message_gap_seconds()
-        elif swipes < swipe_cap:
-            action = "swipe"
-            state["swipes_done"] = swipes + 1
-            gap = humanizer.sample_swipe_step_gap_seconds()
-        else:
-            job["status"] = "completed"
-            job["completed_at"] = int(time.time())
-            return job
-    elif openers < opener_target:
+    _ = reply_cap  # kept on caps for config compat; unused
+    _ = replies
+    _ = scope
+    if openers < opener_target:
         action = "opener"
         state["openers_sent"] = openers + 1
         gap = humanizer.sample_message_gap_seconds()
-    elif swipes < swipe_cap and humanizer._rng.random() < 0.3:
+    elif swipes < swipe_cap:
         action = "swipe"
         state["swipes_done"] = swipes + 1
         gap = humanizer.sample_swipe_step_gap_seconds()
     else:
-        action = "reply"
-        state["replies_sent"] = replies + 1
-        gap = humanizer.sample_message_gap_seconds()
+        job["status"] = "completed"
+        job["completed_at"] = int(time.time())
+        return job
 
     # Dry-run / emulator verification: short ticks so activity UI updates live
     if dry:
@@ -366,6 +342,33 @@ def run_dating_step(job: Dict[str, Any]) -> Dict[str, Any]:
     state["last_action"] = action
     state["last_gap_s"] = gap_i
     state["steps"] = int(state.get("steps", 0)) + 1
+    # Mirror opener/swipe onto DatingStats (skip dry-run)
+    if not dry:
+        try:
+            try:
+                from dating_stats_io import (
+                    record_dating_messages,
+                    record_dating_swipes,
+                )
+            except ImportError:
+                from backend.dating_stats_io import (  # type: ignore
+                    record_dating_messages,
+                    record_dating_swipes,
+                )
+
+            pkg = str(
+                state.get("current_app")
+                or job.get("dating_app")
+                or job.get("current_app")
+                or ""
+            )
+            uid = str(job.get("user_id") or job.get("owner") or "local")
+            if pkg and action == "opener":
+                record_dating_messages(pkg, n=1, user_id=uid)
+            elif pkg and action == "swipe":
+                record_dating_swipes(pkg, liked=True, n=1, user_id=uid)
+        except Exception:
+            logger.exception("dating stats record from step_worker failed")
     # Shuffle next app hint when multiple apps configured
     apps = job.get("apps") or state.get("apps") or []
     if apps:

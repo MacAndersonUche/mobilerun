@@ -359,7 +359,7 @@ def next_job_after(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     queue = [q for q in (job.get("run_queue") or []) if _known(q)]
     if not queue:
         return None
-    return build_job(
+    nxt = build_job(
         device_id=str(job.get("device_id") or ""),
         queue=queue,
         count=int(job.get("run_count") or 0) or None,
@@ -376,6 +376,11 @@ def next_job_after(job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             else None
         ),
     )
+    if job.get("user_id"):
+        nxt["user_id"] = job.get("user_id")
+        nxt["owner"] = job.get("owner") or job.get("user_id")
+    nxt["contact_scope"] = "new"
+    return nxt
 
 
 def latest_in_run(run_id: str, jobs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

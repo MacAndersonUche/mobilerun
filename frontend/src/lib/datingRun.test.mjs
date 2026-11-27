@@ -174,7 +174,8 @@ console.log('datingRun ok');
   a(datingAppGroup('com.hily.app') === 'works', 'Hily works (verified live 5/5)');
   a(datingAppGroup('co.yellw.yellowapp') === 'works', 'Yubo works (verified live 5/5)');
   a(datingAppGroup('co.hinge.app') === 'works', 'Hinge works (verified live 5/5 r53n)');
-  a(datingAppGroup('com.taggedapp') === 'needs-fixing', 'Tagged needs fixing');
+  a(datingAppGroup('com.taggedapp') === 'needs-fixing', 'Tagged still needs fixing');
+  a(DATING_APP_GROUPS.find((g) => g.id === 'works')?.title === 'Working', 'Working label');
   a(datingAppGroup('com.affinityapps.blk') === 'needs-fixing', 'BLK needs fixing');
   a(datingAppGroup('com.facebook.katana') === 'needs-fixing', 'Facebook needs fixing');
   a(datingAppGroup('com.takimi.android') === 'needs-fixing', 'Taimi needs fixing');
@@ -191,6 +192,7 @@ console.log('datingRun ok');
   a(canRunFromCard('com.hily.app'), 'Hily card runnable');
   a(canRunFromCard('co.yellw.yellowapp'), 'Yubo card runnable');
   a(canRunFromCard('co.hinge.app'), 'Hinge card runnable');
+  a(canRunFromCard('com.taggedapp'), 'Tagged card still runnable');
   a(!canRunFromCard('com.takimi.android'), 'Taimi card not runnable');
   a(!canRunFromCard('com.tinder'), 'Tinder card not runnable');
   a(!canRunFromCard('com.threesome.swingers.threefun'), '3Fun card not runnable');
@@ -226,7 +228,7 @@ console.log('datingRun ok');
   console.log('dating page groups tests ok');
 }
 
-// Apps to come collapsible only: default expanded; localStorage remembers
+// Apps to come collapsible only: default collapsed; localStorage remembers
 {
   const {
     readAppsToComeExpanded,
@@ -238,11 +240,11 @@ console.log('datingRun ok');
     getItem: (k) => (mem.has(k) ? mem.get(k) : null),
     setItem: (k, v) => { mem.set(k, String(v)); },
   };
-  assert.equal(readAppsToComeExpanded(storage), true, 'apps to come default expanded');
-  writeAppsToComeExpanded(false, storage);
-  assert.equal(mem.get(APPS_TO_COME_EXPANDED_KEY), '0');
-  assert.equal(readAppsToComeExpanded(storage), false, 'apps to come collapsed after write');
+  assert.equal(readAppsToComeExpanded(storage), false, 'apps to come default collapsed');
   writeAppsToComeExpanded(true, storage);
+  assert.equal(mem.get(APPS_TO_COME_EXPANDED_KEY), '1');
   assert.equal(readAppsToComeExpanded(storage), true, 'apps to come expanded after write');
+  writeAppsToComeExpanded(false, storage);
+  assert.equal(readAppsToComeExpanded(storage), false, 'apps to come collapsed after write');
   console.log('apps to come expanded tests ok');
 }

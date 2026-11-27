@@ -3291,12 +3291,13 @@ async def selectors_invalidate(
 
 @app.get("/api/dating/stats")
 async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Get dating mode statistics."""
-    from mobilerun.dating.stats import DatingStats
+    """Get dating mode statistics (Europe/London day; durable per-user store)."""
+    try:
+        from dating_stats_io import load_dating_stats
+    except ImportError:
+        from backend.dating_stats_io import load_dating_stats  # type: ignore
 
-    stats_file = Path.home() / ".mobilerun" / "dating_stats.json"
-    stats = DatingStats.load(stats_file)
-
+    stats = load_dating_stats(_dating_user_id(auth))
     return stats.get_summary()
 
 
@@ -3690,6 +3691,11 @@ async def _start_dating_apps_run(
         modes=modes,
         like_caps=like_caps,
     )
+    # Owner key so agent steps can write Today totals to the right stats blob.
+    job["user_id"] = _dating_user_id(auth)
+    job["owner"] = job["user_id"]
+    # First-contact only — do not spend steps checking existing-chat replies.
+    job["contact_scope"] = "new"
     try:
         put_job(job)
         _kick_job(job["job_id"])
@@ -4609,10 +4615,12 @@ async def chat_endpoint(
             return {"message": f"{len(devices)} device(s)", "devices": devices}
         if intent == "dating_stats":
             try:
-                from mobilerun.dating.stats import DatingStats
+                try:
+                    from dating_stats_io import load_dating_stats
+                except ImportError:
+                    from backend.dating_stats_io import load_dating_stats  # type: ignore
 
-                stats_file = Path.home() / ".mobilerun" / "dating_stats.json"
-                stats = DatingStats.load(stats_file).get_summary()
+                stats = load_dating_stats(_dating_user_id(auth)).get_summary()
                 return {"message": "Dating stats", "stats": stats}
             except Exception as e:
                 return {"message": f"Stats unavailable: {e}", "stats": {}}

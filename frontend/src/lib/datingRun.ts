@@ -73,7 +73,7 @@ export interface DatingAppGroupDef {
 export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
   {
     id: 'works',
-    title: 'Works all the time',
+    title: 'Working',
     subtitle: 'These run reliably — trigger them any time.',
     // Hily: verified live 5/5 via Activity > Likes sent (r53, 27 Nov 2026)
     // Yubo: verified live 5/5 Direct sends (r54, 27 Nov 2026)
@@ -119,18 +119,18 @@ export function datingAppGroup(pkg: string): DatingAppGroupId | null {
 /** localStorage key for the Dating page "Apps to come" collapsible. */
 export const APPS_TO_COME_EXPANDED_KEY = 'dating_apps_to_come_expanded';
 
-/** Read whether Apps to come is expanded. Default true when unset / invalid. */
+/** Read whether Apps to come is expanded. Default collapsed when unset. */
 export function readAppsToComeExpanded(
   storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
 ): boolean {
   try {
     const raw = storage?.getItem(APPS_TO_COME_EXPANDED_KEY);
-    if (raw === '0' || raw === 'false') return false;
     if (raw === '1' || raw === 'true') return true;
+    if (raw === '0' || raw === 'false') return false;
   } catch {
     /* private mode / unavailable */
   }
-  return true;
+  return false;
 }
 
 /** Persist Apps to come expanded state. */

@@ -235,6 +235,7 @@ export default function DatingPage() {
   const [globalMin, setGlobalMin] = useState(100);
   const [globalMax, setGlobalMax] = useState(500);
   const [todayMessages, setTodayMessages] = useState(0);
+  const [todaySwipes, setTodaySwipes] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
@@ -252,9 +253,8 @@ export default function DatingPage() {
   const [likeCaps, setLikeCaps] = useState<Record<string, number>>({});
   const [likeDrafts, setLikeDrafts] = useState<Record<string, string>>({});
   const [likeErrors, setLikeErrors] = useState<Record<string, string>>({});
-  const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
-    'both'
-  );
+  // First-contact only — reply checking/tracking removed from dating runs.
+  const contactScope = 'new' as const;
   const [appsToComeExpanded, setAppsToComeExpanded] = useState(() =>
     readAppsToComeExpanded()
   );
@@ -342,8 +342,20 @@ export default function DatingPage() {
       setRunModes(rc.modes || {});
       setLikeCaps(rc.like_caps || {});
       setStatus(statusRes.data);
-      setApps(statsRes.data.apps || []);
-      setTodayMessages(statsRes.data.today?.messages || 0);
+      const appRows = statsRes.data.apps || [];
+      setApps(appRows);
+      // Prefer sum of per-app today counts so the global total always matches
+      // the cards (backend also recomputes, but keep the UI honest).
+      const swipeSum = appRows.reduce(
+        (n: number, a: AppStats) => n + (a.today?.swipes || 0),
+        0
+      );
+      const openersSum = appRows.reduce(
+        (n: number, a: AppStats) => n + (a.today?.openers || 0),
+        0
+      );
+      setTodaySwipes(swipeSum || statsRes.data.today?.swipes || 0);
+      setTodayMessages(openersSum || statsRes.data.today?.messages || 0);
       setConfigApps(
         ensureRunnableConfigApps(configRes.data.apps || [], (pkg) => ({
           name: datingAppDisplayName(pkg),
@@ -792,22 +804,6 @@ export default function DatingPage() {
           />
           Dry-run (no real likes/messages)
         </label>
-        <label className="flex w-full flex-col gap-1 text-sm text-mute sm:w-auto sm:flex-row sm:items-center sm:gap-2">
-          Contacts
-          <select
-            className="mr-input text-sm sm:min-w-[12rem]"
-            value={contactScope}
-            onChange={(e) =>
-              setContactScope(e.target.value as 'new' | 'existing' | 'both')
-            }
-            data-testid="dating-contact-scope"
-            aria-label="Contact scope"
-          >
-            <option value="new">New (openers / first message)</option>
-            <option value="existing">Existing chats</option>
-            <option value="both">Both</option>
-          </select>
-        </label>
         {devices.length > 0 && (
           <select
             className="mr-input w-full text-sm sm:max-w-xs"
@@ -832,13 +828,18 @@ export default function DatingPage() {
         loading={!!status?.running && !status?.paused}
       />
 
-      {/* Global progress */}
+      {/* Global progress — totals must match the sum of per-app today cards */}
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <h3 className="text-lg font-semibold">Today · All Apps</h3>
         <ProgressBar
+          value={todaySwipes}
+          max={Math.max(todaySwipes, 50)}
+          label={`Swipes today · ${todaySwipes}`}
+        />
+        <ProgressBar
           value={todayMessages}
           max={globalMax}
-          label={`Auto messages (openers + replies) · target range ${globalMin}–${globalMax}`}
+          label={`Messages today · target range ${globalMin}–${globalMax}`}
         />
       </div>
 
@@ -1017,14 +1018,13 @@ export default function DatingPage() {
                   )}
                   <details className="text-sm text-mute">
                     <summary className="cursor-pointer select-none">
-                      Today: {app.today.swipes} swipes · {app.today.openers} openers ·{' '}
-                      {app.today.replies} replies
+                      Today: {app.today.swipes} swipes · {app.today.openers} messages
                     </summary>
                     <div className="pt-2">
                       <ProgressBar
                         value={app.targets.opener_progress}
                         max={app.targets.opener_target || 75}
-                        label="Openers vs daily target"
+                        label="Messages vs daily target"
                       />
                     </div>
                   </details>

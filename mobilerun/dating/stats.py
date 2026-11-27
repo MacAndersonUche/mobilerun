@@ -1,11 +1,26 @@
 """Dating mode statistics tracking."""
 
+from __future__ import annotations
+
 import json
-from dataclasses import dataclass, asdict
-from datetime import datetime, date
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional  # noqa: F401 — Optional used by record_date_flow
-from collections import defaultdict
+from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
+
+# Mac is in Europe/London — "today" on the dashboard uses London midnight,
+# not the Lambda host's UTC calendar date.
+LONDON = ZoneInfo("Europe/London")
+
+
+def london_today() -> str:
+    """ISO date (YYYY-MM-DD) for Europe/London right now."""
+    return datetime.now(LONDON).date().isoformat()
+
+
+def london_now_iso() -> str:
+    return datetime.now(LONDON).isoformat()
 
 
 @dataclass
@@ -18,8 +33,8 @@ class AppStats:
     # Daily counts
     swipes_today: int = 0
     likes_today: int = 0
-    openers_sent_today: int = 0  # Opening messages to new matches
-    replies_sent_today: int = 0  # Replies to existing conversations
+    openers_sent_today: int = 0  # First-contact / send messages
+    replies_sent_today: int = 0  # Legacy; dating runs no longer track replies
 
     # Totals
     total_swipes: int = 0
@@ -45,12 +60,11 @@ class AppStats:
     last_stats_update: Optional[str] = None
 
     def reset_daily_counts(self):
-        """Reset daily counters (called at midnight)."""
+        """Reset daily counters (called at London midnight)."""
         self.swipes_today = 0
         self.likes_today = 0
         self.openers_sent_today = 0
         self.replies_sent_today = 0
-        # daily_opener_target is re-randomized separately
 
 
 @dataclass
@@ -64,7 +78,7 @@ class DatingStats:
     total_sessions: int = 0
     total_runtime_minutes: int = 0
 
-    # Daily totals
+    # Daily totals (kept in sync; get_summary recomputes from apps)
     swipes_today_all: int = 0
     messages_today_all: int = 0
 
@@ -73,51 +87,61 @@ class DatingStats:
     stats_file: Optional[Path] = None
 
     @classmethod
-    def load(cls, stats_file: Path) -> "DatingStats":
-        """Load stats from file."""
-        if stats_file.exists():
-            try:
-                with open(stats_file) as f:
-                    data = json.load(f)
+    def from_dict(
+        cls, data: Dict[str, Any], *, stats_file: Optional[Path] = None
+    ) -> "DatingStats":
+        app_stats: Dict[str, AppStats] = {}
+        for pkg, stats_dict in (data.get("app_stats") or {}).items():
+            if not isinstance(stats_dict, dict):
+                continue
+            # Drop unknown keys so older/newer blobs still load
+            known = {f.name for f in AppStats.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+            cleaned = {k: v for k, v in stats_dict.items() if k in known}
+            cleaned.setdefault("app_name", "")
+            cleaned.setdefault("package_name", pkg)
+            app_stats[pkg] = AppStats(**cleaned)
+        return cls(
+            app_stats=app_stats,
+            total_sessions=int(data.get("total_sessions") or 0),
+            total_runtime_minutes=int(data.get("total_runtime_minutes") or 0),
+            swipes_today_all=int(data.get("swipes_today_all") or 0),
+            messages_today_all=int(data.get("messages_today_all") or 0),
+            last_session_date=data.get("last_session_date"),
+            stats_file=stats_file,
+        )
 
-                # Reconstruct app_stats
-                app_stats = {}
-                for pkg, stats_dict in data.get("app_stats", {}).items():
-                    app_stats[pkg] = AppStats(**stats_dict)
-
-                return cls(
-                    app_stats=app_stats,
-                    total_sessions=data.get("total_sessions", 0),
-                    total_runtime_minutes=data.get("total_runtime_minutes", 0),
-                    swipes_today_all=data.get("swipes_today_all", 0),
-                    messages_today_all=data.get("messages_today_all", 0),
-                    last_session_date=data.get("last_session_date"),
-                    stats_file=stats_file,
-                )
-            except Exception as e:
-                print(f"Failed to load stats: {e}, starting fresh")
-
-        return cls(app_stats={}, stats_file=stats_file)
-
-    def save(self):
-        """Save stats to file."""
-        if not self.stats_file:
-            return
-
-        self.stats_file.parent.mkdir(parents=True, exist_ok=True)
-
-        data = {
+    def to_dict(self) -> Dict[str, Any]:
+        return {
             "app_stats": {pkg: asdict(stats) for pkg, stats in self.app_stats.items()},
             "total_sessions": self.total_sessions,
             "total_runtime_minutes": self.total_runtime_minutes,
             "swipes_today_all": self.swipes_today_all,
             "messages_today_all": self.messages_today_all,
             "last_session_date": self.last_session_date,
-            "saved_at": datetime.now().isoformat(),
+            "saved_at": london_now_iso(),
         }
 
+    @classmethod
+    def load(cls, stats_file: Path) -> "DatingStats":
+        """Load stats from a local JSON file (dev / offline)."""
+        if stats_file.exists():
+            try:
+                with open(stats_file) as f:
+                    data = json.load(f)
+                return cls.from_dict(data, stats_file=stats_file)
+            except Exception as e:
+                print(f"Failed to load stats: {e}, starting fresh")
+
+        return cls(app_stats={}, stats_file=stats_file)
+
+    def save(self):
+        """Save stats to the local file when one is configured."""
+        if not self.stats_file:
+            return
+
+        self.stats_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.stats_file, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(self.to_dict(), f, indent=2)
 
     def get_or_create_app_stats(self, app_name: str, package_name: str) -> AppStats:
         """Get or create stats for an app."""
@@ -134,11 +158,10 @@ class DatingStats:
         return self.app_stats[package_name]
 
     def check_and_reset_daily(self):
-        """Check if it's a new day and reset daily counters."""
-        today = date.today().isoformat()
+        """Reset daily counters when the London calendar day rolls over."""
+        today = london_today()
 
         if self.last_session_date != today:
-            # New day, reset all daily counters
             for stats in self.app_stats.values():
                 stats.reset_daily_counts()
 
@@ -147,32 +170,46 @@ class DatingStats:
             self.last_session_date = today
             self.save()
 
-    def record_swipe(self, package_name: str, app_name: str, liked: bool = True):
-        """Record a swipe."""
-        stats = self.get_or_create_app_stats(app_name, package_name)
-        stats.swipes_today += 1
-        stats.total_swipes += 1
+    def recompute_today_totals(self) -> None:
+        """Globals = sum of per-app today (messages = openers only)."""
+        self.swipes_today_all = sum(s.swipes_today for s in self.app_stats.values())
+        self.messages_today_all = sum(
+            s.openers_sent_today for s in self.app_stats.values()
+        )
 
+    def record_swipe(
+        self, package_name: str, app_name: str, liked: bool = True, n: int = 1
+    ):
+        """Record one or more swipes/likes."""
+        self.check_and_reset_daily()
+        stats = self.get_or_create_app_stats(app_name, package_name)
+        n = max(0, int(n))
+        stats.swipes_today += n
+        stats.total_swipes += n
         if liked:
-            stats.likes_today += 1
-            stats.total_likes += 1
+            stats.likes_today += n
+            stats.total_likes += n
+        self.recompute_today_totals()
+        stats.last_active = london_now_iso()
 
-        self.swipes_today_all += 1
-        stats.last_active = datetime.now().isoformat()
-
-    def record_message(self, package_name: str, app_name: str, is_opener: bool = False):
-        """Record a sent message (opener or reply)."""
+    def record_message(
+        self,
+        package_name: str,
+        app_name: str,
+        is_opener: bool = True,
+        n: int = 1,
+    ):
+        """Record sent first-contact message(s). Replies are no longer tracked."""
+        self.check_and_reset_daily()
         stats = self.get_or_create_app_stats(app_name, package_name)
-
-        if is_opener:
-            stats.openers_sent_today += 1
-            stats.total_openers += 1
-        else:
-            stats.replies_sent_today += 1
-            stats.total_replies += 1
-
-        self.messages_today_all += 1
-        stats.last_active = datetime.now().isoformat()
+        n = max(0, int(n))
+        # Dating dashboard only counts first-contact / send messages.
+        # Reply tracking was removed — is_opener is kept for call-site compat.
+        _ = is_opener
+        stats.openers_sent_today += n
+        stats.total_openers += n
+        self.recompute_today_totals()
+        stats.last_active = london_now_iso()
 
     def update_inbox_count(
         self, package_name: str, app_name: str, unread: int, new_matches: int = 0
@@ -181,7 +218,7 @@ class DatingStats:
         stats = self.get_or_create_app_stats(app_name, package_name)
         stats.unread_messages = unread
         stats.new_matches = new_matches
-        stats.last_stats_update = datetime.now().isoformat()
+        stats.last_stats_update = london_now_iso()
 
     def set_daily_opener_target(self, package_name: str, app_name: str, target: int):
         """Set randomized daily opener target for an app."""
@@ -205,11 +242,14 @@ class DatingStats:
             stats.invites_sent += 1
         if date_booked:
             stats.dates_booked += 1
-        stats.last_active = datetime.now().isoformat()
+        stats.last_active = london_now_iso()
 
     def get_summary(self) -> Dict:
-        """Get summary of all stats."""
+        """Get summary of all stats. Today totals = sum of per-app today."""
         from mobilerun.dating.config import display_name_for_package
+
+        self.check_and_reset_daily()
+        self.recompute_today_totals()
 
         return {
             "total_sessions": self.total_sessions,
@@ -228,9 +268,9 @@ class DatingStats:
                         "swipes": stats.swipes_today,
                         "likes": stats.likes_today,
                         "openers": stats.openers_sent_today,
-                        "replies": stats.replies_sent_today,
-                        "total_messages": stats.openers_sent_today
-                        + stats.replies_sent_today,
+                        # Reply tracking removed — always 0 for the dashboard
+                        "replies": 0,
+                        "total_messages": stats.openers_sent_today,
                     },
                     "targets": {
                         "opener_target": stats.daily_opener_target,
@@ -239,8 +279,8 @@ class DatingStats:
                     "total": {
                         "swipes": stats.total_swipes,
                         "openers": stats.total_openers,
-                        "replies": stats.total_replies,
-                        "messages": stats.total_openers + stats.total_replies,
+                        "replies": 0,
+                        "messages": stats.total_openers,
                         "matches": stats.total_matches,
                     },
                     "date_flow": {
