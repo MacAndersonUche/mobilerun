@@ -60,12 +60,11 @@ export function ensureRunnableConfigApps<T extends { package_name: string }>(
 }
 
 // Dating page groups: move an app between groups by moving its package
-// between these three lists — nothing else needs to change.
+// between these two lists — nothing else needs to change.
 // - works: apps that run all the time (top of the page)
-// - needs-fixing: drivers exist but these still fail or need work; Taimi is
-//   blocked (FLAG_SECURE makes its screenshots black) and must not be runnable
-// - coming-soon: no working driver yet — cards show as coming soon, no Run
-export type DatingAppGroupId = 'works' | 'needs-fixing' | 'coming-soon';
+// - coming-soon: no working driver yet (or not verified live) — cards show
+//   as coming soon, no Run. Unknown packages fall back here too.
+export type DatingAppGroupId = 'works' | 'coming-soon';
 export interface DatingAppGroupDef {
   id: DatingAppGroupId;
   title: string;
@@ -93,14 +92,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     ],
   },
   {
-    id: 'needs-fixing',
-    title: 'Still needs fixing',
-    subtitle: 'Drivers exist but these still fail or need work.',
-    packages: [
-      'com.takimi.android',
-    ],
-  },
-  {
     id: 'coming-soon',
     title: 'Apps to come',
     subtitle: 'No working driver yet — coming soon, cannot run.',
@@ -113,6 +104,8 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
       'com.myyearbook.m',
       // Mac (27 Nov): move BLK out of Still needs fixing into Apps to come
       'com.affinityapps.blk',
+      // Mac (t370u): Taimi into Apps to come; drop Still needs fixing
+      'com.takimi.android',
     ],
   },
 ];
@@ -154,10 +147,9 @@ export function canRunFromCard(pkg: string): boolean {
   return true;
 }
 
-/** Split cards into the three page groups, in group order; within a group
- * cards follow the group's package list. A card in no group (e.g. a new app
- * the backend adds later) falls into "Still needs fixing" so it never
- * vanishes from the page. */
+/** Split cards into page groups, in group order; within a group cards follow
+ * the group's package list. A card in no group (e.g. a new app the backend
+ * adds later) falls into "Apps to come" so it never vanishes from the page. */
 export function groupDatingCards<T extends { package: string }>(
   cards: T[]
 ): { group: DatingAppGroupDef; apps: T[] }[] {
@@ -171,7 +163,7 @@ export function groupDatingCards<T extends { package: string }>(
   const grouped = new Set(DATING_APP_GROUPS.flatMap((g) => g.packages));
   const ungrouped = cards.filter((c) => !grouped.has(c.package));
   if (ungrouped.length) {
-    out.find((g) => g.group.id === 'needs-fixing')?.apps.push(...ungrouped);
+    out.find((g) => g.group.id === 'coming-soon')?.apps.push(...ungrouped);
   }
   return out.filter((g) => g.apps.length > 0);
 }
