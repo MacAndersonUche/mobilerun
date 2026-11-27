@@ -226,12 +226,9 @@ console.log('datingRun ok');
   console.log('dating page groups tests ok');
 }
 
-// Apps to run / Apps to come collapsibles: default expanded; localStorage remembers
+// Apps to come collapsible only: default expanded; localStorage remembers
 {
   const {
-    readAppsToRunExpanded,
-    writeAppsToRunExpanded,
-    APPS_TO_RUN_EXPANDED_KEY,
     readAppsToComeExpanded,
     writeAppsToComeExpanded,
     APPS_TO_COME_EXPANDED_KEY,
@@ -241,17 +238,11 @@ console.log('datingRun ok');
     getItem: (k) => (mem.has(k) ? mem.get(k) : null),
     setItem: (k, v) => { mem.set(k, String(v)); },
   };
-  assert.equal(readAppsToRunExpanded(storage), true, 'apps to run default expanded');
-  writeAppsToRunExpanded(false, storage);
-  assert.equal(mem.get(APPS_TO_RUN_EXPANDED_KEY), '0');
-  assert.equal(readAppsToRunExpanded(storage), false, 'apps to run collapsed after write');
-  writeAppsToRunExpanded(true, storage);
-  assert.equal(readAppsToRunExpanded(storage), true, 'apps to run expanded after write');
   assert.equal(readAppsToComeExpanded(storage), true, 'apps to come default expanded');
   writeAppsToComeExpanded(false, storage);
   assert.equal(mem.get(APPS_TO_COME_EXPANDED_KEY), '0');
   assert.equal(readAppsToComeExpanded(storage), false, 'apps to come collapsed after write');
   writeAppsToComeExpanded(true, storage);
   assert.equal(readAppsToComeExpanded(storage), true, 'apps to come expanded after write');
-  console.log('apps to run/come expanded tests ok');
+  console.log('apps to come expanded tests ok');
 }

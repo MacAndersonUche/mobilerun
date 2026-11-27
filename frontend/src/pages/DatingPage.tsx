@@ -31,8 +31,6 @@ import {
   canRunFromCard,
   isBlockedApp,
   TAIMI_BLOCKED_NOTE,
-  readAppsToRunExpanded,
-  writeAppsToRunExpanded,
   readAppsToComeExpanded,
   writeAppsToComeExpanded,
 } from '../lib/datingRun';
@@ -256,9 +254,6 @@ export default function DatingPage() {
   const [likeErrors, setLikeErrors] = useState<Record<string, string>>({});
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
-  );
-  const [appsToRunExpanded, setAppsToRunExpanded] = useState(() =>
-    readAppsToRunExpanded()
   );
   const [appsToComeExpanded, setAppsToComeExpanded] = useState(() =>
     readAppsToComeExpanded()
@@ -848,30 +843,7 @@ export default function DatingPage() {
       </div>
 
       {/* Per-app stats, grouped: works all the time, still needs fixing, apps to come */}
-      <section className="space-y-3" data-testid="dating-apps-to-run">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-4 py-3 text-left hover:bg-canvas-elev"
-          aria-expanded={appsToRunExpanded}
-          aria-controls="dating-apps-to-run-panel"
-          data-testid="dating-apps-to-run-toggle"
-          onClick={() => {
-            setAppsToRunExpanded((prev) => {
-              const next = !prev;
-              writeAppsToRunExpanded(next);
-              return next;
-            });
-          }}
-        >
-          {appsToRunExpanded ? (
-            <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
-          ) : (
-            <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
-          )}
-          <span className="text-lg font-semibold text-white">Apps to run</span>
-        </button>
-        {appsToRunExpanded && (
-          <div id="dating-apps-to-run-panel" className="space-y-6" role="region" aria-label="Apps to run">
+      <div className="space-y-6" data-testid="dating-apps-to-run">
             {groupDatingCards(
               cardsForDatingApps(apps, configApps).filter(
                 (app) => !isSocialPackage(app.package)
@@ -1063,9 +1035,7 @@ export default function DatingPage() {
               </section>
             );
             })}
-          </div>
-        )}
-      </section>
+      </div>
 
       {/* r44: schedule per-app / combo runs */}
       <DatingSchedules
