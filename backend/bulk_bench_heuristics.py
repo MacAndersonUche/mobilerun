@@ -4495,6 +4495,28 @@ def plan_bulk_message_new(
         if fixed:
             return fixed
 
+    if app == "taimi":
+        try:
+            from taimi_fixed_first_contact import (
+                plan_taimi_fixed_first_contact,
+            )
+        except ImportError:
+            from backend.taimi_fixed_first_contact import (  # type: ignore
+                plan_taimi_fixed_first_contact,
+            )
+        fixed = plan_taimi_fixed_first_contact(
+            instruction,
+            ui_tree,
+            history,
+            state=st,
+            package=package,
+            dry_run=dry_run,
+            message=message,
+            target=target,
+        )
+        if fixed:
+            return fixed
+
     if app == "yubo":
         # r46 (CA-18): message from the deck cards (Send a message → Direct →
         # up arrow → sent → swipe right), never the Conversations tab.
@@ -5337,24 +5359,9 @@ def plan_bulk_bench(
     goal = parse_bulk_goal(instruction)
     if not goal:
         return None
-    # r28/r30: Taimi only — FLAG_SECURE hides a11y + screencap. Hinge is
-    # attempted (it sent real messages on 22 Nov); do not fail before launch.
-    app0 = str(goal.get("app") or "")
-    if app0 == "taimi":
-        return _fp(
-            {
-                "action": "fail",
-                "reason": (
-                    "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
-                    "Fail fast — do not burn steps."
-                ),
-                "planner": "unsupported_app",
-                "llm_provider": None,
-                "dry_run_verified": False,
-                "unsupported_app": app0,
-            },
-            "bulk_unsupported_app",
-        )
+    # r67: Taimi FLAG_SECURE only blacks screenshots; the a11y tree is
+    # readable. First-contact is handled by taimi_fixed_first_contact
+    # (never Instant Chat / Like / existing Chats). Do not fail-fast.
     if goal["kind"] == "swipe":
         # Only for swipe-capable apps when detected
         app = goal.get("app")

@@ -1,0 +1,6 @@
+<hierarchy windows="2" nodes="0" app_nodes="0" text_nodes="0" needs_vision="true" partial="false" empty="true" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.takimi.android">
+<w id="active" t="active" p="com.takimi.android" f="1" kids="1">
+</w>
+<w id="7926" t="1:Taimi" p="com.takimi.android" f="1" kids="1">
+</w>
+</hierarchy>

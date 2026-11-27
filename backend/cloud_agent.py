@@ -1335,13 +1335,10 @@ def apply_dry_run_send_guard(
 PHONE_LOCKED_ERROR = "phone locked / systemui in foreground - unlock phone"
 MAX_STEPS_UNMET_ERROR = "max_steps reached, goal not met"
 
-# r28: FLAG_SECURE / empty-tree apps — fail fast instead of burning steps
-UNSUPPORTED_AGENT_APPS: Dict[str, str] = {
-    "taimi": (
-        "Taimi is unsupported: FLAG_SECURE hides a11y + screencap. "
-        "Fail fast — do not burn steps."
-    ),
-}
+# r67/r68: Taimi FLAG_SECURE only blacks screenshots; the a11y tree is
+# readable and first-contact / fixed-like runs use it. Keep the map empty
+# so unsupported_app_fail_action stays a no-op.
+UNSUPPORTED_AGENT_APPS: Dict[str, str] = {}
 
 _TERMINAL_JOB_STATUSES = frozenset(
     {"stopped", "cancelled", "canceled", "failed", "completed", "paused"}
@@ -1398,7 +1395,7 @@ def _preserve_terminal_status(job: Dict[str, Any]) -> bool:
 def unsupported_app_fail_action(
     instruction: str, *, package: str = ""
 ) -> Optional[Dict[str, Any]]:
-    """Fail fast (<30s) for Taimi (FLAG_SECURE) instead of burning max_steps."""
+    """Fail fast for apps in UNSUPPORTED_AGENT_APPS (empty since r68)."""
     try:
         from dm_heuristics import detect_dm_app
     except ImportError:
@@ -2026,7 +2023,7 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     # paid Blast sheet; Hily left for Google Messages; Hinge opened Matches
     # chats and typed AI text, 24 Nov).
     if "first contact" in inst and any(
-        a in inst for a in ("yubo", "hily", "hinge", "facebook")
+        a in inst for a in ("yubo", "hily", "hinge", "facebook", "taimi")
     ):
         return True
     st = state if isinstance(state, dict) else {}
@@ -3431,6 +3428,56 @@ def _fetch_ui_tree_retry(
             last = info
             if not info.get("empty"):
                 return info
+            # r70: Taimi compact dumps are often empty; retry a full walk.
+            prefer_l = (
+                preferred_package or params.get("preferred_package") or ""
+            ).lower()
+            if "takimi" in prefer_l or "taimi" in prefer_l:
+                try:
+                    raw_full = (
+                        call_device(
+                            device_id,
+                            "get_ui_tree",
+                            {**params, "mode": "full"},
+                            timeout_s=timeout_s,
+                            wait_reconnect_s=wait_reconnect,
+                        )
+                        or ""
+                    )
+                    info_full = _normalize_tree_payload(raw_full)
+                    try:
+                        from taimi_tree_fallback import tree_has_useful_nodes
+                    except ImportError:
+                        from backend.taimi_tree_fallback import (  # type: ignore
+                            tree_has_useful_nodes,
+                        )
+                    full_tree = str(info_full.get("tree") or "")
+                    useful = tree_has_useful_nodes(full_tree)
+                    if useful and int(info_full.get("nodes") or 0) <= 0:
+                        info_full["nodes"] = max(
+                            full_tree.count("<node "),
+                            full_tree.count("<n "),
+                            1,
+                        )
+                        info_full["empty"] = False
+                    if useful or (
+                        not info_full.get("empty")
+                        and int(info_full.get("nodes") or 0) > 0
+                    ):
+                        logger.info(
+                            "Taimi full-dump fallback nodes=%s chars=%s",
+                            info_full.get("nodes"),
+                            info_full.get("chars"),
+                        )
+                        return info_full
+                    last = (
+                        info_full
+                        if int(info_full.get("nodes") or 0)
+                        >= int(info.get("nodes") or 0)
+                        else info
+                    )
+                except Exception as full_err:
+                    logger.warning("Taimi full-dump fallback failed: %s", full_err)
             logger.warning(
                 "get_ui_tree empty attempt=%s/%s chars=%s",
                 attempt + 1,
@@ -4863,7 +4910,7 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         if status_l in ("failed", "completed"):
             return job
 
-    # r28/r30: Taimi unsupported — fail fast (<30s) instead of burning steps
+    # r68: UNSUPPORTED_AGENT_APPS is empty (Taimi trees work).
     if not state.get("_unsupported_checked"):
         state["_unsupported_checked"] = True
         unsup = unsupported_app_fail_action(instruction)
@@ -5716,10 +5763,13 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         else:
             state["same_decision_n"] = 1 if decision_key else 0
             state["last_decision_key"] = decision_key
+        if action.get("_ignore_same_decision"):
+            state["same_decision_n"] = 1
         if (
             decision_key
             and int(state.get("same_decision_n") or 0) >= MAX_SAME_DECISION
             and kind not in ("done", "fail")
+            and not action.get("_ignore_same_decision")
         ):
             # r26: hand off to LLM instead of hard-fail (Hily liked-you loop)
             if _is_fixed_swipe_action(action) or _fixed_swipe_run(instruction, state):

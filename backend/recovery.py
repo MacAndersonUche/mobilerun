@@ -161,6 +161,15 @@ def recovery_action(
     planner = f"recovery:{name}"
 
     if name == "dismiss_dialogs":
+        try:
+            from cast_prompt import cancel_cast_prompt_action
+        except ImportError:
+            from backend.cast_prompt import cancel_cast_prompt_action  # type: ignore
+        cap = cancel_cast_prompt_action(ui_tree, state)
+        if cap:
+            cap["_recovery"] = name
+            cap["planner"] = planner
+            return cap
         c = popup_center(ui_tree)
         if c:
             return {
@@ -172,6 +181,25 @@ def recovery_action(
                 "llm_provider": None,
                 "_recovery": name,
             }
+        try:
+            from taimi_tree_fallback import is_taimi_context
+        except ImportError:
+            from backend.taimi_tree_fallback import is_taimi_context  # type: ignore
+        if is_taimi_context(instruction, package, ui_tree):
+            return {
+                "action": "wait",
+                "seconds": 1.0,
+                "reason": (
+                    "No popup center on Taimi — wait, never Back "
+                    f"({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "_recovery": name,
+                "_force_redump": True,
+                "_no_llm_handoff": True,
+                "_ignore_same_decision": True,
+            }
         # No popup center — Back instead of a blind mid-screen tap
         return {
             "action": "back",
@@ -182,6 +210,28 @@ def recovery_action(
         }
 
     if name == "redump_tree":
+        # r70: Taimi compact dumps are often empty while the app is still in
+        # front. Back leaves the app (tai3). Wait and re-fetch a full /
+        # uiautomator dump instead.
+        try:
+            from taimi_tree_fallback import is_taimi_context
+        except ImportError:
+            from backend.taimi_tree_fallback import is_taimi_context  # type: ignore
+        if is_taimi_context(instruction, package, ui_tree):
+            return {
+                "action": "wait",
+                "seconds": 1.2,
+                "reason": (
+                    "Taimi empty tree — wait for full/uiautomator dump, "
+                    f"never Back ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "_recovery": name,
+                "_force_redump": True,
+                "_no_llm_handoff": True,
+                "_ignore_same_decision": True,
+            }
         return {
             "action": "back",  # mild UI nudge; caller also re-fetches tree
             "reason": f"Nudge UI before re-dump ({planner})",
@@ -202,6 +252,25 @@ def recovery_action(
         }
 
     if name == "back":
+        try:
+            from taimi_tree_fallback import is_taimi_context
+        except ImportError:
+            from backend.taimi_tree_fallback import is_taimi_context  # type: ignore
+        if is_taimi_context(instruction, package, ui_tree):
+            return {
+                "action": "wait",
+                "seconds": 1.2,
+                "reason": (
+                    "Taimi empty tree — skip recovery Back, "
+                    f"wait for a full dump ({planner})"
+                ),
+                "planner": planner,
+                "llm_provider": None,
+                "_recovery": name,
+                "_force_redump": True,
+                "_no_llm_handoff": True,
+                "_ignore_same_decision": True,
+            }
         return {
             "action": "back",
             "reason": f"Back out of stuck screen ({planner})",
