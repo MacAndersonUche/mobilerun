@@ -3,9 +3,11 @@
 Mac (24 Nov, spoken): "for auto message click into a profile, send a message, click
 the send arrow, then go back into the profile, match by clicking the middle,
 then swipe".
-Video (24 Nov 2026) supersedes it: tap the deck chat bubble → chat → type →
-send arrow → back to the deck. The profile path stays as the fallback when
-the deck has no chat bubble.
+Video (27 Nov 2026, Mac) is the required path: tap the centre of the photo
+on the Match deck → "Your message" at the bottom → type a bank line →
+blue square send arrow → Android Back to the deck → green heart (likeBtn)
+to like and advance. Never a bare like, never the chats tab, never paid
+(credits, boosts, VIP, gold, gifts, Go Live).
 
 Real-device map (S21+ 1080x2400, 22 Nov, dm_heuristics DM_APP_PROFILES
 ["tagged"]): Match game tab ``tab_match_game`` (540, 2200); card buttons
@@ -44,7 +46,7 @@ MATCH_TAB_XY = (540, 2200)
 LIKE_XY = (860, 1908)
 CHAT_XY = (540, 1911)
 CARD_XY = (540, 900)
-MESSAGE_BANK = ("hey how are you", "hi miss", "hello miss", "good morning")
+MESSAGE_BANK = ("hey how are you", "hi miss", "hello miss", "good morning", "good evening beautiful")
 MAX_RECOVER = 10
 
 _INST_RE = re.compile(r"\bfixed\s+tagged\s+(swipe|message)\s+(\d+)", re.I)
@@ -124,9 +126,20 @@ def _composer(tree: str) -> Tuple[Optional[Tuple[int, int]], str]:
 
 
 def _send_xy(tree: str) -> Optional[Tuple[int, int]]:
-    c = _tree_id_center(tree, "id/send_button", "send_button", "btnSend", "sendButton")
-    if c:
+    c = _tree_id_center(
+        tree,
+        "imSendMessageButton",
+        "id/imSendMessageButton",
+        "id/send_button",
+        "send_button",
+        "btnSend",
+        "sendButton",
+        "send_message_button",
+    )
+    if c and int(c[1]) < 2000:
         return int(c[0]), int(c[1])
+    # y≥2000 means the IME is closed and the bar sits on the bottom
+    # nav (27 Nov: send was planned at (991, 2187) and hit My likes).
     comp, _ = _composer(tree)
     best = None
     for n in _nodes(tree):
@@ -138,7 +151,62 @@ def _send_xy(tree: str) -> Optional[Tuple[int, int]]:
             x, y = int(n.get("x") or 0), int(n.get("y") or 0)
             if x > comp[0] + 200 and abs(y - comp[1]) < 90:
                 best = best or (x, y)
-    return best
+    if best:
+        return best
+    # 27 Nov S21+: imSendMessageButton is an ImageView often not marked
+    # clickable, so compact dumps omit it. Sit just right of the box
+    # (composer x2=922 → send centre 995 on the live leidy tree).
+    if comp:
+        ex2 = None
+        cy = int(comp[1])
+        for n in _nodes(tree):
+            if n.get("editable") or "etmessageedittext" in str(n.get("id") or "").lower():
+                if n.get("x2") is not None:
+                    ex2 = int(n["x2"])
+                    cy = int(n["y"])
+        if cy >= 2000:
+            # Keyboard is closed; the bar sits on the bottom nav.
+            # Caller should focus the composer first (y≈1323 with IME up).
+            return None
+        if ex2:
+            return (min(ex2 + 73, 1040), cy)
+        return (995, cy)
+    return None
+
+
+def _photo_xy(tree: str) -> Tuple[int, int]:
+    """Centre of the Match-deck photo, never a card button or the nav.
+
+    Mac (27 Nov video): tap the photo to open the profile, not the chat
+    bubble and not the green heart. Fallback CARD_XY (540, 900) is the
+    mid-photo point on the S21+ 1080x2400 map.
+    """
+    banned_ids = (
+        "likebtn", "dislikebtn", "chatbtn", "tab_", "fab", "credits",
+        "boost", "vip", "gift", "golive", "go_live", "tvusername",
+    )
+    best = None
+    best_area = 0
+    for n in _nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if any(b in nid for b in banned_ids):
+            continue
+        if _paid_label(_lab(n)):
+            continue
+        x1, y1, x2, y2 = n.get("x1"), n.get("y1"), n.get("x2"), n.get("y2")
+        if None in (x1, y1, x2, y2):
+            continue
+        w, h = int(x2) - int(x1), int(y2) - int(y1)
+        if w < 400 or h < 400:
+            continue
+        cy = (int(y1) + int(y2)) // 2
+        if cy < 200 or cy > 1800:
+            continue
+        area = w * h
+        if area > best_area:
+            best_area = area
+            best = ((int(x1) + int(x2)) // 2, cy)
+    return best or CARD_XY
 
 
 def _deck_chat_xy(tree: str) -> Optional[Tuple[int, int]]:
@@ -189,8 +257,48 @@ def _middle_like_xy(tree: str) -> Optional[Tuple[int, int]]:
 def _card_name(tree: str) -> str:
     for n in _nodes(tree):
         if "tvusername" in str(n.get("id") or "").lower():
-            return _lab(n)
+            lab = _lab(n).split(",")[0].strip()
+            if lab:
+                return lab
+    try:
+        from dm_heuristics import tagged_deck_card_name as _deck_name
+    except ImportError:  # pragma: no cover
+        from backend.dm_heuristics import tagged_deck_card_name as _deck_name  # type: ignore
+    return (_deck_name(tree) or "").split(",")[0].strip()
+
+
+def _thread_name(tree: str) -> str:
+    for n in _nodes(tree):
+        if str(n.get("id") or "").lower().endswith("username") or str(n.get("id") or "").lower().endswith("/username"):
+            lab = _lab(n).split(",")[0].strip()
+            if lab:
+                return lab
     return ""
+
+
+def on_existing_thread(tree: str) -> bool:
+    """A conversation with prior messages — not a first-contact 'Your message' box."""
+    blob = " ".join(_lab(n) for n in _nodes(tree)).lower()
+    if "make the first move" in blob or (
+        "say hello" in blob and "your message" in blob
+    ):
+        return False
+    if any("llemptyview" in str(n.get("id") or "").lower() for n in _nodes(tree)):
+        return False
+    for n in _nodes(tree):
+        nid = str(n.get("id") or "").lower()
+        if any(
+            s in nid
+            for s in (
+                "tvmessagetext",
+                "cloutermessageitem",
+                "dcbadgedate",
+                "prlmessageitem",
+            )
+        ):
+            if _lab(n) or "dcbadgedate" in nid or "cloutermessageitem" in nid:
+                return True
+    return False
 
 
 def _act(kind: str, step: str, reason: str, dry_run: bool, **kw: Any) -> Dict[str, Any]:
@@ -282,6 +390,47 @@ def plan_tagged_fixed(
         return _recover(ui_tree, tg, dry_run)
 
     # ---------------- auto message --------------------------------------
+    # Existing conversation (27 Nov: photo on Naomi's Match card opened
+    # her 22 Nov thread, and we typed into it). Never send there. Clear
+    # any leftover bank text, Back, then X on the deck to skip.
+    if mode == "message" and on_existing_thread(ui_tree):
+        tg["existing"] = _thread_name(ui_tree) or tg.get("name") or "this chat"
+        _comp, box = _composer(ui_tree)
+        if (box or "").strip() and not tg.get("cleared_existing"):
+            tg["cleared_existing"] = True
+            tg["phase"] = "skip_existing"
+            return _act(
+                "type", "tagged_fixed_clear_existing",
+                f"Clear leftover text in existing chat with {tg['existing']} — will not send",
+                dry_run, text="", clear=True, _clear_only=True,
+            )
+        tg["phase"] = "skip_existing"
+        return _act(
+            "press_button", "tagged_fixed_existing_back",
+            f"Existing chat with {tg['existing']} — Back, will not message them",
+            dry_run, button="back",
+        )
+
+    if mode == "message" and str(tg.get("phase") or "") == "skip_existing":
+        if on_existing_thread(ui_tree):
+            return _act(
+                "press_button", "tagged_fixed_existing_back",
+                "Still in an existing Tagged chat — Back, will not message them",
+                dry_run, button="back",
+            )
+        if on_deck(ui_tree):
+            tg["recover"] = 0
+            xy = _tree_id_center(ui_tree, "dislikeBtn", "id/dislikeBtn") or (220, 1908)
+            tg["phase"] = "deck"
+            tg["liked_this"] = False
+            return _act(
+                "tap", "tagged_fixed_skip_existing",
+                f"Skip {_card_name(ui_tree) or tg.get('existing') or 'this card'} "
+                f"(already a chat) — X, not the green heart",
+                dry_run, x=int(xy[0]), y=int(xy[1]),
+            )
+        return _recover(ui_tree, tg, dry_run)
+
     pending = str(tg.get("awaiting_sent") or "")
     if pending:
         comp, box = _composer(ui_tree)
@@ -308,25 +457,19 @@ def plan_tagged_fixed(
             tg["name"] = _card_name(ui_tree)
             if dry_run:
                 return _act("done", "tagged_fixed_dry",
-                            f"[DRY RUN] on Tagged match game; would tap the chat bubble, send "
-                            f"'{text}', then back to the deck — no tap", True,
+                            f"[DRY RUN] on Tagged match game; would tap the photo, type "
+                            f"'{text}' in Your message, send, Back, then the green heart "
+                            f"— no tap", True,
                             dry_run_verified=True, would_send_text=text)
-            # Video (24 Nov 2026): tap the deck chat bubble straight into
-            # the chat. The profile path below is the fallback when the
-            # deck has no chat bubble.
-            chat = _deck_chat_xy(ui_tree)
-            if chat:
-                tg["phase"] = "compose"
-                return _act("tap", "tagged_fixed_open_chat",
-                            f"Open the chat on {tg.get('name') or 'this'} card "
-                            f"(deck chat bubble)", dry_run,
-                            x=chat[0], y=chat[1])
+            # Video (27 Nov 2026): tap the centre of the photo, then
+            # "Your message". Never the chat bubble (that is not the
+            # required first-contact path) and never a bare like.
             tg["phase"] = "profile"
-            name_xy = _tree_id_center(ui_tree, "tvUsername", "id/tvUsername")
-            xy = (int(name_xy[0]), int(name_xy[1])) if name_xy else CARD_XY
+            tg["profile_tries"] = 0
+            xy = _photo_xy(ui_tree)
             return _act("tap", "tagged_fixed_open_profile",
-                        f"Open {tg.get('name') or 'this'} profile on Tagged", dry_run,
-                        x=xy[0], y=xy[1])
+                        f"Open {tg.get('name') or 'this'} profile (tap the photo)",
+                        dry_run, x=xy[0], y=xy[1])
         return _recover(ui_tree, tg, dry_run)
 
     if phase == "profile":
@@ -360,6 +503,12 @@ def plan_tagged_fixed(
                         dry_run, text=text, clear=True, x=comp[0], y=comp[1])
         xy = _send_xy(ui_tree)
         if not xy:
+            # Keyboard closed: the send arrow sits on the nav (y≈2196
+            # on 27 Nov, which is My likes). Focus the box first.
+            if int(comp[1]) >= 1800:
+                return _act("tap", "tagged_fixed_focus_composer",
+                            "Open the keyboard so the send arrow is above the nav",
+                            dry_run, x=comp[0], y=comp[1])
             return _act("fail", "tagged_fixed_no_send",
                         "Tagged send arrow not found — stop, nothing sent", dry_run)
         tg["awaiting_sent"] = text
@@ -368,8 +517,8 @@ def plan_tagged_fixed(
                     x=xy[0], y=xy[1])
 
     if phase == "back_to_deck":
-        # Video (24 Nov 2026): after the send, go straight back to the
-        # deck — no profile, no middle-match tap.
+        # Video (27 Nov 2026): after the send, Back to the Match deck, then
+        # the green heart (including on the last card).
         if on_thread(ui_tree):
             return _act("press_button", "tagged_fixed_thread_back",
                         "Message sent — Back to the match game", dry_run, button="back")
@@ -381,17 +530,23 @@ def plan_tagged_fixed(
         phase = "after_match"
 
     if phase == "after_match":
-        tg["phase"] = "deck"
-        if done >= target:
-            return _act("done", "tagged_fixed_done",
-                        f"Tagged message finished {done}/{target} messages", dry_run)
+        if on_thread(ui_tree):
+            return _act("press_button", "tagged_fixed_thread_back",
+                        "Message sent — Back to the match game", dry_run, button="back")
         if on_deck(ui_tree):
-            if _card_name(ui_tree) and _card_name(ui_tree) == tg.get("name"):
-                # still the same person → swipe on (free like) to the next one
+            tg["recover"] = 0
+            name = _card_name(ui_tree)
+            if name and name == tg.get("name") and not tg.get("liked_this"):
                 xy = _middle_like_xy(ui_tree) or LIKE_XY
-                return _act("tap", "tagged_fixed_next",
-                            "Swipe on to the next person (free like)", dry_run,
+                tg["liked_this"] = True
+                return _act("tap", "tagged_fixed_like_after",
+                            f"Green heart after the message to {name}", dry_run,
                             x=xy[0], y=xy[1])
+            tg["liked_this"] = False
+            tg["phase"] = "deck"
+            if done >= target:
+                return _act("done", "tagged_fixed_done",
+                            f"Tagged message finished {done}/{target} messages", dry_run)
             return plan_tagged_fixed(instruction, ui_tree, history, state=st,
                                      dry_run=dry_run, message=message)
         if not _bottom_nav(ui_tree):

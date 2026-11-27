@@ -1,0 +1,50 @@
+<hierarchy windows="1" nodes="46" app_nodes="46" text_nodes="7" needs_vision="false" partial="false" empty="false" mode="full" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.taggedapp">
+<w id="active" t="active" p="com.taggedapp" f="1" kids="2">
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="LinearLayout" xy="540,1189" b="0,0,1080,2379"/>
+ <n cls="FrameLayout" xy="540,1189" b="0,0,1080,2379"/>
+ <n i="com.taggedapp:id/action_bar_root" cls="FrameLayout" xy="540,1189" b="0,0,1080,2379"/>
+ <n i="android:id/content" cls="FrameLayout" xy="540,1189" b="0,0,1080,2379"/>
+ <n i="com.taggedapp:id/fragmentContainer" cls="FrameLayout" xy="540,1189" b="0,0,1080,2379"/>
+ <n i="com.taggedapp:id/llMainLayout" cls="LinearLayout" xy="540,720" b="0,54,1080,1387"/>
+ <n i="com.taggedapp:id/iToolbarMessageFragment" cls="LinearLayout" xy="540,127" b="0,54,1080,201"/>
+ <n i="com.taggedapp:id/subToolbarMessageFragment" cls="ViewGroup" xy="540,127" b="0,54,1080,201"/>
+ <n cls="LinearLayout" xy="372,127" b="0,80,745,175"/>
+ <n i="com.taggedapp:id/llToolbarName" cls="LinearLayout" xy="372,127" b="0,80,745,175"/>
+ <n i="com.taggedapp:id/backBtn" cls="ImageView" c="1" xy="74,127" b="32,85,116,169"/>
+ <n t="8" i="com.taggedapp:id/conversationsCount" cls="TextView" xy="132,127" b="116,94,148,160"/>
+ <n i="com.taggedapp:id/openProfile" cls="FrameLayout" c="1" xy="227,127" b="180,80,275,175"/>
+ <n i="com.taggedapp:id/userIcon" cls="ImageView" xy="227,127" b="180,80,275,175"/>
+ <n i="com.taggedapp:id/onlineStateView" cls="View" xy="259,159" b="243,143,275,175"/>
+ <n t="Naomi Paniagua" i="com.taggedapp:id/userName" cls="TextView" xy="520,127" b="317,94,724,160"/>
+ <n cls="LinearLayoutCompat" xy="1027,127" b="975,54,1080,201"/>
+ <n d="More options" cls="ImageView" c="1" xy="1027,127" b="975,64,1080,190"/>
+ <n i="com.taggedapp:id/messagingContainer" cls="LinearLayout" xy="540,794" b="0,201,1080,1387"/>
+ <n cls="FrameLayout" xy="540,709" b="0,201,1080,1217"/>
+ <n i="com.taggedapp:id/rvRecyclerView" cls="RecyclerView" xy="540,709" b="0,201,1080,1217"/>
+ <n i="com.taggedapp:id/clOuterMessageItem" cls="ViewGroup" c="1" xy="540,944" b="0,725,1080,1163"/>
+ <n i="com.taggedapp:id/dcBadgeDate" cls="ViewGroup" xy="540,751" b="384,725,696,777"/>
+ <n cls="View" xy="540,751" b="384,725,696,777"/>
+ <n cls="View" xy="540,751" b="384,725,696,777"/>
+ <n t="22 November 2026" cls="TextView" xy="540,751" b="405,732,675,770"/>
+ <n i="com.taggedapp:id/fLMessageContentContainer" cls="FrameLayout" xy="660,962" b="282,819,1038,1106"/>
+ <n i="com.taggedapp:id/prlMessageItem" cls="ViewGroup" xy="660,962" b="282,819,1038,1106"/>
+ <n i="com.taggedapp:id/flMessageHeaderContainer" cls="FrameLayout" v="0" xy="660,819" b="282,819,1038,819"/>
+ <n t="Hola hermoso ¿cómo estás?  Visitaré Punta Cana ¿Te gustaría " i="com.taggedapp:id/fLMessageContainer" cls="FrameLayout" c="1" xy="660,962" b="282,819,1038,1106"/>
+ <n t="Hola hermoso ¿cómo estás?  Visitaré Punta Cana ¿Te gustaría reunirte por unos dí" i="com.taggedapp:id/tvMessageText" cls="TextView" xy="660,962" b="282,819,1038,1106"/>
+ <n cls="LinearLayout" xy="1006,1129" b="975,1095,1038,1163"/>
+ <n i="com.taggedapp:id/tvMessageStatus" cls="TextView" xy="1006,1132" b="975,1102,1038,1163"/>
+ <n i="com.taggedapp:id/cRecordingWaveContainer" cls="ComposeView" v="0" xy="540,1185" b="540,1154,540,1217"/>
+ <n cls="View" v="0" xy="540,1154" b="540,1154,540,1154"/>
+ <n i="com.taggedapp:id/vInputLayoutDivider" cls="View" xy="540,1217" b="0,1217,1080,1218"/>
+ <n i="com.taggedapp:id/clSendMessageBar" cls="ViewGroup" xy="540,1302" b="0,1218,1080,1387"/>
+ <n i="com.taggedapp:id/clTextMessageBar" cls="ViewGroup" xy="487,1302" b="32,1250,943,1355"/>
+ <n i="com.taggedapp:id/ibOpenAttachments" cls="Button" c="1" xy="84,1302" b="32,1250,137,1355"/>
+ <n i="com.taggedapp:id/ibGiftsButton" cls="Button" c="1" xy="210,1302" b="158,1250,263,1355"/>
+ <n t="good evening beautiful" h="Your message" i="com.taggedapp:id/etMessageEditText" cls="EditText" it="180289" c="1" e="1" f="1" xy="603,1302" b="284,1250,922,1355"/>
+ <n i="com.taggedapp:id/imSendMessageButton" cls="ImageView" xy="995,1302" b="943,1250,1048,1355"/>
+ <n i="com.taggedapp:id/suspendedChatContent" cls="ComposeView" v="0" xy="0,1387" b="0,1387,0,1387"/>
+ <n cls="View" v="0" xy="0,1387" b="0,1387,0,1387"/>
+ <n i="android:id/navigationBarBackground" cls="View" xy="540,2316" b="0,2253,1080,2379"/>
+</w>
+</hierarchy>
