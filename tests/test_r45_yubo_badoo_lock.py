@@ -241,7 +241,8 @@ def test_bank_text_passes_guard_for_fixed_planners():
 def test_hily_likes_sent_empty_goes_to_discover():
     t = (FIX / "hily_likes_sent.xml").read_text(encoding="utf-8")
     t = t.replace('d="chat_request"', 'd="photo"')
-    st = {"bulk_message_new": {"done": 2}}
+    # r53: Likes sent tapped and already scrolled to the end
+    st = {"bulk_message_new": {"done": 2, "_ls_tapped": True, "_ls_scrolls": 4}}
     a = plan_hily_fixed_first_contact(
         "send 5 first contact messages on hily", t, [], state=st,
         dry_run=False, message="hi miss", target=5,

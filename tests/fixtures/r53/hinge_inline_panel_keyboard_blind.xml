@@ -1,0 +1,85 @@
+<hierarchy windows="2" nodes="79" app_nodes="79" text_nodes="6" needs_vision="false" partial="false" empty="false" mode="full" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="co.hinge.app,com.samsung.android.honeyboard">
+<w id="active" t="active" p="co.hinge.app" f="1" kids="2">
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="LinearLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="co.hinge.app:id/action_bar_root" cls="LinearLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="android:id/content" cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="co.hinge.app:id/activity_root" cls="ViewGroup" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="co.hinge.app:id/notifications" cls="ViewGroup" v="0" xy="0,0" b="0,0,0,0"/>
+ <n cls="View" v="0" xy="0,0" b="0,0,0,0"/>
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="co.hinge.app:id/nav_host" cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="co.hinge.app:id/nav_host" cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="ComposeView" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="fwl" v="0" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="FrameLayout" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="ComposeView" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1058" b="0,0,1080,2116"/>
+ <n cls="View" v="0" xy="540,2084" b="477,2053,603,2116"/>
+ <n cls="fwl" v="0" xy="540,2258" b="0,2116,1080,2400"/>
+ <n i="co.hinge.app:id/blur_view" cls="ViewGroup" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="View" xy="540,1200" b="0,0,1080,2400"/>
+ <n i="android:id/navigationBarBackground" cls="View" v="0" xy="540,2337" b="0,2274,1080,2400"/>
+</w>
+<w id="6250" t="2:Samsung Keyboard" p="com.samsung.android.honeyboard" f="0" kids="2">
+ <n cls="FrameLayout" xy="540,1237" b="0,75,1080,2400"/>
+ <n cls="LinearLayout" xy="540,1174" b="0,75,1080,2274"/>
+ <n i="android:id/content" cls="FrameLayout" xy="540,1174" b="0,75,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/emoticonPreviewPlacer" cls="FrameLayout" v="0" xy="0,75" b="0,75,0,75"/>
+ <n cls="FrameLayout" v="0" xy="0,75" b="0,75,0,75"/>
+ <n i="android:id/parentPanel" cls="LinearLayout" xy="540,1174" b="0,75,1080,2274"/>
+ <n i="android:id/inputArea" cls="FrameLayout" xy="540,1174" b="0,75,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_honeyboard" cls="LinearLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_honeyboard_inner" cls="LinearLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n cls="FrameLayout" v="0" xy="540,1408" b="0,1408,1080,1408"/>
+ <n i="com.samsung.android.honeyboard:id/layout_extension" cls="FrameLayout" v="0" xy="540,1408" b="0,1408,1080,1408"/>
+ <n i="com.samsung.android.honeyboard:id/layout_spell" cls="LinearLayout" v="0" xy="540,1408" b="0,1408,1080,1408"/>
+ <n i="com.samsung.android.honeyboard:id/layout_base_search" cls="LinearLayout" v="0" xy="540,1408" b="0,1408,1080,1408"/>
+ <n i="com.samsung.android.honeyboard:id/layout_extension_without_inset" cls="FrameLayout" v="0" xy="540,1408" b="0,1408,1080,1408"/>
+ <n i="com.samsung.android.honeyboard:id/layout_overlay_outer" cls="LinearLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_overlay" cls="FrameLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n cls="LinearLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_honey_frame" cls="FrameLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_base_frame_root" cls="LinearLayout" xy="540,1841" b="0,1408,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_header" cls="FrameLayout" xy="540,1465" b="0,1408,1080,1523"/>
+ <n i="com.samsung.android.honeyboard:id/layout_toolbar" cls="LinearLayout" xy="540,1465" b="0,1408,1080,1523"/>
+ <n cls="ViewGroup" xy="540,1465" b="0,1408,1080,1523"/>
+ <n i="com.samsung.android.honeyboard:id/beehive_primary_container" cls="ViewGroup" xy="475,1465" b="0,1408,950,1523"/>
+ <n cls="FrameLayout" xy="119,1465" b="0,1408,238,1523"/>
+ <n d="Emojis" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="119,1465" b="0,1423,238,1507"/>
+ <n cls="LinearLayout" xy="119,1465" b="77,1423,161,1507"/>
+ <n cls="FrameLayout" xy="356,1465" b="238,1408,475,1523"/>
+ <n d="Translation" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="356,1465" b="238,1423,475,1507"/>
+ <n cls="LinearLayout" xy="356,1465" b="314,1423,398,1507"/>
+ <n cls="FrameLayout" xy="594,1465" b="475,1408,713,1523"/>
+ <n d="Settings" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="594,1465" b="475,1423,713,1507"/>
+ <n cls="LinearLayout" xy="594,1465" b="552,1423,636,1507"/>
+ <n cls="FrameLayout" xy="831,1465" b="713,1408,950,1523"/>
+ <n d="Clipboard" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="831,1465" b="713,1423,950,1507"/>
+ <n cls="LinearLayout" xy="831,1465" b="789,1423,873,1507"/>
+ <n i="com.samsung.android.honeyboard:id/beehive_expand_area" cls="FrameLayout" xy="1015,1465" b="950,1408,1080,1523"/>
+ <n d="Expand toolbar" cls="FrameLayout" c="1" xy="1015,1465" b="950,1423,1080,1507"/>
+ <n cls="FrameLayout" xy="1015,1465" b="973,1423,1057,1507"/>
+ <n d="Expand toolbar" i="com.samsung.android.honeyboard:id/toolbar_expand" cls="Button" xy="1014,1464" b="986,1436,1043,1493"/>
+ <n i="com.samsung.android.honeyboard:id/layout_body" cls="FrameLayout" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_body_background" cls="ImageView" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_body_overlay" cls="LinearLayout" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_board_frame" cls="FrameLayout" xy="540,1898" b="0,1523,1080,2274"/>
+ <n cls="LinearLayout" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_board" cls="LinearLayout" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/keyboard_view_holder_shell" cls="FrameLayout" xy="540,1898" b="0,1523,1080,2274"/>
+ <n cls="ViewGroup" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/keyboard_split_touch_layer" cls="View" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/keyboard_touch_layer" cls="View" xy="540,1898" b="0,1523,1080,2274"/>
+ <n cls="ViewGroup" xy="540,1898" b="0,1523,1080,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_board_left" cls="LinearLayout" v="0" xy="0,1898" b="0,1523,0,2274"/>
+ <n i="com.samsung.android.honeyboard:id/layout_board_right" cls="LinearLayout" v="0" xy="1080,1898" b="1080,1523,1080,2274"/>
+ <n i="android:id/navigationBarBackground" cls="View" xy="540,2337" b="0,2274,1080,2400"/>
+</w>
+</hierarchy>

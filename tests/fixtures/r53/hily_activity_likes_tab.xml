@@ -1,0 +1,61 @@
+<hierarchy windows="1" nodes="57" app_nodes="57" text_nodes="57" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="com.hily.app">
+<w id="active" t="active" p="com.hily.app" f="1" kids="2">
+ <n t="Activity" i="activityTabTitle" cls="TextView" xy="160,149" b="42,110,279,188"/>
+ <n d="Rive Animation child" cls="View" xy="985,148" b="933,96,1038,201"/>
+ <n t="Likes" i="centerTabName" cls="TextView" xy="146,265" b="98,241,195,289"/>
+ <n t="6" i="counterBadgeText" cls="TextView" xy="239,266" b="218,245,261,287"/>
+ <n t="Visitors · 28" cls="View" c="1" xy="540,259" b="360,202,720,317"/>
+ <n t="Visitors" i="centerTabName" cls="TextView" xy="499,265" b="429,241,569,289"/>
+ <n t="28" i="counterBadgeText" cls="TextView" xy="621,266" b="590,245,652,287"/>
+ <n t="Likes sent" cls="View" c="1" xy="900,259" b="720,202,1080,317"/>
+ <n t="Likes sent" i="centerTabName" cls="TextView" xy="900,265" b="807,241,993,289"/>
+ <n t="Christiana · Zoe · Esther" d="https://im.hily.com/nr/hilybudwilim7kepwgckw0cc888cg4o.rx400 · https://im.hily.c" cls="View" s="1" xy="540,1211" b="0,317,1080,2106"/>
+ <n t="6" d="https://im.hily.com/nr/hilybudwilim7kepwgckw0cc888cg4o.rx400 · TextBadgeIcon" i="blurred_center_item_card" cls="View" c="1" xy="275,674" b="21,338,530,1010"/>
+ <n d="https://im.hily.com/nr/hilybudwilim7kepwgckw0cc888cg4o.rx400" cls="View" xy="275,674" b="21,338,530,1010"/>
+ <n d="TextBadgeIcon" cls="View" xy="459,386" b="443,370,475,402"/>
+ <n t="6" i="badgeText" cls="TextView" xy="489,385" b="480,370,498,401"/>
+ <n d="show" cls="View" c="1" xy="446,926" b="383,863,509,989"/>
+ <n d="show" cls="View" xy="446,926" b="415,895,478,958"/>
+ <n t="Christiana" d="https://im.hily.com/nr/hilybuatz2ak46wdss80wgg800swk80.rx400" i="center_item_card" cls="View" c="1" xy="805,674" b="551,338,1059,1010"/>
+ <n d="https://im.hily.com/nr/hilybuatz2ak46wdss80wgg800swk80.rx400" cls="View" xy="805,674" b="551,338,1059,1010"/>
+ <n t="Christiana" i="center_name" cls="TextView" xy="672,955" b="572,922,772,989"/>
+ <n d="like" cls="View" c="1" xy="975,926" b="912,863,1038,989"/>
+ <n d="like" cls="View" xy="975,926" b="944,895,1007,958"/>
+ <n t="Crush · 6 · Zoe" d="https://im.hily.com/nr/hilybu9hk41a4hbsw00s0ogws4oksoo.rx400 · TextBadgeIcon" i="center_item_card" cls="View" c="1" xy="275,1367" b="21,1031,530,1703"/>
+ <n d="https://im.hily.com/nr/hilybu9hk41a4hbsw00s0ogws4oksoo.rx400" cls="View" xy="275,1367" b="21,1031,530,1703"/>
+ <n t="Crush" i="badgeText" cls="TextView" xy="90,1078" b="53,1063,127,1094"/>
+ <n d="TextBadgeIcon" cls="View" xy="459,1079" b="443,1063,475,1095"/>
+ <n t="6" i="badgeText" cls="TextView" xy="489,1078" b="480,1063,498,1094"/>
+ <n t="Zoe" i="center_name" cls="TextView" xy="86,1648" b="42,1615,131,1682"/>
+ <n d="like" cls="View" c="1" xy="446,1619" b="383,1556,509,1682"/>
+ <n d="like" cls="View" xy="446,1619" b="415,1588,478,1651"/>
+ <n t="5 · Esther" d="https://im.hily.com/nr/hilybu4ttbipulh8cgcogosk8kwwc4c.rx400 · TextBadgeIcon" i="center_item_card" cls="View" c="1" xy="805,1367" b="551,1031,1059,1703"/>
+ <n d="https://im.hily.com/nr/hilybu4ttbipulh8cgcogosk8kwwc4c.rx400" cls="View" xy="805,1367" b="551,1031,1059,1703"/>
+ <n d="TextBadgeIcon" cls="View" xy="989,1079" b="973,1063,1005,1095"/>
+ <n t="5" i="badgeText" cls="TextView" xy="1018,1078" b="1010,1063,1027,1094"/>
+ <n t="Esther" i="center_name" cls="TextView" xy="639,1648" b="572,1615,707,1682"/>
+ <n d="like" cls="View" c="1" xy="975,1619" b="912,1556,1038,1682"/>
+ <n d="like" cls="View" xy="975,1619" b="944,1588,1007,1651"/>
+ <n d="https://im.hily.com/nr/hilybu31bve3s305gksgg8ss0sk80oo.rx400" i="blurred_center_item_card" cls="View" c="1" xy="275,1915" b="21,1724,530,2106"/>
+ <n d="https://im.hily.com/nr/hilybu31bve3s305gksgg8ss0sk80oo.rx400" cls="View" xy="275,1915" b="21,1724,530,2106"/>
+ <n t="5" d="https://im.hily.com/nr/hilybu4inq7pgjydc0gc8sooc4wwgoo.rx400 · TextBadgeIcon" i="center_item_card" cls="View" c="1" xy="805,1915" b="551,1724,1059,2106"/>
+ <n d="https://im.hily.com/nr/hilybu4inq7pgjydc0gc8sooc4wwgoo.rx400" cls="View" xy="805,1915" b="551,1724,1059,2106"/>
+ <n d="TextBadgeIcon" cls="View" xy="989,1772" b="973,1756,1005,1788"/>
+ <n t="5" i="badgeText" cls="TextView" xy="1018,1771" b="1010,1756,1027,1787"/>
+ <n t="Finder" d="Finder" i="bottomNavTab_1" cls="View" c="1" xy="142,2190" b="42,2127,242,2253"/>
+ <n d="Finder" cls="View" xy="142,2169" b="105,2132,179,2206"/>
+ <n t="Finder" cls="TextView" xy="142,2229" b="103,2211,181,2248"/>
+ <n t="Chats" d="Chats" i="bottomNavTab_2" cls="View" c="1" xy="341,2190" b="242,2127,441,2253"/>
+ <n d="Chats" cls="View" xy="342,2169" b="305,2132,379,2206"/>
+ <n t="Chats" cls="TextView" xy="342,2229" b="305,2211,379,2248"/>
+ <n t="Discover" d="Discover" i="bottomNavTab_7" cls="View" c="1" xy="540,2190" b="441,2127,640,2253"/>
+ <n d="Discover" cls="View" xy="541,2169" b="504,2132,578,2206"/>
+ <n t="Discover" cls="TextView" xy="541,2229" b="487,2211,595,2248"/>
+ <n t="Activity" d="Activity" i="bottomNavTab_4" cls="View" c="1" xy="739,2190" b="640,2127,839,2253"/>
+ <n d="Activity" cls="View" xy="740,2169" b="703,2132,777,2206"/>
+ <n t="Activity" cls="TextView" xy="740,2229" b="693,2211,787,2248"/>
+ <n t="Me" d="Me" i="bottomNavTab_5" cls="View" c="1" xy="938,2190" b="839,2127,1038,2253"/>
+ <n d="Me" cls="View" xy="939,2169" b="902,2132,976,2206"/>
+ <n t="Me" cls="TextView" xy="938,2229" b="919,2211,958,2248"/>
+</w>
+</hierarchy>

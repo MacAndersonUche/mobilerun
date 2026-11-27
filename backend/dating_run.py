@@ -277,6 +277,10 @@ def build_job(
     n = run_count(pkg, count, counts)
     max_steps = min(400, 6 * n + 15)
     wall_s = 0
+    if pkg == "co.hinge.app":
+        # r53: blind inline panel — heart, wait, focus, type, Send Like,
+        # Rose check, next card ≈ 8 steps per message + app open/popups
+        max_steps = min(400, 10 * n + 20)
     if pkg == "co.yellw.yellowapp":
         # r48: ~7 steps per card (open, Direct, type, send, popup, swipe,
         # next card); 6n+15 ran out at card 5 on 24 Nov
@@ -327,6 +331,8 @@ def build_job(
             "current_app": base_package(pkg),
         },
         **({"wall_s": wall_s} if wall_s else {}),
+        # r53: Hinge Discover is blind — slow empty-tree steps are healthy
+        **({"ui_wall_s": 240} if pkg == "co.hinge.app" else {}),
         "ttl": now + 86400,
         "result": "Queued for cloud agent",
     }

@@ -47,7 +47,7 @@ def test_live_empty_discover_taps_photo_heart_not_vision():
     act = plan_bulk_bench(
         "send 2 first contact messages on Hinge",
         tree,
-        ["Opened Hinge", "Open Hinge Discover tab"],
+        ["Opened Hinge", "tap(110,2195) — Open Hinge Discover tab (nav xy)"],
         state=st,
         package="co.hinge.app",
         dry_run=False,
@@ -59,7 +59,7 @@ def test_live_empty_discover_taps_photo_heart_not_vision():
     act = plan_bulk_bench(
         "send 2 first contact messages on Hinge",
         tree,
-        ["Opened Hinge", "Open Hinge Discover tab"],
+        ["Opened Hinge", "tap(110,2195) — Open Hinge Discover tab (nav xy)"],
         state=st,
         package="co.hinge.app",
         dry_run=False,
@@ -74,48 +74,38 @@ def test_live_empty_discover_taps_photo_heart_not_vision():
 
 
 def test_photo_heart_ladder_tries_each_position_once_then_fails():
-    # Live 25 Nov 2026: the heart tap at (937, 1356) repeated 3x and no
-    # sheet ever opened, because the heart's Y moves with the photo
-    # (1010 / 1356 / 1790 in Mac's 24 Nov video). The ladder tries each
-    # position once, then fails honestly instead of repeating one tap.
-    from backend.hinge_fixed_first_contact import PHOTO_HEART_LADDER
-
+    # r53 (live 27 Nov 2026): on Discover the heart opens the inline comment
+    # panel but Hinge's Compose tree stays blind, so the planner no longer
+    # walks the heart ladder on a blind tree (that tapped the card behind
+    # the open panel). One heart tap, wait, focus the box under the heart,
+    # then stop honestly — never the same heart tap repeated.
     tree = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
     st = {"bulk_message_new": {"done": 0, "typed": False, "_opened_discover": True}}
-    hist = ["Opened Hinge", "Open Hinge Discover tab"]
+    hist = ["Opened Hinge", "tap(110,2195) — Open Hinge Discover tab (nav xy)"]
     acts = []
-    for _ in range(5):
+    for _ in range(7):
         act = plan_bulk_bench(
-            "send 2 first contact messages on Hinge",
-            tree,
-            hist,
-            state=st,
-            package="co.hinge.app",
-            dry_run=False,
+            "send 2 first contact messages on Hinge", tree, hist, state=st,
+            package="co.hinge.app", dry_run=False,
         )
         assert act is not None
         acts.append(act)
+        if act["action"] == "tap":
+            hist.append(f"tap({act['x']},{act['y']}) — {act['reason']}")
     assert acts[0]["action"] == "wait"  # deck loading wait
-    hearts = acts[1:4]
-    assert all(a["action"] == "tap" for a in hearts)
-    assert [(a["x"], a["y"]) for a in hearts] == [
-        (937, y) for y in PHOTO_HEART_LADDER
-    ]
-    assert len({(a["x"], a["y"]) for a in hearts}) == 3  # never the same tap twice
-    assert all("Rose" not in (a.get("reason") or "") or "never Rose" in (a.get("reason") or "")
-               for a in hearts)
-    fail = acts[4]
-    assert fail["action"] == "fail"
-    assert "did not open the like sheet" in (fail.get("reason") or "")
-    assert st["bulk_message_new"]["done"] == 0  # nothing counted as sent
-
+    hearts = [a for a in acts if a.get("fastpath_step") == "hinge_fixed_fc_photo_heart"]
+    assert len(hearts) == 1 and (hearts[0]["x"], hearts[0]["y"]) == PHOTO_HEART_XY
+    focus = [a for a in acts if a.get("fastpath_step") == "hinge_fixed_fc_blind_focus"]
+    assert focus and all(a["y"] == PHOTO_HEART_XY[1] + 200 for a in focus)
+    assert acts[-1]["action"] == "fail"
+    assert all(not in_rose_bounds(a.get("x"), a.get("y")) for a in acts if a["action"] == "tap")
 
 def test_heart_ladder_resets_when_sheet_opens():
     # One heart tap, then the sheet appears: the planner types the comment
     # (never fails) and the ladder resets for the next profile.
     tree = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
     st = {"bulk_message_new": {"done": 0, "typed": False, "_opened_discover": True}}
-    hist = ["Opened Hinge", "Open Hinge Discover tab"]
+    hist = ["Opened Hinge", "tap(110,2195) — Open Hinge Discover tab (nav xy)"]
     plan_bulk_bench(
         "send 2 first contact messages on Hinge", tree, hist, state=st,
         package="co.hinge.app", dry_run=False,
@@ -585,38 +575,26 @@ def test_next_card_wait_after_send_before_next_heart():
 
 
 def test_heart_ladder_rungs_have_distinct_decision_keys():
-    # The 08:50 live run died on "same step x3 (tap:937,1356|hinge
-    # discover photo heart (937, 1356) to open like sheet)" — the old
-    # code re-emitted one tap. The ladder must never produce the same
-    # decision key twice in a row: different coords AND a different
-    # reason stem per rung, so the executor's same-decision guard can
-    # never fire on the ladder itself.
+    # The 08:50 live run died on "same step x3 (tap:937,1356|...)". The
+    # blind-tree path must never emit the same heart tap twice.
     tree = (FIX / "hinge_empty_tree.xml").read_text(encoding="utf-8")
     st = {"bulk_message_new": {"done": 0, "typed": False, "_opened_discover": True}}
-    hist = ["Opened Hinge", "Open Hinge Discover tab"]
-    acts = [
-        plan_bulk_bench(
-            "send 2 first contact messages on Hinge",
-            tree,
-            hist,
-            state=st,
-            package="co.hinge.app",
-            dry_run=False,
+    hist = ["Opened Hinge", "tap(110,2195) — Open Hinge Discover tab (nav xy)"]
+    acts = []
+    for _ in range(7):
+        act = plan_bulk_bench(
+            "send 2 first contact messages on Hinge", tree, hist, state=st,
+            package="co.hinge.app", dry_run=False,
         )
-        for _ in range(4)
-    ]
+        assert act is not None
+        acts.append(act)
+        if act["action"] == "tap":
+            hist.append(f"tap({act['x']},{act['y']}) — {act['reason']}")
     hearts = [
-        a
-        for a in acts
-        if a.get("action") == "tap"
-        and "photo heart" in (a.get("reason") or "").lower()
+        a for a in acts
+        if a.get("action") == "tap" and "photo heart" in (a.get("reason") or "").lower()
     ]
-    assert len(hearts) == 3
-    assert [(a["x"], a["y"]) for a in hearts] == [
-        (937, y) for y in PHOTO_HEART_LADDER
-    ]
-    assert len({a.get("reason") for a in hearts}) == 3
-    assert all(
-        f"try {i + 1}/{len(PHOTO_HEART_LADDER)}" in (h.get("reason") or "")
-        for i, h in enumerate(hearts)
-    )
+    assert len(hearts) == 1
+    keys = [(a.get("action"), a.get("x"), a.get("y"), a.get("reason")) for a in acts]
+    assert all(keys[i] != keys[i + 1] or keys[i][0] != "tap" or "focus" in str(keys[i][3]).lower()
+               for i in range(len(keys) - 1))
