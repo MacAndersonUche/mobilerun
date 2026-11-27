@@ -173,7 +173,7 @@ console.log('datingRun ok');
   a(datingAppGroup('com.bumble.app') === 'works', 'Bumble works');
   a(datingAppGroup('com.hily.app') === 'works', 'Hily works (verified live 5/5)');
   a(datingAppGroup('co.yellw.yellowapp') === 'works', 'Yubo works (verified live 5/5)');
-  a(datingAppGroup('co.hinge.app') === 'needs-fixing', 'Hinge needs fixing');
+  a(datingAppGroup('co.hinge.app') === 'works', 'Hinge works (verified live 5/5 r53n)');
   a(datingAppGroup('com.taggedapp') === 'needs-fixing', 'Tagged needs fixing');
   a(datingAppGroup('com.affinityapps.blk') === 'needs-fixing', 'BLK needs fixing');
   a(datingAppGroup('com.facebook.katana') === 'needs-fixing', 'Facebook needs fixing');
@@ -190,7 +190,7 @@ console.log('datingRun ok');
   a(canRunFromCard('com.bumble.app'), 'Bumble card runnable');
   a(canRunFromCard('com.hily.app'), 'Hily card runnable');
   a(canRunFromCard('co.yellw.yellowapp'), 'Yubo card runnable');
-  a(canRunFromCard('co.hinge.app'), 'Hinge card still runnable');
+  a(canRunFromCard('co.hinge.app'), 'Hinge card runnable');
   a(!canRunFromCard('com.takimi.android'), 'Taimi card not runnable');
   a(!canRunFromCard('com.tinder'), 'Tinder card not runnable');
   a(!canRunFromCard('com.threesome.swingers.threefun'), '3Fun card not runnable');
@@ -204,13 +204,14 @@ console.log('datingRun ok');
     { package: 'com.badoo.mobile' },
     { package: 'com.hily.app' },
     { package: 'co.yellw.yellowapp' },
+    { package: 'com.taggedapp' },
     { package: 'enterprises.dating.boo' },
   ]);
   assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'needs-fixing', 'coming-soon']);
   assert.deepEqual(grouped[0].apps.map((x) => x.package), [
-    'com.badoo.mobile', 'com.bumble.app', 'com.hily.app', 'co.yellw.yellowapp',
+    'com.badoo.mobile', 'com.bumble.app', 'com.hily.app', 'co.yellw.yellowapp', 'co.hinge.app',
   ]);
-  assert.deepEqual(grouped[1].apps.map((x) => x.package), ['co.hinge.app']);
+  assert.deepEqual(grouped[1].apps.map((x) => x.package), ['com.taggedapp']);
   assert.deepEqual(grouped[2].apps.map((x) => x.package), [
     'com.tinder', 'enterprises.dating.boo', 'com.threesome.swingers.threefun',
   ]);
