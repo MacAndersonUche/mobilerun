@@ -29,9 +29,12 @@ test('authenticated routes', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible({
     timeout: 15000,
   });
-  // One Devices nav card under Run — no separate summary "Manage" card
-  await expect(page.getByRole('link', { name: /Devices/i })).toHaveCount(1);
-  await expect(page.getByRole('link', { name: /^Manage$/i })).toHaveCount(0);
+  // One Devices card in the home Run grid — not a second summary "Manage" card
+  // (sidebar also has a Devices nav link, so do not count page-wide).
+  const home = page.locator('.mr-page');
+  await expect(home.getByRole('link', { name: /Devices/i })).toHaveCount(1);
+  await expect(home.getByRole('link', { name: /^Manage$/i })).toHaveCount(0);
+  await expect(home.getByRole('heading', { name: /^Devices$/i })).toHaveCount(0);
   await shot(page, '03-home');
 
   const routes = [
