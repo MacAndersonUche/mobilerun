@@ -250,8 +250,7 @@ export default function SettingsPage() {
             </div>
             <p className="mt-2 text-xs text-mute">
               After install: pair → Enable Accessibility (deep-linked) → accept the
-              automatic notification + battery prompts. Live view capture is optional
-              and only asked when you open Live View.
+              automatic notification + battery prompts.
             </p>
           </section>
         )}

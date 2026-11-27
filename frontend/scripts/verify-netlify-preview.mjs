@@ -21,7 +21,6 @@ const routes = [
   '/dating',
   '/social',
   '/dating',
-  '/live',
   '/settings',
   '/account',
   '/tasks',

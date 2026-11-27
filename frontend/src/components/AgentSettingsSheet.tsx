@@ -84,7 +84,7 @@ export default function AgentSettingsSheet({
       {tab === 'devices' && (
         <div className="space-y-3">
           <p className="text-sm text-mute">
-            Linked phones for this agent. Live view and permission status live here.
+            Linked phones for this agent. Permission status lives here.
           </p>
           <select
             className="mr-input"
@@ -101,9 +101,6 @@ export default function AgentSettingsSheet({
           <div className="flex flex-wrap gap-2">
             <Link to="/devices" className="mr-btn-primary text-sm" onClick={onClose}>
               Manage devices
-            </Link>
-            <Link to="/live" className="mr-btn-ghost text-sm" onClick={onClose}>
-              Live view
             </Link>
           </div>
           {devices.length === 0 && (

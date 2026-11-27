@@ -14,10 +14,6 @@ const DEFAULT_BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
   'http://localhost:8000';
 
-const DEFAULT_HOSTED_WS =
-  (import.meta.env.VITE_WS_URL as string | undefined) ||
-  'wss://sv7144gijj.execute-api.eu-west-2.amazonaws.com/prod';
-
 /** True when the UI is served from a public host (not local Vite). */
 export const isHostedUi = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -69,36 +65,6 @@ export const setBackendUrl = (url: string): void => {
     );
   }
   localStorage.setItem('mobilerun_backend_url', cleaned);
-};
-
-export const getWebSocketUrl = (): string => {
-  const httpUrl = getBackendUrl();
-  return httpUrl.replace(/^http/, 'ws');
-};
-
-/** UI live-view socket (local FastAPI path or hosted WS API). */
-export const getUiWebSocketUrl = (): string => {
-  const explicit = localStorage.getItem('mobilerun_ui_ws_url');
-  if (explicit) {
-    if (isHostedUi() && isUnreachableFromHosted(explicit.replace(/^ws/, 'http'))) {
-      try {
-        localStorage.removeItem('mobilerun_ui_ws_url');
-      } catch {
-        /* ignore */
-      }
-    } else {
-      return explicit;
-    }
-  }
-  // Prefer cloud WS API when backend is API Gateway HTTP API
-  const hostedWs = import.meta.env.VITE_WS_URL as string | undefined;
-  if (hostedWs && getBackendUrl().includes('execute-api')) {
-    return hostedWs;
-  }
-  if (isHostedUi() && getBackendUrl().includes('execute-api')) {
-    return DEFAULT_HOSTED_WS;
-  }
-  return `${getWebSocketUrl()}/api/ui/connect`;
 };
 
 /** Hosted AWS HTTP API (chat target toggle). */

@@ -27,7 +27,6 @@ import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import DatingPage from './pages/DatingPage';
-import LiveViewPage from './pages/LiveViewPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
@@ -53,7 +52,6 @@ function MobileMenu({
     { to: '/account', icon: User, label: 'Account' },
     { to: '/chat', icon: MessageCircle, label: 'Chat' },
     { to: '/tasks', icon: History, label: 'Tasks' },
-    { to: '/live', icon: Smartphone, label: 'Live view' },
   ];
   return (
     <div
@@ -197,14 +195,14 @@ function Shell() {
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/social" element={<SocialPage />} />
-            {/* Kept for job-run / live-view / pairing deep links; not in primary nav */}
+            {/* Kept for job-run / pairing deep links; not in primary nav */}
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/chat" element={<ChatPage />} />
-            <Route path="/live" element={<LiveViewPage />} />
             <Route path="/account" element={<AccountPage />} />
-            {/* Legacy Needs you / Matches URLs → Run */}
+            {/* Legacy Needs you / Matches / Live View URLs → Run / home */}
             <Route path="/needs-you" element={<Navigate to="/dating" replace />} />
             <Route path="/matches" element={<Navigate to="/dating" replace />} />
+            <Route path="/live" element={<Navigate to="/" replace />} />
             <Route path="/pair" element={<PairPage />} />
             <Route path="/p/:code" element={<PairPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
