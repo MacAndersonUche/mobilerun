@@ -31,8 +31,8 @@ import {
   canRunFromCard,
   isBlockedApp,
   TAIMI_BLOCKED_NOTE,
-  readAppsToRunExpanded,
-  writeAppsToRunExpanded,
+  readAppsToComeExpanded,
+  writeAppsToComeExpanded,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -255,8 +255,8 @@ export default function DatingPage() {
   const [contactScope, setContactScope] = useState<'new' | 'existing' | 'both'>(
     'both'
   );
-  const [appsToRunExpanded, setAppsToRunExpanded] = useState(() =>
-    readAppsToRunExpanded()
+  const [appsToComeExpanded, setAppsToComeExpanded] = useState(() =>
+    readAppsToComeExpanded()
   );
   const [deviceId, setDeviceId] = useState('');
   const [devices, setDevices] = useState<
@@ -843,41 +843,59 @@ export default function DatingPage() {
       </div>
 
       {/* Per-app stats, grouped: works all the time, still needs fixing, apps to come */}
-      <section className="space-y-3" data-testid="dating-apps-to-run">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-4 py-3 text-left hover:bg-canvas-elev"
-          aria-expanded={appsToRunExpanded}
-          aria-controls="dating-apps-to-run-panel"
-          data-testid="dating-apps-to-run-toggle"
-          onClick={() => {
-            setAppsToRunExpanded((prev) => {
-              const next = !prev;
-              writeAppsToRunExpanded(next);
-              return next;
-            });
-          }}
-        >
-          {appsToRunExpanded ? (
-            <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
-          ) : (
-            <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
-          )}
-          <span className="text-lg font-semibold text-white">Apps to run</span>
-        </button>
-        {appsToRunExpanded && (
-          <div id="dating-apps-to-run-panel" className="space-y-6" role="region" aria-label="Apps to run">
+      <div className="space-y-6" data-testid="dating-apps-to-run">
             {groupDatingCards(
               cardsForDatingApps(apps, configApps).filter(
                 (app) => !isSocialPackage(app.package)
               )
-            ).map(({ group, apps: groupApps }) => (
-              <section key={group.id} aria-label={group.title} className="space-y-3">
-                <div>
-                  <h3 className="text-lg font-semibold">{group.title}</h3>
-                  <p className="text-xs text-mute">{group.subtitle}</p>
-                </div>
-                <div className="grid md:grid-cols-2 gap-4">
+            ).map(({ group, apps: groupApps }) => {
+              const isComingSoon = group.id === 'coming-soon';
+              const groupExpanded = isComingSoon ? appsToComeExpanded : true;
+              return (
+              <section
+                key={group.id}
+                aria-label={group.title}
+                className="space-y-3"
+                data-testid={isComingSoon ? 'dating-apps-to-come' : undefined}
+              >
+                {isComingSoon ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-4 py-3 text-left hover:bg-canvas-elev"
+                    aria-expanded={appsToComeExpanded}
+                    aria-controls="dating-apps-to-come-panel"
+                    data-testid="dating-apps-to-come-toggle"
+                    onClick={() => {
+                      setAppsToComeExpanded((prev) => {
+                        const next = !prev;
+                        writeAppsToComeExpanded(next);
+                        return next;
+                      });
+                    }}
+                  >
+                    {appsToComeExpanded ? (
+                      <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
+                    ) : (
+                      <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
+                    )}
+                    <span className="min-w-0">
+                      <span className="block text-lg font-semibold text-white">{group.title}</span>
+                      <span className="block text-xs text-mute">{group.subtitle}</span>
+                    </span>
+                  </button>
+                ) : (
+                  <div>
+                    <h3 className="text-lg font-semibold">{group.title}</h3>
+                    <p className="text-xs text-mute">{group.subtitle}</p>
+                  </div>
+                )}
+                {groupExpanded && (
+                <div
+                  id={isComingSoon ? 'dating-apps-to-come-panel' : undefined}
+                  className="grid md:grid-cols-2 gap-4"
+                  role={isComingSoon ? 'region' : undefined}
+                  aria-label={isComingSoon ? group.title : undefined}
+                >
                   {groupApps.map((app) => (
                 <div
                   key={app.package}
@@ -1013,11 +1031,11 @@ export default function DatingPage() {
                 </div>
                   ))}
                 </div>
+                )}
               </section>
-            ))}
-          </div>
-        )}
-      </section>
+            );
+            })}
+      </div>
 
       {/* r44: schedule per-app / combo runs */}
       <DatingSchedules

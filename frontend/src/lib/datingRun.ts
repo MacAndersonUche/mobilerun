@@ -77,11 +77,13 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     subtitle: 'These run reliably — trigger them any time.',
     // Hily: verified live 5/5 via Activity > Likes sent (r53, 27 Nov 2026)
     // Yubo: verified live 5/5 Direct sends (r54, 27 Nov 2026)
+    // Hinge: verified live 5/5 with r53n heart ladder (27 Nov 2026)
     packages: [
       'com.badoo.mobile',
       'com.bumble.app',
       'com.hily.app',
       'co.yellw.yellowapp',
+      'co.hinge.app',
     ],
   },
   {
@@ -89,7 +91,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     title: 'Still needs fixing',
     subtitle: 'Drivers exist but these still fail or need work.',
     packages: [
-      'co.hinge.app',
       'com.taggedapp',
       'com.affinityapps.blk',
       'com.facebook.katana',
@@ -115,15 +116,15 @@ export function datingAppGroup(pkg: string): DatingAppGroupId | null {
   return hit ? hit.id : null;
 }
 
-/** localStorage key for the Dating page "Apps to run" collapsible. */
-export const APPS_TO_RUN_EXPANDED_KEY = 'dating_apps_to_run_expanded';
+/** localStorage key for the Dating page "Apps to come" collapsible. */
+export const APPS_TO_COME_EXPANDED_KEY = 'dating_apps_to_come_expanded';
 
-/** Read whether Apps to run is expanded. Default true when unset / invalid. */
-export function readAppsToRunExpanded(
+/** Read whether Apps to come is expanded. Default true when unset / invalid. */
+export function readAppsToComeExpanded(
   storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage
 ): boolean {
   try {
-    const raw = storage?.getItem(APPS_TO_RUN_EXPANDED_KEY);
+    const raw = storage?.getItem(APPS_TO_COME_EXPANDED_KEY);
     if (raw === '0' || raw === 'false') return false;
     if (raw === '1' || raw === 'true') return true;
   } catch {
@@ -132,13 +133,13 @@ export function readAppsToRunExpanded(
   return true;
 }
 
-/** Persist Apps to run expanded state. */
-export function writeAppsToRunExpanded(
+/** Persist Apps to come expanded state. */
+export function writeAppsToComeExpanded(
   expanded: boolean,
   storage: Pick<Storage, 'setItem'> | null | undefined = globalThis.localStorage
 ): void {
   try {
-    storage?.setItem(APPS_TO_RUN_EXPANDED_KEY, expanded ? '1' : '0');
+    storage?.setItem(APPS_TO_COME_EXPANDED_KEY, expanded ? '1' : '0');
   } catch {
     /* ignore */
   }
