@@ -171,8 +171,8 @@ console.log('datingRun ok');
   const a = (c, m) => { if (!c) throw new Error(m); };
   a(datingAppGroup('com.badoo.mobile') === 'works', 'Badoo works');
   a(datingAppGroup('com.bumble.app') === 'works', 'Bumble works');
+  a(datingAppGroup('com.hily.app') === 'works', 'Hily works (verified live 5/5)');
   a(datingAppGroup('co.hinge.app') === 'needs-fixing', 'Hinge needs fixing');
-  a(datingAppGroup('com.hily.app') === 'needs-fixing', 'Hily needs fixing');
   a(datingAppGroup('co.yellw.yellowapp') === 'needs-fixing', 'Yubo needs fixing');
   a(datingAppGroup('com.taggedapp') === 'needs-fixing', 'Tagged needs fixing');
   a(datingAppGroup('com.affinityapps.blk') === 'needs-fixing', 'BLK needs fixing');
@@ -188,6 +188,7 @@ console.log('datingRun ok');
   a(!isBlockedApp('com.badoo.mobile'), 'Badoo not blocked');
   a(canRunFromCard('com.badoo.mobile'), 'Badoo card runnable');
   a(canRunFromCard('com.bumble.app'), 'Bumble card runnable');
+  a(canRunFromCard('com.hily.app'), 'Hily card runnable');
   a(canRunFromCard('co.hinge.app'), 'Hinge card still runnable');
   a(!canRunFromCard('com.takimi.android'), 'Taimi card not runnable');
   a(!canRunFromCard('com.tinder'), 'Tinder card not runnable');
@@ -200,10 +201,13 @@ console.log('datingRun ok');
     { package: 'com.tinder' },
     { package: 'co.hinge.app' },
     { package: 'com.badoo.mobile' },
+    { package: 'com.hily.app' },
     { package: 'enterprises.dating.boo' },
   ]);
   assert.deepEqual(grouped.map((g) => g.group.id), ['works', 'needs-fixing', 'coming-soon']);
-  assert.deepEqual(grouped[0].apps.map((x) => x.package), ['com.badoo.mobile', 'com.bumble.app']);
+  assert.deepEqual(grouped[0].apps.map((x) => x.package), [
+    'com.badoo.mobile', 'com.bumble.app', 'com.hily.app',
+  ]);
   assert.deepEqual(grouped[1].apps.map((x) => x.package), ['co.hinge.app']);
   assert.deepEqual(grouped[2].apps.map((x) => x.package), [
     'com.tinder', 'enterprises.dating.boo', 'com.threesome.swingers.threefun',
@@ -217,4 +221,25 @@ console.log('datingRun ok');
   assert.equal(new Set(allGrouped).size, allGrouped.length, 'no app in two groups');
   RUNNABLE_APPS.forEach((pkg) => assert.ok(allGrouped.includes(pkg), pkg + ' in a group'));
   console.log('dating page groups tests ok');
+}
+
+// Apps to run collapsible: default expanded; localStorage remembers
+{
+  const {
+    readAppsToRunExpanded,
+    writeAppsToRunExpanded,
+    APPS_TO_RUN_EXPANDED_KEY,
+  } = await import('./datingRun.ts');
+  const mem = new Map();
+  const storage = {
+    getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+    setItem: (k, v) => { mem.set(k, String(v)); },
+  };
+  assert.equal(readAppsToRunExpanded(storage), true, 'default expanded');
+  writeAppsToRunExpanded(false, storage);
+  assert.equal(mem.get(APPS_TO_RUN_EXPANDED_KEY), '0');
+  assert.equal(readAppsToRunExpanded(storage), false, 'collapsed after write');
+  writeAppsToRunExpanded(true, storage);
+  assert.equal(readAppsToRunExpanded(storage), true, 'expanded after write');
+  console.log('apps to run expanded tests ok');
 }
