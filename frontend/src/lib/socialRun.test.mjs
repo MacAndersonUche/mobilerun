@@ -12,17 +12,17 @@ assert.equal(canMessageApp('com.snapchat.android'), false);
 
 const wa = socialRunBody({
   deviceId: 'd', app: 'com.whatsapp', action: 'message',
-  contact: ' Jo ', message: ' hi ', dryRun: false,
+  contact: ' Jo ', message: ' hi ', dryRun: true, // ignored — always live
 });
-assert.equal(wa.dry_run, false); // follows the toggle
-assert.equal(socialRunBody({ deviceId: 'd', app: 'com.whatsapp', action: 'reply', message: 'hi', dryRun: true }).dry_run, true);
+assert.equal(wa.dry_run, false);
+assert.equal(socialRunBody({ deviceId: 'd', app: 'com.whatsapp', action: 'reply', message: 'hi', dryRun: true }).dry_run, false);
 assert.equal(wa.contact, 'Jo');
 assert.equal(wa.message, 'hi');
 assert.equal('count' in wa, false);
 
 const ig = socialRunBody({
   deviceId: '', app: 'com.instagram.android', action: 'reply',
-  contact: 'ignored', message: 'hey', dryRun: false,
+  contact: 'ignored', message: 'hey',
 });
 assert.equal(ig.dry_run, false);
 assert.equal(ig.contact, undefined);

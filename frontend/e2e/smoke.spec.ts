@@ -72,6 +72,12 @@ test('authenticated routes', async ({ page }) => {
   await page.goto('/devices');
   await expect(page.getByRole('heading', { name: 'Install APK' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Connect phone' })).toBeVisible();
-  await expect(page.getByText('Download-only', { exact: false })).toBeVisible();
+  // Expand Install APK when collapsed (phone already Connected)
+  const apk = page.getByTestId('devices-install-apk');
+  const downloadOnly = page.getByText('Download-only', { exact: false });
+  if (!(await downloadOnly.isVisible().catch(() => false))) {
+    await apk.locator('summary').click();
+  }
+  await expect(downloadOnly).toBeVisible();
   await shot(page, '15-devices-apk-qr');
 });

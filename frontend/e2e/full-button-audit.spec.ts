@@ -90,13 +90,6 @@ async function apiLogin(): Promise<string> {
   return ((await res.json()) as { access_token: string }).access_token;
 }
 
-async function ensureDryRun(page: Page, testId: string) {
-  const box = page.getByTestId(testId);
-  if ((await box.count()) === 0) return;
-  if (!(await box.isChecked())) await box.check();
-  expect(await box.isChecked()).toBeTruthy();
-}
-
 function attachMonitors(page: Page) {
   page.on('console', (msg: ConsoleMessage) => {
     if (msg.type() === 'error') {
@@ -345,16 +338,16 @@ test.describe('full button audit', () => {
       ]);
       const ok = resp.ok();
       record('tasks', 'Run Task', 'POST /api/tasks', ok, `status=${resp.status()}`);
-      // Wait for live steps or completion
-      await page.waitForTimeout(8000);
-      const steps = await page.getByTestId('step-line').count();
-      const progress = await page.getByTestId('task-progress').count();
+      // Tasks page is one-off submit only; logs live on History
+      await page.waitForTimeout(2000);
+      const submitted = await page.getByTestId('task-submitted').count();
+      const histLink = await page.getByTestId('task-history-link').count();
       record(
         'tasks',
-        'Live step log',
-        'UI updates after submit',
-        progress > 0 || steps > 0,
-        `steps=${steps} progress=${progress}`
+        'Submitted → History link',
+        'UI after submit',
+        submitted > 0 && histLink > 0,
+        `submitted=${submitted} historyLink=${histLink}`
       );
     } catch (e) {
       record('tasks', 'Run Task', 'POST /api/tasks', false, String(e).slice(0, 200));
@@ -567,11 +560,15 @@ test.describe('full button audit', () => {
     }
     await page.screenshot({ path: path.join(OUT, '05-dating.png'), fullPage: true });
 
-    // ---------- Social (dry-run only) ----------
+    // ---------- Social (always live, no dry-run toggle) ----------
     await page.goto('/social');
     await page.waitForTimeout(1000);
-    await ensureDryRun(page, 'social-dry-run');
-    record('social', 'Dry-run toggle', 'checked', true);
+    record(
+      'social',
+      'No dry-run toggle',
+      'UI',
+      (await page.getByTestId('social-dry-run').count()) === 0
+    );
     try {
       const stopBtn = page.getByTestId('social-stop');
       if ((await stopBtn.count()) && (await stopBtn.isEnabled())) {
@@ -595,12 +592,23 @@ test.describe('full button audit', () => {
       );
       await startBtn.click({ timeout: 10000 });
       const startResp = await startWait.catch(() => null);
+      let startDry: boolean | null = null;
+      if (startResp) {
+        try {
+          const posted = startResp.request().postDataJSON() as { dry_run?: boolean };
+          startDry = posted?.dry_run ?? null;
+        } catch {
+          /* ok */
+        }
+      }
       record(
         'social',
-        'Start (dry-run)',
+        'Start (live)',
         'POST /api/social/start',
-        !!startResp && startResp.ok(),
-        startResp ? `status=${startResp.status()}` : 'no start response'
+        !!startResp && startResp.ok() && startDry === false,
+        startResp
+          ? `status=${startResp.status()} dry_run=${String(startDry)}`
+          : 'no start response'
       );
       await page.waitForTimeout(4000);
       record(
@@ -625,7 +633,7 @@ test.describe('full button audit', () => {
         record('social', 'Stop', 'API fallback', true, 'UI stop disabled');
       }
     } catch (e) {
-      record('social', 'Start/Stop dry-run', 'flow', false, String(e).slice(0, 200));
+      record('social', 'Start/Stop live', 'flow', false, String(e).slice(0, 200));
     }
     const saveSocial = page.getByRole('button', { name: /save/i });
     if (await saveSocial.count()) {

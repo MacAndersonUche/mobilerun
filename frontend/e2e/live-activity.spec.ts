@@ -62,13 +62,10 @@ test('dating and social live activity views', async ({ page }) => {
 
     await page.getByTestId('dating-stop').click().catch(() => undefined);
 
-    // Social dry-run
+    // Social (always live)
     await page.goto('/social');
     await expect(page.getByTestId('live-activity')).toBeVisible({ timeout: 20000 });
-    const sdry = page.getByTestId('social-dry-run');
-    if (await sdry.count()) {
-      if (!(await sdry.isChecked())) await sdry.check();
-    }
+    await expect(page.getByTestId('social-dry-run')).toHaveCount(0);
     await page.getByTestId('social-start').click();
     await expect
       .poll(

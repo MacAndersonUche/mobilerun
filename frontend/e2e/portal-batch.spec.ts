@@ -65,7 +65,20 @@ async function authAndMock(page: import('@playwright/test').Page) {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          apps: [],
+          apps: [
+            {
+              name: 'Bumble',
+              package_name: 'com.bumble.app',
+              enabled: true,
+              daily_swipe_cap: 50,
+            },
+            {
+              name: 'Hinge',
+              package_name: 'co.hinge.app',
+              enabled: true,
+              daily_swipe_cap: 50,
+            },
+          ],
           persona_prompt: '',
           opener_mode: 'templates',
           speed_preset: 'balanced',
@@ -193,8 +206,17 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('settings-page')).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('settings-account-card')).toBeVisible();
     await expect(page.getByTestId('settings-account-meta')).toBeVisible();
+    await expect(page.getByTestId('settings-account-meta')).not.toContainText('Backend:');
     await expect(page.getByTestId('settings-workspace')).toBeVisible();
+    await expect(page.getByTestId('settings-workspace').locator('#settings-backend-url')).toBeVisible();
     await expect(page.getByTestId('settings-ai-tools')).toBeVisible();
+    const advanced = page.getByTestId('settings-ai-advanced');
+    await expect(advanced).toBeVisible();
+    await expect(page.locator('#settings-temperature')).toHaveCount(0);
+    await advanced.locator('summary').click();
+    await expect(page.locator('#settings-temperature')).toBeVisible();
+    await expect(page.locator('#settings-max-tokens')).toBeVisible();
+    await expect(page.locator('#settings-auth-token')).toBeVisible();
     await expect(page.getByTestId('settings-logout')).toBeVisible();
     await expect(page.getByText('Owner')).toBeVisible();
     await expect(page.getByText(/Help & support/)).toBeVisible();
@@ -228,6 +250,8 @@ test.describe('portal batch', () => {
     await page.goto('/dating');
     await expect(page.getByTestId('dating-start')).toBeVisible({ timeout: 15000 });
     await expect(page.getByTestId('dating-stop')).toBeVisible();
+    await expect(page.getByTestId('dating-status-refresh')).toBeVisible();
+    await expect(page.getByTestId('dating-apps-for-start')).toHaveCount(0);
     await expect(page.getByTestId('dating-dry-run')).toHaveCount(0);
     await expect(page.getByText('Dry-run (no real likes/messages)')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^(Pause|Resume)$/i })).toHaveCount(0);

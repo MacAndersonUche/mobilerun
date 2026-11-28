@@ -4,7 +4,6 @@ import { Link } from 'react-router-dom';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
-import TaskStepLog, { type RawStep } from '../components/TaskStepLog';
 
 interface Device {
   device_id: string;
@@ -25,56 +24,14 @@ export default function TasksPage() {
   const [submitting, setSubmitting] = useState(false);
   const [mode, setMode] = useState<Mode>('normal');
   const [speed, setSpeed] = useState<Speed>('balanced');
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [lastTaskId, setLastTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string>('');
-  const [taskLog, setTaskLog] = useState<string>('');
   const [taskError, setTaskError] = useState<string>('');
-  const [taskInstruction, setTaskInstruction] = useState<string>('');
-  const [taskSteps, setTaskSteps] = useState<RawStep[]>([]);
 
   useEffect(() => {
     loadDevices();
     loadMode();
   }, []);
-
-  useEffect(() => {
-    if (!activeTaskId) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const res = await axios.get(
-          `${getBackendUrl()}/api/tasks/${activeTaskId}`,
-          { headers: authHeaders() }
-        );
-        if (cancelled) return;
-        const d = res.data;
-        const planner = d.planner ? ` · ${d.planner}` : '';
-        const provider = d.llm_provider ? `/${d.llm_provider}` : '';
-        setTaskStatus(String(d.status || 'running'));
-        setTaskLog(
-          [d.result, planner || provider ? `${planner}${provider}`.trim() : '']
-            .filter(Boolean)
-            .join(' - ') || 'Running…'
-        );
-        setTaskError(d.error || '');
-        if (d.instruction) setTaskInstruction(String(d.instruction));
-        if (Array.isArray(d.steps)) setTaskSteps(d.steps);
-        if (['completed', 'failed', 'stopped', 'cancelled'].includes(d.status)) {
-          setActiveTaskId(null);
-          setSubmitting(false);
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    };
-    tick();
-    const id = setInterval(tick, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [activeTaskId]);
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -148,11 +105,8 @@ export default function TasksPage() {
     }
 
     setSubmitting(true);
-    setTaskStatus('running');
-    setTaskLog('Submitted - waiting for first step…');
+    setTaskStatus('submitted');
     setTaskError('');
-    setTaskSteps([]);
-    setTaskInstruction(instruction.trim());
     try {
       const res = await axios.post(
         `${getBackendUrl()}/api/tasks`,
@@ -169,16 +123,13 @@ export default function TasksPage() {
       );
       const tid = res.data?.task_id;
       if (tid) {
-        setActiveTaskId(tid);
         setLastTaskId(tid);
         setTaskStatus(res.data.status || 'running');
-        setTaskLog(res.data.result || 'Cloud agent started');
-        if (Array.isArray(res.data.steps)) setTaskSteps(res.data.steps);
+        setInstruction('');
       } else {
-        setSubmitting(false);
+        setTaskStatus('failed');
         alert('Task submitted but no task_id returned');
       }
-      setInstruction('');
     } catch (error: unknown) {
       console.error('Failed to submit task:', error);
       const detail =
@@ -187,9 +138,9 @@ export default function TasksPage() {
           : 'Failed to submit task';
       setTaskStatus('failed');
       setTaskError(detail);
-      setTaskLog('');
-      setSubmitting(false);
       alert(detail);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -198,7 +149,11 @@ export default function TasksPage() {
       <div>
         <h2 className="text-2xl font-semibold">Run Automation Task</h2>
         <p className="text-mute text-sm mt-1">
-          Normal mode: general-purpose phone agent (open apps, navigate, type, multi-step).
+          One-off jobs only. Browse job logs on{' '}
+          <Link to="/history" className="text-accent underline underline-offset-2">
+            History
+          </Link>
+          .
         </p>
       </div>
 
@@ -228,28 +183,31 @@ export default function TasksPage() {
         </div>
       )}
 
-      {(taskStatus || taskLog || taskSteps.length > 0 || lastTaskId) && (
-        <div data-testid="task-progress">
-          {/LLM unavailable:\s*quota/i.test(`${taskLog} ${taskError}`) && (
+      {(lastTaskId || taskStatus) && (
+        <div
+          className="rounded-lg border border-line bg-surface px-4 py-3 text-sm"
+          data-testid="task-submitted"
+        >
+          {/LLM unavailable:\s*quota/i.test(taskError) && (
             <p
-              className="mb-3 rounded border border-amber-700/60 bg-amber-950/40 px-2 py-1 text-sm text-amber-200"
+              className="mb-2 rounded border border-amber-700/60 bg-amber-950/40 px-2 py-1 text-amber-200"
               data-testid="llm-unavailable-banner"
             >
               LLM unavailable: quota
             </p>
           )}
-          <TaskStepLog
-            title="Task live steps"
-            status={taskStatus || 'idle'}
-            taskId={activeTaskId || lastTaskId}
-            instruction={taskInstruction}
-            result={taskError ? undefined : taskLog}
-            error={taskError || undefined}
-            steps={taskSteps}
-            loading={!!activeTaskId}
-            emptyText="Task submitted - steps will appear here as soon as the agent acts."
-            linkToHistory
-          />
+          <p className="text-white">
+            {taskStatus === 'failed'
+              ? `Task failed${taskError ? `: ${taskError}` : ''}.`
+              : `Task ${taskStatus || 'submitted'}${lastTaskId ? ` (${lastTaskId})` : ''}.`}{' '}
+            <Link
+              to="/history"
+              className="text-accent underline underline-offset-2"
+              data-testid="task-history-link"
+            >
+              View progress in History
+            </Link>
+          </p>
         </div>
       )}
 

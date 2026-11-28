@@ -72,14 +72,9 @@ test('tasks page shows plain-language live steps', async ({ page }) => {
     const runBtn = page.getByRole('button', { name: /Run Task/i }).first();
     await expect(runBtn).toBeEnabled({ timeout: 15000 });
     await runBtn.click();
-    await expect(page.getByTestId('task-progress')).toBeVisible({ timeout: 15000 });
-    await expect
-      .poll(async () => page.getByTestId('step-line').count(), { timeout: 180000 })
-      .toBeGreaterThan(0);
-    const first = page.getByTestId('step-line').first();
-    await expect(first).toContainText(/Step\s+\d+:/i);
-    await expect(first).toContainText(/Opened|Tapped|Typed|Swiped|Finished|open/i);
-    await shot(page, 'tasks-live-steps');
+    await expect(page.getByTestId('task-submitted')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('task-history-link')).toBeVisible();
+    await shot(page, 'tasks-submitted');
 
     await page.goto('/history');
     await expect(page.getByTestId('history-task').first()).toBeVisible({

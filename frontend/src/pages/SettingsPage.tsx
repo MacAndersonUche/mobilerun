@@ -131,7 +131,6 @@ export default function SettingsPage() {
         className="space-y-2 text-sm text-mute"
         data-testid="settings-account-meta"
       >
-        <p>Backend: {getBackendUrl()}</p>
         <p>Help & support · macandersonuche@yahoo.com</p>
         <button
           type="button"
@@ -146,8 +145,8 @@ export default function SettingsPage() {
         <section className="mr-card space-y-4" data-testid="settings-workspace">
           <h3 className="text-xl font-semibold">Workspace</h3>
           <p className="text-xs text-mute">
-            Backend URL and auth for this portal (was Workspace preference /
-            AWS cost target).
+            Backend URL for this portal (was Workspace preference / AWS cost
+            target).
           </p>
 
           <div>
@@ -165,20 +164,6 @@ export default function SettingsPage() {
             <p className="mt-1 text-xs text-mute">
               Use localhost for local backend or your Lambda API URL for cloud
             </p>
-          </div>
-
-          <div>
-            <label htmlFor="settings-auth-token" className="mb-2 block text-sm font-medium">
-              Auth Token (JWT)
-            </label>
-            <input
-              id="settings-auth-token"
-              type="password"
-              value={authToken}
-              onChange={(e) => setAuthTokenState(e.target.value)}
-              placeholder="Optional for local, required for cloud"
-              className="mr-input"
-            />
           </div>
         </section>
 
@@ -246,36 +231,55 @@ export default function SettingsPage() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="settings-temperature" className="mb-2 block text-sm font-medium">
-                Temperature
-              </label>
-              <input
-                id="settings-temperature"
-                type="number"
-                step="0.1"
-                min="0"
-                max="2"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="mr-input"
-              />
+          <details className="rounded-lg border border-line bg-canvas-elev/40" data-testid="settings-ai-advanced">
+            <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-white">
+              Advanced
+            </summary>
+            <div className="space-y-4 border-t border-line px-3 py-3">
+              <div>
+                <label htmlFor="settings-auth-token" className="mb-2 block text-sm font-medium">
+                  Auth Token (JWT)
+                </label>
+                <input
+                  id="settings-auth-token"
+                  type="password"
+                  value={authToken}
+                  onChange={(e) => setAuthTokenState(e.target.value)}
+                  placeholder="Optional for local, required for cloud"
+                  className="mr-input"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="settings-temperature" className="mb-2 block text-sm font-medium">
+                    Temperature
+                  </label>
+                  <input
+                    id="settings-temperature"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="2"
+                    value={temperature}
+                    onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                    className="mr-input"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="settings-max-tokens" className="mb-2 block text-sm font-medium">
+                    Max Tokens
+                  </label>
+                  <input
+                    id="settings-max-tokens"
+                    type="number"
+                    value={maxTokens}
+                    onChange={(e) => setMaxTokens(parseInt(e.target.value))}
+                    className="mr-input"
+                  />
+                </div>
+              </div>
             </div>
-
-            <div>
-              <label htmlFor="settings-max-tokens" className="mb-2 block text-sm font-medium">
-                Max Tokens
-              </label>
-              <input
-                id="settings-max-tokens"
-                type="number"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                className="mr-input"
-              />
-            </div>
-          </div>
+          </details>
         </section>
 
         {latestApkQr && (

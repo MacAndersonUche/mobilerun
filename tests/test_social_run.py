@@ -44,7 +44,8 @@ def test_bad_social_requests_rejected(pkg, action, contact, msg):
         social_run.instruction_for(pkg, action, contact, msg)
 
 
-def test_whatsapp_follows_dry_run_toggle():
+def test_social_build_job_respects_dry_run_arg():
+    """Low-level build_job still accepts dry_run; HTTP always forces live."""
     job = social_run.build_job(
         device_id="d",
         pkg="com.whatsapp",
@@ -124,7 +125,7 @@ def client(monkeypatch):
     return c
 
 
-def test_social_run_endpoint(client):
+def test_social_run_endpoint_always_live(client):
     r = client.post(
         "/api/social/run",
         json={
@@ -133,12 +134,12 @@ def test_social_run_endpoint(client):
             "action": "message",
             "contact": "Jo",
             "message": "hi",
-            "dry_run": False,
+            "dry_run": True,  # ignored — always live
         },
     )
     assert r.status_code == 200, r.text
     job = r.json()["job"]
-    assert job["dry_run"] is False  # WhatsApp follows the toggle
+    assert job["dry_run"] is False
     assert job["instruction"] == "whatsapp message Jo and say hi"
     assert client.saved["job_id"] == job["job_id"]  # Stop works cross-Lambda
     bad = client.post(
@@ -162,3 +163,20 @@ def test_social_run_endpoint(client):
         },
     )
     assert off.status_code == 400 and "offline" in off.json()["detail"].lower()
+
+
+def test_social_start_always_live(client):
+    r = client.post(
+        "/api/social/start",
+        json={
+            "device_id": "phone1",
+            "dry_run": True,  # ignored
+            "stand_in_package": "com.google.android.apps.messaging",
+            "max_steps": 4,
+        },
+    )
+    assert r.status_code == 200, r.text
+    job = r.json()["job"]
+    assert job["dry_run"] is False
+    assert job["max_steps"] == 4
+    assert client.saved["job_id"] == job["job_id"]

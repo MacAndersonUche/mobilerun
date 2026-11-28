@@ -31,7 +31,8 @@ export function socialRunBody(opts: {
   action: 'message' | 'reply';
   contact?: string;
   message: string;
-  dryRun: boolean;
+  /** Ignored — Social always runs live (dry_run=false). Kept for call-site compat. */
+  dryRun?: boolean;
 }) {
   return {
     device_id: opts.deviceId || undefined,
@@ -39,6 +40,6 @@ export function socialRunBody(opts: {
     action: opts.action,
     contact: opts.action === 'message' ? (opts.contact || '').trim() : undefined,
     message: opts.message.trim(),
-    dry_run: opts.dryRun,
+    dry_run: false,
   };
 }

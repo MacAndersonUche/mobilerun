@@ -76,6 +76,21 @@ export function appsForStartRows<T extends { package_name: string }>(
   ).filter((app) => !isSocial(app.package_name));
 }
 
+/**
+ * Show Apps for Start only on first run / when Working has nothing enabled
+ * to run (avoids duplicating Working toggles after setup).
+ */
+export function shouldShowAppsForStart(
+  configApps: { package_name: string; enabled?: boolean }[]
+): boolean {
+  return !(configApps || []).some(
+    (a) =>
+      !!a.enabled &&
+      datingAppGroup(a.package_name) === 'works' &&
+      canRunApp(a.package_name)
+  );
+}
+
 // Dating page groups: move an app between groups by moving its package
 // between these two lists — nothing else needs to change.
 // - works: apps that run all the time (top of the page)
