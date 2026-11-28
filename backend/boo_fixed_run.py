@@ -77,9 +77,9 @@ BANK = ("hey how are you", "hi miss", "hello miss", "good morning")
 # Bottom nav at ~95% height: Match, Spotlight, Universes, Messages
 BOO_COORDS = {
     "action_row_y": 0.85,  # Action row vertical position
-    "nav_y": 0.95,         # Bottom nav vertical position
-    "like_x": 0.61,        # Big teal heart horizontal position
-    "message_x": 0.78,     # Paper-plane arrow horizontal position (direct message from card)
+    "nav_y": 0.95,  # Bottom nav vertical position
+    "like_x": 0.61,  # Big teal heart horizontal position
+    "message_x": 0.78,  # Paper-plane arrow horizontal position (direct message from card)
 }
 
 # Paid controls to never tap
@@ -114,7 +114,9 @@ def _blob(tree: str) -> str:
     return " ".join(_label(n) for n in _parse_compact_nodes(tree)).lower()
 
 
-def screen_size_from_tree(tree: str, default: Tuple[int, int] = (1080, 2400)) -> Tuple[int, int]:
+def screen_size_from_tree(
+    tree: str, default: Tuple[int, int] = (1080, 2400)
+) -> Tuple[int, int]:
     """Best-effort display size from visible node bounds."""
     max_r = 0
     max_b = 0
@@ -132,7 +134,9 @@ def screen_size_from_tree(tree: str, default: Tuple[int, int] = (1080, 2400)) ->
     return (w, h)
 
 
-def scale_coords(screen_w: int, screen_h: int, x_frac: float, y_frac: float) -> Tuple[int, int]:
+def scale_coords(
+    screen_w: int, screen_h: int, x_frac: float, y_frac: float
+) -> Tuple[int, int]:
     """Convert fractional coordinates to absolute screen pixels."""
     return (int(round(x_frac * screen_w)), int(round(y_frac * screen_h)))
 
