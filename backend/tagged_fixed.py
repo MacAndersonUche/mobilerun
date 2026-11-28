@@ -507,10 +507,19 @@ def plan_tagged_fixed(
     st["tagged_fixed"] = tg
     done = int(tg.get("done") or 0)
     try:
-        from mobilerun.dating.openers import pick_runner_first_contact_text
+        from mobilerun.dating.openers import (
+            clear_sticky_opener,
+            sticky_first_contact_text,
+        )
     except ImportError:  # pragma: no cover
-        from dating.openers import pick_runner_first_contact_text  # type: ignore
-    text = pick_runner_first_contact_text(
+        from dating.openers import (  # type: ignore
+            clear_sticky_opener,
+            sticky_first_contact_text,
+        )
+    # Stick one opener per person on tg['text'] — re-picking every step
+    # rotates the library line and breaks the typed/send verify.
+    text = sticky_first_contact_text(
+        tg,
         fallback_bank=MESSAGE_BANK,
         message=message,
         state=st,
@@ -895,6 +904,7 @@ def plan_tagged_fixed(
             tg["sent_this"] = False
             done += 1
             tg["done"] = done
+            clear_sticky_opener(tg)
         tg["phase"] = "after_match"
         phase = "after_match"
 

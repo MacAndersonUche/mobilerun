@@ -75,8 +75,26 @@ def allowed_message(
     state: Optional[Dict[str, Any]] = None,
     *,
     profile_name: str = "",
+    store: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Portal opener library first; MESSAGE_BANK if library empty/unreachable."""
+    """Portal opener library first; MESSAGE_BANK if library empty/unreachable.
+
+    When ``store`` is given, stick the chosen line on ``store['text']`` for
+    that person so every planner step reuses it (no mid-send re-pick).
+    """
+    try:
+        from mobilerun.dating.openers import sticky_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import sticky_first_contact_text  # type: ignore
+    if isinstance(store, dict):
+        return sticky_first_contact_text(
+            store,
+            fallback_bank=MESSAGE_BANK,
+            message=text,
+            state=state if isinstance(state, dict) else None,
+            package_name="com.hily.app",
+            profile_name=profile_name or None,
+        )
     try:
         from mobilerun.dating.openers import pick_runner_first_contact_text
     except ImportError:  # pragma: no cover
@@ -88,6 +106,14 @@ def allowed_message(
         package_name="com.hily.app",
         profile_name=profile_name or None,
     )
+
+
+def _clear_stuck_text(bulk: Dict[str, Any]) -> None:
+    try:
+        from mobilerun.dating.openers import clear_sticky_opener
+    except ImportError:  # pragma: no cover
+        from dating.openers import clear_sticky_opener  # type: ignore
+    clear_sticky_opener(bulk)
 
 
 def _blob(tree: str) -> str:
@@ -248,6 +274,7 @@ def plan_hily_fixed_first_contact(
         bulk["awaiting_sent"] = ""
         bulk["send_retry"] = 0
         bulk["typed"] = False
+        _clear_stuck_text(bulk)
         st["bulk_message_new"] = bulk
         if done >= cap:
             return _fp(
@@ -295,7 +322,7 @@ def plan_hily_fixed_first_contact(
             "hily_fixed_fc_paywall_back",
         )
 
-    text = allowed_message(message, state=st)
+    text = allowed_message(message, state=st, store=bulk)
 
     if _message_sent_sheet(ui_tree) or (
         hily_on_mbm(ui_tree) and "message sent" in _blob(ui_tree)

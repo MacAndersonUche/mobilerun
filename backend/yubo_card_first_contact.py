@@ -177,7 +177,7 @@ def plan_yubo_card_first_contact(
     cap = max(1, int(target or 1))
     sent = int(yc.get("sent") or 0)
     phase = str(yc.get("phase") or "open")
-    text = allowed_message(message, state=st)
+    text = allowed_message(message, state=st, store=yc)
     # keep bulk counters in step for the bench/progress readers
     st.setdefault("bulk_message_new", {})["done"] = sent
 
@@ -233,6 +233,11 @@ def plan_yubo_card_first_contact(
             st["bulk_message_new"]["done"] = sent
             yc["phase"] = "swipe"
             yc["waits"] = 0
+            try:
+                from mobilerun.dating.openers import clear_sticky_opener
+            except ImportError:  # pragma: no cover
+                from dating.openers import clear_sticky_opener  # type: ignore
+            clear_sticky_opener(yc)
             phase = "swipe"
         elif sheet and box == text.lower():
             tries = int(yc.get("send_retry") or 0)
@@ -249,6 +254,11 @@ def plan_yubo_card_first_contact(
                     )
             yc["phase"] = "swipe"
             yc["unconfirmed"] = int(yc.get("unconfirmed") or 0) + 1
+            try:
+                from mobilerun.dating.openers import clear_sticky_opener
+            except ImportError:  # pragma: no cover
+                from dating.openers import clear_sticky_opener  # type: ignore
+            clear_sticky_opener(yc)
             stopped = _stop_if_sends_missed(yc)
             if stopped:
                 return stopped
@@ -268,6 +278,11 @@ def plan_yubo_card_first_contact(
             yc["unconfirmed"] = int(yc.get("unconfirmed") or 0) + 1
             yc["phase"] = "swipe"
             yc["waits"] = 0
+            try:
+                from mobilerun.dating.openers import clear_sticky_opener
+            except ImportError:  # pragma: no cover
+                from dating.openers import clear_sticky_opener  # type: ignore
+            clear_sticky_opener(yc)
             stopped = _stop_if_sends_missed(yc)
             if stopped:
                 return stopped

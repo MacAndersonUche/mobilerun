@@ -118,8 +118,28 @@ def allowed_message(
     state: Optional[Dict[str, Any]] = None,
     *,
     profile_name: str = "",
+    store: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Portal opener library first; MESSAGE_BANK if library empty/unreachable."""
+    """Portal opener library first; MESSAGE_BANK if library empty/unreachable.
+
+    When ``store`` (bulk_message_new) is given, the line is stuck on
+    ``store['text']`` for that person so every planner step reuses it.
+    Hinge types via Honeyboard, so only keyable lines are chosen.
+    """
+    try:
+        from mobilerun.dating.openers import sticky_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import sticky_first_contact_text  # type: ignore
+    if isinstance(store, dict):
+        return sticky_first_contact_text(
+            store,
+            fallback_bank=MESSAGE_BANK,
+            message=text,
+            state=state if isinstance(state, dict) else None,
+            package_name="co.hinge.app",
+            profile_name=profile_name or None,
+            require_keyable=True,
+        )
     try:
         from mobilerun.dating.openers import pick_runner_first_contact_text
     except ImportError:  # pragma: no cover
@@ -130,7 +150,16 @@ def allowed_message(
         state=state if isinstance(state, dict) else None,
         package_name="co.hinge.app",
         profile_name=profile_name or None,
+        require_keyable=True,
     )
+
+
+def _clear_stuck_text(bulk: Dict[str, Any]) -> None:
+    try:
+        from mobilerun.dating.openers import clear_sticky_opener
+    except ImportError:  # pragma: no cover
+        from dating.openers import clear_sticky_opener  # type: ignore
+    clear_sticky_opener(bulk)
 
 
 HINGE_PKG = "co.hinge.app"
@@ -512,7 +541,7 @@ def plan_hinge_fixed_first_contact(
     if _on_likes_you(ui_tree) and not hinge_on_like_sheet(ui_tree):
         return _leave_likes_you(bulk, planner)
 
-    text = allowed_message(message, state=st)
+    text = allowed_message(message, state=st, store=bulk)
 
     # Video flow: the "Send a Rose instead?" sheet appears after Send Like.
     # Dismiss it with "Send Like anyway" — never "Send a Rose". The sheet
@@ -552,6 +581,7 @@ def plan_hinge_fixed_first_contact(
                     "_bc_wait": 0,
                 }
             )
+            _clear_stuck_text(bulk)
             bulk.pop("_sheet_waited", None)
             bulk.pop("_discover_waited", None)
             bulk.pop("_vision_last", None)
@@ -572,6 +602,7 @@ def plan_hinge_fixed_first_contact(
             bulk["close_tries"] = 0
             bulk["type_tries"] = 0
             bulk["focus_tries"] = 0
+            _clear_stuck_text(bulk)
             st["bulk_message_new"] = bulk
             return anyway
         # Popup before typing: do not send a bare like — Back to the
@@ -726,6 +757,7 @@ def plan_hinge_fixed_first_contact(
             bulk["close_tries"] = 0
             bulk["type_tries"] = 0
             bulk["focus_tries"] = 0
+            _clear_stuck_text(bulk)
             st["bulk_message_new"] = bulk
             return send
         # The line is not in the box yet: focus it first (tree-verified,
@@ -1327,6 +1359,7 @@ def _blind_compose_step(
                 "_bc_wait": 0,
             }
         )
+        _clear_stuck_text(bulk)
         bulk.pop("_sheet_waited", None)
         bulk.pop("_discover_waited", None)
         bulk.pop("_vision_last", None)

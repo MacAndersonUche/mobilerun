@@ -64,12 +64,17 @@ def comment_text(
     instruction: str,
     message: str,
     state: Optional[Dict[str, Any]] = None,
+    *,
+    store: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Photo-comment from portal opener library (fallback: MESSAGE_BANK).
 
     Custom quoted text in the instruction (not the baked-in dating_run default)
     still wins. The baked-in ``hi miss you look beautiful`` quote is treated as
     a library hint so the opener bank can rotate.
+
+    When ``store`` (bulk_message_new) is given, stick the chosen line on
+    ``store['text']`` for that person so every planner step reuses it.
     """
     import re
 
@@ -78,7 +83,21 @@ def comment_text(
     bank_low = {p.lower() for p in MESSAGE_BANK}
     # Custom Mac quote (not a known bank / default photo line) wins.
     if quoted and quoted.lower() not in bank_low:
+        if isinstance(store, dict):
+            store["text"] = quoted
         return quoted
+    try:
+        from mobilerun.dating.openers import sticky_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import sticky_first_contact_text  # type: ignore
+    if isinstance(store, dict):
+        return sticky_first_contact_text(
+            store,
+            fallback_bank=MESSAGE_BANK,
+            message=message or quoted or PHOTO_COMMENT_TEXT,
+            state=state if isinstance(state, dict) else None,
+            package_name="com.facebook.katana",
+        )
     try:
         from mobilerun.dating.openers import pick_runner_first_contact_text
     except ImportError:  # pragma: no cover
@@ -89,6 +108,14 @@ def comment_text(
         state=state if isinstance(state, dict) else None,
         package_name="com.facebook.katana",
     )
+
+
+def _clear_stuck_text(bulk: Dict[str, Any]) -> None:
+    try:
+        from mobilerun.dating.openers import clear_sticky_opener
+    except ImportError:  # pragma: no cover
+        from dating.openers import clear_sticky_opener  # type: ignore
+    clear_sticky_opener(bulk)
 
 
 def _blob(tree: str) -> str:
@@ -553,7 +580,7 @@ def plan_facebook_dating_fixed_first_contact(
         {"done": 0, "typed": False},
     )
     done = int(bulk.get("done") or 0)
-    text_now = comment_text(instruction, message, state=st)
+    text_now = comment_text(instruction, message, state=st, store=bulk)
     if _on_comment_sheet(ui_tree):
         box_node = _compose_editable(ui_tree)
         box_now = str(box_node.get("text") or "").strip() if box_node else ""
@@ -594,7 +621,7 @@ def plan_facebook_dating_fixed_first_contact(
     # Off the sheet: count a pending send first (the sheet closed or the
     # next profile appeared). Never increment at the Send tap itself —
     # a retry at the closed-keyboard nav (fb3) used to count a miss.
-    pending_text = comment_text(instruction, message, state=st)
+    pending_text = comment_text(instruction, message, state=st, store=bulk)
     if (
         not _on_comment_sheet(ui_tree)
         and (
@@ -615,6 +642,7 @@ def plan_facebook_dating_fixed_first_contact(
             bulk.pop("closing", None)
             bulk["pending_count"] = False
             bulk["confirm_tries"] = 0
+            _clear_stuck_text(bulk)
             st["bulk_message_new"] = bulk
             if done >= cap:
                 return _fp(
@@ -709,7 +737,7 @@ def plan_facebook_dating_fixed_first_contact(
             "fb_dating_fc_paywall_back",
         )
 
-    text = comment_text(instruction, message, state=st)
+    text = comment_text(instruction, message, state=st, store=bulk)
     name = _profile_name(ui_tree)
     if name:
         bulk["name"] = name
@@ -906,6 +934,7 @@ def plan_facebook_dating_fixed_first_contact(
                 bulk["done"] = done
                 bulk["counted_this_send"] = True
                 _remember_sent(bulk, str(bulk.get("pending_name") or name or ""))
+                _clear_stuck_text(bulk)
             bulk["just_sent"] = False
             bulk["awaiting_send"] = False
             bulk["closing"] = True

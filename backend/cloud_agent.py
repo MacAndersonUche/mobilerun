@@ -7554,28 +7554,32 @@ def _dating_fixed_no_llm(
     return False
 
 
-# r53: Samsung Keyboard (Honeyboard) QWERTY with number row, S21+ 1080x2400,
-# measured from the live Hinge screenshot (keyboard up, 27 Nov 2026).
-_HONEYBOARD_KEYS: Dict[str, Tuple[int, int]] = {}
-for _row, _y, _xs in (
-    ("qwertyuiop", 1736, (68, 173, 278, 383, 488, 593, 698, 803, 908, 1013)),
-    ("asdfghjkl", 1886, (120, 225, 330, 435, 540, 645, 750, 855, 960)),
-    ("zxcvbnm", 2036, (225, 330, 435, 540, 645, 750, 855)),
-):
-    for _ch, _x in zip(_row, _xs):
-        _HONEYBOARD_KEYS[_ch] = (_x, _y)
-_HONEYBOARD_KEYS[" "] = (540, 2186)
-_HONEYBOARD_BACKSPACE = (990, 2036)
-_HONEYBOARD_SHIFT = (86, 2036)
+# r53/r54: Samsung Honeyboard key map — see honeyboard_keys.py (letters,
+# space, comma on main; ' and ? via !#1 layer).
+try:
+    from honeyboard_keys import (  # type: ignore
+        HONEYBOARD_BACKSPACE as _HONEYBOARD_BACKSPACE,
+        HONEYBOARD_KEYS as _HONEYBOARD_KEYS,
+        HONEYBOARD_SHIFT as _HONEYBOARD_SHIFT,
+        clear_and_type_plan as _honeyboard_plan,
+    )
+except ImportError:  # pragma: no cover
+    from backend.honeyboard_keys import (  # type: ignore
+        HONEYBOARD_BACKSPACE as _HONEYBOARD_BACKSPACE,
+        HONEYBOARD_KEYS as _HONEYBOARD_KEYS,
+        HONEYBOARD_SHIFT as _HONEYBOARD_SHIFT,
+        clear_and_type_plan as _honeyboard_plan,
+    )
 
 
 def _type_on_keyboard(device_id: str, action: Dict[str, Any]) -> str:
     """Type bank / Mac's text by tapping on-screen keyboard keys.
 
     For fields with no accessibility node (Hinge's Compose comment box),
-    where a11y SET_TEXT has nothing to target. Letters and spaces only, the
-    message text guard still applies, and every tap stays inside the
-    keyboard band (y 1700-2200) — never Done, never the app above.
+    where a11y SET_TEXT has nothing to target. Letters, spaces, comma,
+    apostrophe and ? (via !#1) are keyed; the message text guard still
+    applies; every tap stays inside the keyboard band (y 1700-2200) —
+    never Done, never the app above.
     """
     try:
         from device_rpc import call_device
@@ -7599,34 +7603,17 @@ def _type_on_keyboard(device_id: str, action: Dict[str, Any]) -> str:
     if str(guarded.get("action") or "").lower() == "fail":
         raise RuntimeError(str(guarded.get("reason") or "message text guard"))
     text = str(guarded.get("text") or action.get("text") or "")
-    low = text.lower()
-    if not low or any(ch not in _HONEYBOARD_KEYS for ch in low):
-        raise RuntimeError(
-            f"type_keys: only letters and spaces can be keyed ({text!r})"
+    try:
+        plan = _honeyboard_plan(
+            text,
+            clear_keys=int(action.get("clear_keys") or 0),
+            lower_first=bool(action.get("lower_first")),
         )
-    # Clear what is already in the box (a failed earlier run left text) with
-    # Backspace; harmless on an empty field.
-    for _ in range(max(0, min(40, int(action.get("clear_keys") or 0)))):
-        call_device(
-            device_id,
-            "tap",
-            {"x": _HONEYBOARD_BACKSPACE[0], "y": _HONEYBOARD_BACKSPACE[1]},
-            timeout_s=12,
-        )
-        time.sleep(0.08)
-    if action.get("lower_first") and text[:1].islower():
-        # Samsung auto-capitalises the first letter of an empty box: Shift off
-        call_device(
-            device_id,
-            "tap",
-            {"x": _HONEYBOARD_SHIFT[0], "y": _HONEYBOARD_SHIFT[1]},
-            timeout_s=12,
-        )
-        time.sleep(0.15)
-    for ch in low:
-        x, y = _HONEYBOARD_KEYS[ch]
+    except ValueError as e:
+        raise RuntimeError(str(e)) from e
+    for _label, x, y in plan:
         call_device(device_id, "tap", {"x": int(x), "y": int(y)}, timeout_s=12)
-        time.sleep(0.12)
+        time.sleep(0.08 if _label == "bs" else (0.15 if _label == "shift" else 0.12))
     action["text"] = text
     action["_via"] = "keyboard_keys"
     return f'Typed "{text[:48]}"'
