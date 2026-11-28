@@ -1722,7 +1722,7 @@ class MobilerunAccessibilityService : AccessibilityService() {
                                         software.recycle()
                                         Log.w(
                                             TAG,
-                                            "takeScreenshot black/FLAG_SECURE frame — skip",
+                                            "takeScreenshot black/FLAG_SECURE frame - skip",
                                         )
                                         return
                                     }

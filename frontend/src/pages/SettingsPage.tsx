@@ -104,7 +104,7 @@ export default function SettingsPage() {
       <div>
         <h2 className="text-2xl font-semibold">Settings</h2>
         <p className="text-sm text-mute">
-          Workspace, AI tools, and AWS cost — one place (backend URL, LLM keys,
+          Workspace, AI tools, and AWS cost - one place (backend URL, LLM keys,
           models).
         </p>
       </div>
@@ -249,7 +249,7 @@ export default function SettingsPage() {
           <section className="mr-card">
             <h3 className="mb-4 text-xl font-semibold">Install Android App</h3>
             <p className="mb-4 text-sm text-mute">
-              QR is download-only — scan to install the latest GitHub release APK.
+              QR is download-only - scan to install the latest GitHub release APK.
               Then open the app, pair via Devices → Connect phone QR, and enable
               Accessibility (the only manual step). Notifications and battery are
               requested automatically.

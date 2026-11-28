@@ -46,6 +46,15 @@ async function authAndMock(page: import('@playwright/test').Page) {
               inbox: { unread: 0, new_matches: 0 },
               last_active: null,
             },
+            {
+              name: 'Facebook Dating',
+              package: 'com.facebook.katana',
+              today: { swipes: 6, likes: 0, openers: 11, replies: 0, total_messages: 11 },
+              targets: { opener_target: 50, opener_progress: 11 },
+              total: { swipes: 6, openers: 11, replies: 0, messages: 11, matches: 0 },
+              inbox: { unread: 0, new_matches: 0 },
+              last_active: null,
+            },
           ],
         }),
       });
@@ -137,7 +146,7 @@ test.describe('portal batch', () => {
     await workingToggle.click();
     await expect(workingToggle).toHaveAttribute('aria-expanded', 'true');
 
-    // Bumble/Badoo: swipes only. Hinge/Yubo: messages only. Others: both.
+    // Bumble/Badoo: swipes only. Hinge/Yubo/Facebook: messages only. Others: both.
     await expect(page.getByTestId('dating-today-com.bumble.app')).toHaveText(
       'Today: 9 swipes'
     );
@@ -150,6 +159,12 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('dating-today-com.hily.app')).toHaveText(
       'Today: 3 swipes · 2 messages'
     );
+    await expect(page.getByTestId('dating-today-com.facebook.katana')).toHaveText(
+      'Today: 11 messages'
+    );
+    await expect(
+      page.getByTestId('dating-today-note-com.facebook.katana')
+    ).toHaveText('Max 50 a day');
   });
 
   test('/usage redirects home; no Usage tile', async ({ page }) => {

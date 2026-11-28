@@ -170,7 +170,7 @@ export default function DatingSchedules(props: Props) {
             <div className="font-medium text-white">{s.name}</div>
             <div className="text-xs text-mute">{scheduleSummary(s, appName)}</div>
             <div className="text-xs text-mute">
-              Next: {s.enabled ? s.next_run_label || '—' : 'off'}
+              Next: {s.enabled ? s.next_run_label || '-' : 'off'}
               {s.last_result ? ` · Last: ${s.last_result}` : ''}
             </div>
           </div>
@@ -220,7 +220,7 @@ export default function DatingSchedules(props: Props) {
           />
           <div className="space-y-1">
             <div className="text-xs text-mute">
-              Apps — pick one, or several for a combo. Runs = times the app
+              Apps - pick one, or several for a combo. Runs = times the app
               runs; per run = swipes/messages each time.
             </div>
             {RUNNABLE_APPS.map((pkg) => {

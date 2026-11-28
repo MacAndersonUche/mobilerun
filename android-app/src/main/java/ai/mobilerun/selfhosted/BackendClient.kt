@@ -141,7 +141,7 @@ class BackendClient(private val context: Context) {
     private val _statusFlow = MutableStateFlow("Disconnected")
     val statusFlow: StateFlow<String> = _statusFlow
 
-    private val _routeFlow = MutableStateFlow("Route: —")
+    private val _routeFlow = MutableStateFlow("Route: -")
     val routeFlow: StateFlow<String> = _routeFlow
 
     private val _taskFlow = MutableStateFlow("No tasks yet")
@@ -409,7 +409,7 @@ class BackendClient(private val context: Context) {
                 _statusFlow.value = "Paired · opening WebSocket…"
                 connectBest(force = true)
                 if (webSocket == null) {
-                    val msg = "Paired but WebSocket not connected — will retry"
+                    val msg = "Paired but WebSocket not connected - will retry"
                     _pairErrorFlow.value = msg
                     prefs().edit().putString("last_pair_error", msg).apply()
                 }
@@ -683,8 +683,8 @@ class BackendClient(private val context: Context) {
         }
         val cands = candidates()
         if (cands.isEmpty()) {
-            _statusFlow.value = "No endpoints — set backend URL & sign in"
-            _routeFlow.value = "Route: —"
+            _statusFlow.value = "No endpoints - set backend URL & sign in"
+            _routeFlow.value = "Route: -"
             return
         }
         connecting = true
@@ -857,7 +857,7 @@ class BackendClient(private val context: Context) {
             if (socketGeneration.get() != gen) return@launch
             if (serverAcked && lastHeartbeatAckAtMs > 0) return@launch
             Log.w(tag, "no server register ack within ${REGISTER_ACK_TIMEOUT_MS}ms — reconnect")
-            _statusFlow.value = "No server ack — reconnecting…"
+            _statusFlow.value = "No server ack - reconnecting…"
             _pairErrorFlow.value = "Socket opened but server never registered this device"
             try {
                 webSocket?.cancel()
@@ -902,7 +902,7 @@ class BackendClient(private val context: Context) {
     }
 
     private fun updateRouteUi() {
-        val lat = lastLatencyMs?.let { "${it.toInt()} ms" } ?: "—"
+        val lat = lastLatencyMs?.let { "${it.toInt()} ms" } ?: "-"
         _routeFlow.value = "Route: ${activeRoute.uppercase()} · $lat"
     }
 
@@ -917,7 +917,7 @@ class BackendClient(private val context: Context) {
                 if (lastHeartbeatAckAtMs > 0 && now - lastHeartbeatAckAtMs > HEARTBEAT_STALE_MS) {
                     Log.w(tag, "heartbeat ack stale ${now - lastHeartbeatAckAtMs}ms — reconnect")
                     serverAcked = false
-                    _statusFlow.value = "Connection stale — reconnecting…"
+                    _statusFlow.value = "Connection stale - reconnecting…"
                     try {
                         webSocket?.cancel()
                     } catch (_: Exception) {
@@ -941,7 +941,7 @@ class BackendClient(private val context: Context) {
                 val sent = webSocket?.send(gson.toJson(hb)) == true
                 if (!sent) {
                     serverAcked = false
-                    _statusFlow.value = "Disconnected — reconnecting…"
+                    _statusFlow.value = "Disconnected - reconnecting…"
                     scheduleReconnect()
                     break
                 }
@@ -1087,7 +1087,7 @@ class BackendClient(private val context: Context) {
                     } else if (release.versionCode <= BuildConfig.VERSION_CODE) {
                         Log.i(
                             tag,
-                            "update_available ignored — already on ${BuildConfig.VERSION_CODE}",
+                            "update_available ignored - already on ${BuildConfig.VERSION_CODE}",
                         )
                     } else {
                         _taskFlow.value =
@@ -1446,7 +1446,7 @@ class BackendClient(private val context: Context) {
                                     )
                                 val ok = svc.inputText(text, clear, humanize)
                                 if (!ok) {
-                                    throw Exception("input_text failed — focus a text field")
+                                    throw Exception("input_text failed - focus a text field")
                                 }
                                 "a11y"
                             }
@@ -1518,7 +1518,7 @@ class BackendClient(private val context: Context) {
                                 val y = sendHit.groupValues[2].toInt()
                                 GestureController.tap(x, y, humanize = false)
                             } else {
-                                throw Exception("ime_action=$actionName failed — no IME connection")
+                                throw Exception("ime_action=$actionName failed - no IME connection")
                             }
                         }
                         sendAgentEvent(null, null, "ime_action", "ime_action($actionName)")
@@ -1977,7 +1977,7 @@ class BackendClient(private val context: Context) {
             Log.w(
                 tag,
                 "screenshot too large for WS inline b64_chars=${b64.length} " +
-                    "bytes=${jpeg.size} — need upload_url",
+                    "bytes=${jpeg.size} - need upload_url",
             )
             return mapOf(
                 "ok" to false,
@@ -2315,7 +2315,7 @@ class BackendClient(private val context: Context) {
             null,
             null,
             "secure_folder",
-            "Opened Secure Folder — waiting for fingerprint unlock",
+            "Opened Secure Folder - waiting for fingerprint unlock",
         )
         val a11y = MobilerunAccessibilityService.instance
         val t0 = SystemClock.elapsedRealtime()
@@ -2349,7 +2349,7 @@ class BackendClient(private val context: Context) {
                         null,
                         null,
                         "secure_folder_unlock",
-                        "Fingerprint prompt — unlock Secure Folder to continue ($app)",
+                        "Fingerprint prompt - unlock Secure Folder to continue ($app)",
                     )
                 }
                 continue
@@ -2582,6 +2582,6 @@ class BackendClient(private val context: Context) {
         serverAcked = false
         lastHeartbeatAckAtMs = 0L
         _statusFlow.value = "Disconnected"
-        _routeFlow.value = "Route: —"
+        _routeFlow.value = "Route: -"
     }
 }

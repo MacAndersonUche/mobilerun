@@ -584,7 +584,7 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         f"pair-create:{owner or 'anon'}", limit=10, window_seconds=60
     ):
         raise HTTPException(
-            status_code=429, detail="Too many pairing codes — try again shortly"
+            status_code=429, detail="Too many pairing codes - try again shortly"
         )
 
     try:
@@ -632,7 +632,7 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
     except Exception:
         logger.exception("save_pairing_token failed for owner=%s", owner)
         raise HTTPException(
-            status_code=503, detail="Could not persist pairing code — retry"
+            status_code=503, detail="Could not persist pairing code - retry"
         )
 
     # Compact deep link: short code only (c=) — QR encodes even shorter HTTPS /p/CODE
@@ -1395,12 +1395,12 @@ async def submit_task(
             raise HTTPException(status_code=404, detail="Device not found")
         raise HTTPException(
             status_code=400,
-            detail="Device offline — open MobileRun on the phone and wait until Devices shows Connected",
+            detail="Device offline - open MobileRun on the phone and wait until Devices shows Connected",
         )
     if not reachable:
         raise HTTPException(
             status_code=400,
-            detail="Device offline — no live WebSocket. Re-open the app on the phone.",
+            detail="Device offline - no live WebSocket. Re-open the app on the phone.",
         )
 
     task_id = f"task_{secrets.token_hex(8)}"
@@ -3091,7 +3091,7 @@ async def compose_dating_message_api(
 
         if get_safety_state().is_paused(body.package_name or None):
             raise HTTPException(
-                status_code=409, detail="Safety pause active — resume in UI first"
+                status_code=409, detail="Safety pause active - resume in UI first"
             )
     except HTTPException:
         raise
@@ -3100,7 +3100,7 @@ async def compose_dating_message_api(
 
     if dating_mode_state.get("paused"):
         raise HTTPException(
-            status_code=409, detail="Dating mode paused — resume before composing"
+            status_code=409, detail="Dating mode paused - resume before composing"
         )
 
     lib, _ = _load_opener_library(auth)
@@ -3788,7 +3788,7 @@ async def _start_dating_apps_run(
     if not (mem.get("connected") or device_is_reachable(did)):
         raise HTTPException(
             status_code=400,
-            detail="Phone offline — open MobileRun on the phone and wait "
+            detail="Phone offline - open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
     # One Start = one job per device (dedupe double-tap / racing Lambdas)
@@ -4390,7 +4390,7 @@ async def social_run(
     if not (mem.get("connected") or device_is_reachable(did)):
         raise HTTPException(
             status_code=400,
-            detail="Phone offline — open MobileRun on the phone and wait "
+            detail="Phone offline - open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
     try:

@@ -31,7 +31,7 @@ export function isTokenExpired(token: string | null, nowMs = Date.now()): boolea
   if (!token) return true;
   try {
     const part = token.split('.')[1];
-    if (!part) return false; // not a JWT (opaque) — let the server decide
+    if (!part) return false; // not a JWT (opaque) - let the server decide
     const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
     return typeof json.exp === 'number' && json.exp * 1000 <= nowMs;
   } catch {
@@ -71,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           localStorage.removeItem('mobilerun_user_email');
           setToken(null);
           setEmail(null);
-          setError('Session expired — sign in again');
+          setError('Session expired - sign in again');
         }
         return Promise.reject(err);
       },

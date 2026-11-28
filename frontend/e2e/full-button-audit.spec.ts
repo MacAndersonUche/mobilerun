@@ -629,7 +629,7 @@ test.describe('full button audit', () => {
     record(
       'needs-you',
       'Approve/Send buttons',
-      'enumerate (not clicked — safety)',
+      'enumerate (not clicked - safety)',
       true,
       `approve=${await approve.count()} reject=${await reject.count()}`
     );

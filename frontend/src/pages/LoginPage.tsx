@@ -13,7 +13,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-canvas text-white md:grid md:grid-cols-2">
-      {/* Form column — mirrors cloud.mobilerun.ai split login */}
+      {/* Form column - mirrors cloud.mobilerun.ai split login */}
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-1">
@@ -89,7 +89,7 @@ export default function LoginPage() {
               {loading ? 'Signing in…' : 'Continue'}
             </Button>
             <p className="text-center text-xs text-mute">
-              QR codes download the APK only — linking is Cognito, not pairing.
+              QR codes download the APK only - linking is Cognito, not pairing.
             </p>
           </Card>
         </div>

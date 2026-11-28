@@ -15,12 +15,14 @@ import {
   hasLikeCap,
   todayCounterKind,
   formatTodayCounters,
+  todayCounterNote,
 } from './datingRun.ts';
 
 assert.equal(todayCounterKind('com.badoo.mobile'), 'swipes');
 assert.equal(todayCounterKind('com.bumble.app'), 'swipes');
 assert.equal(todayCounterKind('co.hinge.app'), 'messages');
 assert.equal(todayCounterKind('co.yellw.yellowapp'), 'messages');
+assert.equal(todayCounterKind('com.facebook.katana'), 'messages');
 assert.equal(todayCounterKind('com.hily.app'), 'both');
 assert.equal(todayCounterKind('com.taggedapp'), 'both');
 assert.equal(
@@ -32,9 +34,15 @@ assert.equal(
   'Today: 5 messages'
 );
 assert.equal(
+  formatTodayCounters('com.facebook.katana', { swipes: 9, openers: 12 }),
+  'Today: 12 messages'
+);
+assert.equal(
   formatTodayCounters('com.hily.app', { swipes: 3, openers: 2 }),
   'Today: 3 swipes · 2 messages'
 );
+assert.equal(todayCounterNote('com.facebook.katana'), 'Max 50 a day');
+assert.equal(todayCounterNote('co.hinge.app'), null);
 
 assert.equal(canRunApp('co.hinge.app'), true);
 assert.equal(canRunApp('com.whatsapp'), false);

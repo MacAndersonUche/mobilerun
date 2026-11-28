@@ -129,18 +129,18 @@ export function formatStepWhy(step: RawStep): string {
     .trim();
   // dating opener noise
   r = r.replace(/^dating\s+(opener|reply|swipe)\s*[·|]?\s*/i, '').trim();
-  if (!r || /^(dry_run|ok|—|-)$/i.test(r)) return '';
+  if (!r || /^(dry_run|ok|-)$/i.test(r)) return '';
   // Avoid duplicating the headline
   const head = formatStepHeadline(step).toLowerCase();
   if (head.includes(r.toLowerCase().slice(0, 24))) return '';
   return r;
 }
 
-/** Full line: "Step 2: Opened WhatsApp — to check unread". */
+/** Full line: "Step 2: Opened WhatsApp - to check unread". */
 export function formatStepLine(step: RawStep): string {
   const head = formatStepHeadline(step);
   const why = formatStepWhy(step);
-  const body = why ? `${head} — ${why}` : head;
+  const body = why ? `${head} - ${why}` : head;
   return `Step ${step.n}: ${body}`;
 }
 
