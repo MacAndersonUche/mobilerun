@@ -1,0 +1,24 @@
+<hierarchy windows="2" nodes="18" app_nodes="18" text_nodes="17" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="enterprises.dating.boo,com.samsung.android.honeyboard">
+<w id="active" t="active" p="enterprises.dating.boo" f="1" kids="1">
+ <n d="Dismiss" cls="View" c="1" xy="540,1200" b="0,0,1080,2400"/>
+ <n t="Message Jo" d="MUTUAL INTERESTS LOOKING FOR Friends Long term partner · Interest movies · Inter" cls="View" c="1" s="1" xy="540,1200" b="0,0,1080,2400"/>
+ <n d="MUTUAL INTERESTS LOOKING FOR Friends Long term partner" cls="View" c="1" xy="540,741" b="0,75,1080,1408"/>
+ <n d="Interest movies" cls="Button" c="1" xy="436,230" b="336,196,537,264"/>
+ <n d="Interest music" cls="Button" c="1" xy="651,230" b="558,196,744,264"/>
+ <n d="Hey" cls="Button" c="1" xy="126,1015" b="42,943,211,1088"/>
+ <n d="Hi!" cls="Button" c="1" xy="318,1015" b="243,943,393,1088"/>
+ <n d="👋" cls="Button" c="1" xy="499,1015" b="425,943,573,1088"/>
+ <n d="❤️" cls="Button" c="1" xy="678,1015" b="604,943,753,1088"/>
+ <n cls="Button" c="1" xy="988,1219" b="949,1172,1028,1266"/>
+ <n t="Message Jo" h="Message Jo" cls="EditText" c="1" e="1" f="1" xy="493,1218" b="53,1193,933,1243"/>
+ <n d="GIF" cls="ImageView" c="1" xy="88,1320" b="53,1286,123,1354"/>
+</w>
+<w id="14" t="2:Samsung Keyboard" p="com.samsung.android.honeyboard" f="0" kids="2">
+ <n d="Emojis" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="119,1465" b="0,1423,238,1507"/>
+ <n d="Translation" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="356,1465" b="238,1423,475,1507"/>
+ <n d="Settings" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="594,1465" b="475,1423,713,1507"/>
+ <n d="Clipboard" i="com.samsung.android.honeyboard:id/bee_item_layout" cls="LinearLayout" c="1" xy="831,1465" b="713,1423,950,1507"/>
+ <n d="Expand toolbar" cls="FrameLayout" c="1" xy="1015,1465" b="950,1423,1080,1507"/>
+ <n d="Expand toolbar" i="com.samsung.android.honeyboard:id/toolbar_expand" cls="Button" xy="1014,1464" b="986,1436,1043,1493"/>
+</w>
+</hierarchy>

@@ -159,19 +159,43 @@ def boo_like_button(tree: str, sw: int, sh: int) -> Optional[Tuple[int, int]]:
     return scale_coords(sw, sh, BOO_COORDS["like_x"], BOO_COORDS["action_row_y"])
 
 
+_DM_LAB = re.compile(r"^(?:dm|direct message|message)$", re.I)
+_BAD_MSG = re.compile(
+    r"love|context|crush|super|boost|rose|gold|premium|coin|credit|spotlight|universe|match|power",
+    re.I,
+)
+
+
 def boo_message_button(tree: str, sw: int, sh: int) -> Optional[Tuple[int, int]]:
-    """Message arrow from tree (send/message/arrow/plane), else fractional xy."""
+    """Direct message control on the discovery card.
+
+    Live SM-G996B tree (r51): the card action row is Boost, Pass, Super Love, Like,
+    DM. The message control is labelled exactly "DM" (ImageView, clickable). The
+    old substring match on send/message/arrow/plane picked "Send a Love with
+    Context" (a paid style control) or the bottom nav "Messages" tab instead.
+    Prefer an exact DM label, then a safe substring match that excludes paid and
+    nav labels, then fractional xy.
+    """
+    cands = []
     for n in _parse_compact_nodes(tree):
         if n.get("x") is None or n.get("editable"):
             continue
-        lab = _label(n).lower()
+        y = int(n.get("y") or 0)
+        if y <= sh * 0.7:
+            continue
+        lab = _label(n).strip()
         nid = str(n.get("id") or "").lower().rsplit("/", 1)[-1]
-        if any(w in lab for w in ("send", "message", "arrow", "plane")) or (
-            nid and re.search(r"(?:send|message|arrow|plane)", nid)
+        if _BAD_MSG.search(lab) or _BAD_MSG.search(nid):
+            continue
+        if _DM_LAB.match(lab):
+            cands.append((0, int(n["x"]), y))
+        elif any(w in lab.lower() for w in ("send", "arrow", "plane")) or (
+            nid and re.search(r"(?:send|message|arrow|plane|dm)", nid)
         ):
-            y = int(n.get("y") or 0)
-            if y > sh * 0.7:
-                return (int(n["x"]), y)
+            cands.append((1, int(n["x"]), y))
+    if cands:
+        cands.sort(key=lambda c: c[0])
+        return (cands[0][1], cands[0][2])
     return scale_coords(sw, sh, BOO_COORDS["message_x"], BOO_COORDS["action_row_y"])
 
 
@@ -180,7 +204,90 @@ def boo_card_sig(tree: str) -> str:
     for n in _parse_compact_nodes(tree):
         if _NAME_RE.match(_label(n)):
             return _label(n)
+    return boo_top_card(tree)
+
+
+def boo_top_card(tree: str) -> str:
+    """Name of the first (front) card in the discovery deck.
+
+    Live trees list each card as a ScrollView labelled "Name · Verified · ..."; the
+    first one is the card on screen. Used to confirm the deck advanced after a send.
+    """
+    for n in _parse_compact_nodes(tree):
+        lab = _label(n)
+        if " · " in lab and "MUTUAL INTERESTS" not in lab and n.get("x") is not None:
+            name = lab.split(" · ", 1)[0].strip()
+            if name and len(name) <= 40:
+                return name
     return ""
+
+
+def boo_composer(tree: str) -> Optional[Dict[str, Any]]:
+    """The DM composer EditText (Boo package only), else None."""
+    if PKG not in _pkg(tree):
+        return None
+    for n in _parse_compact_nodes(tree):
+        if n.get("editable"):
+            return n
+    return None
+
+
+_NOT_SEND = re.compile(
+    r"\bai\b|ai mode|gif|emoji|sticker|photo|camera|mic|voice|translat|settings|"
+    r"clipboard|toolbar|love|boost|super|gift|coin|credit|premium|rose|gold",
+    re.I,
+)
+
+
+def boo_send_button(
+    tree: str, edit: Optional[Dict[str, Any]]
+) -> Optional[Tuple[int, int]]:
+    """Paper plane SEND arrow of the Boo DM composer (never the AI mode circle).
+
+    Live SM-G996B tree (type-only runs, 28 Nov 2026): the composer is the EditText
+    with, in the SAME row to its right, an unlabelled Button which is the AI mode
+    circle (opens "Boo AI Page"). The send arrow is the unlabelled clickable
+    ImageView on the toolbar row BELOW the field, at the far right (under the
+    circle). The old generic "right of the field, same row" rule tapped the AI
+    circle, so nothing was ever sent.
+
+    Order: an explicit send/paper plane label or id, then the lowest rightmost
+    unlabelled clickable below the field. Anything in the field's own row is
+    refused, so a missing arrow means no tap rather than the circle.
+    """
+    if edit is None or edit.get("y") is None:
+        return None
+    ey = int(edit["y"])
+    ex2 = int(edit.get("x2") or 0)
+    labelled = []
+    below = []
+    for n in _parse_compact_nodes(tree):
+        if (
+            n is edit
+            or n.get("x") is None
+            or not n.get("clickable")
+            or n.get("editable")
+        ):
+            continue
+        x, y = int(n["x"]), int(n["y"])
+        lab = _label(n)
+        nid = str(n.get("id") or "").lower()
+        if _NOT_SEND.search(lab) or _NOT_SEND.search(nid):
+            continue
+        if re.search(r"send|paper.?plane", lab, re.I) or re.search(
+            r"send|paper.?plane", nid
+        ):
+            labelled.append((x, y))
+        elif abs(y - ey) < 70:
+            continue  # unlabelled, same row as the field: the AI mode circle
+        elif not lab and 40 <= y - ey <= 260 and x >= max(ex2 - 20, 800):
+            below.append((x, y))
+    if labelled:
+        return labelled[0]
+    if below:
+        below.sort(key=lambda c: (-c[0], -c[1]))
+        return below[0]
+    return None
 
 
 def boo_on_deck(tree: str) -> bool:
@@ -241,6 +348,154 @@ def _drop(fr: Dict[str, Any]) -> None:
         fr["unverified"] = int(fr.get("unverified") or 0) + 1
 
 
+def _composer_step(
+    tree: str,
+    fr: Dict[str, Any],
+    text: str,
+    opener_store: Dict[str, Any],
+    msg_limit: int,
+) -> Optional[Dict[str, Any]]:
+    """One planner step while a Boo DM is in flight; None when not applicable.
+
+    Send budget guard: tracks attempted send taps (not just confirmed sends).
+    Never taps the send arrow once attempted+confirmed >= msg_limit. No blind or
+    coordinate taps inside the composer except the identified send arrow. If the
+    composer state is ambiguous, exits without tapping.
+    """
+    edit = boo_composer(tree)
+    pending = fr.get("after_send")
+    if edit is not None:
+        fr["match"] = {"open": True}
+        box = str(edit.get("text") or "").strip()
+        hint = str(edit.get("hint") or "").strip()
+        who = re.sub(r"^message\s+", "", hint, flags=re.I).strip()
+        if box == hint:
+            box = ""
+        cm = fr.setdefault("composer", {})
+        if pending and int(pending.get("taps") or 0) >= 1 and not box:
+            # Composer stayed open but the box emptied: the message went out.
+            fr["match_msgs"] = int(fr.get("match_msgs") or 0) + 1
+            fr.pop("after_send", None)
+            fr.pop("match", None)
+            cm.clear()
+            opener_store.clear()
+            return _act(
+                "press_button",
+                "boo_fixed_int_match_back",
+                f"{NAME}: message sent, back to the cards",
+                button="back",
+            )
+        if box.lower() != text.lower():
+            if int(cm.get("typed") or 0) >= 2:
+                cm.clear()
+                fr.pop("match", None)
+                fr["msg_end"] = "could not type the opener"
+                fr["msg_sent"] = int(fr.get("match_msgs") or 0)
+                fr["phase"] = "likes"
+                return _act(
+                    "press_button",
+                    "boo_composer_abort",
+                    f"{NAME}: leave the composer",
+                    button="back",
+                )
+            cm["typed"] = int(cm.get("typed") or 0) + 1
+            return _act(
+                "type",
+                "boo_fixed_int_match_type",
+                f"{NAME}: type '{text}'",
+                text=text,
+                clear=True,
+            )
+        if pending and int(pending.get("taps") or 0) >= 2:
+            fr.pop("after_send", None)
+            fr.pop("match", None)
+            cm.clear()
+            fr["msg_end"] = "send arrow tapped but the composer did not close"
+            fr["msg_sent"] = int(fr.get("match_msgs") or 0)
+            fr["phase"] = "likes"
+            return _act(
+                "press_button",
+                "boo_composer_abort",
+                f"{NAME}: leave the composer",
+                button="back",
+            )
+        # Send budget guard: never tap send arrow if we've already attempted the limit
+        attempted = int(fr.get("send_attempts") or 0)
+        confirmed = int(fr.get("match_msgs") or 0)
+        if attempted + confirmed >= msg_limit:
+            fr.pop("match", None)
+            cm.clear()
+            fr["msg_end"] = (
+                f"send budget exhausted (attempted {attempted}, confirmed {confirmed}, "
+                f"limit {msg_limit})"
+            )
+            fr["msg_sent"] = confirmed
+            fr["phase"] = "likes"
+            return _act(
+                "press_button",
+                "boo_composer_abort",
+                f"{NAME}: send budget reached, leave the composer",
+                button="back",
+            )
+        xy = boo_send_button(tree, edit)
+        if not xy:
+            fr.pop("match", None)
+            cm.clear()
+            fr["msg_end"] = "send arrow not found (refused to tap the AI circle)"
+            fr["msg_sent"] = int(fr.get("match_msgs") or 0)
+            fr["phase"] = "likes"
+            return _act(
+                "press_button",
+                "boo_composer_abort",
+                f"{NAME}: leave the composer",
+                button="back",
+            )
+        # Count the send attempt before tapping
+        fr["send_attempts"] = attempted + 1
+        pend = fr.setdefault(
+            "after_send",
+            {"to": who or str(fr.get("dm_to") or ""), "taps": 0, "waits": 0},
+        )
+        pend["taps"] = int(pend.get("taps") or 0) + 1
+        return _act(
+            "tap",
+            "boo_fixed_int_match_send",
+            f"{NAME}: send '{text}' to {who or 'card'} (paper plane arrow, attempt {attempted + 1})",
+            x=xy[0],
+            y=xy[1],
+        )
+    if pending:
+        # Composer closed. Boo plays a big send arrow over the card, then shows the
+        # next card. Do nothing (never tap the overlay) until the deck is back with a
+        # different front card.
+        who = str(pending.get("to") or "")
+        top = boo_top_card(tree)
+        if boo_on_deck(tree) and top and top != who:
+            fr["match_msgs"] = int(fr.get("match_msgs") or 0) + 1
+            fr.pop("after_send", None)
+            fr.pop("match", None)
+            fr.pop("composer", None)
+            opener_store.clear()
+            return None
+        pending["waits"] = int(pending.get("waits") or 0) + 1
+        if pending["waits"] > 8:
+            fr.pop("after_send", None)
+            fr.pop("match", None)
+            fr.pop("composer", None)
+            fr["msg_end"] = "send not confirmed (deck did not advance)"
+            fr["msg_sent"] = int(fr.get("match_msgs") or 0)
+            fr["phase"] = "likes"
+            return None
+        return {
+            "action": "wait",
+            "reason": f"{NAME}: waiting for the send animation to clear and the next card",
+            "planner": PLANNER,
+            "llm_provider": None,
+            "_no_llm_handoff": True,
+        }
+    return None
+
+
 def plan_boo_fixed_run(
     instruction: str,
     ui_tree: str,
@@ -260,12 +515,16 @@ def plan_boo_fixed_run(
         "phase", "message" if mode in ("message", "message_likes") and msgs else "likes"
     )
     likes = int(fr["likes"])
-    text = _bank_text(message)
+    # Pick the opener once per person (sticky). Re-picking every planner step made
+    # the typed-box check compare against a different line, so Boo retyped and
+    # never sent.
+    opener_store = fr.setdefault("opener", {})
+    text = _bank_text(message, st, store=opener_store)
     pk = _pkg(ui_tree)
     sw, sh = screen_size_from_tree(ui_tree)
     kw = dict(
         pkg=PKG,
-        prefix=f"boo_fixed",
+        prefix="boo_fixed",
         chrome=lambda t: boo_on_deck(t) or boo_on_message_composer(t),
         app=NAME,
         thread_ids=('e="1"',),
@@ -299,9 +558,17 @@ def plan_boo_fixed_run(
                 dry_run_verified=True,
             )
 
-    # Message phase: direct messages from discovery deck via paper-plane arrow
+    # Message phase: direct messages from discovery deck via the DM control
     if phase == "message":
         m = fr.get("match") or {}
+        # Boo composer: type once, tap the SEND arrow (not the AI circle), then wait
+        # for the send animation to clear and the NEXT card to show before moving on.
+        # Send budget guard prevents tapping send arrow once attempted+confirmed >= limit.
+        if not dry_run:
+            act = _composer_step(ui_tree, fr, text, opener_store, msgs)
+            if act is not None:
+                return act
+            m = fr.get("match") or {}
         if sent() >= msgs and not m.get("open"):
             fr["msg_sent"] = sent()
             fr["phase"] = phase = "likes"
@@ -318,12 +585,16 @@ def plan_boo_fixed_run(
                 done_sigs = fr.setdefault("done_sigs", [])
                 if sig and sig in done_sigs:
                     fr["msg_sent"] = sent()
-                    fr["msg_end"] = "no more new people (all cards seen)"
+                    fr["msg_end"] = (
+                        fr.get("msg_end") or "no more new people (all cards seen)"
+                    )
                     fr["phase"] = phase = "likes"
                 elif not dry_run:
                     if sig:
                         done_sigs.append(sig)
                     fr["match"] = {"open": True}
+                    opener_store.clear()  # fresh opener for this new person
+                    fr["dm_to"] = boo_top_card(ui_tree)
                     xy = boo_message_button(ui_tree, sw, sh)
                     if xy:
                         return _act(
