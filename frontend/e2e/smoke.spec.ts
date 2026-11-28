@@ -29,13 +29,16 @@ test('authenticated routes', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible({
     timeout: 15000,
   });
-  // Home has nav tiles (no sidebar/bottom nav). Dating + Devices among them.
+  // Home has nav tiles (no sidebar/bottom nav). Settings is avatar / bottom nav only.
   const home = page.locator('[data-testid="home-page"]');
-  await expect(home.getByTestId('home-nav-tiles')).toBeVisible();
-  await expect(home.getByRole('link', { name: /Dating/i })).toHaveCount(1);
-  await expect(home.getByRole('link', { name: /Devices/i })).toHaveCount(1);
-  await expect(home.getByRole('link', { name: /Social/i })).toHaveCount(1);
-  await expect(home.getByRole('link', { name: /Tasks/i })).toHaveCount(1);
+  const tiles = home.getByTestId('home-nav-tiles');
+  await expect(tiles).toBeVisible();
+  await expect(tiles.getByRole('link', { name: /Dating/i })).toHaveCount(1);
+  await expect(tiles.getByRole('link', { name: /Devices/i })).toHaveCount(1);
+  await expect(tiles.getByRole('link', { name: /Social/i })).toHaveCount(1);
+  await expect(tiles.getByRole('link', { name: /Tasks/i })).toHaveCount(1);
+  await expect(tiles.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
+  await expect(home.getByRole('link', { name: /^Open settings$/i })).toHaveCount(1);
   await expect(page.getByTestId('desktop-sidebar')).toHaveCount(0);
   await expect(page.getByTestId('mobile-bottom-nav')).toHaveCount(0);
   await expect(home.getByRole('link', { name: /^Manage$/i })).toHaveCount(0);
