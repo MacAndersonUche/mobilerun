@@ -476,3 +476,34 @@ def test_five_message_run_over_distinct_cards():
         assert a["fastpath_step"] == "boo_message_arrow"
     assert taps == 5 and st["boo_run"]["match_msgs"] == 5
     assert "sent 5/5" in a["reason"]
+
+
+def test_confirmed_like_counts_and_reaches_the_job_counters():
+    from backend.dating_stats_io import _counter_snapshot
+
+    inst = "fixed boo likes messages 0 likes 2"
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(inst, tree, [], state=st)  # noqa: E731
+    a = p(LIVE_DECK)
+    assert a["fastpath_step"] == "boo_like_swipe" and _xy(a) == (752, 2025)
+    assert _counter_snapshot(st, None) == (0, 0)  # a tap alone is not a like
+    p(LIVE_AFTER)  # front card changed Kim -> Sam: the like is confirmed
+    assert st["boo_run"]["likes"] == 1
+    assert _counter_snapshot(st, None) == (0, 1)
+
+
+def test_message_counter_follows_each_confirmed_send():
+    from backend.dating_stats_io import _counter_snapshot
+
+    inst = "fixed boo message messages 5 likes 0"
+    msg = "hey how are you"
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(
+        inst, tree, [], state=st, message=msg
+    )  # noqa: E731
+    p(LIVE_DECK.replace("Kim", "Aa"))
+    p(LIVE_EMPTY)
+    p(LIVE_TYPED)
+    assert _counter_snapshot(st, None) == (0, 0)  # tapped, not yet confirmed
+    p(LIVE_AFTER.replace("Sam", "Bb"))
+    assert _counter_snapshot(st, None) == (1, 0)
