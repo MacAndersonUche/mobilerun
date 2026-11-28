@@ -243,6 +243,8 @@ export class MobilerunStack extends cdk.Stack {
       // Prefer OpenAI when Gemini is quota'd (429); also try OpenAI first when set
       PREFER_OPENAI: process.env.PREFER_OPENAI || 'true',
       ALLOW_UNAUTHENTICATED: 'false',
+      // Fabs SSO shared secret (for single sign-on to Auto-Fab)
+      FABS_SSO_SECRET: process.env.FABS_SSO_SECRET || '',
       HISTORY_TABLE: historyTable.tableName,
       SETTINGS_TABLE: settingsTable.tableName,
       CONNECTIONS_TABLE: connectionsTable.tableName,
