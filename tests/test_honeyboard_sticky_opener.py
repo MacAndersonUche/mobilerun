@@ -65,13 +65,14 @@ def test_type_on_keyboard_keys_punctuation(monkeypatch):
             "action": "type_keys",
             "text": text,
             "clear_keys": 2,
-            "lower_first": True,
+            "lower_first": False,
             "_instruction": f'send 1 first contact messages on hinge "{text}"',
         },
     )
     assert out == f'Typed "{text}"'
-    expected = clear_and_type_plan(text, clear_keys=2, lower_first=True)
+    expected = clear_and_type_plan(text, clear_keys=2, lower_first=False)
     assert len(taps) == len(expected)
+    assert all(p.get("humanize") is False for p in taps)
     assert all(1700 <= p["y"] <= 2200 for p in taps)
     assert (985, 2186) not in [(p["x"], p["y"]) for p in taps]
 

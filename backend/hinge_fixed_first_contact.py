@@ -1221,13 +1221,16 @@ def _blind_compose_step(
         st["bulk_message_new"] = bulk
         # r53 (live 27 Nov 2026): a11y SET_TEXT cannot reach Hinge's comment
         # box (no node), so type it on the on-screen keyboard key by key.
+        # Never lower_first / Shift: the empty Add-a-comment box already
+        # sentence-shifts; an extra Shift tap cycles to CAPS LOCK (28 Nov).
         return _fp(
             {
                 **base,
                 "action": "type_keys",
                 "text": text,
                 "clear_keys": 24,
-                "lower_first": True,
+                "lower_first": False,
+                "humanize": False,
                 "reason": f"Type Hinge comment '{text}' on the keyboard into the focused "
                 f"Add a comment box (inline panel, tree blind) ({planner})",
             },

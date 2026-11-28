@@ -7580,6 +7580,11 @@ def _type_on_keyboard(device_id: str, action: Dict[str, Any]) -> str:
     apostrophe and ? (via !#1) are keyed; the message text guard still
     applies; every tap stays inside the keyboard band (y 1700-2200) —
     never Done, never the app above.
+
+    Device taps ACK immediately and fire gestures on a thread pool, so we
+    must (1) pass humanize=False (jitter misses ? after !#1) and (2) sleep
+    between taps — longer after a layer switch — so keys land in order.
+    Never tap Shift first: Hinge's empty box already sentence-shifts.
     """
     try:
         from device_rpc import call_device
@@ -7604,16 +7609,30 @@ def _type_on_keyboard(device_id: str, action: Dict[str, Any]) -> str:
         raise RuntimeError(str(guarded.get("reason") or "message text guard"))
     text = str(guarded.get("text") or action.get("text") or "")
     try:
+        # lower_first is ignored — sentence-shift is already on for Hinge.
         plan = _honeyboard_plan(
             text,
             clear_keys=int(action.get("clear_keys") or 0),
-            lower_first=bool(action.get("lower_first")),
+            lower_first=False,
         )
     except ValueError as e:
         raise RuntimeError(str(e)) from e
     for _label, x, y in plan:
-        call_device(device_id, "tap", {"x": int(x), "y": int(y)}, timeout_s=12)
-        time.sleep(0.08 if _label == "bs" else (0.15 if _label == "shift" else 0.12))
+        # Exact coords — +-10px humanize misses ? on the symbol layer.
+        call_device(
+            device_id,
+            "tap",
+            {"x": int(x), "y": int(y), "humanize": False},
+            timeout_s=12,
+        )
+        # Fire-and-forget gestures: wait for dispatch; layer swaps need more.
+        if _label == "layer":
+            time.sleep(0.35)
+        elif _label == "bs":
+            time.sleep(0.08)
+        else:
+            time.sleep(0.15)
     action["text"] = text
     action["_via"] = "keyboard_keys"
+    action["humanize"] = False
     return f'Typed "{text[:48]}"'
