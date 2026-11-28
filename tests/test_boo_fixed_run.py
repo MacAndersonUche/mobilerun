@@ -300,3 +300,127 @@ def test_send_not_confirmed_if_deck_never_advances():
 def test_top_card_names():
     assert boo_top_card(LIVE_DECK) == "Kim"
     assert boo_top_card(LIVE_AFTER) == "Sam"
+
+
+# ---- Send budget guard: never tap send arrow more than the message limit ----
+
+
+def test_send_budget_guard_refuses_second_tap_with_limit_1():
+    """A run with messages=1 can never issue a second send tap."""
+    inst = "fixed boo message messages 1 likes 0"
+    st = {}
+
+    def p(tree):
+        return plan_boo_fixed_run(inst, tree, [], state=st, message="hey how are you")
+
+    # Open composer and simulate having typed the message already
+    p(LIVE_DECK)
+    # Manually set up state as if we've already typed
+    st["boo_run"]["composer"] = {"typed": 1}
+    st["boo_run"]["opener"]["text"] = "hey how are you"
+    # Now LIVE_TYPED has matching text, so it will tap send (1st attempt)
+    act = p(LIVE_TYPED)
+    assert act["action"] == "tap" and "attempt 1" in act["reason"]
+    assert st["boo_run"]["send_attempts"] == 1
+    # Composer still open after tap (send arrow tapped but not confirmed yet)
+    # Budget guard: attempted=1, confirmed=0, limit=1 -> no more taps allowed
+    act = p(LIVE_TYPED)
+    assert act["action"] == "press_button"  # exits composer
+    assert "send budget exhausted" in st["boo_run"]["msg_end"]
+    assert "attempted 1" in st["boo_run"]["msg_end"]
+
+
+def test_send_budget_guard_ambiguous_state_exits_without_tapping():
+    """If composer state is ambiguous, exit without tapping."""
+    inst = "fixed boo message messages 1 likes 0"
+    st = {}
+
+    def p(tree):
+        return plan_boo_fixed_run(inst, tree, [], state=st, message="hey how are you")
+
+    # Open composer and set up state as if we've typed
+    p(LIVE_DECK)
+    st["boo_run"]["composer"] = {"typed": 1}
+    st["boo_run"]["opener"]["text"] = "hey how are you"
+    # Remove send arrow to make state ambiguous
+    no_arrow = LIVE_TYPED.replace(
+        '<n cls="ImageView" c="1" xy="992,1320" b="957,1285,1028,1356"/>', ""
+    )
+    act = p(no_arrow)
+    assert act["action"] == "press_button"
+    assert "send arrow not found" in st["boo_run"]["msg_end"]
+    assert st["boo_run"].get("send_attempts", 0) == 0  # never incremented
+
+
+def test_send_budget_allows_multiple_sends_within_limit():
+    """With messages=2, can attempt 2 sends but not 3."""
+    inst = "fixed boo message messages 2 likes 0"
+    st = {}
+
+    def p(tree):
+        return plan_boo_fixed_run(inst, tree, [], state=st, message="hey how are you")
+
+    # First person: set up state as if typed, then send (attempt 1)
+    p(LIVE_DECK)
+    st["boo_run"]["composer"] = {"typed": 1}
+    st["boo_run"]["opener"]["text"] = "hey how are you"
+    st["boo_run"]["match"] = {"open": True}
+    act = p(LIVE_TYPED)
+    assert "attempt 1" in act["reason"]
+    assert st["boo_run"]["send_attempts"] == 1
+    # Clear match to allow second DM
+    st["boo_run"].pop("after_send", None)
+    st["boo_run"]["match_msgs"] = 0  # confirmed sends
+    st["boo_run"]["composer"] = {}
+    st["boo_run"]["opener"] = {"text": "hey how are you"}
+    st["boo_run"]["match"] = {"open": True}
+    # Second attempt with text already matching
+    st["boo_run"]["composer"] = {"typed": 1}
+    act = p(LIVE_TYPED)
+    assert "attempt 2" in act["reason"]
+    assert st["boo_run"]["send_attempts"] == 2
+    # Try third tap: budget exhausted (attempted=2, confirmed=0, limit=2)
+    st["boo_run"].pop("after_send", None)
+    st["boo_run"]["composer"] = {"typed": 1}
+    st["boo_run"]["match"] = {"open": True}
+    act = p(LIVE_TYPED)
+    assert act["action"] == "press_button"
+    assert "send budget exhausted" in st["boo_run"]["msg_end"]
+    assert "attempted 2" in st["boo_run"]["msg_end"]
+
+
+def test_no_blind_coordinate_taps_in_composer():
+    """Only the identified send arrow is tapped; no blind/coordinate taps."""
+    inst = "fixed boo message messages 3 likes 0"  # limit=3 to allow more attempts
+    st = {}
+
+    def p(tree):
+        return plan_boo_fixed_run(inst, tree, [], state=st, message="hey how are you")
+
+    # Open composer and set up state as if typed
+    p(LIVE_DECK)
+    st["boo_run"]["composer"] = {"typed": 1}
+    st["boo_run"]["opener"]["text"] = "hey how are you"
+    st["boo_run"]["match"] = {"open": True}
+    # Only tap if boo_send_button returns valid coordinates
+    act = p(LIVE_TYPED)
+    assert act["action"] == "tap"
+    assert act["x"] == 992 and act["y"] == 1320  # identified send arrow
+    # Remove send arrow: no fallback coordinate tap
+    no_arrow = LIVE_TYPED.replace(
+        '<n cls="ImageView" c="1" xy="992,1320" b="957,1285,1028,1356"/>', ""
+    )
+    # Reset state for second attempt
+    st["boo_run"]["opener"] = {"text": "hey how are you"}
+    st["boo_run"]["send_attempts"] = 1  # keep the first attempt
+    st["boo_run"]["match_msgs"] = 0  # no confirmed sends yet
+    st["boo_run"].pop("after_send", None)
+    st["boo_run"].pop("msg_end", None)
+    st["boo_run"]["phase"] = "message"
+    st["boo_run"]["match"] = {"open": True}
+    st["boo_run"]["composer"] = {"typed": 1}
+    act = p(no_arrow)
+    assert act["action"] == "press_button"  # exits, no tap
+    assert "send arrow not found" in st["boo_run"]["msg_end"]
+    # Verify send_attempts was not incremented
+    assert st["boo_run"]["send_attempts"] == 1

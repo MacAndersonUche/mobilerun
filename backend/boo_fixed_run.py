@@ -349,9 +349,19 @@ def _drop(fr: Dict[str, Any]) -> None:
 
 
 def _composer_step(
-    tree: str, fr: Dict[str, Any], text: str, opener_store: Dict[str, Any]
+    tree: str,
+    fr: Dict[str, Any],
+    text: str,
+    opener_store: Dict[str, Any],
+    msg_limit: int,
 ) -> Optional[Dict[str, Any]]:
-    """One planner step while a Boo DM is in flight; None when not applicable."""
+    """One planner step while a Boo DM is in flight; None when not applicable.
+
+    Send budget guard: tracks attempted send taps (not just confirmed sends).
+    Never taps the send arrow once attempted+confirmed >= msg_limit. No blind or
+    coordinate taps inside the composer except the identified send arrow. If the
+    composer state is ambiguous, exits without tapping.
+    """
     edit = boo_composer(tree)
     pending = fr.get("after_send")
     if edit is not None:
@@ -409,6 +419,24 @@ def _composer_step(
                 f"{NAME}: leave the composer",
                 button="back",
             )
+        # Send budget guard: never tap send arrow if we've already attempted the limit
+        attempted = int(fr.get("send_attempts") or 0)
+        confirmed = int(fr.get("match_msgs") or 0)
+        if attempted + confirmed >= msg_limit:
+            fr.pop("match", None)
+            cm.clear()
+            fr["msg_end"] = (
+                f"send budget exhausted (attempted {attempted}, confirmed {confirmed}, "
+                f"limit {msg_limit})"
+            )
+            fr["msg_sent"] = confirmed
+            fr["phase"] = "likes"
+            return _act(
+                "press_button",
+                "boo_composer_abort",
+                f"{NAME}: send budget reached, leave the composer",
+                button="back",
+            )
         xy = boo_send_button(tree, edit)
         if not xy:
             fr.pop("match", None)
@@ -422,6 +450,8 @@ def _composer_step(
                 f"{NAME}: leave the composer",
                 button="back",
             )
+        # Count the send attempt before tapping
+        fr["send_attempts"] = attempted + 1
         pend = fr.setdefault(
             "after_send",
             {"to": who or str(fr.get("dm_to") or ""), "taps": 0, "waits": 0},
@@ -430,7 +460,7 @@ def _composer_step(
         return _act(
             "tap",
             "boo_fixed_int_match_send",
-            f"{NAME}: send '{text}' to {who or 'card'} (paper plane arrow)",
+            f"{NAME}: send '{text}' to {who or 'card'} (paper plane arrow, attempt {attempted + 1})",
             x=xy[0],
             y=xy[1],
         )
@@ -533,8 +563,9 @@ def plan_boo_fixed_run(
         m = fr.get("match") or {}
         # Boo composer: type once, tap the SEND arrow (not the AI circle), then wait
         # for the send animation to clear and the NEXT card to show before moving on.
+        # Send budget guard prevents tapping send arrow once attempted+confirmed >= limit.
         if not dry_run:
-            act = _composer_step(ui_tree, fr, text, opener_store)
+            act = _composer_step(ui_tree, fr, text, opener_store, msgs)
             if act is not None:
                 return act
             m = fr.get("match") or {}
