@@ -232,7 +232,7 @@ console.log('datingRun ok');
   a(datingAppGroup('com.affinityapps.blk') === 'coming-soon', 'BLK coming soon');
   a(datingAppGroup('com.takimi.android') === 'coming-soon', 'Taimi coming soon');
   a(datingAppGroup('com.tinder') === 'coming-soon', 'Tinder coming soon');
-  a(datingAppGroup('enterprises.dating.boo') === 'coming-soon', 'Boo coming soon');
+  a(datingAppGroup('enterprises.dating.boo') === 'works', 'Boo works');
   a(datingAppGroup('social.breeze.breeze_app') === 'coming-soon', 'Breeze coming soon');
   a(datingAppGroup('com.getpure.pure') === 'coming-soon', 'Pure coming soon');
   a(datingAppGroup('com.threesome.swingers.threefun') === 'coming-soon', '3Fun coming soon');
