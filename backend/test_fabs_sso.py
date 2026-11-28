@@ -16,6 +16,7 @@ from backend.fabs_sso import (
     create_fabs_sso_link,
     get_fabs_sso_secret,
     mint_fabs_sso_token,
+    verify_fabs_sso_token,
 )
 
 
@@ -133,66 +134,128 @@ def test_mint_token_empty_username_raises():
         mint_fabs_sso_token("", "secret")
 
 
-def test_get_fabs_sso_secret_from_env():
-    """Test secret retrieval from environment."""
-    with patch.dict("os.environ", {"FABS_SSO_SECRET": "my-secret"}):
-        assert get_fabs_sso_secret() == "my-secret"
+def test_get_fabs_sso_secret_from_secrets_manager():
+    """Test secret retrieval from AWS Secrets Manager."""
+    with patch.dict(
+        "os.environ",
+        {"FABS_SSO_SECRET_ARN": "arn:aws:secretsmanager:region:account:secret:test"},
+    ):
+        with patch("boto3.client") as mock_boto:
+            mock_client = mock_boto.return_value
+            mock_client.get_secret_value.return_value = {
+                "SecretString": json.dumps({"secret": "my-secret-from-sm"})
+            }
+            # Clear cache first
+            import backend.fabs_sso
+
+            backend.fabs_sso._secret_cache = None
+
+            assert get_fabs_sso_secret() == "my-secret-from-sm"
 
 
-def test_get_fabs_sso_secret_missing():
-    """Test secret retrieval when not set returns empty string."""
+def test_get_fabs_sso_secret_missing_arn():
+    """Test secret retrieval when ARN not set raises error."""
     with patch.dict("os.environ", {}, clear=True):
-        assert get_fabs_sso_secret() == ""
+        import backend.fabs_sso
+
+        backend.fabs_sso._secret_cache = None
+
+        with pytest.raises(
+            ValueError,
+            match="FABS_SSO_SECRET_ARN environment variable is not configured",
+        ):
+            get_fabs_sso_secret()
 
 
 def test_create_fabs_sso_link_format():
     """Test SSO link has correct format."""
-    with patch.dict("os.environ", {"FABS_SSO_SECRET": "test-secret"}):
-        link = create_fabs_sso_link()
+    with patch.dict(
+        "os.environ",
+        {"FABS_SSO_SECRET_ARN": "arn:aws:secretsmanager:region:account:secret:test"},
+    ):
+        with patch("boto3.client") as mock_boto:
+            mock_client = mock_boto.return_value
+            mock_client.get_secret_value.return_value = {
+                "SecretString": json.dumps({"secret": "test-secret"})
+            }
+            import backend.fabs_sso
 
-        assert link.startswith("https://fabswingerauto.netlify.app/sso#token=")
+            backend.fabs_sso._secret_cache = None
 
-        # Extract token from fragment
-        fragment = link.split("#")[1]
-        assert fragment.startswith("token=")
-        token = fragment.split("token=")[1]
-        assert "." in token
-        assert len(token.split(".")) == 2
+            link = create_fabs_sso_link()
+
+            assert link.startswith("https://fabswingerauto.netlify.app/sso#token=")
+
+            # Extract token from fragment
+            fragment = link.split("#")[1]
+            assert fragment.startswith("token=")
+            token = fragment.split("token=")[1]
+            assert "." in token
+            assert len(token.split(".")) == 2
 
 
 def test_create_fabs_sso_link_custom_username():
     """Test SSO link with custom username."""
-    with patch.dict("os.environ", {"FABS_SSO_SECRET": "test-secret"}):
-        link = create_fabs_sso_link("CustomUser")
-        fragment = link.split("#")[1]
-        token = fragment.split("token=")[1]
-        payload_b64 = token.split(".")[0]
+    with patch.dict(
+        "os.environ",
+        {"FABS_SSO_SECRET_ARN": "arn:aws:secretsmanager:region:account:secret:test"},
+    ):
+        with patch("boto3.client") as mock_boto:
+            mock_client = mock_boto.return_value
+            mock_client.get_secret_value.return_value = {
+                "SecretString": json.dumps({"secret": "test-secret"})
+            }
+            import backend.fabs_sso
 
-        padding = "=" * (4 - len(payload_b64) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+            backend.fabs_sso._secret_cache = None
 
-        assert payload["sub"] == "CustomUser"
+            link = create_fabs_sso_link("CustomUser")
+            fragment = link.split("#")[1]
+            token = fragment.split("token=")[1]
+            payload_b64 = token.split(".")[0]
+
+            padding = "=" * (4 - len(payload_b64) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+
+            assert payload["sub"] == "CustomUser"
 
 
 def test_create_fabs_sso_link_no_secret_raises():
-    """Test link creation without secret raises ValueError."""
+    """Test link creation without secret ARN raises ValueError."""
     with patch.dict("os.environ", {}, clear=True):
+        import backend.fabs_sso
+
+        backend.fabs_sso._secret_cache = None
+
         with pytest.raises(
-            ValueError, match="FABS_SSO_SECRET environment variable is not configured"
+            ValueError,
+            match="FABS_SSO_SECRET_ARN environment variable is not configured",
         ):
             create_fabs_sso_link()
 
 
 def test_token_url_safe():
     """Test token contains only URL-safe characters."""
-    with patch.dict("os.environ", {"FABS_SSO_SECRET": "test-secret"}):
-        link = create_fabs_sso_link()
-        fragment = link.split("#")[1]
-        token = fragment.split("token=")[1]
+    with patch.dict(
+        "os.environ",
+        {"FABS_SSO_SECRET_ARN": "arn:aws:secretsmanager:region:account:secret:test"},
+    ):
+        with patch("boto3.client") as mock_boto:
+            mock_client = mock_boto.return_value
+            mock_client.get_secret_value.return_value = {
+                "SecretString": json.dumps({"secret": "test-secret"})
+            }
+            import backend.fabs_sso
 
-        # Token value should not contain +, or / (= is allowed in the fragment key)
-        assert "+" not in token
-        assert "/" not in token
+            backend.fabs_sso._secret_cache = None
+
+            link = create_fabs_sso_link()
+            fragment = link.split("#")[1]
+            token = fragment.split("token=")[1]
+
+            # Token value should not contain +, or / (= is allowed in the fragment key)
+            assert "+" not in token
+            assert "/" not in token
 
 
 def test_token_roundtrip_verification():
@@ -217,3 +280,114 @@ def test_token_roundtrip_verification():
 
     assert payload["sub"] == "Mac"
     assert payload["exp"] > int(time.time()), "Token should not be expired immediately"
+
+
+def test_verify_token_valid():
+    """Test verification of a valid token."""
+    secret = "test-secret-for-verification"
+    token = mint_fabs_sso_token("Mac", secret)
+
+    payload = verify_fabs_sso_token(token, secret)
+
+    assert payload["sub"] == "Mac"
+    assert "iat" in payload
+    assert "exp" in payload
+    assert "nonce" in payload
+
+
+def test_verify_token_invalid_signature():
+    """Test verification fails with wrong signature."""
+    secret = "test-secret"
+    token = mint_fabs_sso_token("Mac", secret)
+
+    wrong_secret = "wrong-secret"
+    with pytest.raises(ValueError, match="Invalid token signature"):
+        verify_fabs_sso_token(token, wrong_secret)
+
+
+def test_verify_token_expired():
+    """Test verification fails for expired token."""
+    secret = "test-secret"
+    token = mint_fabs_sso_token("Mac", secret)
+
+    # Wait for token to expire (or mock time)
+    with patch("backend.fabs_sso.time.time", return_value=time.time() + 70):
+        with pytest.raises(ValueError, match="Token has expired"):
+            verify_fabs_sso_token(token, secret)
+
+
+def test_verify_token_invalid_format():
+    """Test verification fails with invalid token format."""
+    secret = "test-secret"
+
+    with pytest.raises(ValueError, match="Invalid token format"):
+        verify_fabs_sso_token("invalid-token", secret)
+
+    with pytest.raises(ValueError, match="Invalid token format"):
+        verify_fabs_sso_token("too.many.parts.here", secret)
+
+
+def test_verify_token_tampered_payload():
+    """Test verification fails if payload is tampered."""
+    secret = "test-secret"
+    token = mint_fabs_sso_token("Mac", secret)
+    payload_b64, signature_b64 = token.split(".")
+
+    # Tamper with payload
+    tampered_payload = payload_b64[:-5] + "XXXXX"
+    tampered_token = f"{tampered_payload}.{signature_b64}"
+
+    with pytest.raises(ValueError, match="Invalid token signature"):
+        verify_fabs_sso_token(tampered_token, secret)
+
+
+def test_verify_token_missing_fields():
+    """Test verification fails if required fields are missing."""
+    secret = "test-secret"
+
+    # Create a token with missing fields (missing nonce, but has valid exp)
+    now = int(time.time())
+    payload = {"sub": "Mac", "iat": now, "exp": now + 60}  # Missing nonce
+    payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    payload_b64 = base64.urlsafe_b64encode(payload_json.encode()).rstrip(b"=").decode()
+
+    signature = hmac.new(
+        secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
+    ).digest()
+    signature_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+
+    token = f"{payload_b64}.{signature_b64}"
+
+    with pytest.raises(ValueError, match="Token missing required fields"):
+        verify_fabs_sso_token(token, secret)
+
+
+def test_verify_token_empty_inputs():
+    """Test verification fails with empty inputs."""
+    with pytest.raises(ValueError, match="Token and secret are required"):
+        verify_fabs_sso_token("", "secret")
+
+    with pytest.raises(ValueError, match="Token and secret are required"):
+        verify_fabs_sso_token("token", "")
+
+
+def test_verify_token_subject_extraction():
+    """Test that verification correctly extracts subject."""
+    secret = "test-secret"
+    token = mint_fabs_sso_token("CustomUser", secret)
+
+    payload = verify_fabs_sso_token(token, secret)
+
+    assert payload["sub"] == "CustomUser"
+
+
+def test_verify_token_nonce_present():
+    """Test that verified token includes nonce."""
+    secret = "test-secret"
+    token = mint_fabs_sso_token("Mac", secret)
+
+    payload = verify_fabs_sso_token(token, secret)
+
+    assert "nonce" in payload
+    assert len(payload["nonce"]) == 32
+    assert all(c in "0123456789abcdef" for c in payload["nonce"])

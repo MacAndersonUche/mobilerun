@@ -9,6 +9,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -100,6 +101,28 @@ export class MobilerunStack extends cdk.Stack {
       tableName: 'mobilerun-matches',
     });
 
+    // SSO token nonce tracking (single-use verification)
+    const ssoNoncesTable = new dynamodb.Table(this, 'SsoNonces', {
+      partitionKey: { name: 'nonce', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      tableName: 'mobilerun-sso-nonces',
+      timeToLiveAttribute: 'ttl',
+    });
+
+    // Fabs SSO shared secret (auto-generated)
+    const fabsSsoSecret = new secretsmanager.Secret(this, 'FabsSsoSecret', {
+      secretName: 'mobilerun/fabs-sso-secret',
+      description: 'Shared secret for Fabs SSO integration (HMAC signing)',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({}),
+        generateStringKey: 'secret',
+        excludeCharacters: ' \'"\\',
+        passwordLength: 64,
+      },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const screenshotBucket = new s3.Bucket(this, 'Screenshots', {
       bucketName: `mobilerun-screenshots-${this.account}-${this.region}`,
       versioned: false,
@@ -129,7 +152,9 @@ export class MobilerunStack extends cdk.Stack {
         settingsTable,
         connectionsTable,
         jobsTable,
-        matchesTable
+        matchesTable,
+        ssoNoncesTable,
+        fabsSsoSecret
       );
     } else {
       new cdk.CfnOutput(this, 'EC2Disabled', {
@@ -228,7 +253,9 @@ export class MobilerunStack extends cdk.Stack {
     settingsTable: dynamodb.Table,
     connectionsTable: dynamodb.Table,
     jobsTable: dynamodb.Table,
-    matchesTable: dynamodb.Table
+    matchesTable: dynamodb.Table,
+    ssoNoncesTable: dynamodb.Table,
+    fabsSsoSecret: secretsmanager.Secret
   ) {
     const envVars: { [key: string]: string } = {
       JWT_SECRET: process.env.JWT_SECRET || 'change-me-in-production',
@@ -243,8 +270,9 @@ export class MobilerunStack extends cdk.Stack {
       // Prefer OpenAI when Gemini is quota'd (429); also try OpenAI first when set
       PREFER_OPENAI: process.env.PREFER_OPENAI || 'true',
       ALLOW_UNAUTHENTICATED: 'false',
-      // Fabs SSO shared secret (for single sign-on to Auto-Fab)
-      FABS_SSO_SECRET: process.env.FABS_SSO_SECRET || '',
+      // Fabs SSO shared secret ARN (auto-generated in Secrets Manager)
+      FABS_SSO_SECRET_ARN: fabsSsoSecret.secretArn,
+      SSO_NONCES_TABLE: ssoNoncesTable.tableName,
       HISTORY_TABLE: historyTable.tableName,
       SETTINGS_TABLE: settingsTable.tableName,
       CONNECTIONS_TABLE: connectionsTable.tableName,
@@ -299,7 +327,9 @@ export class MobilerunStack extends cdk.Stack {
       connectionsTable.grantReadWriteData(fn);
       jobsTable.grantReadWriteData(fn);
       matchesTable.grantReadWriteData(fn);
+      ssoNoncesTable.grantReadWriteData(fn);
       screenshotBucket.grantReadWrite(fn);
+      fabsSsoSecret.grantRead(fn);
     }
 
     // Allow HTTP Lambda to invoke step worker. Self-invoke uses a wildcard

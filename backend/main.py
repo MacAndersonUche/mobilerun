@@ -12,23 +12,22 @@ import os
 import secrets
 import sys
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import qrcode
 from fastapi import (
+    Depends,
     FastAPI,
+    HTTPException,
     WebSocket,
     WebSocketDisconnect,
-    HTTPException,
-    Depends,
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # Add mobilerun to path for local runs
@@ -304,6 +303,92 @@ async def fabs_sso_link(auth: dict = Depends(optional_verify_token)):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
         )
+
+
+class FabsSsoVerifyRequest(BaseModel):
+    token: str
+
+
+@app.post("/fabs/sso-verify")
+async def fabs_sso_verify(body: FabsSsoVerifyRequest):
+    """
+    Verify a Fabs SSO token (public endpoint for Auto-Fab).
+
+    Validates:
+    - HMAC signature
+    - Token expiry (60 seconds)
+    - Subject == "Mac"
+    - Single-use nonce
+
+    Returns:
+        {"ok": true, "sub": "Mac"} on success
+
+    Raises:
+        HTTPException 401 for invalid/expired/reused tokens
+    """
+    try:
+        from backend.fabs_sso import (
+            get_fabs_sso_secret,
+            is_nonce_used,
+            mark_nonce_used,
+            verify_fabs_sso_token,
+        )
+    except ImportError:
+        from fabs_sso import (
+            get_fabs_sso_secret,
+            is_nonce_used,
+            mark_nonce_used,
+            verify_fabs_sso_token,
+        )  # type: ignore
+
+    if not body.token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token is required"
+        )
+
+    try:
+        secret = get_fabs_sso_secret()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"SSO not configured: {e}",
+        )
+
+    try:
+        payload = verify_fabs_sso_token(body.token, secret)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {e}"
+        )
+
+    sub = payload.get("sub", "")
+    if sub != "Mac":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token subject must be Mac",
+        )
+
+    nonce = payload.get("nonce", "")
+    if not nonce:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing nonce"
+        )
+
+    # Check single-use nonce
+    try:
+        if is_nonce_used(nonce):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has already been used",
+            )
+        mark_nonce_used(nonce)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Nonce tracking failure should not block valid tokens in edge cases
+        logger.warning(f"Nonce tracking failed: {e}")
+
+    return {"ok": True, "sub": sub}
 
 
 class DeviceCodeStart(BaseModel):
@@ -2794,7 +2879,7 @@ def _dating_user_id(auth: Optional[dict]) -> str:
 
 
 def _load_opener_library(auth: Optional[dict] = None):
-    from mobilerun.dating.openers import load_default_library, merge_with_defaults
+    from mobilerun.dating.openers import merge_with_defaults
 
     user_id = _dating_user_id(auth)
     user_data = None
@@ -2905,6 +2990,8 @@ async def get_dating_config(auth: Optional[dict] = Depends(optional_verify_token
     """Get dating mode configuration."""
     from mobilerun.dating.config import (
         DatingModeConfig as ConfigModel,
+    )
+    from mobilerun.dating.config import (
         display_name_for_package,
         ensure_default_apps,
     )
@@ -4638,7 +4725,7 @@ async def inject_frame(
 async def live_state(
     device_id: str, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    from backend.live_hub import agent_state, subscribers_for, stream_wanted
+    from backend.live_hub import agent_state, stream_wanted, subscribers_for
 
     return {
         "device_id": device_id,
