@@ -26,6 +26,7 @@ import {
   sortDatingApps,
   RUNNABLE_APPS,
   ensureRunnableConfigApps,
+  appsForStartRows,
   datingAppGroup,
   groupDatingCards,
   canRunFromCard,
@@ -122,6 +123,16 @@ function datingAppDisplayName(
   return tail ? tail.charAt(0).toUpperCase() + tail.slice(1) : 'Unknown';
 }
 
+/** Seed a missing runnable app into Apps for Start / config state. */
+function seedConfigApp(pkg: string): AppConfig {
+  return {
+    name: datingAppDisplayName(pkg),
+    package_name: pkg,
+    enabled: true,
+    daily_swipe_cap: 50,
+  };
+}
+
 function cardsForDatingApps(
   apps: AppStats[],
   configApps: AppConfig[]
@@ -205,7 +216,11 @@ function omitKey<T>(o: Record<string, T>, k: string): Record<string, T> {
 export default function DatingPage() {
   const [status, setStatus] = useState<DatingStatus | null>(null);
   const [apps, setApps] = useState<AppStats[]>([]);
-  const [configApps, setConfigApps] = useState<AppConfig[]>([]);
+  // Seed RUNNABLE_APPS immediately so Apps for Start is never an empty body
+  // while /api/dating/config loads (or if that request fails).
+  const [configApps, setConfigApps] = useState<AppConfig[]>(() =>
+    ensureRunnableConfigApps([], seedConfigApp)
+  );
   const [persona, setPersona] = useState('');
   const [replyPersona, setReplyPersona] = useState('');
   const [inviteDaysMin, setInviteDaysMin] = useState(3);
@@ -361,12 +376,7 @@ export default function DatingPage() {
       setTodaySwipes(swipeSum || statsRes.data.today?.swipes || 0);
       setTodayMessages(openersSum || statsRes.data.today?.messages || 0);
       setConfigApps(
-        ensureRunnableConfigApps(configRes.data.apps || [], (pkg) => ({
-          name: datingAppDisplayName(pkg),
-          package_name: pkg,
-          enabled: true,
-          daily_swipe_cap: 50,
-        }))
+        ensureRunnableConfigApps(configRes.data.apps || [], seedConfigApp)
       );
       setPersona(configRes.data.persona_prompt || '');
       const df = configRes.data.date_flow || {};
@@ -413,6 +423,9 @@ export default function DatingPage() {
     } catch (e: unknown) {
       console.error(e);
       setError('Failed to load dating mode. Is the backend running and authenticated?');
+      // Keep Apps for Start populated even when config load fails — Working
+      // cards already seed from RUNNABLE_APPS; match that guarantee here.
+      setConfigApps((prev) => ensureRunnableConfigApps(prev, seedConfigApp));
     }
   };
 
@@ -1076,15 +1089,16 @@ export default function DatingPage() {
           role="region"
           aria-label="Apps for Start"
         >
-        <div className="space-y-2">
-          {sortDatingApps(configApps, (a) => a.package_name)
-            .filter((app) => !isSocialPackage(app.package_name))
-            .map((app) => (
+        <div className="space-y-2" data-testid="dating-apps-for-start-list">
+          {appsForStartRows(configApps, seedConfigApp, isSocialPackage).map(
+            (app) => (
             <div
               key={app.package_name}
               className="flex flex-wrap items-center gap-2 justify-between rounded-xl border border-line bg-canvas-elev px-3 py-2"
+              data-testid={`dating-app-for-start-${app.package_name}`}
             >
               <button
+                type="button"
                 onClick={() => toggleApp(app.package_name)}
                 className={`px-3 py-1 rounded text-sm border ${
                   app.enabled
@@ -1094,7 +1108,10 @@ export default function DatingPage() {
               >
                 {datingAppDisplayName(app.package_name, app.name)}
               </button>
-              <div className="flex overflow-hidden rounded-lg border border-line text-xs">
+              <div
+                className="flex overflow-hidden rounded-lg border border-line text-xs"
+                data-testid={`dating-app-opener-mode-${app.package_name}`}
+              >
                 <button
                   type="button"
                   className={`px-2 py-1 ${
@@ -1119,7 +1136,8 @@ export default function DatingPage() {
                 </button>
               </div>
             </div>
-          ))}
+          )
+          )}
         </div>
         <details className="text-sm">
           <summary className="cursor-pointer select-none text-mute">AI opener persona</summary>
