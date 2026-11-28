@@ -1,5 +1,11 @@
 import { cn } from '../lib/cn';
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react';
+import type {
+  ButtonHTMLAttributes,
+  HTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  TextareaHTMLAttributes,
+} from 'react';
 
 export function Button({
   className,
@@ -32,13 +38,16 @@ export function Card({
   className,
   elev,
   children,
+  ...rest
 }: {
   className?: string;
   elev?: boolean;
   children: ReactNode;
-}) {
+} & HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn(elev ? 'mr-card-elev' : 'mr-card', className)}>{children}</div>
+    <div className={cn(elev ? 'mr-card-elev' : 'mr-card', className)} {...rest}>
+      {children}
+    </div>
   );
 }
 

@@ -16,12 +16,10 @@ import {
   MessageCircle,
   Menu,
   X,
-  User,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
-import AccountPage from './pages/AccountPage';
 import DevicesPage from './pages/DevicesPage';
 import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
@@ -47,12 +45,11 @@ function MobileMenu({
   }, [location.pathname]);
 
   if (!open) return null;
-  // Devices + Settings live in the bottom nav — keep hamburger for the rest.
+  // Devices + Settings live in the bottom nav; keep hamburger for the rest.
   const links = [
     { to: '/dating', icon: Heart, label: 'Dating' },
     { to: '/social', icon: MessageCircle, label: 'Social' },
     { to: '/tasks', icon: History, label: 'Tasks' },
-    { to: '/account', icon: User, label: 'Account' },
     { to: '/chat', icon: MessageCircle, label: 'Chat' },
   ];
   return (
@@ -209,7 +206,8 @@ function Shell() {
             {/* Kept for job-run / pairing deep links; not in primary nav */}
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/chat" element={<ChatPage />} />
-            <Route path="/account" element={<AccountPage />} />
+            {/* Account moved into Settings; keep /account for old links */}
+            <Route path="/account" element={<Navigate to="/settings" replace />} />
             {/* Legacy Needs you / Matches / Live View / Run / Usage → Dating / home */}
             <Route path="/needs-you" element={<Navigate to="/dating" replace />} />
             <Route path="/matches" element={<Navigate to="/dating" replace />} />

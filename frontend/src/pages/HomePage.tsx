@@ -7,12 +7,10 @@ import {
   MessageCircle,
   History,
   Settings,
-  User,
   ChevronRight,
 } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
 import { Card } from '../components/ui';
-import AccountSheet from '../components/AccountSheet';
 import { useAuth } from '../auth';
 
 type Device = {
@@ -61,15 +59,8 @@ const NAV_TILES: {
   {
     to: '/settings',
     title: 'Settings',
-    subtitle: 'Backend, AI keys, workspace',
+    subtitle: 'Account, backend, AI keys',
     icon: Settings,
-    accent: 'text-mute',
-  },
-  {
-    to: '/account',
-    title: 'Account',
-    subtitle: 'Profile and sign out',
-    icon: User,
     accent: 'text-mute',
   },
 ];
@@ -78,7 +69,6 @@ export default function HomePage() {
   const { email } = useAuth();
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [accountOpen, setAccountOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -113,15 +103,14 @@ export default function HomePage() {
           <h1 className="text-2xl font-semibold tracking-tight">MacMobileRun</h1>
           <p className="text-sm text-mute">Dating & social on your phone</p>
         </div>
-        <button
-          type="button"
-          onClick={() => setAccountOpen(true)}
+        <Link
+          to="/settings"
           className="tap-target flex items-center justify-center rounded-full bg-accent text-sm font-semibold"
-          title="Account"
-          aria-label="Open account"
+          title="Settings"
+          aria-label="Open settings"
         >
           {(email || 'M').slice(0, 1).toUpperCase()}
-        </button>
+        </Link>
       </header>
 
       <div className="grid gap-3 sm:grid-cols-2" data-testid="home-nav-tiles">
@@ -155,8 +144,6 @@ export default function HomePage() {
           {error} - check Settings → Backend URL
         </p>
       )}
-
-      <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
     </div>
   );
 }

@@ -26,7 +26,6 @@ const routes = [
   ['/social', 'social'],
   ['/dating', 'dating'],
   ['/settings', 'settings'],
-  ['/account', 'account'],
   ['/tasks', 'tasks'],
   ['/history', 'history'],
 ] as const;
