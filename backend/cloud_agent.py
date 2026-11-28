@@ -2016,7 +2016,10 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
         return True
     if (
-        "fixed hily" in inst or "fixed tinder" in inst or "fixed boo" in inst or "fixed app " in inst
+        "fixed hily" in inst
+        or "fixed tinder" in inst
+        or "fixed boo" in inst
+        or "fixed app " in inst
     ):  # r46/r49/r50
         return True
     # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
@@ -2177,7 +2180,12 @@ def plan_next_action(
             from backend.boo_fixed_run import plan_boo_fixed_run  # type: ignore
         st_boo = agent_state if isinstance(agent_state, dict) else {}
         boo_act = plan_boo_fixed_run(
-            instruction, ui_tree, history, state=st_boo, dry_run=dry_run, message=_instruction_text(instruction)
+            instruction,
+            ui_tree,
+            history,
+            state=st_boo,
+            dry_run=dry_run,
+            message=_instruction_text(instruction),
         )
         if boo_act is None:
             boo_act = {

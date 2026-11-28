@@ -39,10 +39,18 @@ def _xy(a):
 
 def test_parse():
     assert parse("fixed boo likes messages 0 likes 10") == ("likes", 0, 10)
-    assert parse("fixed boo message_likes messages 3 likes 25") == ("message_likes", 3, 25)
+    assert parse("fixed boo message_likes messages 3 likes 25") == (
+        "message_likes",
+        3,
+        25,
+    )
     assert parse("fixed boo message messages 5 likes 0") == ("message", 5, 0)
     assert parse("fixed boo likes messages 0 likes 600") == ("likes", 0, 500)
-    assert parse("fixed boo message_likes messages 10 likes 2") == ("message_likes", 5, 2)
+    assert parse("fixed boo message_likes messages 10 likes 2") == (
+        "message_likes",
+        5,
+        2,
+    )
     assert parse("random instruction") == ("", 0, 0)
 
 
