@@ -7,17 +7,17 @@
     {"id": "m01", "bucket": "morning", "enabled": true, "text": "good morning, how did you sleep?"},
     {"id": "m02", "bucket": "morning", "enabled": true, "text": "morning, what's on your plate today?"},
     {"id": "m03", "bucket": "morning", "enabled": true, "text": "hey, hope your morning's going soft"},
-    {"id": "m04", "bucket": "morning", "enabled": true, "text": "good morning - coffee or chaos so far?"},
+    {"id": "m04", "bucket": "morning", "enabled": true, "text": "good morning, coffee or chaos so far?"},
 
     {"id": "a01", "bucket": "afternoon", "enabled": true, "text": "hey, how's your afternoon going?"},
-    {"id": "a02", "bucket": "afternoon", "enabled": true, "text": "afternoon - anything fun later?"},
+    {"id": "a02", "bucket": "afternoon", "enabled": true, "text": "afternoon, anything fun later?"},
     {"id": "a03", "bucket": "afternoon", "enabled": true, "text": "hey you, surviving the day alright?"},
     {"id": "a04", "bucket": "afternoon", "enabled": true, "text": "what's been the highlight of your day so far?"},
 
     {"id": "e01", "bucket": "evening", "enabled": true, "text": "good evening beautiful"},
     {"id": "e02", "bucket": "evening", "enabled": true, "text": "good evening, how was your day?"},
     {"id": "e03", "bucket": "evening", "enabled": true, "text": "hey, winding down or still out?"},
-    {"id": "e04", "bucket": "evening", "enabled": true, "text": "evening - anything good happen today?"},
+    {"id": "e04", "bucket": "evening", "enabled": true, "text": "evening, anything good happen today?"},
 
     {"id": "n01", "bucket": "any", "enabled": true, "text": "hey how are you"},
     {"id": "n02", "bucket": "any", "enabled": true, "text": "hi miss"},
