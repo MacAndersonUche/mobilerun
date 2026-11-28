@@ -88,6 +88,7 @@ _BAD_LIKE = re.compile(
     re.I,
 )
 _LIKE_LAB = re.compile(r"^(?:like|heart|♥|❤|❤️)$", re.I)
+_GENDER_AGE = re.compile(r"^(?:female|male|non.?binary|trans\w*|other)\s+\d{2}$", re.I)
 _NAME_RE = re.compile(r"^([A-Z][\w''\-]+(?: [A-Z][\w''\-]+)?),?\s*(\d{2})$")
 _DECK_EMPTY = (
     "no one new",
@@ -200,11 +201,21 @@ def boo_message_button(tree: str, sw: int, sh: int) -> Optional[Tuple[int, int]]
 
 
 def boo_card_sig(tree: str) -> str:
-    """Unique card signature: name from "Name, 24" pattern."""
+    """Unique card signature: the front card's name.
+
+    The first "Name · Verified · ..." card label identifies the card on screen.
+    The old "Name, 24" regex also matched the "Female 25" gender and age chip,
+    so different cards shared one signature and the run stopped early with
+    "no more new people". The regex is only a fallback for older layouts.
+    """
+    top = boo_top_card(tree)
+    if top:
+        return top
     for n in _parse_compact_nodes(tree):
-        if _NAME_RE.match(_label(n)):
-            return _label(n)
-    return boo_top_card(tree)
+        lab = _label(n)
+        if _NAME_RE.match(lab) and not _GENDER_AGE.match(lab):
+            return lab
+    return ""
 
 
 def boo_top_card(tree: str) -> str:
@@ -358,7 +369,7 @@ def _composer_step(
     """One planner step while a Boo DM is in flight; None when not applicable.
 
     Send budget guard: tracks attempted send taps (not just confirmed sends).
-    Never taps the send arrow once attempted+confirmed >= msg_limit. No blind or
+    Never taps the send arrow once send attempts reach msg_limit. No blind or
     coordinate taps inside the composer except the identified send arrow. If the
     composer state is ambiguous, exits without tapping.
     """
@@ -420,9 +431,12 @@ def _composer_step(
                 button="back",
             )
         # Send budget guard: never tap send arrow if we've already attempted the limit
+        # Every confirmed send was first an attempt, so the budget is the attempt
+        # count alone. Adding confirmed sends too counted each message twice and
+        # stopped a 5 message run after 3.
         attempted = int(fr.get("send_attempts") or 0)
         confirmed = int(fr.get("match_msgs") or 0)
-        if attempted + confirmed >= msg_limit:
+        if attempted >= msg_limit:
             fr.pop("match", None)
             cm.clear()
             fr["msg_end"] = (

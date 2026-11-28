@@ -217,3 +217,52 @@ def test_apply_job_totals_heals_underreported_today(monkeypatch, tmp_path):
     assert summary["today"]["messages"] == 5
     # Second apply with same totals is a no-op
     assert dio.apply_job_totals_to_stats(stats, job) is False
+
+
+def _boo_job(boo_run, **extra):
+    job = {
+        "dating_app": "enterprises.dating.boo",
+        "dating_run": True,
+        "state": {"current_app": "enterprises.dating.boo", "boo_run": boo_run},
+    }
+    job.update(extra)
+    return job
+
+
+def test_counter_snapshot_reads_boo_messages_and_likes():
+    from backend.dating_stats_io import _counter_snapshot
+
+    job = _boo_job({"match_msgs": 5, "likes": 0})
+    assert _counter_snapshot(job["state"], job) == (5, 0)
+    job = _boo_job({"match_msgs": 0, "likes": 2})
+    assert _counter_snapshot(job["state"], job) == (0, 2)
+    job = _boo_job({"match_msgs": 3, "likes": 4, "send_attempts": 9})
+    assert _counter_snapshot(job["state"], job) == (3, 4)  # attempts never count
+
+
+def test_boo_job_totals_reach_the_dashboard_stats():
+    from backend.dating_stats_io import apply_job_totals_to_stats
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stats = DatingStats(app_stats={}, stats_file=Path(tmp) / "s.json")
+        assert apply_job_totals_to_stats(stats, _boo_job({"match_msgs": 5, "likes": 2}))
+        summary = stats.get_summary()
+        per = {a["package"]: a for a in summary["apps"]}
+        boo = per["enterprises.dating.boo"]["today"]
+        assert boo["openers"] == 5 and boo["swipes"] == 2
+        assert summary["today"]["messages"] == 5 and summary["today"]["swipes"] == 2
+
+
+def test_boo_step_sync_records_each_confirmed_send_and_like():
+    from backend import dating_stats_io as dsi
+
+    job = _boo_job({"match_msgs": 1, "likes": 0})
+    before = dsi._counter_snapshot(job["state"], job)
+    job["state"]["boo_run"] = {"match_msgs": 2, "likes": 1}
+    with (
+        patch.object(dsi, "record_dating_messages") as rm,
+        patch.object(dsi, "record_dating_swipes") as rs,
+    ):
+        after = dsi.sync_dating_stats_from_job(job, before=before)
+    assert after == (2, 1)
+    assert rm.call_args.kwargs["n"] == 1 and rs.call_args.kwargs["n"] == 1

@@ -139,7 +139,8 @@ def _counter_snapshot(
 
     Covers every Working fixed planner: Hinge/FB/Yubo/Hily use
     ``bulk_message_new`` / ``yubo_card`` / ``hily_run``; Tagged uses
-    ``tagged_fixed.done`` (messages vs likes by run mode); Bumble/Badoo
+    ``tagged_fixed.done`` (messages vs likes by run mode); Boo uses
+    ``boo_run.match_msgs`` / ``boo_run.likes``; Bumble/Badoo
     use ``bulk_swipe``. Nested Hily first-contact counters are included.
     """
     bulk = (
@@ -156,6 +157,10 @@ def _counter_snapshot(
         else {}
     )
     swipe = state.get("bulk_swipe") if isinstance(state.get("bulk_swipe"), dict) else {}
+    # Boo (boo_fixed_run): match_msgs counts DMs confirmed by the deck advancing,
+    # likes counts heart taps confirmed by the front card changing. Neither key
+    # was read here, so Boo runs always showed 0 messaged / 0 liked.
+    boo = state.get("boo_run") if isinstance(state.get("boo_run"), dict) else {}
     tagged = (
         state.get("tagged_fixed") if isinstance(state.get("tagged_fixed"), dict) else {}
     )
@@ -176,11 +181,13 @@ def _counter_snapshot(
         _int_done(hr, "sent"),
         _int_done(hr_fc_bulk, "done"),
         _int_done(state, "live_messages_done", "openers_sent"),
+        _int_done(boo, "match_msgs"),
         tagged_done if tagged_as_message else 0,
     )
     likes = max(
         _int_done(hr, "likes"),
         _int_done(swipe, "done"),
+        _int_done(boo, "likes"),
         _int_done(state, "live_likes_done", "swipes_done"),
         tagged_done if not tagged_as_message else 0,
     )

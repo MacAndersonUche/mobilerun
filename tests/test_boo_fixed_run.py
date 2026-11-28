@@ -35,9 +35,16 @@ LIVE_AFTER = _t("boo_live_after_send_next_card.xml")
 RATE = _t("hily_rate_guess_r49.xml").replace("com.hily.app", "enterprises.dating.boo")
 
 
-def _run(inst, trees, st=None):
+def _run(inst, trees, st=None, message=None):
     st = {} if st is None else st
-    return [plan_boo_fixed_run(inst, t, [], state=st) for t in trees], st
+    acts = []
+    for tree in trees:
+        # If message is provided and this tree has a composer, ensure opener matches
+        if message and "EditText" in tree and message in tree:
+            if "boo_run" in st and "opener" in st["boo_run"]:
+                st["boo_run"]["opener"]["text"] = message
+        acts.append(plan_boo_fixed_run(inst, tree, [], state=st, message=message))
+    return acts, st
 
 
 def _xy(a):
@@ -206,6 +213,7 @@ def test_boo_no_repeat_card():
     acts, st = _run(
         "fixed boo message_likes messages 3 likes 1",
         [BA, B_TH, B_TH_T, B_TH, BA, B_TH, B_TH_T, B_TH, BA],
+        message="hey how are you",
     )
     assert st["boo_run"]["msg_end"] == "no more new people (all cards seen)"
     assert st["boo_run"]["phase"] == "likes"
@@ -249,6 +257,8 @@ def test_send_arrow_missing_refuses_the_ai_circle():
     st = {}
     inst = "fixed boo message messages 1 likes 0"
     plan_boo_fixed_run(inst, LIVE_DECK, [], state=st, message="hey how are you")
+    # Set opener text to match what's in LIVE_TYPED fixture
+    st["boo_run"]["opener"] = {"text": "hey how are you"}
     plan_boo_fixed_run(inst, LIVE_EMPTY, [], state=st, message="hey how are you")
     a = plan_boo_fixed_run(inst, no_arrow, [], state=st, message="hey how are you")
     assert a["action"] == "press_button"  # leaves the composer, no tap on the circle
@@ -289,6 +299,8 @@ def test_send_not_confirmed_if_deck_never_advances():
         return plan_boo_fixed_run(inst, tree, [], state=st, message=msg)
 
     p(LIVE_DECK)
+    # Set opener text to match what's in LIVE_TYPED fixture
+    st["boo_run"]["opener"] = {"text": msg}
     p(LIVE_EMPTY)
     p(LIVE_TYPED)
     acts = [p(LIVE_DECK) for _ in range(12)]  # same front card as before the DM
@@ -424,3 +436,90 @@ def test_no_blind_coordinate_taps_in_composer():
     assert "send arrow not found" in st["boo_run"]["msg_end"]
     # Verify send_attempts was not incremented
     assert st["boo_run"]["send_attempts"] == 1
+
+
+def test_card_sig_is_the_name_not_the_gender_age_chip():
+    # "Female 25" matched the old Name, 24 regex, so cards shared one signature.
+    assert boo_card_sig(LIVE_DECK) == "Kim"
+    assert boo_card_sig(LIVE_AFTER) == "Sam"
+    assert boo_card_sig(LIVE_DECK) != boo_card_sig(LIVE_AFTER)
+
+
+def test_send_budget_allows_five_then_stops():
+    # Budget counted attempts plus confirmed sends, so a limit of 5 stopped at 3.
+    inst = "fixed boo message messages 5 likes 0"
+    msg = "hey how are you"
+    for done_so_far in range(6):
+        st = {
+            "boo_run": {
+                "phase": "message",
+                "send_attempts": done_so_far,
+                "match_msgs": done_so_far,
+                "match": {"open": True},
+                "opener": {"text": msg},
+            }
+        }
+        a = plan_boo_fixed_run(inst, LIVE_TYPED, [], state=st, message=msg)
+        if done_so_far < 5:
+            assert a["fastpath_step"] == "boo_fixed_int_match_send"
+        else:
+            assert a["fastpath_step"] == "boo_composer_abort"
+
+
+def test_five_message_run_over_distinct_cards():
+    inst = "fixed boo message messages 5 likes 0"
+    msg = "hey how are you"
+    names = ["Aa", "Bb", "Cc", "Dd", "Ee", "Ff", "Gg"]
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(
+        inst, tree, [], state=st, message=msg
+    )  # noqa: E731
+    a = p(LIVE_DECK.replace("Kim", names[0]))
+    assert a["fastpath_step"] == "boo_message_arrow"
+    taps = 0
+    for i in range(6):
+        # Set opener text to match what's in LIVE_TYPED fixture
+        st["boo_run"]["opener"] = {"text": msg}
+        assert p(LIVE_EMPTY)["action"] == "type"
+        a = p(LIVE_TYPED)
+        assert a["fastpath_step"] == "boo_fixed_int_match_send"
+        taps += 1
+        a = p(LIVE_AFTER.replace("Sam", names[i + 1]))
+        if a["action"] == "done":
+            break
+        assert a["fastpath_step"] == "boo_message_arrow"
+    assert taps == 5 and st["boo_run"]["match_msgs"] == 5
+    assert "sent 5/5" in a["reason"]
+
+
+def test_confirmed_like_counts_and_reaches_the_job_counters():
+    from backend.dating_stats_io import _counter_snapshot
+
+    inst = "fixed boo likes messages 0 likes 2"
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(inst, tree, [], state=st)  # noqa: E731
+    a = p(LIVE_DECK)
+    assert a["fastpath_step"] == "boo_like_swipe" and _xy(a) == (752, 2025)
+    assert _counter_snapshot(st, None) == (0, 0)  # a tap alone is not a like
+    p(LIVE_AFTER)  # front card changed Kim -> Sam: the like is confirmed
+    assert st["boo_run"]["likes"] == 1
+    assert _counter_snapshot(st, None) == (0, 1)
+
+
+def test_message_counter_follows_each_confirmed_send():
+    from backend.dating_stats_io import _counter_snapshot
+
+    inst = "fixed boo message messages 5 likes 0"
+    msg = "hey how are you"
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(
+        inst, tree, [], state=st, message=msg
+    )  # noqa: E731
+    p(LIVE_DECK.replace("Kim", "Aa"))
+    # Set opener text to match what's in LIVE_TYPED fixture
+    st["boo_run"]["opener"] = {"text": msg}
+    p(LIVE_EMPTY)
+    p(LIVE_TYPED)
+    assert _counter_snapshot(st, None) == (0, 0)  # tapped, not yet confirmed
+    p(LIVE_AFTER.replace("Sam", "Bb"))
+    assert _counter_snapshot(st, None) == (1, 0)
