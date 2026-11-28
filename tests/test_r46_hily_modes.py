@@ -51,7 +51,11 @@ def _run(inst, trees, st=None):
         # stable while sticky/clear still run for real.
         hr = st.setdefault(
             "hily_run",
-            {"likes": 0, "sent": 0, "phase": "message" if "message" in inst else "likes"},
+            {
+                "likes": 0,
+                "sent": 0,
+                "phase": "message" if "message" in inst else "likes",
+            },
         )
         if "message" in inst and hr.get("phase") == "message":
             fc = hr.setdefault("fc", {})
@@ -403,9 +407,10 @@ def test_cloud_agent_routes_hily_without_llm():
     )
     assert t["action"] == "type" and t["text"] == "hey how are you"
     # Nested fc pick is promoted onto the job state
-    assert st2.get("last_opener_template_id") or st2["hily_run"]["fc"][
-        "bulk_message_new"
-    ].get("text") == "hey how are you"
+    assert (
+        st2.get("last_opener_template_id")
+        or st2["hily_run"]["fc"]["bulk_message_new"].get("text") == "hey how are you"
+    )
 
 
 # ---- API -------------------------------------------------------------------

@@ -11,7 +11,10 @@ from backend.honeyboard_keys import (
     is_honeyboard_keyable,
     key_tap_plan,
 )
-from backend.hinge_fixed_first_contact import allowed_message, plan_hinge_fixed_first_contact
+from backend.hinge_fixed_first_contact import (
+    allowed_message,
+    plan_hinge_fixed_first_contact,
+)
 from mobilerun.dating.openers import (
     OpenerLibrary,
     OpenerTemplate,
@@ -152,7 +155,10 @@ def test_hinge_blind_type_reuses_stuck_text():
     from pathlib import Path
 
     tree = (
-        Path(__file__).resolve().parent / "fixtures" / "r53" / "hinge_inline_panel_keyboard_blind.xml"
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "r53"
+        / "hinge_inline_panel_keyboard_blind.xml"
     ).read_text()
     stuck = "good morning, coffee or chaos so far?"
     st = {
@@ -247,7 +253,9 @@ def test_sticky_records_template_id_and_promote_to_parent():
 
     lib = OpenerLibrary(
         templates=[
-            OpenerTemplate(id="n01", text="hey how are you", bucket="any", enabled=True),
+            OpenerTemplate(
+                id="n01", text="hey how are you", bucket="any", enabled=True
+            ),
             OpenerTemplate(id="n02", text="hi miss", bucket="any", enabled=True),
         ],
         opener_mode="templates",
