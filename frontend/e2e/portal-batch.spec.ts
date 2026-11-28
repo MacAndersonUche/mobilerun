@@ -142,9 +142,15 @@ test.describe('portal batch', () => {
     await expect(workingToggle).toBeVisible();
     await expect(workingToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByTestId('dating-today-co.hinge.app')).toHaveCount(0);
+    // Header totals visible while collapsed (per-app rules: Bumble 9 + Hily 3
+    // swipes; Hinge 5 + Yubo 8 + Hily 2 + FB 11 messages).
+    await expect(page.getByTestId('dating-working-today-totals')).toHaveText(
+      '12 swipes · 26 messages'
+    );
 
     await workingToggle.click();
     await expect(workingToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByTestId('dating-working-today-totals')).toBeVisible();
 
     // Bumble/Badoo: swipes only. Hinge/Yubo/Facebook: messages only. Others: both.
     await expect(page.getByTestId('dating-today-com.bumble.app')).toHaveText(

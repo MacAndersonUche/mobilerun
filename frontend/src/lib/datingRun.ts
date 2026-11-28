@@ -326,6 +326,36 @@ export function todayCounterNote(pkg: string): string | null {
   return null;
 }
 
+/**
+ * Sum today's swipes/messages for Working apps, respecting per-app rules
+ * (swipes-only / messages-only / both). Used in the Working section header.
+ */
+export function sumWorkingTodayCounters(
+  apps: Array<{
+    package: string;
+    today?: { swipes?: number; openers?: number } | null;
+  }>
+): { swipes: number; messages: number } {
+  let swipes = 0;
+  let messages = 0;
+  for (const app of apps || []) {
+    const kind = todayCounterKind(app.package);
+    const s = app.today?.swipes ?? 0;
+    const m = app.today?.openers ?? 0;
+    if (kind === 'swipes' || kind === 'both') swipes += s;
+    if (kind === 'messages' || kind === 'both') messages += m;
+  }
+  return { swipes, messages };
+}
+
+/** Header line next to "Working" (no em dashes). */
+export function formatWorkingTodayTotals(totals: {
+  swipes: number;
+  messages: number;
+}): string {
+  return `${totals.swipes} swipes · ${totals.messages} messages`;
+}
+
 /** Hint shown under a count box: the real cap only (no minimum clamp). */
 export function runCountHint(pkg: string): string {
   if (pkg === 'com.facebook.katana') return 'Max 50 (Facebook Dating limit)';

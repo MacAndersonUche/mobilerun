@@ -16,6 +16,8 @@ import {
   todayCounterKind,
   formatTodayCounters,
   todayCounterNote,
+  sumWorkingTodayCounters,
+  formatWorkingTodayTotals,
 } from './datingRun.ts';
 
 assert.equal(todayCounterKind('com.badoo.mobile'), 'swipes');
@@ -43,6 +45,21 @@ assert.equal(
 );
 assert.equal(todayCounterNote('com.facebook.katana'), 'Max 50 a day');
 assert.equal(todayCounterNote('co.hinge.app'), null);
+// Working header totals: only count metrics each app tracks
+assert.deepEqual(
+  sumWorkingTodayCounters([
+    { package: 'com.bumble.app', today: { swipes: 9, openers: 4 } }, // swipes only
+    { package: 'co.hinge.app', today: { swipes: 2, openers: 5 } }, // messages only
+    { package: 'com.facebook.katana', today: { swipes: 6, openers: 11 } }, // messages
+    { package: 'com.hily.app', today: { swipes: 3, openers: 2 } }, // both
+  ]),
+  { swipes: 12, messages: 18 }
+);
+assert.equal(
+  formatWorkingTodayTotals({ swipes: 12, messages: 18 }),
+  '12 swipes · 18 messages'
+);
+assert.ok(!formatWorkingTodayTotals({ swipes: 1, messages: 2 }).includes('—'));
 
 assert.equal(canRunApp('co.hinge.app'), true);
 assert.equal(canRunApp('com.whatsapp'), false);

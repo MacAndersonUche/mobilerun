@@ -35,6 +35,8 @@ import {
   clearCollapsibleExpandedPrefs,
   formatTodayCounters,
   todayCounterNote,
+  sumWorkingTodayCounters,
+  formatWorkingTodayTotals,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -841,6 +843,9 @@ export default function DatingPage() {
                 : isWorking
                   ? workingExpanded
                   : true;
+              const workingTotals = isWorking
+                ? sumWorkingTodayCounters(groupApps)
+                : null;
               return (
               <section
                 key={group.id}
@@ -881,7 +886,19 @@ export default function DatingPage() {
                       <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
                     )}
                     <span className="min-w-0">
-                      <span className="block text-lg font-semibold text-white">{group.title}</span>
+                      <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                        <span className="text-lg font-semibold text-white">
+                          {group.title}
+                        </span>
+                        {workingTotals && (
+                          <span
+                            className="text-sm font-medium text-mute"
+                            data-testid="dating-working-today-totals"
+                          >
+                            {formatWorkingTodayTotals(workingTotals)}
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-xs text-mute">{group.subtitle}</span>
                     </span>
                   </button>
