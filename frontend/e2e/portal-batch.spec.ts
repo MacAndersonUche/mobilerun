@@ -212,7 +212,9 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('settings-ai-tools')).toBeVisible();
     const advanced = page.getByTestId('settings-ai-advanced');
     await expect(advanced).toBeVisible();
-    await expect(page.locator('#settings-temperature')).toHaveCount(0);
+    // Closed <details> keeps inputs in the DOM but hidden
+    await expect(page.locator('#settings-temperature')).not.toBeVisible();
+    await expect(page.locator('#settings-auth-token')).not.toBeVisible();
     await advanced.locator('summary').click();
     await expect(page.locator('#settings-temperature')).toBeVisible();
     await expect(page.locator('#settings-max-tokens')).toBeVisible();
