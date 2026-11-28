@@ -261,3 +261,30 @@ console.log('datingRun ok');
   assert.equal(mem.has(APPS_TO_COME_EXPANDED_KEY), false, 'clear is idempotent');
   console.log('collapsible start-collapsed tests ok');
 }
+
+// Apps for Start: always seed runnable dating apps (never empty when config load fails)
+{
+  const { appsForStartRows, RUNNABLE_APPS: apps } = await import('./datingRun.ts');
+  const seed = (pkg) => ({ package_name: pkg, name: pkg, enabled: true });
+  const isSocial = (pkg) =>
+    ['com.whatsapp', 'com.instagram.android', 'com.facebook.orca',
+      'org.telegram.messenger', 'com.snapchat.android', 'com.twitter.android']
+      .includes(pkg);
+  // Empty config (failed / pending load) still lists every runnable dating app
+  const empty = appsForStartRows([], seed, isSocial);
+  assert.equal(empty.length, apps.length, 'seeds all RUNNABLE_APPS');
+  assert.ok(empty.every((a) => !isSocial(a.package_name)), 'no socials');
+  assert.ok(empty.some((a) => a.package_name === 'co.hinge.app'), 'includes Hinge');
+  assert.ok(empty.some((a) => a.package_name === 'com.bumble.app'), 'includes Bumble');
+  // Preserves saved opener_mode / enabled from config
+  const mixed = appsForStartRows(
+    [{ package_name: 'com.bumble.app', name: 'Bumble', enabled: false, opener_mode: 'ai' }],
+    seed,
+    isSocial
+  );
+  const bumble = mixed.find((a) => a.package_name === 'com.bumble.app');
+  assert.equal(bumble?.enabled, false, 'keeps saved enabled');
+  assert.equal(bumble?.opener_mode, 'ai', 'keeps saved opener_mode');
+  assert.ok(mixed.length >= apps.length, 'still has full runnable set');
+  console.log('appsForStartRows tests ok');
+}

@@ -59,6 +59,23 @@ export function ensureRunnableConfigApps<T extends { package_name: string }>(
   return [...(configApps || []), ...extra];
 }
 
+/**
+ * Rows for the Apps for Start panel (enable toggle + Templates/AI).
+ * Always seeds RUNNABLE_APPS so the expanded body is never empty when
+ * /api/dating/config failed or has not loaded yet — same guarantee as
+ * Working cards via cardsForDatingApps. Social packages are excluded.
+ */
+export function appsForStartRows<T extends { package_name: string }>(
+  configApps: T[],
+  seed: (pkg: string) => T,
+  isSocial: (pkg: string) => boolean
+): T[] {
+  return sortDatingApps(
+    ensureRunnableConfigApps(configApps, seed),
+    (a) => a.package_name
+  ).filter((app) => !isSocial(app.package_name));
+}
+
 // Dating page groups: move an app between groups by moving its package
 // between these two lists — nothing else needs to change.
 // - works: apps that run all the time (top of the page)
