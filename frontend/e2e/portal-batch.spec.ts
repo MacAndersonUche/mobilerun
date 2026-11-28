@@ -181,15 +181,21 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('usage-page')).toHaveCount(0);
   });
 
-  test('Settings is one merged page', async ({ page }) => {
+  test('Settings is one merged page with account + logout', async ({ page }) => {
     await authAndMock(page);
     await page.goto('/settings');
     await expect(page.getByTestId('settings-page')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('settings-account-card')).toBeVisible();
+    await expect(page.getByTestId('settings-account-meta')).toBeVisible();
     await expect(page.getByTestId('settings-workspace')).toBeVisible();
     await expect(page.getByTestId('settings-ai-tools')).toBeVisible();
+    await expect(page.getByTestId('settings-logout')).toBeVisible();
+    await expect(page.getByText('Owner')).toBeVisible();
+    await expect(page.getByText(/Help & support/)).toBeVisible();
+    await expect(page.getByRole('button', { name: /Copy user ID/i })).toBeVisible();
   });
 
-  test('hamburger omits Settings and Devices (bottom nav has them)', async ({
+  test('hamburger omits Settings, Devices, and Account (bottom nav has Settings/Devices)', async ({
     page,
   }, testInfo) => {
     test.skip(testInfo.project.name === 'desktop', 'hamburger is mobile-only');
@@ -204,6 +210,7 @@ test.describe('portal batch', () => {
     await expect(menu.getByRole('link', { name: /^Dating$/i })).toBeVisible();
     await expect(menu.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
     await expect(menu.getByRole('link', { name: /^Devices$/i })).toHaveCount(0);
+    await expect(menu.getByRole('link', { name: /^Account$/i })).toHaveCount(0);
     await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Settings$/i })).toBeVisible();
     await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Devices$/i })).toBeVisible();
   });
@@ -229,23 +236,23 @@ test.describe('portal batch', () => {
     expect(body.dry_run).toBe(false);
   });
 
-  test('Account has no Link a phone / Settings / Devices rows', async ({
+  test('/account redirects to Settings with account controls', async ({
     page,
   }, testInfo) => {
     await authAndMock(page);
     await page.goto('/account');
-    const account = page.getByTestId('account-page');
-    await expect(account).toBeVisible({ timeout: 15000 });
-    await expect(account.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
-    await expect(account.getByRole('heading', { name: 'Link a phone' })).toHaveCount(0);
-    await expect(account.getByRole('link', { name: /^Open Devices$/i })).toHaveCount(0);
-    await expect(account.getByRole('link', { name: /^Devices$/i })).toHaveCount(0);
-    await expect(account.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
-    await expect(account.getByRole('button', { name: /Log out/i })).toBeVisible();
-    // Bottom nav still exposes Devices once (mobile only; desktop uses sidebar).
+    await expect(page).toHaveURL(/\/settings$/, { timeout: 15000 });
+    const settings = page.getByTestId('settings-page');
+    await expect(settings).toBeVisible();
+    await expect(page.getByTestId('settings-account-card')).toBeVisible();
+    await expect(page.getByTestId('settings-logout')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Account', exact: true })).toHaveCount(0);
     if (testInfo.project.name !== 'desktop') {
       await expect(
         page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Devices$/i })
+      ).toBeVisible();
+      await expect(
+        page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Settings$/i })
       ).toBeVisible();
     }
   });

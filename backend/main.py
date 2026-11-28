@@ -345,8 +345,8 @@ async def start_device_code(body: DeviceCodeStart):
         "device_code": device_code,
         "expires_in": 600,
         "interval": 3,
-        "verification_uri": f"{ui.rstrip('/')}/account" if ui else "/account",
-        "message": "Enter this code on the MobileRun Account page while signed in",
+        "verification_uri": f"{ui.rstrip('/')}/settings" if ui else "/settings",
+        "message": "Enter this code on the MobileRun Settings page while signed in",
     }
 
 

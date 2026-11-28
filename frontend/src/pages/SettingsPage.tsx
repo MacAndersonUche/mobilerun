@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { Save } from 'lucide-react';
 import { getBackendUrl, setBackendUrl, getAuthToken, setAuthToken } from '../config';
 import axios from 'axios';
+import { useAuth } from '../auth';
+import { Button, Card } from '../components/ui';
 
 const DEFAULT_LLM_MODELS: Record<string, string> = {
   gemini: 'gemini-3.8-flash',
@@ -11,6 +13,7 @@ const DEFAULT_LLM_MODELS: Record<string, string> = {
 };
 
 export default function SettingsPage() {
+  const { email, logout } = useAuth();
   const [backendUrl, setBackendUrlState] = useState(getBackendUrl());
   const [authToken, setAuthTokenState] = useState(getAuthToken() || '');
   const [provider, setProvider] = useState('gemini');
@@ -104,10 +107,40 @@ export default function SettingsPage() {
       <div>
         <h2 className="text-2xl font-semibold">Settings</h2>
         <p className="text-sm text-mute">
-          Workspace, AI tools, and AWS cost - one place (backend URL, LLM keys,
-          models).
+          Account, workspace, AI tools, and AWS cost in one place.
         </p>
       </div>
+
+      <Card
+        className="flex items-center gap-3"
+        data-testid="settings-account-card"
+      >
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-lg font-semibold">
+          {(email || 'M').slice(0, 1).toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium">{email || 'Mac'}</p>
+          <p className="text-xs text-mute">
+            <span className="mr-badge bg-accent/20 text-accent">Owner</span>
+            <span className="ml-2 break-all">{email || 'self-hosted'}</span>
+          </p>
+        </div>
+      </Card>
+
+      <Card
+        className="space-y-2 text-sm text-mute"
+        data-testid="settings-account-meta"
+      >
+        <p>Backend: {getBackendUrl()}</p>
+        <p>Help & support · macandersonuche@yahoo.com</p>
+        <button
+          type="button"
+          className="text-accent"
+          onClick={() => navigator.clipboard.writeText(email || '')}
+        >
+          Copy user ID
+        </button>
+      </Card>
 
       <form onSubmit={saveSettings} className="space-y-6">
         <section className="mr-card space-y-4" data-testid="settings-workspace">
@@ -277,6 +310,17 @@ export default function SettingsPage() {
           <span>{saving ? 'Saving...' : 'Save Settings'}</span>
         </button>
       </form>
+
+      <Button
+        variant="danger"
+        className="w-full"
+        onClick={logout}
+        data-testid="settings-logout"
+      >
+        Log out
+      </Button>
+
+      <p className="pt-2 text-center text-xs text-mute">MacMobileRun</p>
     </div>
   );
 }

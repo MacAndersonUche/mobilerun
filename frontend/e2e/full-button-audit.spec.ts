@@ -222,7 +222,6 @@ test.describe('full button audit', () => {
       ['/social', 'Social'],
       ['/tasks', 'Tasks'],
       ['/history', 'Activity'],
-      ['/account', 'Account'],
     ] as const;
     for (const [href, label] of nav) {
       try {
@@ -728,31 +727,20 @@ test.describe('full button audit', () => {
         record('settings', 'Save', 'click', false, String(e).slice(0, 100));
       }
     }
+    const accountOnSettings = await page.getByTestId('settings-account-card').count();
+    record('settings', 'account card', 'visible', accountOnSettings > 0);
+    const logoutBtn = page.getByTestId('settings-logout');
+    if (await logoutBtn.count()) {
+      record('settings', 'Log out', 'skipped (destructive)', true, 'not clicked');
+    }
     await page.screenshot({ path: path.join(OUT, '09-settings.png'), fullPage: true });
 
-    // ---------- Account ----------
+    // ---------- /account redirects to Settings ----------
     await page.goto('/account');
     await page.waitForTimeout(800);
-    record('account', 'page load', 'render', true);
-    const accountBtns = page.getByRole('button');
-    for (let i = 0; i < (await accountBtns.count()); i++) {
-      const b = accountBtns.nth(i);
-      const label = ((await b.innerText().catch(() => '')) || (await b.getAttribute('aria-label')) || '').trim().slice(0, 60);
-      if (/sign out|log out|logout|delete account|revoke all/i.test(label)) {
-        record('account', label, 'skipped (destructive)', true, 'not clicked');
-        continue;
-      }
-      if (/generate|pair|copy|refresh|link/i.test(label)) {
-        try {
-          await b.click({ timeout: 5000 });
-          await page.waitForTimeout(800);
-          record('account', label || `btn-${i}`, 'click', true);
-        } catch (e) {
-          record('account', label || `btn-${i}`, 'click', false, String(e).slice(0, 100));
-        }
-      }
-    }
-    await page.screenshot({ path: path.join(OUT, '10-account.png'), fullPage: true });
+    const redirected = /\/settings/.test(page.url());
+    record('account', '/account redirect', 'to /settings', redirected, page.url());
+    await page.screenshot({ path: path.join(OUT, '10-account-redirect.png'), fullPage: true });
 
     } finally {
       report = writeReport();
