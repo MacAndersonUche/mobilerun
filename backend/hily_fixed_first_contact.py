@@ -70,15 +70,24 @@ TEXT_INPUT_XY = (540, 1344)
 DISCOVER_TAB_XY = (540, 2190)  # bottomNavTab_7 Discover
 
 
-def allowed_message(text: str) -> str:
-    raw = (text or "").strip()
-    low = raw.lower()
-    for phrase in MESSAGE_BANK:
-        if low == phrase:
-            return phrase
-    if raw:
-        return raw
-    return MESSAGE_BANK[0]
+def allowed_message(
+    text: str,
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    profile_name: str = "",
+) -> str:
+    """Portal opener library first; MESSAGE_BANK if library empty/unreachable."""
+    try:
+        from mobilerun.dating.openers import pick_runner_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import pick_runner_first_contact_text  # type: ignore
+    return pick_runner_first_contact_text(
+        fallback_bank=MESSAGE_BANK,
+        message=text,
+        state=state if isinstance(state, dict) else None,
+        package_name="com.hily.app",
+        profile_name=profile_name or None,
+    )
 
 
 def _blob(tree: str) -> str:
@@ -286,7 +295,7 @@ def plan_hily_fixed_first_contact(
             "hily_fixed_fc_paywall_back",
         )
 
-    text = allowed_message(message)
+    text = allowed_message(message, state=st)
 
     if _message_sent_sheet(ui_tree) or (
         hily_on_mbm(ui_tree) and "message sent" in _blob(ui_tree)

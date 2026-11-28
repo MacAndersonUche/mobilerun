@@ -60,27 +60,35 @@ PASS_XY = (340, 2116)
 EXPLORE_XY = (893, 260)
 
 
-def comment_text(instruction: str, message: str) -> str:
-    """Mac's exact photo-comment line, unless the instruction quotes other text.
+def comment_text(
+    instruction: str,
+    message: str,
+    state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Photo-comment from portal opener library (fallback: MESSAGE_BANK).
 
-    parse_bulk_goal defaults first-contact to 'hey how are you'; ignore that
-    generic bank default for Facebook Dating.
+    Custom quoted text in the instruction (not the baked-in dating_run default)
+    still wins. The baked-in ``hi miss you look beautiful`` quote is treated as
+    a library hint so the opener bank can rotate.
     """
     import re
 
     qm = re.search(r"[\"']([^\"']+)[\"']", instruction or "")
-    if qm:
-        return qm.group(1).strip()
-    raw = (message or "").strip()
-    generic = {
-        "hey how are you",
-        "hi miss",
-        "hello miss",
-        "good morning",
-    }
-    if not raw or raw.lower() in generic:
-        return PHOTO_COMMENT_TEXT
-    return raw
+    quoted = qm.group(1).strip() if qm else ""
+    bank_low = {p.lower() for p in MESSAGE_BANK}
+    # Custom Mac quote (not a known bank / default photo line) wins.
+    if quoted and quoted.lower() not in bank_low:
+        return quoted
+    try:
+        from mobilerun.dating.openers import pick_runner_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import pick_runner_first_contact_text  # type: ignore
+    return pick_runner_first_contact_text(
+        fallback_bank=MESSAGE_BANK,
+        message=message or quoted or PHOTO_COMMENT_TEXT,
+        state=state if isinstance(state, dict) else None,
+        package_name="com.facebook.katana",
+    )
 
 
 def _blob(tree: str) -> str:
@@ -545,7 +553,7 @@ def plan_facebook_dating_fixed_first_contact(
         {"done": 0, "typed": False},
     )
     done = int(bulk.get("done") or 0)
-    text_now = comment_text(instruction, message)
+    text_now = comment_text(instruction, message, state=st)
     if _on_comment_sheet(ui_tree):
         box_node = _compose_editable(ui_tree)
         box_now = str(box_node.get("text") or "").strip() if box_node else ""
@@ -586,7 +594,7 @@ def plan_facebook_dating_fixed_first_contact(
     # Off the sheet: count a pending send first (the sheet closed or the
     # next profile appeared). Never increment at the Send tap itself —
     # a retry at the closed-keyboard nav (fb3) used to count a miss.
-    pending_text = comment_text(instruction, message)
+    pending_text = comment_text(instruction, message, state=st)
     if (
         not _on_comment_sheet(ui_tree)
         and (
@@ -701,7 +709,7 @@ def plan_facebook_dating_fixed_first_contact(
             "fb_dating_fc_paywall_back",
         )
 
-    text = comment_text(instruction, message)
+    text = comment_text(instruction, message, state=st)
     name = _profile_name(ui_tree)
     if name:
         bulk["name"] = name

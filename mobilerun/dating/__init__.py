@@ -9,6 +9,7 @@ from .openers import (
     OpenerLibrary,
     compose_dating_message,
     load_default_library,
+    pick_runner_first_contact_text,
     pick_template_opener,
 )
 from .date_flow import DateFlowConfig, DateFlowManager
@@ -26,6 +27,7 @@ __all__ = [
     "compose_dating_message",
     "load_default_library",
     "pick_template_opener",
+    "pick_runner_first_contact_text",
     "DateFlowConfig",
     "DateFlowManager",
     "MatchRecord",

@@ -177,7 +177,7 @@ def plan_yubo_card_first_contact(
     cap = max(1, int(target or 1))
     sent = int(yc.get("sent") or 0)
     phase = str(yc.get("phase") or "open")
-    text = allowed_message(message)
+    text = allowed_message(message, state=st)
     # keep bulk counters in step for the bench/progress readers
     st.setdefault("bulk_message_new", {})["done"] = sent
 

@@ -55,15 +55,24 @@ _SKIP_TILES = {
 }
 
 
-def allowed_message(text: str) -> str:
-    raw = (text or "").strip()
-    low = raw.lower()
-    for phrase in MESSAGE_BANK:
-        if low == phrase:
-            return phrase
-    if raw:
-        return raw
-    return MESSAGE_BANK[0]
+def allowed_message(
+    text: str,
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    profile_name: str = "",
+) -> str:
+    """Portal opener library first; MESSAGE_BANK if library empty/unreachable."""
+    try:
+        from mobilerun.dating.openers import pick_runner_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import pick_runner_first_contact_text  # type: ignore
+    return pick_runner_first_contact_text(
+        fallback_bank=MESSAGE_BANK,
+        message=text,
+        state=state if isinstance(state, dict) else None,
+        package_name="co.yellw.yellowapp",
+        profile_name=profile_name or None,
+    )
 
 
 def _blob(tree: str) -> str:
@@ -351,7 +360,7 @@ def plan_yubo_fixed_first_contact(
         select_direct["planner"] = planner
         return select_direct
 
-    text = allowed_message(message)
+    text = allowed_message(message, state=st)
     on_direct = "direct" in _blob(ui_tree) and "blast" in _blob(ui_tree)
     on_hello = _on_say_hello(ui_tree) or (
         _composer(ui_tree) is not None and "say hello" in _blob(ui_tree)

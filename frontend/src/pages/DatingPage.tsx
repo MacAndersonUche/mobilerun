@@ -606,7 +606,7 @@ export default function DatingPage() {
   const saveTemplates = async (next: OpenerTemplate[]) => {
     const enabled = next.filter((t) => t.enabled).length;
     if (enabled < 2 || enabled > 50) {
-      alert('Keep 2–50 templates enabled');
+      alert('Keep 2-50 templates enabled');
       return;
     }
     setLoading(true);
@@ -1145,7 +1145,7 @@ export default function DatingPage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-lg font-semibold">Openers</h3>
           <span className="text-xs text-mute">
-            Bucket now: {bucketNow} · enabled {enabledCount}/50
+            Slot now (London): {bucketNow} · enabled {enabledCount}/50
           </span>
         </div>
         <p className="text-sm text-mute">
@@ -1356,7 +1356,8 @@ export default function DatingPage() {
           Opener library ({enabledCount} active)
         </h3>
         <p className="text-xs text-mute">
-          Pick 2–50 active. Morning / afternoon / evening buckets + time-neutral.
+          Pick 2-50 active. Slots use Europe/London time: morning before 12:00,
+          afternoon 12:00-17:00, evening after 17:00, plus any-time lines.
           Optional {'{name}'} only when the match name is known.
         </p>
         <div className="flex flex-col sm:flex-row gap-2">
@@ -1369,13 +1370,14 @@ export default function DatingPage() {
           <select
             value={newTemplateBucket}
             onChange={(e) => setNewTemplateBucket(e.target.value)}
-            aria-label="New opener bucket"
+            aria-label="New opener slot"
+            data-testid="dating-opener-new-slot"
             className="bg-canvas-elev border border-line rounded px-3 py-2 text-sm"
           >
-            <option value="morning">morning</option>
-            <option value="afternoon">afternoon</option>
-            <option value="evening">evening</option>
-            <option value="any">any</option>
+            <option value="morning">slot: morning</option>
+            <option value="afternoon">slot: afternoon</option>
+            <option value="evening">slot: evening</option>
+            <option value="any">slot: any</option>
           </select>
           <button
             type="button"
@@ -1402,13 +1404,14 @@ export default function DatingPage() {
                     );
                     setTemplates(next);
                   }}
-                  aria-label={`Bucket for opener ${t.id}`}
+                  aria-label={`Slot for opener ${t.id}`}
+                  data-testid={`dating-opener-slot-${t.id}`}
                   className="bg-surface border border-line rounded px-2 py-1"
                 >
-                  <option value="morning">morning</option>
-                  <option value="afternoon">afternoon</option>
-                  <option value="evening">evening</option>
-                  <option value="any">any</option>
+                  <option value="morning">slot: morning</option>
+                  <option value="afternoon">slot: afternoon</option>
+                  <option value="evening">slot: evening</option>
+                  <option value="any">slot: any</option>
                 </select>
                 <label className="flex items-center gap-1">
                   <input
