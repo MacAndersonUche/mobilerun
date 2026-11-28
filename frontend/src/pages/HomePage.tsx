@@ -6,7 +6,6 @@ import {
   Smartphone,
   MessageCircle,
   History,
-  Settings,
   ChevronRight,
 } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
@@ -55,13 +54,6 @@ const NAV_TILES: {
     subtitle: 'Connect a phone · install APK',
     icon: Smartphone,
     accent: 'text-accent',
-  },
-  {
-    to: '/settings',
-    title: 'Settings',
-    subtitle: 'Account, backend, AI keys',
-    icon: Settings,
-    accent: 'text-mute',
   },
 ];
 

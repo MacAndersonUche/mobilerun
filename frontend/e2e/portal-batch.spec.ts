@@ -123,8 +123,14 @@ test.describe('portal batch', () => {
   }) => {
     await authAndMock(page);
     await page.goto('/');
-    await expect(page.getByTestId('home-nav-tiles')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByRole('link', { name: /Dating/i })).toBeVisible();
+    const tiles = page.getByTestId('home-nav-tiles');
+    await expect(tiles).toBeVisible({ timeout: 15000 });
+    await expect(tiles.getByRole('link', { name: /Dating/i })).toBeVisible();
+    await expect(tiles.getByRole('link', { name: /Social/i })).toBeVisible();
+    await expect(tiles.getByRole('link', { name: /Tasks/i })).toBeVisible();
+    await expect(tiles.getByRole('link', { name: /Devices/i })).toBeVisible();
+    await expect(tiles.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^Open settings$/i })).toBeVisible();
     await expect(page.getByTestId('desktop-sidebar')).toHaveCount(0);
     await expect(page.getByTestId('mobile-bottom-nav')).toHaveCount(0);
     await expect(page.getByText('All Apps')).toHaveCount(0);
