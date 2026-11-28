@@ -51,9 +51,7 @@ def mint_fabs_sso_token(username: str, secret: str) -> str:
     payload_b64 = _base64url_encode(payload_json.encode("utf-8"))
 
     signature = hmac.new(
-        secret.encode("utf-8"),
-        payload_b64.encode("ascii"),
-        hashlib.sha256
+        secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
     ).digest()
     signature_b64 = _base64url_encode(signature)
 

@@ -38,7 +38,9 @@ def test_mint_token_format():
 
     # Verify base64url (no padding, URL-safe)
     for char in payload_b64 + signature_b64:
-        assert char in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        assert (
+            char in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        )
 
 
 def test_mint_token_payload_structure():
@@ -85,11 +87,11 @@ def test_mint_token_hmac_signature():
 
     # Recompute signature
     expected_sig = hmac.new(
-        secret.encode("utf-8"),
-        payload_b64.encode("ascii"),
-        hashlib.sha256
+        secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
     ).digest()
-    expected_sig_b64 = base64.urlsafe_b64encode(expected_sig).rstrip(b"=").decode("ascii")
+    expected_sig_b64 = (
+        base64.urlsafe_b64encode(expected_sig).rstrip(b"=").decode("ascii")
+    )
 
     assert signature_b64 == expected_sig_b64, "Signature must match HMAC-SHA256"
 
@@ -175,7 +177,9 @@ def test_create_fabs_sso_link_custom_username():
 def test_create_fabs_sso_link_no_secret_raises():
     """Test link creation without secret raises ValueError."""
     with patch.dict("os.environ", {}, clear=True):
-        with pytest.raises(ValueError, match="FABS_SSO_SECRET environment variable is not configured"):
+        with pytest.raises(
+            ValueError, match="FABS_SSO_SECRET environment variable is not configured"
+        ):
             create_fabs_sso_link()
 
 
@@ -199,11 +203,11 @@ def test_token_roundtrip_verification():
 
     # Verify signature (as Auto-Fab would)
     expected_sig = hmac.new(
-        secret.encode("utf-8"),
-        payload_b64.encode("ascii"),
-        hashlib.sha256
+        secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
     ).digest()
-    expected_sig_b64 = base64.urlsafe_b64encode(expected_sig).rstrip(b"=").decode("ascii")
+    expected_sig_b64 = (
+        base64.urlsafe_b64encode(expected_sig).rstrip(b"=").decode("ascii")
+    )
 
     assert signature_b64 == expected_sig_b64, "Signature verification must pass"
 

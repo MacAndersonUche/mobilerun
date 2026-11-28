@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import qrcode
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    HTTPException,
+    Depends,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -260,7 +267,7 @@ async def auth_me(auth: Optional[dict] = Depends(optional_verify_token)):
 async def fabs_sso_link(auth: dict = Depends(optional_verify_token)):
     """
     Mint a Fabs SSO token for authenticated portal users.
-    
+
     Returns a URL with token in the fragment for single sign-on to Auto-Fab.
     Only works for signed-in portal users (admin/Mac).
     """
@@ -269,26 +276,26 @@ async def fabs_sso_link(auth: dict = Depends(optional_verify_token)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
-    
+
     try:
         from backend.fabs_sso import create_fabs_sso_link, get_fabs_sso_secret
     except ImportError:
         from fabs_sso import create_fabs_sso_link, get_fabs_sso_secret  # type: ignore
-    
+
     secret = get_fabs_sso_secret()
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Fabs SSO is not configured. Set FABS_SSO_SECRET environment variable.",
         )
-    
+
     username = "Mac"
     email = (auth.get("email") or "").lower()
     if email and "@" in email:
         local_part = email.split("@")[0]
         if local_part and local_part != "admin":
             username = local_part.capitalize()
-    
+
     try:
         url = create_fabs_sso_link(username)
         return {"url": url}
