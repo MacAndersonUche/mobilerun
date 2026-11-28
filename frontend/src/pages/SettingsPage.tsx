@@ -100,12 +100,22 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="mr-page space-y-6">
-      <h2 className="text-2xl font-semibold">Settings</h2>
+    <div className="mr-page space-y-6" data-testid="settings-page">
+      <div>
+        <h2 className="text-2xl font-semibold">Settings</h2>
+        <p className="text-sm text-mute">
+          Workspace, AI tools, and AWS cost — one place (backend URL, LLM keys,
+          models).
+        </p>
+      </div>
 
       <form onSubmit={saveSettings} className="space-y-6">
-        <section className="mr-card space-y-4">
-          <h3 className="text-xl font-semibold">Backend Connection</h3>
+        <section className="mr-card space-y-4" data-testid="settings-workspace">
+          <h3 className="text-xl font-semibold">Workspace</h3>
+          <p className="text-xs text-mute">
+            Backend URL and auth for this portal (was Workspace preference /
+            AWS cost target).
+          </p>
 
           <div>
             <label htmlFor="settings-backend-url" className="mb-2 block text-sm font-medium">
@@ -139,8 +149,11 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <section className="mr-card space-y-4">
-          <h3 className="text-xl font-semibold">LLM Provider</h3>
+        <section className="mr-card space-y-4" data-testid="settings-ai-tools">
+          <h3 className="text-xl font-semibold">Connect AI tools</h3>
+          <p className="text-xs text-mute">
+            Provider, model, and API key. Token spend appears under Usage.
+          </p>
 
           <div>
             <label htmlFor="settings-provider" className="mb-2 block text-sm font-medium">

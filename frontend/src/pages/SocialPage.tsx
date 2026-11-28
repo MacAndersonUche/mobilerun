@@ -203,7 +203,7 @@ export default function SocialPage() {
         <p className="text-mute mt-1 text-sm">
           Secondary to{' '}
           <Link to="/dating" className="text-accent underline underline-offset-2">
-            Run
+            Dating
           </Link>
           . WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + auto
           replies with humanizer pacing.

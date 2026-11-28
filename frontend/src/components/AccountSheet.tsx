@@ -41,34 +41,14 @@ export default function AccountSheet({
   };
 
   const rows: [string, string][] = [
-    ['Workspace', '/settings'],
-    ['Preferences', '/settings'],
-    ['AWS cost', '/settings'],
-    ['Usage', '/history'],
-    ['Connect AI tools', '/settings'],
+    ['Settings', '/settings'],
+    ['Usage', '/usage'],
+    ['Devices', '/devices'],
   ];
 
   return (
     <Sheet open={open} onClose={onClose} title="Account">
       <div className="space-y-4">
-        <div className="rounded-2xl border border-line bg-canvas-elev p-4">
-          <p className="text-xs uppercase tracking-wide text-mute">Developer platform</p>
-          <Link
-            to="/devices"
-            onClick={onClose}
-            className="mt-2 block py-2 text-sm hover:text-accent"
-          >
-            Devices
-          </Link>
-          <Link
-            to="/settings"
-            onClick={onClose}
-            className="block py-2 text-sm hover:text-accent"
-          >
-            API keys and runs
-          </Link>
-        </div>
-
         <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface p-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-lg font-semibold">
             {(email || 'M').slice(0, 1).toUpperCase()}

@@ -22,3 +22,13 @@
   # VITE_COGNITO_DOMAIN = your-prefix.auth.eu-west-2.amazoncognito.com
   # VITE_COGNITO_CLIENT_ID = ...
   # VITE_COGNITO_REDIRECT_URI = https://<site>/auth/callback
+
+# Hide Netlify's edge-injected "Powered by Netlify" badge. That script runs in
+# an iframe and needs 'unsafe-inline' in script-src; omitting it blocks the
+# badge without touching our module scripts (see Netlify docs). Also turn the
+# badge off under Project configuration → General → Powered by Netlify badge
+# when the plan allows — CSP is the code-side guarantee.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; worker-src 'self' blob:; form-action 'self' https:; frame-src 'self' https://*.amazoncognito.com"

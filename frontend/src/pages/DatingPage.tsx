@@ -249,8 +249,6 @@ export default function DatingPage() {
   } | null>(null);
   const [globalMin, setGlobalMin] = useState(100);
   const [globalMax, setGlobalMax] = useState(500);
-  const [todayMessages, setTodayMessages] = useState(0);
-  const [todaySwipes, setTodaySwipes] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
@@ -274,6 +272,10 @@ export default function DatingPage() {
   // left phones expanded after a prior open). Session toggle only.
   const [appsToComeExpanded, setAppsToComeExpanded] = useState(false);
   const [appsForStartExpanded, setAppsForStartExpanded] = useState(false);
+  // Working app rows start collapsed; expand one at a time (or several).
+  const [expandedWorking, setExpandedWorking] = useState<Record<string, boolean>>(
+    {}
+  );
   useEffect(() => {
     clearCollapsibleExpandedPrefs();
   }, []);
@@ -363,18 +365,6 @@ export default function DatingPage() {
       setStatus(statusRes.data);
       const appRows = statsRes.data.apps || [];
       setApps(appRows);
-      // Prefer sum of per-app today counts so the global total always matches
-      // the cards (backend also recomputes, but keep the UI honest).
-      const swipeSum = appRows.reduce(
-        (n: number, a: AppStats) => n + (a.today?.swipes || 0),
-        0
-      );
-      const openersSum = appRows.reduce(
-        (n: number, a: AppStats) => n + (a.today?.openers || 0),
-        0
-      );
-      setTodaySwipes(swipeSum || statsRes.data.today?.swipes || 0);
-      setTodayMessages(openersSum || statsRes.data.today?.messages || 0);
       setConfigApps(
         ensureRunnableConfigApps(configRes.data.apps || [], seedConfigApp)
       );
@@ -732,7 +722,7 @@ export default function DatingPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Heart className="text-rose-400 shrink-0" /> Run
+            <Heart className="text-rose-400 shrink-0" /> Dating
           </h1>
           <p className="text-mute mt-1 text-sm sm:text-base">
             MacMobileRun · app selection, dry-run, openers, start/stop, activity
@@ -846,21 +836,7 @@ export default function DatingPage() {
       />
 
       {/* Global progress — totals must match the sum of per-app today cards */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="text-lg font-semibold">Today · All Apps</h3>
-        <ProgressBar
-          value={todaySwipes}
-          max={Math.max(todaySwipes, 50)}
-          label={`Swipes today · ${todaySwipes}`}
-        />
-        <ProgressBar
-          value={todayMessages}
-          max={globalMax}
-          label={`Messages today · target range ${globalMin}–${globalMax}`}
-        />
-      </div>
-
-      {/* Per-app stats, grouped: works all the time, still needs fixing, apps to come */}
+      {/* Per-app stats: Working (rows collapsed on load) + Apps to come */}
       <div className="space-y-6" data-testid="dating-apps-to-run">
             {groupDatingCards(
               cardsForDatingApps(apps, configApps).filter(
@@ -868,13 +844,20 @@ export default function DatingPage() {
               )
             ).map(({ group, apps: groupApps }) => {
               const isComingSoon = group.id === 'coming-soon';
+              const isWorking = group.id === 'works';
               const groupExpanded = isComingSoon ? appsToComeExpanded : true;
               return (
               <section
                 key={group.id}
                 aria-label={group.title}
                 className="space-y-3"
-                data-testid={isComingSoon ? 'dating-apps-to-come' : undefined}
+                data-testid={
+                  isComingSoon
+                    ? 'dating-apps-to-come'
+                    : isWorking
+                      ? 'dating-apps-working'
+                      : undefined
+                }
               >
                 {isComingSoon ? (
                   <button
@@ -904,16 +887,73 @@ export default function DatingPage() {
                 {groupExpanded && (
                 <div
                   id={isComingSoon ? 'dating-apps-to-come-panel' : undefined}
-                  className="grid md:grid-cols-2 gap-4"
+                  className={isWorking ? 'space-y-2' : 'grid md:grid-cols-2 gap-4'}
                   role={isComingSoon ? 'region' : undefined}
                   aria-label={isComingSoon ? group.title : undefined}
                 >
-                  {groupApps.map((app) => (
+                  {groupApps.map((app) => {
+                    const rowExpanded = isWorking
+                      ? Boolean(expandedWorking[app.package])
+                      : true;
+                    return (
                 <div
                   key={app.package}
-                  className="bg-surface border border-line rounded-lg p-4 space-y-3"
+                  className="bg-surface border border-line rounded-lg overflow-hidden"
+                  data-testid={`dating-app-card-${app.package}`}
                 >
-                  <div className="flex justify-between items-start">
+                  {isWorking ? (
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-canvas-elev"
+                      aria-expanded={rowExpanded}
+                      data-testid={`dating-working-toggle-${app.package}`}
+                      onClick={() =>
+                        setExpandedWorking((prev) => ({
+                          ...prev,
+                          [app.package]: !prev[app.package],
+                        }))
+                      }
+                    >
+                      {rowExpanded ? (
+                        <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
+                      ) : (
+                        <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-semibold text-white">{app.name}</span>
+                        <span
+                          className="block text-xs text-mute"
+                          data-testid={`dating-today-${app.package}`}
+                        >
+                          Today: {app.today?.swipes ?? 0} swipes ·{' '}
+                          {app.today?.openers ?? 0} messages
+                        </span>
+                      </span>
+                      {canRunFromCard(app.package) && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            control('start', app.package);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              control('start', app.package);
+                            }
+                          }}
+                          className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500"
+                          data-testid={`dating-run-${app.package}`}
+                          title={`Start only ${app.name}`}
+                        >
+                          <Play size={12} /> Start
+                        </span>
+                      )}
+                    </button>
+                  ) : (
+                  <div className="flex justify-between items-start p-4">
                     <div>
                       <h4 className="font-semibold text-lg text-white">{app.name}</h4>
                       {datingAppGroup(app.package) === 'coming-soon' && (
@@ -924,23 +964,18 @@ export default function DatingPage() {
                       {isBlockedApp(app.package) && (
                         <p className="mt-1 text-xs text-yellow-300">{TAIMI_BLOCKED_NOTE}</p>
                       )}
+                      <p className="mt-1 text-xs text-mute">
+                        Today: {app.today?.swipes ?? 0} swipes ·{' '}
+                        {app.today?.openers ?? 0} messages
+                      </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
                       <div>{app.inbox.unread} unread</div>
-                      {canRunFromCard(app.package) && (
-                        <button
-                          type="button"
-                          disabled={loading}
-                          onClick={() => control('start', app.package)}
-                          className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50"
-                          data-testid={`dating-run-${app.package}`}
-                          title={`Run only ${app.name}`}
-                        >
-                          <Play size={12} /> Run
-                        </button>
-                      )}
                     </div>
                   </div>
+                  )}
+                  {rowExpanded && (
+                  <div className="space-y-3 border-t border-line px-4 py-3">
                   {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
                     <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
                       <span>{runCountLabel(app.package)}</span>
@@ -958,7 +993,7 @@ export default function DatingPage() {
                         className="mr-input w-20 text-sm"
                         data-testid={`dating-run-count-${app.package}`}
                         aria-label={`${app.name} ${runCountLabel(app.package)}`}
-                        title="Used by Start and by this app's Run button. Saved for this app."
+                        title="Used by Start and by this app's Start button. Saved for this app."
                       />
                     </label>
                   )}
@@ -1027,10 +1062,11 @@ export default function DatingPage() {
                       {countErrors[app.package] || runCountHint(app.package)}
                     </div>
                   )}
-                  <details className="text-sm text-mute">
-                    <summary className="cursor-pointer select-none">
-                      Today: {app.today.swipes} swipes · {app.today.openers} messages
-                    </summary>
+                  <div className="text-sm text-mute">
+                    <p data-testid={`dating-today-detail-${app.package}`}>
+                      Today: {app.today?.swipes ?? 0} swipes ·{' '}
+                      {app.today?.openers ?? 0} messages
+                    </p>
                     <div className="pt-2">
                       <ProgressBar
                         value={app.targets.opener_progress}
@@ -1038,9 +1074,12 @@ export default function DatingPage() {
                         label="Messages vs daily target"
                       />
                     </div>
-                  </details>
+                  </div>
+                  </div>
+                  )}
                 </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 )}
               </section>
