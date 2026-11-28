@@ -1,9 +1,6 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
 import { useAuth } from '../auth';
-import { Button, ErrorBanner, Input, Sheet } from './ui';
-import { getAuthToken, getBackendUrl } from '../config';
+import { Button, Sheet } from './ui';
 
 export default function AccountSheet({
   open,
@@ -13,37 +10,6 @@ export default function AccountSheet({
   onClose: () => void;
 }) {
   const { email, logout } = useAuth();
-  const [userCode, setUserCode] = useState('');
-  const [linkMsg, setLinkMsg] = useState<string | null>(null);
-  const [linkErr, setLinkErr] = useState<string | null>(null);
-  const [linking, setLinking] = useState(false);
-
-  const approvePhone = async () => {
-    setLinking(true);
-    setLinkErr(null);
-    setLinkMsg(null);
-    try {
-      const res = await axios.post(
-        `${getBackendUrl()}/api/auth/device/approve`,
-        { user_code: userCode.trim().toUpperCase() },
-        { headers: { Authorization: `Bearer ${getAuthToken()}` } }
-      );
-      setLinkMsg(`Phone linked · ${res.data.device_id}`);
-      setUserCode('');
-    } catch (e: unknown) {
-      const msg = axios.isAxiosError(e)
-        ? String(e.response?.data?.detail || e.message)
-        : 'Approve failed';
-      setLinkErr(msg);
-    } finally {
-      setLinking(false);
-    }
-  };
-
-  const rows: [string, string][] = [
-    ['Settings', '/settings'],
-    ['Devices', '/devices'],
-  ];
 
   return (
     <Sheet open={open} onClose={onClose} title="Account">
@@ -62,44 +28,6 @@ export default function AccountSheet({
           <Link to="/account" onClick={onClose} className="text-sm text-accent">
             Edit
           </Link>
-        </div>
-
-        <div className="rounded-2xl border border-line bg-surface p-4 space-y-3">
-          <div>
-            <h3 className="font-medium">Link a phone</h3>
-            <p className="text-sm text-mute">
-              Enter the 6-character code from the APK. QR is download-only.
-            </p>
-          </div>
-          {linkErr && <ErrorBanner message={linkErr} />}
-          {linkMsg && <p className="text-sm text-ok">{linkMsg}</p>}
-          <Input
-            className="uppercase tracking-widest"
-            value={userCode}
-            onChange={(e) => setUserCode(e.target.value.toUpperCase())}
-            placeholder="A1B2C3"
-            maxLength={8}
-          />
-          <Button
-            className="w-full"
-            disabled={linking || userCode.trim().length < 4}
-            onClick={approvePhone}
-          >
-            {linking ? 'Linking…' : 'Approve phone'}
-          </Button>
-        </div>
-
-        <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line text-sm">
-          {rows.map(([label, to]) => (
-            <Link
-              key={label}
-              to={to}
-              onClick={onClose}
-              className="block bg-surface px-4 py-3 hover:text-accent"
-            >
-              {label}
-            </Link>
-          ))}
         </div>
 
         <div className="space-y-2 px-1 text-sm text-mute">

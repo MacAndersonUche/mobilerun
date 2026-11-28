@@ -1,4 +1,3 @@
-import { Link } from 'react-router-dom';
 import { useAuth } from '../auth';
 import { Button, Card } from '../components/ui';
 import { getBackendUrl } from '../config';
@@ -7,7 +6,7 @@ export default function AccountPage() {
   const { email, logout } = useAuth();
 
   return (
-    <div className="mr-page space-y-4">
+    <div className="mr-page space-y-4" data-testid="account-page">
       <h1 className="text-2xl font-semibold">Account</h1>
 
       <Card className="flex items-center gap-3">
@@ -21,30 +20,6 @@ export default function AccountPage() {
             <span className="ml-2 break-all">{email || 'self-hosted'}</span>
           </p>
         </div>
-      </Card>
-
-      <Card className="space-y-3">
-        <div>
-          <h2 className="font-medium">Link a phone</h2>
-          <p className="text-sm text-mute">
-            Open Devices → Connect phone and scan the QR with the MacMobileRun APK
-            (or copy the link). No device code or in-app sign-in.
-          </p>
-        </div>
-        <Link to="/devices" className="mr-btn-primary inline-block text-sm">
-          Open Devices
-        </Link>
-      </Card>
-
-      <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">
-        {[
-          ['Settings', '/settings'],
-          ['Devices', '/devices'],
-        ].map(([label, to]) => (
-          <Link key={label} to={to} className="block px-4 py-3 hover:text-accent">
-            {label}
-          </Link>
-        ))}
       </Card>
 
       <Card className="space-y-2 text-sm text-mute">

@@ -60,8 +60,13 @@ test('authenticated routes', async ({ page }) => {
   }
 
   await page.goto('/account');
-  await expect(page.getByRole('heading', { name: 'Link a phone' })).toBeVisible();
-  await shot(page, '14-account-link');
+  const account = page.getByTestId('account-page');
+  await expect(account.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
+  await expect(account.getByRole('heading', { name: 'Link a phone' })).toHaveCount(0);
+  await expect(account.getByRole('link', { name: /^Open Devices$/i })).toHaveCount(0);
+  await expect(account.getByRole('link', { name: /^Devices$/i })).toHaveCount(0);
+  await expect(account.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
+  await shot(page, '14-account');
 
   await page.goto('/devices');
   await expect(page.getByRole('heading', { name: 'Install APK' })).toBeVisible();
