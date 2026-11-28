@@ -494,7 +494,7 @@ def plan_boo_fixed_run(
     sw, sh = screen_size_from_tree(ui_tree)
     kw = dict(
         pkg=PKG,
-        prefix=f"boo_fixed",
+        prefix="boo_fixed",
         chrome=lambda t: boo_on_deck(t) or boo_on_message_composer(t),
         app=NAME,
         thread_ids=('e="1"',),

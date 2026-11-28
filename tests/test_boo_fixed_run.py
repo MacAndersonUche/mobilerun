@@ -10,12 +10,12 @@ from backend import dating_schedule as ds
 from backend.boo_fixed_run import (
     boo_card_sig,
     boo_composer,
-    boo_send_button,
-    boo_top_card,
     boo_like_button,
     boo_message_button,
     boo_on_deck,
     boo_on_message_composer,
+    boo_send_button,
+    boo_top_card,
     parse,
     plan_boo_fixed_run,
     scale_coords,
@@ -259,9 +259,9 @@ def test_live_message_flow_type_send_wait_next_card_then_done():
     inst = "fixed boo message messages 1 likes 0"
     msg = "hey how are you"
     st = {}
-    p = lambda tree: plan_boo_fixed_run(
-        inst, tree, [], state=st, message=msg
-    )  # noqa: E731
+
+    def p(tree):
+        return plan_boo_fixed_run(inst, tree, [], state=st, message=msg)
     a = p(LIVE_DECK)
     assert a["fastpath_step"] == "boo_message_arrow" and _xy(a) == (964, 2025)
     a = p(LIVE_EMPTY)  # composer open, empty box
@@ -283,9 +283,9 @@ def test_send_not_confirmed_if_deck_never_advances():
     inst = "fixed boo message messages 1 likes 0"
     msg = "hey how are you"
     st = {}
-    p = lambda tree: plan_boo_fixed_run(
-        inst, tree, [], state=st, message=msg
-    )  # noqa: E731
+
+    def p(tree):
+        return plan_boo_fixed_run(inst, tree, [], state=st, message=msg)
     p(LIVE_DECK)
     p(LIVE_EMPTY)
     p(LIVE_TYPED)
