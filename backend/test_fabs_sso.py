@@ -148,10 +148,12 @@ def test_create_fabs_sso_link_format():
     with patch.dict("os.environ", {"FABS_SSO_SECRET": "test-secret"}):
         link = create_fabs_sso_link()
 
-        assert link.startswith("https://fabswingerauto.netlify.app/sso#")
+        assert link.startswith("https://fabswingerauto.netlify.app/sso#token=")
 
         # Extract token from fragment
-        token = link.split("#")[1]
+        fragment = link.split("#")[1]
+        assert fragment.startswith("token=")
+        token = fragment.split("token=")[1]
         assert "." in token
         assert len(token.split(".")) == 2
 
@@ -160,7 +162,8 @@ def test_create_fabs_sso_link_custom_username():
     """Test SSO link with custom username."""
     with patch.dict("os.environ", {"FABS_SSO_SECRET": "test-secret"}):
         link = create_fabs_sso_link("CustomUser")
-        token = link.split("#")[1]
+        fragment = link.split("#")[1]
+        token = fragment.split("token=")[1]
         payload_b64 = token.split(".")[0]
 
         padding = "=" * (4 - len(payload_b64) % 4)
@@ -180,10 +183,10 @@ def test_token_url_safe():
     """Test token contains only URL-safe characters."""
     with patch.dict("os.environ", {"FABS_SSO_SECRET": "test-secret"}):
         link = create_fabs_sso_link()
-        token = link.split("#")[1]
+        fragment = link.split("#")[1]
+        token = fragment.split("token=")[1]
 
-        # Should not contain =, +, or /
-        assert "=" not in token
+        # Token value should not contain +, or / (= is allowed in the fragment key)
         assert "+" not in token
         assert "/" not in token
 

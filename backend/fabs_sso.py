@@ -83,4 +83,4 @@ def create_fabs_sso_link(username: str = "Mac") -> str:
         raise ValueError("FABS_SSO_SECRET environment variable is not configured")
 
     token = mint_fabs_sso_token(username, secret)
-    return f"https://fabswingerauto.netlify.app/sso#{token}"
+    return f"https://fabswingerauto.netlify.app/sso#token={token}"
