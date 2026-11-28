@@ -7,6 +7,7 @@ import {
   MessageCircle,
   History,
   ChevronRight,
+  ExternalLink,
 } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
 import { Card } from '../components/ui';
@@ -61,6 +62,7 @@ export default function HomePage() {
   const { email } = useAuth();
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fabsError, setFabsError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -84,6 +86,21 @@ export default function HomePage() {
       clearInterval(t);
     };
   }, []);
+
+  const handleFabsClick = async () => {
+    setFabsError(null);
+    try {
+      const headers = { Authorization: `Bearer ${getAuthToken()}` };
+      const response = await axios.post(`${getBackendUrl()}/fabs/sso-link`, {}, { headers });
+      window.location.assign(response.data.url);
+    } catch (err: unknown) {
+      const message = axios.isAxiosError(err) && err.response?.data?.detail
+        ? err.response.data.detail
+        : 'Could not create Fabs SSO link';
+      setFabsError(message);
+      setTimeout(() => setFabsError(null), 5000);
+    }
+  };
 
   const online = devices?.filter((d) => d.connected).length ?? 0;
   const offline = (devices?.length ?? 0) - online;
@@ -129,7 +146,24 @@ export default function HomePage() {
             </Link>
           );
         })}
+        
+        <button onClick={handleFabsClick} className="block w-full text-left">
+          <Card elev className="flex items-center gap-3">
+            <ExternalLink className="text-purple-400" size={22} />
+            <div className="min-w-0">
+              <p className="font-medium">Fabs</p>
+              <p className="text-sm text-mute">Auto-Fab swinger automation</p>
+            </div>
+            <ChevronRight size={16} className="ml-auto shrink-0 text-mute" />
+          </Card>
+        </button>
       </div>
+      
+      {fabsError && (
+        <p className="text-sm text-red-500" role="alert">
+          {fabsError}
+        </p>
+      )}
 
       {error && (
         <p className="text-sm text-mute" role="status">
