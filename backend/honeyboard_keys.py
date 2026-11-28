@@ -101,12 +101,16 @@ def key_tap_plan(text: str) -> List[Tuple[str, int, int]]:
 def clear_and_type_plan(
     text: str, *, clear_keys: int = 0, lower_first: bool = False
 ) -> List[Tuple[str, int, int]]:
-    """Backspaces + optional Shift-off + key_tap_plan."""
+    """Backspaces + key_tap_plan.
+
+    ``lower_first`` is ignored. Hinge's empty Add-a-comment box already starts
+    in sentence-shift; an extra Shift tap cycles to CAPS LOCK (verified on
+    Mac's S21+, 28 Nov 2026). Never tap Shift before letters.
+    """
+    del lower_first  # kept for call-site compat; must not tap Shift
     taps: List[Tuple[str, int, int]] = []
     for _ in range(max(0, min(40, int(clear_keys or 0)))):
         taps.append(("bs", HONEYBOARD_BACKSPACE[0], HONEYBOARD_BACKSPACE[1]))
-    if lower_first and (text[:1].islower() if text else False):
-        taps.append(("shift", HONEYBOARD_SHIFT[0], HONEYBOARD_SHIFT[1]))
     taps.extend(key_tap_plan(text))
     return taps
 

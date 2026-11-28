@@ -97,7 +97,9 @@ def test_hinge_keyboard_up_after_heart_types_on_keyboard():
     )
     assert a["action"] == "type_keys"
     assert a["text"] == "hello miss"
-    assert a["clear_keys"] > 0 and a["lower_first"] is True
+    assert a["clear_keys"] > 0
+    assert a.get("lower_first") is False  # sentence-shift already on — no CAPS
+    assert a.get("humanize") is False
     assert a["fastpath_step"] == "hinge_fixed_fc_bc_type"
 
 
@@ -113,12 +115,14 @@ def test_type_keys_taps_only_keyboard_band(monkeypatch):
             "action": "type_keys",
             "text": "hello miss",
             "clear_keys": 3,
-            "lower_first": True,
+            "lower_first": False,
             "_instruction": 'send 5 first contact messages on hinge "hello miss"',
         },
     )
     assert out == 'Typed "hello miss"'
-    assert len(taps) == 3 + 1 + len("hello miss")
+    # clear_keys + letters only — no Shift tap
+    assert len(taps) == 3 + len("hello miss")
+    assert all(p.get("humanize") is False for p in taps)
     assert all(1700 <= p["y"] <= 2200 for p in taps)
     assert (985, 2186) not in [(p["x"], p["y"]) for p in taps]  # never Done
 
