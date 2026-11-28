@@ -3289,15 +3289,54 @@ async def selectors_invalidate(
     }
 
 
+@app.get("/api/usage/tokens")
+async def get_token_usage(
+    days: int = 30,
+    auth: Optional[dict] = Depends(optional_verify_token),
+):
+    """AI API token usage for the last N days (Europe/London)."""
+    try:
+        from token_usage_io import usage_summary
+    except ImportError:
+        from backend.token_usage_io import usage_summary  # type: ignore
+
+    return usage_summary(_dating_user_id(auth), days=days)
+
+
 @app.get("/api/dating/stats")
 async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)):
-    """Get dating mode statistics (Europe/London day; durable per-user store)."""
-    try:
-        from dating_stats_io import load_dating_stats
-    except ImportError:
-        from backend.dating_stats_io import load_dating_stats  # type: ignore
+    """Get dating mode statistics (Europe/London day; durable per-user store).
 
-    stats = load_dating_stats(_dating_user_id(auth))
+    Also lifts Today totals from recent live dating_run jobs so the Working
+    cards never show 0 when the bot already completed sends/likes tonight
+    (covers missed step-sync and Tagged's tagged_fixed counter).
+    """
+    try:
+        from dating_stats_io import (
+            load_dating_stats,
+            merge_recent_dating_jobs_into_stats,
+            save_dating_stats,
+        )
+    except ImportError:
+        from backend.dating_stats_io import (  # type: ignore
+            load_dating_stats,
+            merge_recent_dating_jobs_into_stats,
+            save_dating_stats,
+        )
+
+    uid = _dating_user_id(auth)
+    stats = load_dating_stats(uid)
+    try:
+        try:
+            from storage import list_recent_jobs
+        except ImportError:
+            from backend.storage import list_recent_jobs  # type: ignore
+
+        jobs = list_recent_jobs(80)
+        if merge_recent_dating_jobs_into_stats(stats, jobs, user_id=uid):
+            save_dating_stats(stats, uid)
+    except Exception:
+        logger.exception("dating stats merge from recent jobs failed")
     return stats.get_summary()
 
 

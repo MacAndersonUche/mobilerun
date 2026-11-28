@@ -119,3 +119,57 @@ def test_record_message_ignores_reply_flag_counts_as_opener():
         assert summary["today"]["messages"] == 1
         assert summary["apps"][0]["today"]["openers"] == 1
         assert summary["apps"][0]["today"]["replies"] == 0
+
+
+def test_counter_snapshot_includes_tagged_fixed_messages():
+    from backend import dating_stats_io as dio
+
+    job = {
+        "dating_app": "com.taggedapp",
+        "run_modes": {"com.taggedapp": "message"},
+        "state": {"tagged_fixed": {"done": 4}, "current_app": "com.taggedapp"},
+    }
+    msgs, likes = dio._counter_snapshot(job["state"], job)
+    assert msgs == 4
+    assert likes == 0
+
+
+def test_counter_snapshot_tagged_swipe_counts_as_likes():
+    from backend import dating_stats_io as dio
+
+    job = {
+        "dating_app": "com.taggedapp",
+        "run_modes": {"com.taggedapp": "swipe"},
+        "state": {"tagged_fixed": {"done": 7}},
+    }
+    msgs, likes = dio._counter_snapshot(job["state"], job)
+    assert msgs == 0
+    assert likes == 7
+
+
+def test_apply_job_totals_heals_underreported_today(monkeypatch, tmp_path):
+    from backend import dating_stats_io as dio
+
+    store: dict = {}
+    monkeypatch.setattr(
+        dio,
+        "_storage",
+        lambda: (
+            lambda uid, name: store.get(f"{uid}:{name}"),
+            lambda uid, name, data: store.__setitem__(f"{uid}:{name}", data) or True,
+        ),
+    )
+    monkeypatch.setattr(dio, "_default_file", lambda: tmp_path / "dating_stats.json")
+    stats = dio.load_dating_stats("mac")
+    job = {
+        "dating_run": True,
+        "dating_app": "co.hinge.app",
+        "user_id": "mac",
+        "dry_run": False,
+        "state": {"bulk_message_new": {"done": 5}},
+    }
+    assert dio.apply_job_totals_to_stats(stats, job) is True
+    summary = stats.get_summary()
+    assert summary["today"]["messages"] == 5
+    # Second apply with same totals is a no-op
+    assert dio.apply_job_totals_to_stats(stats, job) is False

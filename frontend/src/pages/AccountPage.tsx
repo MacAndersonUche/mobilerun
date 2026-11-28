@@ -10,16 +10,6 @@ export default function AccountPage() {
     <div className="mr-page space-y-4">
       <h1 className="text-2xl font-semibold">Account</h1>
 
-      <Card elev className="space-y-1">
-        <p className="text-xs uppercase tracking-wide text-mute">Developer platform</p>
-        <Link to="/devices" className="block py-2 text-sm hover:text-accent">
-          Devices
-        </Link>
-        <Link to="/settings" className="block py-2 text-sm hover:text-accent">
-          API keys and runs
-        </Link>
-      </Card>
-
       <Card className="flex items-center gap-3">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent text-lg font-semibold">
           {(email || 'M').slice(0, 1).toUpperCase()}
@@ -48,11 +38,9 @@ export default function AccountPage() {
 
       <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">
         {[
-          ['Workspace', '/settings'],
-          ['Preferences', '/settings'],
-          ['AWS cost', '/settings'],
-          ['Usage', '/history'],
-          ['Connect AI tools', '/settings'],
+          ['Settings', '/settings'],
+          ['Usage', '/usage'],
+          ['Devices', '/devices'],
         ].map(([label, to]) => (
           <Link key={label} to={to} className="block px-4 py-3 hover:text-accent">
             {label}
