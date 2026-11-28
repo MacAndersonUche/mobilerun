@@ -262,6 +262,7 @@ def test_live_message_flow_type_send_wait_next_card_then_done():
 
     def p(tree):
         return plan_boo_fixed_run(inst, tree, [], state=st, message=msg)
+
     a = p(LIVE_DECK)
     assert a["fastpath_step"] == "boo_message_arrow" and _xy(a) == (964, 2025)
     a = p(LIVE_EMPTY)  # composer open, empty box
@@ -286,6 +287,7 @@ def test_send_not_confirmed_if_deck_never_advances():
 
     def p(tree):
         return plan_boo_fixed_run(inst, tree, [], state=st, message=msg)
+
     p(LIVE_DECK)
     p(LIVE_EMPTY)
     p(LIVE_TYPED)
