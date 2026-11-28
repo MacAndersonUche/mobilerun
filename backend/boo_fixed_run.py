@@ -16,11 +16,13 @@ just above the nav bar (~85% screen height):
 Bottom nav (~95% height): Match, Spotlight, Universes, Messages.
 
 Behaviour:
-  - Message + likes: send up to `messages` (default 5) direct messages to NEW
-    people via the arrow, typing an opener-library line (time-of-day aware,
-    same picker as other apps), then do `max(0, max_likes - messages)` likes
-    with the big blue heart. Same semantics as Hily PR #106.
-  - Message only: messages only.
+  - Message + likes: from the discovery deck, tap the paper-plane arrow to
+    send up to `messages` (default 5) direct messages to NEW people (Boo gives
+    ~5 free direct messages like Hily message-before-match), typing an
+    opener-library line (time-of-day aware), then send and return to deck.
+    After messages, do `max(0, max_likes - messages)` likes with the big blue
+    heart. Same semantics as Hily PR #106.
+  - Message only: paper-plane messages only from deck.
   - Likes only: big blue heart only.
   - Never tap anything paid: rocket, lightning, pink heart if it's a super like,
     coins/premium/paywall screens. If the message arrow hits a paywall (free
@@ -31,14 +33,15 @@ Behaviour:
 
 Instruction: ``fixed boo <mode> messages <M> likes <L>``
   mode likes          — free like taps only (L likes)
-  mode message_likes  — up to M bank-text messages to NEW matches from the
-                        chats list, then L likes
+  mode message_likes  — up to M direct messages from deck via paper-plane
+                        arrow, then L likes
   mode message        — messages only (never offered, reserved)
 
-Rules: no LLM, never paid, bank text only, never double-message. A like counts
-only when the deck shows before AND after the tap (and when a card name is
-readable, the name changed). Popups / matches go through hily_interrupts
-handle_interrupt; paid popups are closed earlier by paid_popup (cloud_agent).
+Rules: no LLM, never paid, bank text only. Each message is a direct message
+from the discovery card (not via Messages tab). A like counts only when the
+deck shows before AND after the tap (and when a card name is readable, the
+name changed). Popups / matches go through hily_interrupts handle_interrupt;
+paid popups are closed earlier by paid_popup (cloud_agent).
 """
 
 from __future__ import annotations
@@ -76,8 +79,7 @@ BOO_COORDS = {
     "action_row_y": 0.85,  # Action row vertical position
     "nav_y": 0.95,         # Bottom nav vertical position
     "like_x": 0.61,        # Big teal heart horizontal position
-    "message_x": 0.78,     # Paper-plane arrow horizontal position
-    "messages_tab_x": 0.95, # Messages tab (rightmost in nav)
+    "message_x": 0.78,     # Paper-plane arrow horizontal position (direct message from card)
 }
 
 # Paid controls to never tap
@@ -87,15 +89,6 @@ _BAD_LIKE = re.compile(
 )
 _LIKE_LAB = re.compile(r"^(?:like|heart|♥|❤|❤️)$", re.I)
 _NAME_RE = re.compile(r"^([A-Z][\w''\-]+(?: [A-Z][\w''\-]+)?),?\s*(\d{2})$")
-_CHATS_LAB = ("messages", "matches", "chats", "inbox", "chat")
-_NEW_TILE = (
-    "new match",
-    "start chat",
-    "say hi",
-    "no messages yet",
-    "matched",
-    "start a conversation",
-)
 _DECK_EMPTY = (
     "no one new",
     "no more profiles",
@@ -201,34 +194,12 @@ def boo_on_deck(tree: str) -> bool:
     return (has_like or has_card) and no_composer
 
 
-def boo_on_chats(tree: str) -> bool:
-    """Boo messages/chats list: header + new-match tile patterns."""
+def boo_on_message_composer(tree: str) -> bool:
+    """Boo direct message composer opened from discovery card paper-plane arrow."""
     nodes = _parse_compact_nodes(tree)
-    head = any(
-        _label(n).lower() in _CHATS_LAB and int(n.get("y") or 9999) < 400 for n in nodes
-    )
-    tile = any(any(w in _label(n).lower() for w in _NEW_TILE) for n in nodes)
-    return head or (tile and not any(n.get("editable") for n in nodes))
-
-
-def boo_new_tile(tree: str, done: List[str]) -> Optional[Tuple[int, int, str]]:
-    """First unseen new-match tile (x, y, name)."""
-    for n in _parse_compact_nodes(tree):
-        lab = _label(n)
-        low = lab.lower()
-        if (
-            n.get("x") is None
-            or "daily pick" in low
-            or low.startswith(("say '", 'say "'))
-        ):
-            continue
-        if not any(w in low for w in _NEW_TILE):
-            continue
-        name = lab.split(",")[0].strip() or lab
-        if name in done:
-            continue
-        return (int(n["x"]), int(n["y"]), name)
-    return None
+    has_composer = any(n.get("editable") for n in nodes)
+    has_send = any("send" in _label(n).lower() for n in nodes if n.get("clickable"))
+    return has_composer and has_send and PKG in _pkg(tree)
 
 
 def parse(instruction: str) -> Tuple[str, int, int]:
@@ -291,7 +262,7 @@ def plan_boo_fixed_run(
     kw = dict(
         pkg=PKG,
         prefix=f"boo_fixed",
-        chrome=lambda t: boo_on_deck(t) or boo_on_chats(t),
+        chrome=lambda t: boo_on_deck(t) or boo_on_message_composer(t),
         app=NAME,
         thread_ids=('e="1"',),
     )
@@ -311,7 +282,7 @@ def plan_boo_fixed_run(
     if not (ui_tree or "").strip():
         return None
     if dry_run:
-        if boo_on_deck(ui_tree) or boo_on_chats(ui_tree):
+        if boo_on_deck(ui_tree) or boo_on_message_composer(ui_tree):
             return _act(
                 "done",
                 "boo_dry",
@@ -320,76 +291,55 @@ def plan_boo_fixed_run(
                 dry_run_verified=True,
             )
 
-    # Message phase (new matches only)
+    # Message phase: direct messages from discovery deck via paper-plane arrow
     if phase == "message":
         m = fr.get("match") or {}
         if sent() >= msgs and not m.get("open"):
             fr["msg_sent"] = sent()
             fr["phase"] = phase = "likes"
-        elif m.get("open") or (is_match_popup(ui_tree) and not boo_on_chats(ui_tree)):
+        elif m.get("open") or (is_match_popup(ui_tree) and not boo_on_deck(ui_tree)):
             if not dry_run:
-                if (
-                    m.get("open")
-                    and not m.get("typed")
-                    and not m.get("awaiting")
-                    and any(
-                        _label(n).lower() in BANK
-                        for n in _parse_compact_nodes(ui_tree)
-                        if not n.get("editable")
-                    )
-                ):
-                    fr.pop("match", None)
-                    return _act(
-                        "press_button",
-                        "boo_already_messaged",
-                        f"{NAME}: this chat already has a message — Back, no double message",
-                        button="back",
-                    )
                 ia = handle_interrupt(ui_tree, fr, text, PLANNER, **kw)
                 if ia:
                     return ia
                 fr.pop("match", None)
         if phase == "message":
-            if boo_on_chats(ui_tree):
+            if boo_on_deck(ui_tree):
                 fr["recover"] = 0
-                t = boo_new_tile(ui_tree, fr.setdefault("done_names", []))
-                if t and not dry_run:
-                    fr["done_names"].append(t[2])
+                sig = boo_card_sig(ui_tree)
+                done_sigs = fr.setdefault("done_sigs", [])
+                if sig and sig in done_sigs:
+                    fr["msg_sent"] = sent()
+                    fr["msg_end"] = "no more new people (all cards seen)"
+                    fr["phase"] = phase = "likes"
+                elif not dry_run:
+                    if sig:
+                        done_sigs.append(sig)
                     fr["match"] = {"open": True}
-                    return _act(
-                        "tap",
-                        "boo_open_match",
-                        f"{NAME}: open new match '{t[2]}' ({sent() + 1}/{msgs})",
-                        x=t[0],
-                        y=t[1],
-                    )
-                fr["msg_sent"] = sent()
-                fr["msg_end"] = "no more new matches"
-                fr["phase"] = phase = "likes"
+                    xy = boo_message_button(ui_tree, sw, sh)
+                    if xy:
+                        return _act(
+                            "tap",
+                            "boo_message_arrow",
+                            f"{NAME}: direct message {sent() + 1}/{msgs} (paper-plane arrow)",
+                            x=xy[0],
+                            y=xy[1],
+                        )
             elif PKG in pk:
-                msgs_xy = scale_coords(sw, sh, BOO_COORDS["messages_tab_x"], BOO_COORDS["nav_y"])
-                n_try = int(fr.get("chat_tries") or 0) + 1
-                fr["chat_tries"] = n_try
+                ia = handle_interrupt(ui_tree, fr, text, PLANNER, **kw)
+                if ia:
+                    return ia
+                n_try = int(fr.get("msg_recover") or 0) + 1
+                fr["msg_recover"] = n_try
                 if n_try <= 3:
                     return _act(
-                        "tap",
-                        "boo_messages_tab",
-                        f"{NAME}: open Messages tab",
-                        x=msgs_xy[0],
-                        y=msgs_xy[1],
-                    )
-                if n_try <= 5:
-                    ia = handle_interrupt(ui_tree, fr, text, PLANNER, **kw)
-                    if ia:
-                        return ia
-                    return _act(
                         "press_button",
-                        "boo_back_messages",
-                        f"{NAME}: Back toward Messages",
+                        "boo_back_deck",
+                        f"{NAME}: Back to discovery deck",
                         button="back",
                     )
                 fr["msg_sent"] = sent()
-                fr["msg_end"] = "Messages not found"
+                fr["msg_end"] = "could not return to deck"
                 fr["phase"] = phase = "likes"
             else:
                 r = int(fr.get("recover") or 0) + 1
@@ -401,6 +351,7 @@ def plan_boo_fixed_run(
             return done(fr.get("msg_end") or "finished")
         if phase == "likes":
             fr["recover"] = 0
+            fr.pop("msg_recover", None)
 
     # Likes phase
     if likes >= max_likes:

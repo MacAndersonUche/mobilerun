@@ -11,9 +11,8 @@ from backend.boo_fixed_run import (
     boo_card_sig,
     boo_like_button,
     boo_message_button,
-    boo_new_tile,
-    boo_on_chats,
     boo_on_deck,
+    boo_on_message_composer,
     parse,
     plan_boo_fixed_run,
     scale_coords,
@@ -24,7 +23,6 @@ FIX = Path(__file__).parent / "fixtures" / "dm"
 _t = lambda n: (FIX / n).read_text(encoding="utf-8")  # noqa: E731
 BA = _t("boo_deck_a_guess_r50.xml")
 BB = _t("boo_deck_b_guess_r50.xml")
-B_CHATS = _t("boo_chats_guess_r50.xml")
 B_TH = _t("boo_thread_guess_r50.xml")
 B_TH_T = _t("boo_thread_typed_guess_r50.xml")
 RATE = _t("hily_rate_guess_r49.xml").replace("com.hily.app", "enterprises.dating.boo")
@@ -58,14 +56,13 @@ def test_screen_helpers():
 def test_boo_on_deck():
     assert boo_on_deck(BA)
     assert boo_on_deck(BB)
-    assert not boo_on_deck(B_CHATS)
     assert not boo_on_deck(B_TH)
 
 
-def test_boo_on_chats():
-    assert boo_on_chats(B_CHATS)
-    assert not boo_on_chats(BA)
-    assert not boo_on_chats(B_TH)
+def test_boo_on_message_composer():
+    assert boo_on_message_composer(B_TH)
+    assert boo_on_message_composer(B_TH_T)
+    assert not boo_on_message_composer(BA)
 
 
 def test_boo_card_sig():
@@ -87,15 +84,6 @@ def test_boo_message_button():
     assert 800 <= xy[0] <= 900 and 1950 <= xy[1] <= 2050
 
 
-def test_boo_new_tile():
-    tile = boo_new_tile(B_CHATS, [])
-    assert tile is not None
-    assert tile[2] == "Zoe"
-    assert tile == (540, 500, "Zoe")
-    tile2 = boo_new_tile(B_CHATS, ["Zoe"])
-    assert tile2 is None or tile2[2] != "Zoe"
-
-
 def test_boo_likes_only():
     acts, st = _run("fixed boo likes messages 0 likes 2", [BA, BB, BA])
     assert len(acts) == 3
@@ -113,16 +101,16 @@ def test_boo_likes_counted_on_card_change():
 def test_boo_message_then_like():
     acts, st = _run(
         "fixed boo message_likes messages 1 likes 1",
-        [BA, B_CHATS, B_TH, B_TH_T, B_TH, B_CHATS, BA, BB],
+        [BA, B_TH, B_TH_T, B_TH, BA, BB, BA],
     )
     steps = [a["fastpath_step"] for a in acts]
-    assert steps[0] == "boo_messages_tab"
-    assert steps[1] == "boo_open_match" and _xy(acts[1]) == (540, 500)
-    assert acts[2]["action"] == "type"
-    assert steps[3] == "boo_boo_int_match_send"
-    assert steps[4] == "boo_boo_int_match_back"
+    assert steps[0] == "boo_message_arrow"
+    assert 800 <= acts[0]["x"] <= 900
+    assert acts[1]["action"] == "type"
+    assert steps[2] == "boo_boo_int_match_send"
+    assert steps[3] == "boo_boo_int_match_back"
     assert st["boo_run"]["match_msgs"] == 1
-    assert steps[6] == "boo_like_swipe"
+    assert steps[5] == "boo_like_swipe"
     assert acts[-1]["action"] == "done" and "sent 1/1" in acts[-1]["reason"]
 
 
@@ -207,16 +195,13 @@ def test_cloud_agent_routing():
     assert d["action"] == "done" and d.get("dry_run_verified")
 
 
-def test_boo_no_double_message():
-    thread_with_bank = B_TH.replace(
-        'e="1" h="Type a message"', 't="hey how are you" e="1" h="Type a message"'
-    )
+def test_boo_no_repeat_card():
     acts, st = _run(
-        "fixed boo message_likes messages 2 likes 1",
-        [B_CHATS, thread_with_bank],
+        "fixed boo message_likes messages 3 likes 1",
+        [BA, B_TH, B_TH_T, B_TH, BA, B_TH, B_TH_T, B_TH, BA],
     )
-    assert acts[1]["fastpath_step"] == "boo_already_messaged"
-    assert acts[1]["action"] == "press_button"
+    assert st["boo_run"]["match_msgs"] == 1
+    assert st["boo_run"]["msg_end"] == "no more new people (all cards seen)"
 
 
 def test_job_build_boo():
