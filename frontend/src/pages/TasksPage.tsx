@@ -248,7 +248,6 @@ export default function TasksPage() {
             steps={taskSteps}
             loading={!!activeTaskId}
             emptyText="Task submitted - steps will appear here as soon as the agent acts."
-            showScreenshots
             linkToHistory
           />
         </div>

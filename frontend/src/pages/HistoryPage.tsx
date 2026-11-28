@@ -156,7 +156,6 @@ function TaskCard({
             steps={steps}
             loading={task.status === 'running'}
             emptyText="No per-step log yet."
-            showScreenshots
             testId={`history-step-log-${task.task_id}`}
           />
         </div>

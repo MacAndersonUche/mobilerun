@@ -6,6 +6,7 @@ import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
 import LiveActivityFeed, {
   ActivityPayload,
+  activityJobActive,
 } from '../components/LiveActivityFeed';
 import {
   parseRunCount,
@@ -808,6 +809,8 @@ export default function DatingPage() {
         title="Dating live activity"
         activity={activity}
         loading={!!status?.running && !status?.paused}
+        collapsible
+        jobActive={activityJobActive(activity, !!status?.running)}
       />
 
       {/* Working (one collapsible) + Apps to come */}

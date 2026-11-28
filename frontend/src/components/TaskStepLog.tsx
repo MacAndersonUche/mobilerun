@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader } from 'lucide-react';
 import {
@@ -22,7 +21,6 @@ type Props = {
   /** Newest first for live feeds; oldest first for task progress */
   newestFirst?: boolean;
   emptyText?: string;
-  showScreenshots?: boolean;
   linkToHistory?: boolean;
   testId?: string;
 };
@@ -63,32 +61,45 @@ export default function TaskStepLog({
   loading,
   newestFirst = false,
   emptyText = 'Waiting for the first step…',
-  showScreenshots = false,
   linkToHistory = false,
   testId = 'task-step-log',
 }: Props) {
-  const [shotsOpen, setShotsOpen] = useState(false);
   const list = [...(steps || [])];
   if (newestFirst) list.reverse();
   const st = String(status || 'idle').toLowerCase();
 
   return (
     <div
-      className="bg-surface border border-line rounded-lg p-4 space-y-3"
+      className={
+        title
+          ? 'bg-surface border border-line rounded-lg p-4 space-y-3'
+          : 'space-y-3'
+      }
       data-testid={testId}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold">{title}</h3>
+      {title ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-semibold">{title}</h3>
+          <div className="flex items-center gap-2 text-xs text-mute">
+            {loading && <Loader className="animate-spin" size={14} />}
+            <StatusPill label={st} testId="live-activity-status" />
+            {typeof steps?.length === 'number' && steps.length > 0 ? (
+              <span data-testid="live-activity-step-count">
+                {steps.length} steps
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : (
         <div className="flex items-center gap-2 text-xs text-mute">
           {loading && <Loader className="animate-spin" size={14} />}
-          <StatusPill label={st} testId="live-activity-status" />
           {typeof steps?.length === 'number' && steps.length > 0 ? (
             <span data-testid="live-activity-step-count">
               {steps.length} steps
             </span>
           ) : null}
         </div>
-      </div>
+      )}
 
       {instruction ? (
         <p className="text-sm text-mute" data-testid="task-step-instruction">
@@ -154,14 +165,6 @@ export default function TaskStepLog({
                       </p>
                     )}
                   </div>
-                  {showScreenshots && shotsOpen && s.screenshot_url ? (
-                    <img
-                      src={s.screenshot_url}
-                      alt={`Step ${s.n}`}
-                      className="h-16 w-10 object-cover rounded border border-line"
-                      data-testid="live-activity-thumb"
-                    />
-                  ) : null}
                 </div>
               </li>
             );
@@ -182,16 +185,6 @@ export default function TaskStepLog({
           {error || result}
         </div>
       )}
-
-      {showScreenshots && (steps || []).some((s) => s.screenshot_url) ? (
-        <button
-          type="button"
-          className="text-xs text-mute underline"
-          onClick={() => setShotsOpen((v) => !v)}
-        >
-          {shotsOpen ? 'Hide screenshots' : 'Show screenshots (optional)'}
-        </button>
-      ) : null}
     </div>
   );
 }

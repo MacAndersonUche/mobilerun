@@ -242,6 +242,55 @@ test.describe('portal batch', () => {
     expect(body.dry_run).toBe(false);
   });
 
+  test('Dating live activity collapsed when idle; expands when running; no screenshots toggle', async ({
+    page,
+  }) => {
+    await authAndMock(page);
+    await page.goto('/dating');
+    await expect(page.getByTestId('live-activity')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('live-activity-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+    await expect(page.getByTestId('live-activity-panel')).toHaveCount(0);
+    await expect(page.getByText(/Show screenshots/i)).toHaveCount(0);
+    await expect(page.getByText(/Hide screenshots/i)).toHaveCount(0);
+
+    await page.getByTestId('live-activity-toggle').click();
+    await expect(page.getByTestId('live-activity-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    await expect(page.getByTestId('live-activity-panel')).toBeVisible();
+    await expect(page.getByText(/Show screenshots/i)).toHaveCount(0);
+
+    // Simulate an active job via status mock (last route wins), then reload.
+    await page.route('**/api/dating/status', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          running: true,
+          paused: false,
+          current_app: 'com.hily.app',
+          activity: {
+            status: 'running',
+            job_id: 'task_live_1',
+            mode: 'dating',
+            steps: [],
+          },
+        }),
+      });
+    });
+    await page.goto('/dating');
+    await expect(page.getByTestId('live-activity-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+      { timeout: 15000 }
+    );
+    await expect(page.getByTestId('live-activity-panel')).toBeVisible();
+  });
+
   test('/account redirects to Settings with account controls', async ({
     page,
   }, testInfo) => {
