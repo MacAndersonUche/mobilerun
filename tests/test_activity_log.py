@@ -233,6 +233,8 @@ def test_dating_social_start_activity_endpoints(monkeypatch):
     monkeypatch.setattr(main_mod, "_kick_job", lambda job_id: None)
     monkeypatch.setattr(main_mod, "_save_dating_runtime", lambda *a, **k: None)
     monkeypatch.setattr(main_mod, "_load_dating_runtime", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "_save_social_runtime", lambda *a, **k: None)
+    monkeypatch.setattr(main_mod, "_load_social_runtime", lambda *a, **k: None)
 
     # Patch storage imports used inside handlers
     import sys
@@ -256,7 +258,7 @@ def test_dating_social_start_activity_endpoints(monkeypatch):
         "/api/dating/start",
         json={
             "device_id": "emu",
-            "dry_run": True,
+            "dry_run": True,  # ignored — Dating always live
             "stand_in_package": "ai.mobilerun.mockdating",
         },
     )
@@ -265,8 +267,8 @@ def test_dating_social_start_activity_endpoints(monkeypatch):
     assert body["status"] == "started"
     job_id = body["job"]["job_id"]
     assert job_id in jobs
-    assert jobs[job_id]["dry_run"] is True
-    assert jobs[job_id]["caps"]["opener_target"] == 3
+    assert jobs[job_id]["dry_run"] is False
+    assert jobs[job_id]["caps"]["opener_target"] >= 50
 
     act = c.get("/api/dating/activity")
     assert act.status_code == 200
@@ -276,7 +278,7 @@ def test_dating_social_start_activity_endpoints(monkeypatch):
         "/api/social/start",
         json={
             "device_id": "emu",
-            "dry_run": True,
+            "dry_run": True,  # ignored — Social always live
             "stand_in_package": "com.google.android.apps.messaging",
             "max_steps": 4,
         },
@@ -284,6 +286,7 @@ def test_dating_social_start_activity_endpoints(monkeypatch):
     assert s.status_code == 200, s.text
     sjob = s.json()["job"]["job_id"]
     assert sjob.startswith("social_")
+    assert jobs[sjob]["dry_run"] is False
     sact = c.get("/api/social/activity")
     assert sact.json()["job_id"] == sjob
 

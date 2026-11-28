@@ -335,3 +335,33 @@ console.log('datingRun ok');
   assert.ok(mixed.length >= apps.length, 'still has full runnable set');
   console.log('appsForStartRows tests ok');
 }
+
+// Apps for Start visibility: only when Working has no enabled runnable apps
+{
+  const { shouldShowAppsForStart } = await import('./datingRun.ts');
+  assert.equal(shouldShowAppsForStart([]), true, 'empty config = first run');
+  assert.equal(
+    shouldShowAppsForStart([
+      { package_name: 'com.bumble.app', enabled: false },
+      { package_name: 'co.hinge.app', enabled: false },
+    ]),
+    true,
+    'all disabled = show'
+  );
+  assert.equal(
+    shouldShowAppsForStart([
+      { package_name: 'com.bumble.app', enabled: true },
+      { package_name: 'co.hinge.app', enabled: false },
+    ]),
+    false,
+    'Working enabled = hide'
+  );
+  assert.equal(
+    shouldShowAppsForStart([
+      { package_name: 'com.tinder', enabled: true }, // coming-soon, not Working
+    ]),
+    true,
+    'only coming-soon enabled still shows'
+  );
+  console.log('shouldShowAppsForStart tests ok');
+}

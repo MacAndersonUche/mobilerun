@@ -341,38 +341,56 @@ export default function DevicesPage() {
         )}
       </Card>
 
-      <Card elev className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Download size={18} className="text-accent" />
-          <h3 className="font-medium">Install APK</h3>
-        </div>
-        <p className="text-sm text-mute">
-          Download-only QR for the latest GitHub release. After install, use
-          Connect phone above - not a separate login.
-        </p>
-        {apkQr ? (
-          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-            <div className="rounded-xl bg-white p-3">
-              <img
-                src={`data:image/png;base64,${apkQr}`}
-                alt="APK download QR"
-                className="h-40 w-40"
-              />
-            </div>
-            {apkUrl && (
-              <a
-                href={apkUrl}
-                className="text-sm text-accent break-all"
-                target="_blank"
-                rel="noreferrer"
-              >
-                {apkUrl}
-              </a>
-            )}
-          </div>
-        ) : (
-          <LoadingBlock label="Loading download QR…" />
-        )}
+      <Card elev className="space-y-0 overflow-hidden p-0" data-testid="devices-install-apk">
+        {(() => {
+          const hasConnected = (devices ?? []).some((d) => d.connected);
+          return (
+            <details
+              key={hasConnected ? 'apk-collapsed' : 'apk-open'}
+              open={!hasConnected}
+              className="group"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                <Download size={18} className="text-accent" />
+                <h3 className="font-medium">Install APK</h3>
+                {hasConnected && (
+                  <span className="ml-auto text-xs text-mute">
+                    Collapsed · phone connected
+                  </span>
+                )}
+              </summary>
+              <div className="space-y-3 border-t border-line px-4 pb-4 pt-3">
+                <p className="text-sm text-mute">
+                  Download-only QR for the latest GitHub release. After install,
+                  use Connect phone above - not a separate login.
+                </p>
+                {apkQr ? (
+                  <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+                    <div className="rounded-xl bg-white p-3">
+                      <img
+                        src={`data:image/png;base64,${apkQr}`}
+                        alt="APK download QR"
+                        className="h-40 w-40"
+                      />
+                    </div>
+                    {apkUrl && (
+                      <a
+                        href={apkUrl}
+                        className="text-sm text-accent break-all"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {apkUrl}
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <LoadingBlock label="Loading download QR…" />
+                )}
+              </div>
+            </details>
+          );
+        })()}
       </Card>
 
       {revokeErr && (

@@ -384,7 +384,6 @@ export default function ChatPage() {
                 steps={taskSteps}
                 loading={!!activeTaskId}
                 emptyText="Task submitted - each phone action will appear here in plain words."
-                showScreenshots
                 linkToHistory
                 testId="chat-task-step-log"
               />

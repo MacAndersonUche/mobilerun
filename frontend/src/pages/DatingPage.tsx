@@ -6,6 +6,7 @@ import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
 import LiveActivityFeed, {
   ActivityPayload,
+  activityJobActive,
 } from '../components/LiveActivityFeed';
 import {
   parseRunCount,
@@ -27,6 +28,7 @@ import {
   RUNNABLE_APPS,
   ensureRunnableConfigApps,
   appsForStartRows,
+  shouldShowAppsForStart,
   datingAppGroup,
   groupDatingCards,
   canRunFromCard,
@@ -132,7 +134,8 @@ function seedConfigApp(pkg: string): AppConfig {
   return {
     name: datingAppDisplayName(pkg),
     package_name: pkg,
-    enabled: true,
+    // First run: disabled until the user picks apps in Apps for Start.
+    enabled: false,
     daily_swipe_cap: 50,
   };
 }
@@ -727,28 +730,26 @@ export default function DatingPage() {
             for unread chat follow-ups.
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span
-            className={`min-h-[44px] inline-flex items-center px-3 py-2 rounded text-sm ${
-              status?.running && !status.paused
-                ? 'bg-green-900 text-green-300'
-                : status?.paused
-                  ? 'bg-yellow-900 text-yellow-300'
-                  : 'bg-surface-elev text-mute'
-            }`}
-          >
+        <button
+          type="button"
+          onClick={() => loadAll()}
+          className={`min-h-[44px] inline-flex items-center gap-2 rounded px-3 py-2 text-sm ${
+            status?.running && !status.paused
+              ? 'bg-green-900 text-green-300 hover:bg-green-800'
+              : status?.paused
+                ? 'bg-yellow-900 text-yellow-300 hover:bg-yellow-800'
+                : 'bg-surface-elev text-mute hover:bg-gray-600'
+          }`}
+          title="Refresh status"
+          aria-label={`Status ${statusLabel}. Refresh`}
+          data-testid="dating-status-refresh"
+        >
+          <span>
             {statusLabel}
             {status?.current_app ? ` · ${status.current_app}` : ''}
           </span>
-          <button
-            onClick={() => loadAll()}
-            className="tap-target rounded-xl bg-surface-elev hover:bg-gray-600"
-            title="Refresh"
-            aria-label="Refresh"
-          >
-            <RefreshCw size={18} />
-          </button>
-        </div>
+          <RefreshCw size={14} aria-hidden />
+        </button>
       </div>
 
       {error && (
@@ -808,6 +809,8 @@ export default function DatingPage() {
         title="Dating live activity"
         activity={activity}
         loading={!!status?.running && !status?.paused}
+        collapsible
+        jobActive={activityJobActive(activity, !!status?.running)}
       />
 
       {/* Working (one collapsible) + Apps to come */}
@@ -1056,7 +1059,8 @@ export default function DatingPage() {
         appName={(pkg) => datingAppDisplayName(pkg)}
       />
 
-      {/* App toggles + persona - collapsed on every page load */}
+      {/* App toggles + persona - only on first run / when Working has none enabled */}
+      {shouldShowAppsForStart(configApps) && (
       <div
         className="bg-surface border border-line rounded-lg space-y-4 overflow-hidden"
         data-testid="dating-apps-for-start"
@@ -1160,6 +1164,7 @@ export default function DatingPage() {
         </div>
         )}
       </div>
+      )}
 
       {/* r44: rarely-changed settings, collapsed by default */}
       <details className="space-y-4" data-testid="dating-advanced">

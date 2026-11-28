@@ -30,7 +30,6 @@ export default function SocialPage() {
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(false);
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
-  const [dryRun, setDryRun] = useState(true);
   const [deviceId, setDeviceId] = useState('');
   const [runApp, setRunApp] = useState('com.whatsapp');
   const [contact, setContact] = useState('');
@@ -127,7 +126,7 @@ export default function SocialPage() {
     try {
       const res = await axios.post(
         `${getBackendUrl()}/api/social/run`,
-        socialRunBody({ deviceId, app: runApp, action, contact, message: msgText, dryRun }),
+        socialRunBody({ deviceId, app: runApp, action, contact, message: msgText }),
         { headers: headers() }
       );
       setRunning(true);
@@ -161,9 +160,9 @@ export default function SocialPage() {
         action === 'start'
           ? {
               device_id: deviceId || undefined,
-              dry_run: dryRun,
+              dry_run: false,
               stand_in_package: 'com.google.android.apps.messaging',
-              max_steps: 6,
+              max_steps: 40,
             }
           : {};
       const res = await axios.post(
@@ -226,15 +225,6 @@ export default function SocialPage() {
         >
           <Square size={16} /> Stop
         </button>
-        <label className="flex items-center gap-2 text-sm text-mute">
-          <input
-            type="checkbox"
-            checked={dryRun}
-            onChange={(e) => setDryRun(e.target.checked)}
-            data-testid="social-dry-run"
-          />
-          Dry-run (no real messages)
-        </label>
         {devices.length > 0 && (
           <select
             className="mr-input text-sm max-w-xs"

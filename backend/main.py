@@ -4351,14 +4351,17 @@ class SocialRunBody(BaseModel):
     action: str  # message | reply
     contact: Optional[str] = None
     message: Optional[str] = None
-    dry_run: bool = True
+    # Ignored — Social always runs live (same as Dating).
+    dry_run: bool = False
 
 
 @app.post("/api/social/run")
 async def social_run(
     body: SocialRunBody, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Social page: message this person / reply to messages. No swipes or likes."""
+    """Social page: message this person / reply to messages. No swipes or likes.
+    Always live (dry_run=False); portal no longer offers a dry-run toggle.
+    """
     try:
         from social_run import build_job as build_social_job
     except ImportError:
@@ -4382,7 +4385,7 @@ async def social_run(
             action=str(body.action or "").strip().lower(),
             contact=body.contact or "",
             message=body.message or "",
-            dry_run=bool(body.dry_run),
+            dry_run=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -4422,10 +4425,12 @@ async def start_social_mode(
     body: Optional[ModeStartBody] = None,
     auth: Optional[dict] = Depends(optional_verify_token),
     device_id: str = "default",
-    dry_run: bool = True,
+    dry_run: bool = False,
     stand_in_package: Optional[str] = None,
 ):
-    """Start social mode as a step-driven job (defaults to dry_run)."""
+    """Start social mode as a step-driven job.
+    Always live (dry_run=False); portal no longer offers a dry-run toggle.
+    """
     _load_social_runtime(auth)
     existing = social_mode_state.get("job_id")
     if social_mode_state.get("running") and _active_mode_job("social", existing):
@@ -4434,8 +4439,9 @@ async def start_social_mode(
     social_mode_state.pop("job_id", None)
     if body:
         device_id = body.device_id or device_id
-        dry_run = body.dry_run if body.dry_run is not None else dry_run
         stand_in_package = body.stand_in_package or stand_in_package
+    # Ignore client/query dry_run — Social Start is always live (like Dating).
+    dry_run = False
 
     social_mode_state["running"] = True
     social_mode_state["paused"] = False
@@ -4444,9 +4450,7 @@ async def start_social_mode(
     job_id = f"social_{secrets.token_hex(8)}"
     social_mode_state["job_id"] = job_id
     stand_in = stand_in_package or "com.google.android.apps.messaging"
-    max_steps = int(
-        (body.max_steps if body and body.max_steps else None) or (6 if dry_run else 40)
-    )
+    max_steps = int((body.max_steps if body and body.max_steps else None) or 40)
     job = {
         "job_id": job_id,
         "kind": "social",

@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * t372u: expanding Apps for Start must show every dating app with
- * Templates/AI controls — even when /api/dating/config fails (Working
- * cards already seed RUNNABLE_APPS; Start must match that).
+ * Apps for Start shows only when Working has no enabled runnable apps
+ * (first run / empty Working). Expanding lists every dating app with
+ * Templates/AI controls — even when /api/dating/config fails.
  */
 async function mockDatingApis(
   page: import('@playwright/test').Page,
-  opts: { failConfig?: boolean } = {}
+  opts: { failConfig?: boolean; enabledWorking?: boolean } = {}
 ) {
   await page.route('**/api/**', async (route) => {
     const url = route.request().url();
@@ -20,6 +20,7 @@ async function mockDatingApis(
       return;
     }
     if (url.includes('/api/dating/config')) {
+      const enabled = !!opts.enabledWorking;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -28,14 +29,14 @@ async function mockDatingApis(
             {
               name: 'Bumble',
               package_name: 'com.bumble.app',
-              enabled: true,
+              enabled,
               daily_swipe_cap: 50,
               opener_mode: 'templates',
             },
             {
               name: 'Hinge',
               package_name: 'co.hinge.app',
-              enabled: true,
+              enabled,
               daily_swipe_cap: 50,
               opener_mode: 'ai',
             },
@@ -107,11 +108,21 @@ async function auth(page: import('@playwright/test').Page) {
 }
 
 test.describe('Apps for Start collapsible', () => {
+  test('hidden when Working already has enabled apps', async ({ page }) => {
+    await auth(page);
+    await mockDatingApis(page, { enabledWorking: true });
+    await page.goto('/dating');
+    await expect(page.getByTestId('dating-status-refresh')).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId('dating-apps-for-start')).toHaveCount(0);
+  });
+
   test('collapsed on load; expand shows app rows + Templates/AI', async ({
     page,
   }) => {
     await auth(page);
-    await mockDatingApis(page);
+    await mockDatingApis(page, { enabledWorking: false });
     await page.goto('/dating');
 
     const section = page.getByTestId('dating-apps-for-start');
@@ -127,7 +138,6 @@ test.describe('Apps for Start collapsible', () => {
 
     const list = page.getByTestId('dating-apps-for-start-list');
     await expect(list).toBeVisible();
-    // At least the Working apps + coming-soon runnable set
     await expect(
       page.getByTestId('dating-app-for-start-com.bumble.app')
     ).toBeVisible();
@@ -150,12 +160,10 @@ test.describe('Apps for Start collapsible', () => {
         .getByTestId('dating-app-opener-mode-com.bumble.app')
         .getByRole('button', { name: 'AI' })
     ).toBeVisible();
-    // Many app rows (RUNNABLE_APPS is 15)
     await expect(
       list.locator('[data-testid^="dating-app-for-start-"]')
     ).toHaveCount(15);
 
-    // Stays in section; Save config still present when expanded
     await expect(section.getByRole('button', { name: 'Save config' })).toBeVisible();
   });
 
