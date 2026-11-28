@@ -39,7 +39,6 @@ export default function AccountPage() {
       <Card className="divide-y divide-line text-sm !p-0 overflow-hidden">
         {[
           ['Settings', '/settings'],
-          ['Usage', '/usage'],
           ['Devices', '/devices'],
         ].map(([label, to]) => (
           <Link key={label} to={to} className="block px-4 py-3 hover:text-accent">

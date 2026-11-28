@@ -8,14 +8,32 @@ async function authAndMock(page: import('@playwright/test').Page) {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          today: { swipes: 3, messages: 12 },
+          today: { swipes: 20, messages: 12 },
           apps: [
+            {
+              name: 'Bumble',
+              package: 'com.bumble.app',
+              today: { swipes: 9, likes: 9, openers: 4, replies: 0, total_messages: 4 },
+              targets: { opener_target: 75, opener_progress: 4 },
+              total: { swipes: 9, openers: 4, replies: 0, messages: 4, matches: 0 },
+              inbox: { unread: 0, new_matches: 0 },
+              last_active: null,
+            },
             {
               name: 'Hinge',
               package: 'co.hinge.app',
-              today: { swipes: 0, likes: 0, openers: 5, replies: 0, total_messages: 5 },
+              today: { swipes: 2, likes: 0, openers: 5, replies: 0, total_messages: 5 },
               targets: { opener_target: 75, opener_progress: 5 },
-              total: { swipes: 0, openers: 5, replies: 0, messages: 5, matches: 0 },
+              total: { swipes: 2, openers: 5, replies: 0, messages: 5, matches: 0 },
+              inbox: { unread: 0, new_matches: 0 },
+              last_active: null,
+            },
+            {
+              name: 'Yubo',
+              package: 'co.yellw.yellowapp',
+              today: { swipes: 1, likes: 0, openers: 8, replies: 0, total_messages: 8 },
+              targets: { opener_target: 75, opener_progress: 8 },
+              total: { swipes: 1, openers: 8, replies: 0, messages: 8, matches: 0 },
               inbox: { unread: 0, new_matches: 0 },
               last_active: null,
             },
@@ -69,42 +87,6 @@ async function authAndMock(page: import('@playwright/test').Page) {
       });
       return;
     }
-    if (url.includes('/api/usage/tokens')) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          timezone: 'Europe/London',
-          days: 30,
-          from: '2026-10-29',
-          to: '2026-11-27',
-          totals: {
-            prompt_tokens: 100,
-            completion_tokens: 40,
-            total_tokens: 140,
-            requests: 7,
-          },
-          by_provider: {
-            gemini: {
-              prompt_tokens: 100,
-              completion_tokens: 40,
-              total_tokens: 140,
-              requests: 7,
-            },
-          },
-          daily: [
-            {
-              date: '2026-11-27',
-              prompt_tokens: 100,
-              completion_tokens: 40,
-              total_tokens: 140,
-              requests: 7,
-            },
-          ],
-        }),
-      });
-      return;
-    }
     if (url.includes('/api/devices')) {
       await route.fulfill({
         status: 200,
@@ -127,7 +109,7 @@ async function authAndMock(page: import('@playwright/test').Page) {
 }
 
 test.describe('portal batch', () => {
-  test('home has tiles, no chrome; Dating Working rows collapsed with today', async ({
+  test('home tiles; Dating Working section + per-app today counters', async ({
     page,
   }) => {
     await authAndMock(page);
@@ -137,33 +119,45 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('desktop-sidebar')).toHaveCount(0);
     await expect(page.getByTestId('mobile-bottom-nav')).toHaveCount(0);
     await expect(page.getByText('All Apps')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^Usage$/i })).toHaveCount(0);
 
     await page.goto('/dating');
     await expect(page.getByRole('heading', { name: /^Dating$/i })).toBeVisible({
       timeout: 15000,
     });
     await expect(page.getByText('Today · All Apps')).toHaveCount(0);
-    await expect(page.getByTestId('dating-apps-working')).toBeVisible();
-    const hingeToggle = page.getByTestId('dating-working-toggle-co.hinge.app');
-    await expect(hingeToggle).toBeVisible();
-    await expect(hingeToggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(page.getByTestId('dating-today-co.hinge.app')).toContainText(
-      '5 messages'
+    await expect(page.getByText(/Messages vs daily target/i)).toHaveCount(0);
+    await expect(page.getByText(/Daily message limits/i)).toHaveCount(0);
+
+    const workingToggle = page.getByTestId('dating-apps-working-toggle');
+    await expect(workingToggle).toBeVisible();
+    await expect(workingToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByTestId('dating-today-co.hinge.app')).toHaveCount(0);
+
+    await workingToggle.click();
+    await expect(workingToggle).toHaveAttribute('aria-expanded', 'true');
+
+    // Bumble/Badoo: swipes only. Hinge/Yubo: messages only. Others: both.
+    await expect(page.getByTestId('dating-today-com.bumble.app')).toHaveText(
+      'Today: 9 swipes'
     );
-    await hingeToggle.click();
-    await expect(hingeToggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(page.getByTestId('dating-today-detail-co.hinge.app')).toBeVisible();
+    await expect(page.getByTestId('dating-today-co.hinge.app')).toHaveText(
+      'Today: 5 messages'
+    );
+    await expect(page.getByTestId('dating-today-co.yellw.yellowapp')).toHaveText(
+      'Today: 8 messages'
+    );
+    await expect(page.getByTestId('dating-today-com.hily.app')).toHaveText(
+      'Today: 3 swipes · 2 messages'
+    );
   });
 
-  test('Usage shows token totals, not history', async ({ page }) => {
+  test('/usage redirects home; no Usage tile', async ({ page }) => {
     await authAndMock(page);
     await page.goto('/usage');
-    await expect(page.getByTestId('usage-page')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByRole('heading', { name: /^Usage$/i })).toBeVisible();
-    await expect(page.getByText(/AI API tokens/i)).toBeVisible();
-    await expect(page.getByText('140', { exact: true }).first()).toBeVisible();
-    await expect(page.getByTestId('usage-daily')).toBeVisible();
-    await expect(page.getByText('Task History')).toHaveCount(0);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByTestId('home-nav-tiles')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('usage-page')).toHaveCount(0);
   });
 
   test('Settings is one merged page', async ({ page }) => {

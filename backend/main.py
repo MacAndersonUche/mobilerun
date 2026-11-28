@@ -3289,20 +3289,6 @@ async def selectors_invalidate(
     }
 
 
-@app.get("/api/usage/tokens")
-async def get_token_usage(
-    days: int = 30,
-    auth: Optional[dict] = Depends(optional_verify_token),
-):
-    """AI API token usage for the last N days (Europe/London)."""
-    try:
-        from token_usage_io import usage_summary
-    except ImportError:
-        from backend.token_usage_io import usage_summary  # type: ignore
-
-    return usage_summary(_dating_user_id(auth), days=days)
-
-
 @app.get("/api/dating/stats")
 async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)):
     """Get dating mode statistics (Europe/London day; durable per-user store).

@@ -8,7 +8,6 @@ import {
   History,
   Settings,
   User,
-  BarChart3,
   ChevronRight,
 } from 'lucide-react';
 import { getAuthToken, getBackendUrl } from '../config';
@@ -65,13 +64,6 @@ const NAV_TILES: {
     subtitle: 'Backend, AI keys, workspace',
     icon: Settings,
     accent: 'text-mute',
-  },
-  {
-    to: '/usage',
-    title: 'Usage',
-    subtitle: 'AI API tokens · last 30 days',
-    icon: BarChart3,
-    accent: 'text-emerald-400',
   },
   {
     to: '/account',

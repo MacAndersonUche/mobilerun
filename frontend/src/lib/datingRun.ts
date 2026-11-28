@@ -289,6 +289,32 @@ export function runCountLabel(pkg: string): string {
   return 'Messages per run';
 }
 
+/** Which today counters to show on app cards (portal display only). */
+export type TodayCounterKind = 'swipes' | 'messages' | 'both';
+
+export function todayCounterKind(pkg: string): TodayCounterKind {
+  if (pkg === 'com.bumble.app' || pkg === 'com.badoo.mobile') return 'swipes';
+  if (pkg === 'co.hinge.app' || pkg === 'co.yellw.yellowapp') return 'messages';
+  return 'both';
+}
+
+/** Portal "Today: …" line for an app card. */
+export function formatTodayCounters(
+  pkg: string,
+  today: { swipes?: number; openers?: number } | null | undefined
+): string {
+  const swipes = today?.swipes ?? 0;
+  const messages = today?.openers ?? 0;
+  switch (todayCounterKind(pkg)) {
+    case 'swipes':
+      return `Today: ${swipes} swipes`;
+    case 'messages':
+      return `Today: ${messages} messages`;
+    default:
+      return `Today: ${swipes} swipes · ${messages} messages`;
+  }
+}
+
 /** Hint shown under a count box: the real cap only (no minimum clamp). */
 export function runCountHint(pkg: string): string {
   if (pkg === 'com.facebook.katana') return 'Max 50 (Facebook Dating limit)';
