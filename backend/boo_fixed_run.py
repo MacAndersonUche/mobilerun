@@ -275,7 +275,11 @@ def plan_boo_fixed_run(
         return int(fr.get("match_msgs") or 0)
 
     def done(why: str) -> Dict[str, Any]:
-        parts = [f"{NAME} {mode}: {likes}/{max_likes} likes"] if max_likes else [f"{NAME} {mode}"]
+        parts = (
+            [f"{NAME} {mode}: {likes}/{max_likes} likes"]
+            if max_likes
+            else [f"{NAME} {mode}"]
+        )
         if msgs:
             parts.append(f"sent {int(fr.get('msg_sent', sent()))}/{msgs}")
         extra = sent() - int(fr.get("msg_sent", sent()) if msgs else 0)
@@ -350,7 +354,9 @@ def plan_boo_fixed_run(
                 fr["recover"] = r
                 if r > MAX_RECOVER:
                     return _act("fail", "boo_lost", f"Could not open {NAME}")
-                return _act("open_app", "boo_open", f"Open {NAME}", app=NAME, package=PKG)
+                return _act(
+                    "open_app", "boo_open", f"Open {NAME}", app=NAME, package=PKG
+                )
         if phase == "likes" and not max_likes:
             return done(fr.get("msg_end") or "finished")
         if phase == "likes":
@@ -361,15 +367,11 @@ def plan_boo_fixed_run(
     if likes >= max_likes:
         return done("finished")
     blob = _blob(ui_tree)
-    if (
-        PKG in pk
-        and any(p in blob for p in _DECK_EMPTY)
-        and not boo_on_deck(ui_tree)
-    ):
+    if PKG in pk and any(p in blob for p in _DECK_EMPTY) and not boo_on_deck(ui_tree):
         _drop(fr)
         return done("no more profiles / likes for today")
     if not dry_run and (
-        (is_match_popup(ui_tree) and not boo_on_chats(ui_tree))
+        (is_match_popup(ui_tree) and not boo_on_deck(ui_tree))
         or (fr.get("match") or {}).get("open")
     ):
         ia = handle_interrupt(ui_tree, fr, text, PLANNER, **kw)
@@ -432,4 +434,6 @@ def plan_boo_fixed_run(
         )
     if PKG not in pk:
         return _act("open_app", "boo_open", f"Open {NAME}", app=NAME, package=PKG)
-    return _act("press_button", "boo_back", f"{NAME}: Back toward the cards", button="back")
+    return _act(
+        "press_button", "boo_back", f"{NAME}: Back toward the cards", button="back"
+    )
