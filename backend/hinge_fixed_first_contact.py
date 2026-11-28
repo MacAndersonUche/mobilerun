@@ -113,16 +113,24 @@ _PAYWALL_SHEETS = (
 )
 
 
-def allowed_message(text: str) -> str:
-    raw = (text or "").strip()
-    low = raw.lower()
-    for phrase in MESSAGE_BANK:
-        if low == phrase:
-            return phrase
-    # Exact text Mac gave in the instruction is allowed.
-    if raw:
-        return raw
-    return MESSAGE_BANK[0]
+def allowed_message(
+    text: str,
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    profile_name: str = "",
+) -> str:
+    """Portal opener library first; MESSAGE_BANK if library empty/unreachable."""
+    try:
+        from mobilerun.dating.openers import pick_runner_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import pick_runner_first_contact_text  # type: ignore
+    return pick_runner_first_contact_text(
+        fallback_bank=MESSAGE_BANK,
+        message=text,
+        state=state if isinstance(state, dict) else None,
+        package_name="co.hinge.app",
+        profile_name=profile_name or None,
+    )
 
 
 HINGE_PKG = "co.hinge.app"
@@ -504,7 +512,7 @@ def plan_hinge_fixed_first_contact(
     if _on_likes_you(ui_tree) and not hinge_on_like_sheet(ui_tree):
         return _leave_likes_you(bulk, planner)
 
-    text = allowed_message(message)
+    text = allowed_message(message, state=st)
 
     # Video flow: the "Send a Rose instead?" sheet appears after Send Like.
     # Dismiss it with "Send Like anyway" — never "Send a Rose". The sheet

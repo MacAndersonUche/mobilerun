@@ -506,7 +506,16 @@ def plan_tagged_fixed(
     tg = st.setdefault("tagged_fixed", {"done": 0, "phase": "deck", "recover": 0})
     st["tagged_fixed"] = tg
     done = int(tg.get("done") or 0)
-    text = (message or "").strip() or MESSAGE_BANK[0]
+    try:
+        from mobilerun.dating.openers import pick_runner_first_contact_text
+    except ImportError:  # pragma: no cover
+        from dating.openers import pick_runner_first_contact_text  # type: ignore
+    text = pick_runner_first_contact_text(
+        fallback_bank=MESSAGE_BANK,
+        message=message,
+        state=st,
+        package_name=PKG,
+    )
     unit = "messages" if mode == "message" else "likes"
 
     if done >= target:

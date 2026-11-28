@@ -1,17 +1,17 @@
-"""Template opener library for Dating mode — first-contact only (no LLM).
+"""Template opener library for Dating mode (first-contact only, no LLM).
 
-Buckets by phone local time:
-  morning   05:00–11:59
-  afternoon 12:00–16:59
-  evening   17:00–04:59
-  any       time-neutral (always eligible as fallback / mix-in)
+Slots by Europe/London local time:
+  morning   before 12:00
+  afternoon 12:00 to 17:00 (exclusive of 17:00)
+  evening   after 17:00
+  any       time-neutral (always eligible with the current slot)
 
 Rules:
-- Random pick from the active bucket (+ optional neutrals)
+- Random pick among current slot + any
 - Never repeat the same template to the same match
-- Rotate so identical text is not sent back-to-back across matches
+- Avoid the same line twice in a row within a run
 - {name} placeholder only when a real name is known; otherwise omit
-- Active templates clamped to 2–50
+- Active templates clamped to 2-50
 """
 
 from __future__ import annotations
@@ -24,6 +24,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from zoneinfo import ZoneInfo
+
+LONDON = ZoneInfo("Europe/London")
 
 BUCKETS = ("morning", "afternoon", "evening", "any")
 MIN_ACTIVE = 2
@@ -174,18 +177,24 @@ def merge_with_defaults(
 
 
 def bucket_for_local_time(now: Optional[datetime] = None) -> str:
-    """Return morning | afternoon | evening for phone-local time."""
-    now = now or datetime.now()
-    t = now.time() if isinstance(now, datetime) else now
-    if isinstance(t, datetime):
-        t = t.time()
-    # morning 05:00–11:59
-    if dtime(5, 0) <= t <= dtime(11, 59, 59):
+    """Return morning | afternoon | evening for Europe/London local time."""
+    if now is None:
+        now = datetime.now(LONDON)
+    if isinstance(now, datetime):
+        if now.tzinfo is None:
+            # Tests pass naive datetimes as London wall-clock.
+            t = now.time()
+        else:
+            t = now.astimezone(LONDON).time()
+    else:
+        t = now
+    # morning before 12:00
+    if t < dtime(12, 0):
         return "morning"
-    # afternoon 12:00–16:59
-    if dtime(12, 0) <= t <= dtime(16, 59, 59):
+    # afternoon 12:00 to 17:00
+    if t < dtime(17, 0):
         return "afternoon"
-    # evening 17:00–04:59 (wraps midnight)
+    # evening after 17:00
     return "evening"
 
 
@@ -215,7 +224,7 @@ def render_opener_text(text: str, name: Optional[str] = None) -> str:
         out = _CLEAN_PUNCT.sub(r"\1", out)
         out = _CLEAN_SPACE.sub(" ", out)
         out = out.replace(" ,", ",").replace("  ", " ").strip()
-        # Fix "Hey ," / "Morning —" leftovers
+        # Fix "Hey ," leftovers
         out = re.sub(r"\s+,", ",", out)
         out = re.sub(r"^[,;\-\s]+", "", out)
         out = re.sub(r"\s{2,}", " ", out).strip()
@@ -279,16 +288,14 @@ def pick_template_opener(
         # Allow repeating last_sent across matches if pool empty, still no-repeat per match
         pool = _eligible(lib, bucket, match_key=match_key, exclude_ids=None)
     if not pool:
-        # Exhausted for this match — try any unused enabled template regardless of bucket
+        # Exhausted for this match: try any unused enabled template regardless of slot
         used = set(lib.used_by_match.get(match_key) or [])
         pool = [t for t in lib.active_templates() if t.id not in used]
     if not pool:
         raise ValueError(f"No unused templates left for match {match_key}")
 
-    # Prefer exact bucket over "any" when both present
-    exact = [t for t in pool if t.bucket == bucket]
-    choice_pool = exact or pool
-    tmpl = rng.choice(choice_pool)
+    # Random among current slot + any (equal weight)
+    tmpl = rng.choice(pool)
     rendered = render_opener_text(tmpl.text, profile_name)
 
     # Record usage
@@ -370,8 +377,68 @@ def validate_active_bounds(lib: OpenerLibrary) -> Tuple[bool, str]:
     if n < lo:
         return False, f"Need at least {lo} enabled templates (have {n})"
     if n > hi:
-        return False, f"At most {hi} enabled templates (have {n} — disable some)"
+        return False, f"At most {hi} enabled templates (have {n}; disable some)"
     return True, "ok"
+
+
+def pick_runner_first_contact_text(
+    *,
+    fallback_bank: Sequence[str],
+    message: str = "",
+    state: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+    match_id: str = "fc",
+    package_name: str = "",
+    profile_name: Optional[str] = None,
+    rng: Optional[random.Random] = None,
+) -> str:
+    """
+    Single source for fixed first-contact runners: portal opener library.
+
+    Falls back to ``fallback_bank`` (legacy MESSAGE_BANK) when the library is
+    empty or unreachable. Persists rotation state on ``state['opener_library']``
+    when a state dict is provided.
+    """
+    raw = (message or "").strip()
+    bank = [str(x).strip() for x in (fallback_bank or []) if str(x).strip()]
+    try:
+        user_data = None
+        if isinstance(state, dict) and isinstance(state.get("opener_library"), dict):
+            user_data = state.get("opener_library")
+        lib = merge_with_defaults(user_data)
+        if lib.active_templates():
+            # Unique match key per send so we rotate within a run without
+            # locking to one person forever when runners lack real match ids.
+            done = 0
+            if isinstance(state, dict):
+                bulk = state.get("bulk_message_new") or state.get("tagged_fixed") or {}
+                if isinstance(bulk, dict):
+                    done = int(bulk.get("done") or 0)
+            mid = f"{match_id}:{done}"
+            pick = pick_template_opener(
+                lib,
+                match_id=mid,
+                package_name=package_name or "dating",
+                profile_name=profile_name,
+                now=now,
+                rng=rng,
+            )
+            if isinstance(state, dict):
+                state["opener_library"] = lib.to_dict()
+                state["last_opener_template_id"] = pick.template_id
+                state["last_opener_bucket"] = pick.bucket
+            return pick.text
+    except Exception:
+        pass
+
+    # Legacy bank fallback
+    if raw:
+        low = raw.lower()
+        for phrase in bank:
+            if low == phrase.lower():
+                return phrase
+        return raw
+    return bank[0] if bank else ""
 
 
 def clamp_enabled_to_max(lib: OpenerLibrary) -> int:
