@@ -1,0 +1,50 @@
+<hierarchy windows="1" nodes="46" app_nodes="46" text_nodes="44" needs_vision="false" partial="false" empty="false" mode="compact" win_diag="probe:t=3:pkg=com.android.systemui:kids=1:f=0:a=0|probe:t=3:pkg=com.sec.android.app.launcher:kids=1:f=0:a=0|probe:t=3:pk" packages="enterprises.dating.boo">
+<w id="active" t="active" p="enterprises.dating.boo" f="1" kids="1">
+ <n d="VIEW PROFILE" cls="ImageView" c="1" xy="95,149" b="53,107,137,191"/>
+ <n d="GROUP DATE" cls="Button" c="1" xy="247,149" b="189,107,305,191"/>
+ <n d="GROUP DATE" cls="Button" c="1" xy="289,148" b="179,96,399,201"/>
+ <n d="Boo" cls="View" xy="540,148" b="482,103,598,194"/>
+ <n d="Power Ups" cls="ImageView" c="1" xy="796,148" b="765,117,828,180"/>
+ <n d="Translate" cls="Button" c="1" xy="890,148" b="859,117,922,180"/>
+ <n d="Filter" cls="ImageView" c="1" xy="985,148" b="954,117,1017,180"/>
+ <n d="Sam · Verified · works at medical graduate · went to school at School" cls="ScrollView" s="1" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="ImageView" c="1" xy="540,1042" b="0,0,1080,2085"/>
+ <n d="Sam" cls="View" xy="172,1631" b="53,1594,291,1668"/>
+ <n d="Verified" cls="Button" c="1" xy="332,1630" b="301,1599,364,1662"/>
+ <n d="works at Work" cls="View" xy="220,1698" b="53,1673,388,1723"/>
+ <n d="went to school at School" cls="View" xy="248,1748" b="53,1723,443,1773"/>
+ <n d="located at Town, England" cls="View" xy="254,1798" b="53,1773,455,1823"/>
+ <n d="16 Type INTP" cls="View" c="1" xy="283,1872" b="201,1844,365,1901"/>
+ <n d="Zodiac Virgo" cls="View" c="1" xy="471,1872" b="386,1844,557,1901"/>
+ <n d="Female 25" cls="View" xy="116,1872" b="74,1854,159,1891"/>
+ <n d="Send a Love with Context" cls="Button" c="1" xy="975,1522" b="922,1463,1028,1581"/>
+ <n d="LOOKING FOR" cls="View" xy="187,2271" b="105,2256,270,2287"/>
+ <n d="Friends" cls="View" xy="363,2271" b="312,2253,415,2290"/>
+ <n d="Long term, open to short" cls="View" xy="650,2271" b="478,2253,822,2290"/>
+ <n d="Send a Love with Context" cls="Button" c="1" xy="1001,2223" b="949,2164,1054,2282"/>
+ <n d="Greetings, fellow adventurers! I’m Sam: a 25-year-old w" cls="View" v="0" xy="540,2371" b="105,2342,975,2400"/>
+ <n d="Fatima · Verified · works at Software Engineer · located at Town, England" cls="ScrollView" s="1" xy="540,1200" b="0,0,1080,2400"/>
+ <n cls="ImageView" c="1" xy="540,1042" b="0,0,1080,2085"/>
+ <n d="Fatima" cls="View" xy="149,1681" b="53,1644,246,1718"/>
+ <n d="Verified" cls="Button" c="1" xy="288,1680" b="257,1649,320,1712"/>
+ <n d="works at Work" cls="View" xy="228,1748" b="53,1723,403,1773"/>
+ <n d="located at Town, England" cls="View" xy="243,1798" b="53,1773,434,1823"/>
+ <n d="16 Type INTP" cls="View" c="1" xy="283,1872" b="201,1844,365,1901"/>
+ <n d="Zodiac Taurus" cls="View" c="1" xy="482,1872" b="386,1844,579,1901"/>
+ <n d="Female 28" cls="View" xy="116,1872" b="74,1854,159,1891"/>
+ <n d="Send a Love with Context" cls="Button" c="1" xy="975,1572" b="922,1513,1028,1631"/>
+ <n d="LOOKING FOR" cls="View" xy="187,2271" b="105,2256,270,2287"/>
+ <n d="Long term partner" cls="View" xy="438,2271" b="312,2253,564,2290"/>
+ <n d="Send a Love with Context" cls="Button" c="1" xy="1001,2223" b="949,2164,1054,2282"/>
+ <n d="Firstly I am not sure I am INTP. Will need to take the test " cls="View" v="0" xy="540,2371" b="105,2342,975,2400"/>
+ <n d="Pass" cls="Button" c="1" xy="328,2025" b="252,1949,404,2101"/>
+ <n d="Like" cls="Button" c="1" xy="752,2025" b="676,1949,828,2101"/>
+ <n d="Boost" cls="ImageView" c="1" xy="116,2025" b="53,1962,179,2088"/>
+ <n d="Super Love" cls="Button" c="1" xy="540,2025" b="477,1962,603,2088"/>
+ <n d="DM" cls="ImageView" c="1" xy="964,2025" b="901,1962,1028,2088"/>
+ <n d="Match Match" cls="Button" c="1" xy="135,2200" b="0,2127,270,2274"/>
+ <n d="Spotlight Spotlight" cls="Button" c="1" xy="405,2200" b="270,2127,540,2274"/>
+ <n d="Universes Universes" cls="Button" c="1" xy="675,2200" b="540,2127,810,2274"/>
+ <n d="Messages Messages" cls="Button" c="1" xy="945,2200" b="810,2127,1080,2274"/>
+</w>
+</hierarchy>

@@ -9,6 +9,9 @@ from backend import dating_run as dr
 from backend import dating_schedule as ds
 from backend.boo_fixed_run import (
     boo_card_sig,
+    boo_composer,
+    boo_send_button,
+    boo_top_card,
     boo_like_button,
     boo_message_button,
     boo_on_deck,
@@ -25,6 +28,10 @@ BA = _t("boo_deck_a_guess_r50.xml")
 BB = _t("boo_deck_b_guess_r50.xml")
 B_TH = _t("boo_thread_guess_r50.xml")
 B_TH_T = _t("boo_thread_typed_guess_r50.xml")
+LIVE_DECK = _t("boo_live_deck_dm_icon.xml")
+LIVE_EMPTY = _t("boo_live_composer_empty.xml")
+LIVE_TYPED = _t("boo_live_composer_typed.xml")
+LIVE_AFTER = _t("boo_live_after_send_next_card.xml")
 RATE = _t("hily_rate_guess_r49.xml").replace("com.hily.app", "enterprises.dating.boo")
 
 
@@ -89,7 +96,9 @@ def test_boo_message_button():
     sw, sh = 1080, 2400
     xy = boo_message_button(BA, sw, sh)
     assert xy is not None
-    assert 750 <= xy[0] <= 850 and 2000 <= xy[1] <= 2300
+    # BA has no DM control: fractional fallback on the action row, never the
+    # bottom nav "Messages" tab (756, 2200) the old substring match picked.
+    assert xy != (756, 2200) and 1900 <= xy[1] <= 2100
 
 
 def test_boo_likes_only():
@@ -113,7 +122,7 @@ def test_boo_message_then_like():
     )
     steps = [a.get("fastpath_step", "") for a in acts]
     assert steps[0] == "boo_message_arrow"
-    assert 750 <= acts[0]["x"] <= 850
+    assert acts[0]["y"] < 2100  # action row, not the nav Messages tab
     assert any(a["action"] == "type" for a in acts)
     assert "boo_like_swipe" in steps
     assert acts[-1]["action"] == "done"
@@ -213,3 +222,79 @@ def test_job_build_boo():
     )
     assert job["instruction"] == "fixed boo message_likes messages 3 likes 30"
     assert "boo" in job["instruction"]
+
+
+# ---- r51: live SM-G996B trees (28 Nov 2026): DM icon, send arrow, send animation ----
+
+
+def test_live_dm_button_is_the_dm_icon_not_love_or_nav():
+    # Old substring match picked "Send a Love with Context" (1001, 2223).
+    assert boo_message_button(LIVE_DECK, 1080, 2400) == (964, 2025)
+
+
+def test_live_send_arrow_is_lower_right_icon_never_the_ai_circle():
+    edit = boo_composer(LIVE_TYPED)
+    assert edit is not None
+    # AI mode circle is the unlabelled Button in the field's row at (988, 1219).
+    # The send arrow is the lower right ImageView at (992, 1320).
+    assert boo_send_button(LIVE_TYPED, edit) == (992, 1320)
+
+
+def test_send_arrow_missing_refuses_the_ai_circle():
+    no_arrow = LIVE_TYPED.replace(
+        '<n cls="ImageView" c="1" xy="992,1320" b="957,1285,1028,1356"/>', ""
+    )
+    assert "992,1320" not in no_arrow
+    assert boo_send_button(no_arrow, boo_composer(no_arrow)) is None
+    st = {}
+    inst = "fixed boo message messages 1 likes 0"
+    plan_boo_fixed_run(inst, LIVE_DECK, [], state=st, message="hey how are you")
+    plan_boo_fixed_run(inst, LIVE_EMPTY, [], state=st, message="hey how are you")
+    a = plan_boo_fixed_run(inst, no_arrow, [], state=st, message="hey how are you")
+    assert a["action"] == "press_button"  # leaves the composer, no tap on the circle
+    assert st["boo_run"]["msg_end"].startswith("send arrow not found")
+
+
+def test_live_message_flow_type_send_wait_next_card_then_done():
+    inst = "fixed boo message messages 1 likes 0"
+    msg = "hey how are you"
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(
+        inst, tree, [], state=st, message=msg
+    )  # noqa: E731
+    a = p(LIVE_DECK)
+    assert a["fastpath_step"] == "boo_message_arrow" and _xy(a) == (964, 2025)
+    a = p(LIVE_EMPTY)  # composer open, empty box
+    assert a["action"] == "type" and a["text"] == msg
+    a = p(LIVE_TYPED)  # text in the box: tap the SEND arrow
+    assert a["fastpath_step"] == "boo_fixed_int_match_send" and _xy(a) == (992, 1320)
+    assert (_xy(a)) != (988, 1219)
+    # send animation overlay: composer gone, deck not readable yet -> wait, never tap
+    overlay = '<hierarchy windows="1"><w id="active" p="enterprises.dating.boo" f="1">\n <n cls="View" xy="540,1200" b="0,0,1080,2400"/>\n</w></hierarchy>'
+    a = p(overlay)
+    assert a["action"] == "wait"
+    # next card showing (front card changed): message counted, run finishes
+    a = p(LIVE_AFTER)
+    assert a["action"] == "done" and "sent 1/1" in a["reason"]
+    assert st["boo_run"]["match_msgs"] == 1
+
+
+def test_send_not_confirmed_if_deck_never_advances():
+    inst = "fixed boo message messages 1 likes 0"
+    msg = "hey how are you"
+    st = {}
+    p = lambda tree: plan_boo_fixed_run(
+        inst, tree, [], state=st, message=msg
+    )  # noqa: E731
+    p(LIVE_DECK)
+    p(LIVE_EMPTY)
+    p(LIVE_TYPED)
+    acts = [p(LIVE_DECK) for _ in range(12)]  # same front card as before the DM
+    assert any(a and a["action"] == "wait" for a in acts)
+    assert st["boo_run"].get("match_msgs", 0) == 0
+    assert "not confirmed" in st["boo_run"]["msg_end"]
+
+
+def test_top_card_names():
+    assert boo_top_card(LIVE_DECK) == "Kim"
+    assert boo_top_card(LIVE_AFTER) == "Sam"
