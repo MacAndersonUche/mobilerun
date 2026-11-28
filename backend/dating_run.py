@@ -248,11 +248,12 @@ def instruction_for(
     key, kind, _cap = RUN_APPS[pkg]
     if kind == "swipe":
         return f"fixed swipe {n} on {key}"
+    # Facebook: no baked-in quote. A quoted instruction is treated as the
+    # only allowed text by message_text_guard, which rewrote library picks
+    # back to "hi miss you look beautiful" on the phone. The FB planner
+    # picks from the opener library (comment_text / sticky) instead.
     if key == "facebook":
-        return (
-            f"send {n} first contact messages on facebook dating "
-            f'"hi miss you look beautiful"'
-        )
+        return f"send {n} first contact messages on facebook dating"
     return f"send {n} first contact messages on {key}"
 
 

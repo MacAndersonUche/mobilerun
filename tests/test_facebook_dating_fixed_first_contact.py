@@ -28,11 +28,12 @@ def test_parse_first_contact_facebook_dating():
 
 def test_dry_comment_sheet_uses_mac_text_never_types():
     tree = (FIX / "fb_dating_comment_sheet.xml").read_text(encoding="utf-8")
+    # Stick the fixture line — live runs pick from the opener library.
     act = plan_bulk_bench(
         "send 2 first contact messages on Facebook Dating",
         tree,
         ["Opened Facebook Dating", "Tap Facebook Dating profile photo"],
-        state={},
+        state={"bulk_message_new": {"done": 0, "text": PHOTO_COMMENT_TEXT}},
         package="com.facebook.katana",
         dry_run=True,
     )
@@ -44,7 +45,7 @@ def test_dry_comment_sheet_uses_mac_text_never_types():
 
 def test_live_types_mac_text_then_sends_not_heart():
     tree = (FIX / "fb_dating_comment_sheet.xml").read_text(encoding="utf-8")
-    st = {"bulk_message_new": {"done": 0, "typed": False}}
+    st = {"bulk_message_new": {"done": 0, "typed": False, "text": PHOTO_COMMENT_TEXT}}
     act = plan_facebook_dating_fixed_first_contact(
         "send 2 first contact messages on Facebook Dating",
         tree,
@@ -134,15 +135,16 @@ def test_explore_backs_out_not_spotlight_or_crush():
     assert act.get("x") is None
 
 
-def test_quoted_good_evening_beautiful_is_used():
+def test_quoted_custom_mac_line_is_used():
     from backend.facebook_dating_fixed_first_contact import comment_text
 
+    # Known bank lines in quotes are library hints; a custom Mac quote wins.
     assert (
         comment_text(
-            'send 1 first contact messages on facebook dating "good evening beautiful"',
+            'send 1 first contact messages on facebook dating "totally custom mac line"',
             "",
         )
-        == "good evening beautiful"
+        == "totally custom mac line"
     )
 
 
@@ -150,7 +152,13 @@ def test_counts_send_after_sheet_closes_not_at_tap():
     """Count when the next profile is on the deck, not when Send is tapped."""
     typed = (FIX / "fb_dating_comment_typed_r46.xml").read_text(encoding="utf-8")
     profile = (FIX / "fb_dating_profile_ellie.xml").read_text(encoding="utf-8")
-    st = {"bulk_message_new": {"done": 0, "typed": True}}
+    st = {
+        "bulk_message_new": {
+            "done": 0,
+            "typed": True,
+            "text": "hi miss you look beautiful",
+        }
+    }
     inst = "send 1 first contact messages on Facebook Dating"
     act = plan_facebook_dating_fixed_first_contact(
         inst,
@@ -273,10 +281,11 @@ def test_unconfirmed_send_with_text_still_in_box_does_not_count():
             "pending_count": True,
             "pending_name": "Meghan",
             "counted_this_send": False,
+            "text": "good evening beautiful",
         }
     }
     act = plan_facebook_dating_fixed_first_contact(
-        'send 1 first contact messages on facebook dating "good evening beautiful"',
+        "send 1 first contact messages on facebook dating",
         tree,
         ["Facebook Dating Send"],
         state=st,
@@ -302,10 +311,11 @@ def test_blank_tree_after_send_waits_and_does_not_count():
             "pending_count": True,
             "pending_name": "Meghan",
             "counted_this_send": False,
+            "text": "good evening beautiful",
         }
     }
     act = plan_facebook_dating_fixed_first_contact(
-        'send 1 first contact messages on facebook dating "good evening beautiful"',
+        "send 1 first contact messages on facebook dating",
         blank,
         ["Facebook Dating Send"],
         state=st,
@@ -320,10 +330,10 @@ def test_blank_tree_after_send_waits_and_does_not_count():
 
 def test_leftover_draft_is_cleared_never_sent():
     typed = (FIX / "fb_dating_comment_typed_r46.xml").read_text(encoding="utf-8")
-    # Use tonight's line so the leftover matches the instruction text.
+    # Use tonight's line so the leftover matches the stuck opener text.
     typed = typed.replace("hi miss you look beautiful", "good evening beautiful")
-    st = {"bulk_message_new": {"done": 0}}
-    inst = 'send 1 first contact messages on facebook dating "good evening beautiful"'
+    st = {"bulk_message_new": {"done": 0, "text": "good evening beautiful"}}
+    inst = "send 1 first contact messages on facebook dating"
     act = plan_facebook_dating_fixed_first_contact(
         inst,
         typed,
@@ -370,10 +380,11 @@ def test_partial_sheet_after_send_waits_does_not_count():
             "pending_name": "Zoe",
             "counted_this_send": False,
             "typed": True,
+            "text": "good evening beautiful",
         }
     }
     act = plan_facebook_dating_fixed_first_contact(
-        'send 1 first contact messages on facebook dating "good evening beautiful"',
+        "send 1 first contact messages on facebook dating",
         tree,
         ["Facebook Dating Send"],
         state=st,
@@ -403,10 +414,11 @@ def test_false_count_is_rolled_back_if_text_still_in_box():
             "counted_this_send": True,
             "typed": True,
             "send_retry": 1,
+            "text": "good evening beautiful",
         }
     }
     act = plan_facebook_dating_fixed_first_contact(
-        'send 1 first contact messages on facebook dating "good evening beautiful"',
+        "send 1 first contact messages on facebook dating",
         tree,
         ["Open the keyboard so Send sits above the nav"],
         state=st,

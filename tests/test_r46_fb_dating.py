@@ -26,13 +26,19 @@ PROD = _t("fb_dating_profile_scrollview_r46.xml")  # real 24 Nov tree
 ELLIE = _t("fb_dating_profile_ellie.xml")
 SHEET = _t("fb_dating_comment_sheet.xml")
 TYPED = _t("fb_dating_comment_typed_r46.xml")
-INSTR = 'send 2 first contact messages on facebook dating "hi miss you look beautiful"'
+INSTR = "send 2 first contact messages on facebook dating"
+PHOTO = "hi miss you look beautiful"
 BLANK = '<hierarchy packages="com.facebook.katana"><w p="com.facebook.katana"><n t="x" xy="5,5"/></w></hierarchy>'
 
 
 def _p(tree, st, target=2):
+    # Stick fixture line every step — live runs pick from the opener library;
+    # after a send, sticky clears and would otherwise rotate away from the
+    # classic photo-comment text these fixtures still use.
+    bulk = st.setdefault("bulk_message_new", {"done": 0, "typed": False})
+    bulk["text"] = PHOTO
     return plan_facebook_dating_fixed_first_contact(
-        INSTR, tree, [], state=st, message="hi miss you look beautiful", target=target
+        INSTR, tree, [], state=st, message=PHOTO, target=target
     )
 
 

@@ -73,12 +73,14 @@ def test_fb_dating_profile_taps_photo_never_heart():
 # ── Hinge ───────────────────────────────────────────────────────────────
 def test_hinge_keyboard_up_after_heart_types_on_keyboard():
     tree = _t("hinge_inline_panel_keyboard_blind.xml")
+    # Stick the opener on bulk — library re-pick every step was the regression.
     st = {
         "bulk_message_new": {
             "done": 0,
             "awaiting_sheet": True,
             "_deck_seen": True,
             "_heart_y": 1356,
+            "text": "hello miss",
         }
     }
     hist = [

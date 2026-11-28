@@ -23,7 +23,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time as dtime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 from zoneinfo import ZoneInfo
 
 LONDON = ZoneInfo("Europe/London")
@@ -271,10 +271,15 @@ def pick_template_opener(
     profile_name: Optional[str] = None,
     now: Optional[datetime] = None,
     rng: Optional[random.Random] = None,
+    accept_text: Optional[Callable[[str], bool]] = None,
 ) -> OpenerPick:
     """
     Pick a first-contact opener from templates.
     Raises ValueError if library cannot satisfy (caller may fall back to AI).
+
+    ``accept_text``: optional predicate on the rendered line (e.g. honeyboard
+    keyable). When set, only matching templates are chosen; if none match in
+    the normal pool, broader pools are tried before raising.
     """
     rng = rng or random.Random()
     match_key = f"{package_name}:{match_id}" if package_name else str(match_id)
@@ -283,14 +288,27 @@ def pick_template_opener(
     if lib.last_sent_template_id:
         exclude.add(lib.last_sent_template_id)
 
-    pool = _eligible(lib, bucket, match_key=match_key, exclude_ids=exclude)
+    def _filter(pool: List[OpenerTemplate]) -> List[OpenerTemplate]:
+        if not accept_text:
+            return list(pool)
+        out: List[OpenerTemplate] = []
+        for t in pool:
+            rendered = render_opener_text(t.text, profile_name)
+            if accept_text(rendered):
+                out.append(t)
+        return out
+
+    pool = _filter(_eligible(lib, bucket, match_key=match_key, exclude_ids=exclude))
     if not pool:
         # Allow repeating last_sent across matches if pool empty, still no-repeat per match
-        pool = _eligible(lib, bucket, match_key=match_key, exclude_ids=None)
+        pool = _filter(_eligible(lib, bucket, match_key=match_key, exclude_ids=None))
     if not pool:
         # Exhausted for this match: try any unused enabled template regardless of slot
         used = set(lib.used_by_match.get(match_key) or [])
-        pool = [t for t in lib.active_templates() if t.id not in used]
+        pool = _filter([t for t in lib.active_templates() if t.id not in used])
+    if not pool and accept_text:
+        # Last resort for keyable: any enabled template that passes, even repeats
+        pool = _filter(list(lib.active_templates()))
     if not pool:
         raise ValueError(f"No unused templates left for match {match_key}")
 
@@ -381,6 +399,20 @@ def validate_active_bounds(lib: OpenerLibrary) -> Tuple[bool, str]:
     return True, "ok"
 
 
+def _honeyboard_keyable(text: str) -> bool:
+    try:
+        from honeyboard_keys import is_honeyboard_keyable
+    except ImportError:
+        try:
+            from backend.honeyboard_keys import is_honeyboard_keyable  # type: ignore
+        except ImportError:  # pragma: no cover
+            # Letters / space / , ' ? — keep in sync with honeyboard_keys.py
+            allowed = set("abcdefghijklmnopqrstuvwxyz ,'?")
+            s = (text or "").strip()
+            return bool(s) and all(ch in allowed for ch in s.lower())
+    return is_honeyboard_keyable(text)
+
+
 def pick_runner_first_contact_text(
     *,
     fallback_bank: Sequence[str],
@@ -391,6 +423,7 @@ def pick_runner_first_contact_text(
     package_name: str = "",
     profile_name: Optional[str] = None,
     rng: Optional[random.Random] = None,
+    require_keyable: bool = False,
 ) -> str:
     """
     Single source for fixed first-contact runners: portal opener library.
@@ -398,9 +431,14 @@ def pick_runner_first_contact_text(
     Falls back to ``fallback_bank`` (legacy MESSAGE_BANK) when the library is
     empty or unreachable. Persists rotation state on ``state['opener_library']``
     when a state dict is provided.
+
+    ``require_keyable``: only return lines Honeyboard type_keys can produce
+    (letters, space, comma, apostrophe, ?). Skips unkeyable templates and
+    bank lines rather than failing mid-type.
     """
     raw = (message or "").strip()
     bank = [str(x).strip() for x in (fallback_bank or []) if str(x).strip()]
+    accept = _honeyboard_keyable if require_keyable else None
     try:
         user_data = None
         if isinstance(state, dict) and isinstance(state.get("opener_library"), dict):
@@ -422,23 +460,127 @@ def pick_runner_first_contact_text(
                 profile_name=profile_name,
                 now=now,
                 rng=rng,
+                accept_text=accept,
             )
             if isinstance(state, dict):
                 state["opener_library"] = lib.to_dict()
                 state["last_opener_template_id"] = pick.template_id
                 state["last_opener_bucket"] = pick.bucket
+            if accept and not accept(pick.text):
+                raise ValueError("picked text not keyable")
             return pick.text
     except Exception:
         pass
 
-    # Legacy bank fallback
-    if raw:
+    # Legacy bank fallback (prefer keyable when required)
+    if raw and (not accept or accept(raw)):
         low = raw.lower()
         for phrase in bank:
             if low == phrase.lower():
                 return phrase
-        return raw
-    return bank[0] if bank else ""
+        if not accept:
+            return raw
+    for phrase in bank:
+        if not accept or accept(phrase):
+            return phrase
+    return bank[0] if bank else ("hey how are you" if require_keyable else "")
+
+
+def sticky_first_contact_text(
+    store: Dict[str, Any],
+    *,
+    fallback_bank: Sequence[str],
+    message: str = "",
+    state: Optional[Dict[str, Any]] = None,
+    package_name: str = "",
+    profile_name: Optional[str] = None,
+    require_keyable: bool = False,
+    now: Optional[datetime] = None,
+    rng: Optional[random.Random] = None,
+) -> str:
+    """Pick once per person into ``store['text']`` and reuse until cleared.
+
+    Fixed runners used to call ``pick_runner_first_contact_text`` every step;
+    the library's no-repeat rule then returned a different line each tick, so
+    the landed/send check compared against the wrong text. Stick the chosen
+    line on the per-person bulk blob until that send finishes.
+    """
+    if not isinstance(store, dict):
+        return pick_runner_first_contact_text(
+            fallback_bank=fallback_bank,
+            message=message,
+            state=state,
+            package_name=package_name,
+            profile_name=profile_name,
+            require_keyable=require_keyable,
+            now=now,
+            rng=rng,
+        )
+    existing = str(store.get("text") or "").strip()
+    if existing:
+        if require_keyable and not _honeyboard_keyable(existing):
+            store.pop("text", None)
+            store.pop("template_id", None)
+            store.pop("bucket", None)
+        else:
+            # Re-surface pick metadata on state every step (nested Hily fc
+            # state used to leave job-level last_opener_template_id empty).
+            if isinstance(state, dict):
+                tid = store.get("template_id")
+                if tid:
+                    state["last_opener_template_id"] = tid
+                if store.get("bucket"):
+                    state["last_opener_bucket"] = store.get("bucket")
+            return existing
+    text = pick_runner_first_contact_text(
+        fallback_bank=fallback_bank,
+        message=message,
+        state=state,
+        package_name=package_name,
+        profile_name=profile_name,
+        require_keyable=require_keyable,
+        now=now,
+        rng=rng,
+    )
+    if require_keyable and not _honeyboard_keyable(text):
+        try:
+            from honeyboard_keys import first_keyable_line
+        except ImportError:
+            from backend.honeyboard_keys import first_keyable_line  # type: ignore
+        text = first_keyable_line(
+            list(fallback_bank or ()) + [message or "", "hey how are you"]
+        )
+    store["text"] = text
+    if isinstance(state, dict):
+        tid = state.get("last_opener_template_id")
+        if tid:
+            store["template_id"] = tid
+        if state.get("last_opener_bucket"):
+            store["bucket"] = state.get("last_opener_bucket")
+    return text
+
+
+def clear_sticky_opener(store: Optional[Dict[str, Any]]) -> None:
+    """Drop the stuck opener so the next person gets a fresh pick."""
+    if isinstance(store, dict):
+        store.pop("text", None)
+        store.pop("template_id", None)
+        store.pop("bucket", None)
+
+
+def promote_opener_state(
+    child: Optional[Dict[str, Any]], parent: Optional[Dict[str, Any]]
+) -> None:
+    """Copy opener pick metadata from a nested planner state onto the job state.
+
+    Hily fixed-run keeps first-contact bulk under ``hr['fc']``; without this,
+    ``last_opener_template_id`` stays empty on the job.
+    """
+    if not isinstance(child, dict) or not isinstance(parent, dict):
+        return
+    for k in ("opener_library", "last_opener_template_id", "last_opener_bucket"):
+        if k in child and child[k] is not None:
+            parent[k] = child[k]
 
 
 def clamp_enabled_to_max(lib: OpenerLibrary) -> int:
