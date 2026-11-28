@@ -199,9 +199,19 @@ test('tasks page shows plain-language live steps', async ({ page }) => {
   await page.locator('#task-device').selectOption('emu');
   await page.locator('#task-instruction').fill('open settings');
   await page.getByRole('button', { name: /Run Task/i }).click();
+  // Tasks is one-off submit only; live step log lives on History
+  await expect(page.getByTestId('task-submitted')).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId('task-history-link')).toBeVisible();
+  await shot(page, 'tasks-submitted');
+
+  await page.goto('/history');
+  await expect(page.getByTestId('history-task').first()).toBeVisible({
+    timeout: 15000,
+  });
+  await page.getByTestId('history-task').first().locator('button').first().click();
   await expect(page.getByTestId('step-line').first()).toContainText(
     /Step\s+1:\s+Opened Settings/i,
     { timeout: 15000 }
   );
-  await shot(page, 'tasks-live-steps');
+  await shot(page, 'history-live-steps');
 });
