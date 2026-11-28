@@ -57,7 +57,13 @@ def test_dating_home_never_taps_header_waits_then_taps_card():
     assert acts[2]["fastpath_step"] == "fb_dating_fc_tap_card"
     assert (acts[2]["x"], acts[2]["y"]) == CARD_PHOTO_XY
     for a in acts:
-        assert (a.get("x"), a.get("y")) not in (HEADER, (525, 133), (532, 140), LIKE_XY, PASS_XY)
+        assert (a.get("x"), a.get("y")) not in (
+            HEADER,
+            (525, 133),
+            (532, 140),
+            LIKE_XY,
+            PASS_XY,
+        )
         assert a.get("llm_provider") is None
         if a.get("action") == "tap":
             assert a["y"] > 300
@@ -95,11 +101,16 @@ def test_post_then_feed_then_home_still_works():
 
 def test_routed_without_llm_and_quoted_bank_text():
     st: dict = {}
-    a = ca.plan_next_action(INSTR, HOME, [], package="com.facebook.katana", agent_state=st)
+    a = ca.plan_next_action(
+        INSTR, HOME, [], package="com.facebook.katana", agent_state=st
+    )
     assert a["fastpath_step"] == "fb_dating_fc_wait_card"
     assert ca._is_fixed_swipe_action(a)
-    b = ca.plan_next_action(INSTR, LAUNCHER, [], package="com.sec.android.app.launcher",
-                            agent_state={})
+    b = ca.plan_next_action(
+        INSTR, LAUNCHER, [], package="com.sec.android.app.launcher", agent_state={}
+    )
     assert b["action"] == "open_app" and b.get("x") is None
-    c = ca.plan_next_action(INSTR, FEED, [], package="com.facebook.katana", agent_state={})
+    c = ca.plan_next_action(
+        INSTR, FEED, [], package="com.facebook.katana", agent_state={}
+    )
     assert (c.get("x"), c.get("y")) == (630, 2200)

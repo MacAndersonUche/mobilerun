@@ -157,18 +157,14 @@ def _counter_snapshot(
     )
     swipe = state.get("bulk_swipe") if isinstance(state.get("bulk_swipe"), dict) else {}
     tagged = (
-        state.get("tagged_fixed")
-        if isinstance(state.get("tagged_fixed"), dict)
-        else {}
+        state.get("tagged_fixed") if isinstance(state.get("tagged_fixed"), dict) else {}
     )
     tagged_done = _int_done(tagged, "done")
     # Tagged: auto message → messages; auto swipe → likes/swipes
     tagged_mode = ""
     if isinstance(job, dict):
         modes = job.get("run_modes") if isinstance(job.get("run_modes"), dict) else {}
-        pkg = str(
-            job.get("dating_app") or state.get("current_app") or ""
-        ).strip()
+        pkg = str(job.get("dating_app") or state.get("current_app") or "").strip()
         tagged_mode = str((modes or {}).get(pkg) or "").lower()
     if not tagged_mode:
         tagged_mode = str(tagged.get("mode") or tagged.get("phase") or "").lower()
@@ -252,7 +248,11 @@ def merge_recent_dating_jobs_into_stats(
     for job in jobs or []:
         if not isinstance(job, dict):
             continue
-        if not (job.get("dating_run") or job.get("dating_app") or job.get("mode") == "dating"):
+        if not (
+            job.get("dating_run")
+            or job.get("dating_app")
+            or job.get("mode") == "dating"
+        ):
             continue
         owner = str(job.get("user_id") or job.get("owner") or "").strip().lower()
         if uid and owner and owner != uid:

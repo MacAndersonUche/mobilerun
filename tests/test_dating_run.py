@@ -42,7 +42,13 @@ def test_swipe_instruction_is_fixed_mode():
 
 def test_unsupported_apps_skipped():
     ok, bad = dating_run.split_supported(
-        ["com.whatsapp", "hinge", "co.hinge.app", "com.taggedapp", "ai.mobilerun.mockdating"]
+        [
+            "com.whatsapp",
+            "hinge",
+            "co.hinge.app",
+            "com.taggedapp",
+            "ai.mobilerun.mockdating",
+        ]
     )
     # r45: Tagged is runnable now (auto swipe / auto message)
     assert ok == ["co.hinge.app", "com.taggedapp"]
@@ -103,7 +109,12 @@ def client(monkeypatch):
 def test_start_single_app_creates_agent_job(client):
     r = client.post(
         "/api/dating/start",
-        json={"device_id": "phone1", "dry_run": True, "apps": ["com.hily.app"], "count": 9},
+        json={
+            "device_id": "phone1",
+            "dry_run": True,
+            "apps": ["com.hily.app"],
+            "count": 9,
+        },
     )
     assert r.status_code == 200, r.text
     job = r.json()["job"]
@@ -199,7 +210,10 @@ def test_step_worker_chains_next_app(monkeypatch):
     monkeypatch.setattr(step_worker, "put_job", lambda j: put.append(j))
     monkeypatch.setenv("USE_AWS_STORAGE", "false")
     job = dating_run.build_job(
-        device_id="d1", queue=["co.hinge.app", "com.badoo.mobile"], count=1, dry_run=True
+        device_id="d1",
+        queue=["co.hinge.app", "com.badoo.mobile"],
+        count=1,
+        dry_run=True,
     )
     job["status"] = "completed"
     step_worker._start_next_run_app(job)

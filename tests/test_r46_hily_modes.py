@@ -67,21 +67,35 @@ def test_modes_and_like_caps_per_mode():
     ) == {"com.hily.app": "likes", "com.taggedapp": "message"}
     assert dating_run.clean_modes({"hily": "swipe"}) == {}
     caps = dating_run.clean_like_caps(
-        {"hily:likes": "40", "com.hily.app:message_likes": 900,
-         "bumble:likes": 3, "hily:bogus": 5, "hily:likes2": "x"}
+        {
+            "hily:likes": "40",
+            "com.hily.app:message_likes": 900,
+            "bumble:likes": 3,
+            "hily:bogus": 5,
+            "hily:likes2": "x",
+        }
     )
     assert caps == {"com.hily.app:likes": 40, "com.hily.app:message_likes": 500}
     inst = dating_run.instruction_for
-    assert inst("com.hily.app", None, None, {"com.hily.app": "likes"}, caps) == "fixed hily likes 40"
-    assert inst("com.hily.app", None, {"com.hily.app": 3}, None, caps) == "fixed hily message 3 likes 500"
+    assert (
+        inst("com.hily.app", None, None, {"com.hily.app": "likes"}, caps)
+        == "fixed hily likes 40"
+    )
+    assert (
+        inst("com.hily.app", None, {"com.hily.app": 3}, None, caps)
+        == "fixed hily message 3 likes 500"
+    )
     # default mode = Message + likes, default 30 likes, 5 messages
     assert inst("com.hily.app", None) == "fixed hily message 5 likes 30"
 
 
 def test_build_job_carries_caps_wall_and_next_app():
     j = dating_run.build_job(
-        device_id="d", queue=["com.hily.app", "com.bumble.app"], count=None,
-        dry_run=False, modes={"com.hily.app": "likes"},
+        device_id="d",
+        queue=["com.hily.app", "com.bumble.app"],
+        count=None,
+        dry_run=False,
+        modes={"com.hily.app": "likes"},
         like_caps={"com.hily.app:likes": 100},
     )
     assert j["instruction"] == "fixed hily likes 100"
@@ -111,18 +125,34 @@ def test_step_worker_uses_job_wall_for_long_hily_runs():
 
 def test_schedule_keeps_hily_mode_and_likes():
     s = normalize(
-        {"time": "09:00", "device_id": "phone1", "items": [
-            {"app": "hily", "runs": 1, "count": 9, "mode": "likes", "likes": 45},
-            {"app": "tagged", "runs": 1, "count": 3, "mode": "message"},
-        ]}
+        {
+            "time": "09:00",
+            "device_id": "phone1",
+            "items": [
+                {"app": "hily", "runs": 1, "count": 9, "mode": "likes", "likes": 45},
+                {"app": "tagged", "runs": 1, "count": 3, "mode": "message"},
+            ],
+        }
     )
     hy = s["items"][0]
-    assert hy == {"app": "com.hily.app", "runs": 1, "count": 5, "mode": "likes", "likes": 45}
+    assert hy == {
+        "app": "com.hily.app",
+        "runs": 1,
+        "count": 5,
+        "mode": "likes",
+        "likes": 45,
+    }
     assert build_modes(s) == {"com.hily.app": "likes", "com.taggedapp": "message"}
     assert build_like_caps(s) == {"com.hily.app:likes": 45}
     q, _ = build_queue(s)
     assert q == ["com.hily.app", "com.taggedapp"]
-    d = normalize({"time": "09:00", "device_id": "phone1", "items": [{"app": "hily", "runs": 1, "count": 2}]})
+    d = normalize(
+        {
+            "time": "09:00",
+            "device_id": "phone1",
+            "items": [{"app": "hily", "runs": 1, "count": 2}],
+        }
+    )
     assert d["items"][0]["mode"] == "message_likes" and d["items"][0]["likes"] == 30
 
 
@@ -162,9 +192,9 @@ def test_finder_recovery_ladder_waits_then_fails_honestly():
     # Same-decision guard simulation: no decision key repeats 3x in a row.
     keys = [ca._planner_decision_key(a) for a in acts]
     for i in range(len(keys) - 2):
-        assert not (keys[i] and keys[i] == keys[i + 1] == keys[i + 2]), (
-            f"guard would fire at {i}: {keys[i]}"
-        )
+        assert not (
+            keys[i] and keys[i] == keys[i + 1] == keys[i + 2]
+        ), f"guard would fire at {i}: {keys[i]}"
 
 
 def test_likes_only_finder_hearts_then_done_never_crush():
@@ -184,10 +214,15 @@ def test_message_and_likes_full_cycle():
     # r53 (Mac, 27 Nov 2026: "I wanna send messages, not like"): a message run
     # sends its N messages from Likes sent and finishes — no Finder likes.
     trees = [
-        FINDER,                         # → Activity
-        LIKES_SENT, MBM, MBM_TYPED,     # envelope → type → send 1
-        LIKES_SENT, LIKES_SENT, MBM, MBM_TYPED,  # confirm 1, envelope, type, send 2
-        LIKES_SENT,                     # confirm 2 → done
+        FINDER,  # → Activity
+        LIKES_SENT,
+        MBM,
+        MBM_TYPED,  # envelope → type → send 1
+        LIKES_SENT,
+        LIKES_SENT,
+        MBM,
+        MBM_TYPED,  # confirm 1, envelope, type, send 2
+        LIKES_SENT,  # confirm 2 → done
     ]
     acts, st = _run("fixed hily message 2 likes 4", trees)
     steps = [a["fastpath_step"] for a in acts]
@@ -197,7 +232,9 @@ def test_message_and_likes_full_cycle():
     assert len(typed) == 2 and all(a["text"] == "hey how are you" for a in typed)
     assert steps.count("hily_fixed_fc_send") == 2
     assert st["hily_run"]["sent"] == 2
-    assert not any(s.startswith("hily_run_fixed_like") for s in steps)  # never a bare like
+    assert not any(
+        s.startswith("hily_run_fixed_like") for s in steps
+    )  # never a bare like
     assert acts[-1]["action"] == "done" and "sent 2/2" in acts[-1]["reason"]
     for a in acts:
         assert _xy(a) not in (CRUSH_XY, DISCOVER_XY)
@@ -205,10 +242,19 @@ def test_message_and_likes_full_cycle():
 
 
 def test_no_envelopes_left_finishes_without_likes():
-    st = {"hily_run": {"likes": 0, "sent": 1, "phase": "message",
-                       "fc": {"bulk_message_new": {"done": 1, "_ls_tapped": True,
-                                                   "_ls_scrolls": 4}}}}
-    a = plan_hily_fixed_run("fixed hily message 2 likes 5", LIKES_SENT_EMPTY, [], state=st)
+    st = {
+        "hily_run": {
+            "likes": 0,
+            "sent": 1,
+            "phase": "message",
+            "fc": {
+                "bulk_message_new": {"done": 1, "_ls_tapped": True, "_ls_scrolls": 4}
+            },
+        }
+    }
+    a = plan_hily_fixed_run(
+        "fixed hily message 2 likes 5", LIKES_SENT_EMPTY, [], state=st
+    )
     assert st["hily_run"]["phase"] == "finished"
     assert a["action"] == "done"
     assert "no more Likes-sent envelopes" in st["hily_run"]["msg_end"]
@@ -220,7 +266,9 @@ def test_paywall_closed_with_back():
 
 
 def test_dry_run_taps_nothing():
-    a = plan_hily_fixed_run("fixed hily message 5 likes 30", FINDER, [], state={}, dry_run=True)
+    a = plan_hily_fixed_run(
+        "fixed hily message 5 likes 30", FINDER, [], state={}, dry_run=True
+    )
     assert a["action"] == "done" and a["dry_run_verified"]
 
 
@@ -233,15 +281,23 @@ def test_lost_off_finder_fails_cleanly():
 
 def test_cloud_agent_routes_hily_without_llm():
     st: Dict[str, Any] = {}
-    a = ca.plan_next_action("fixed hily likes 3", FINDER, [], package="com.hily.app",
-                            agent_state=st)
+    a = ca.plan_next_action(
+        "fixed hily likes 3", FINDER, [], package="com.hily.app", agent_state=st
+    )
     assert a["planner"] == "hily_fixed_run" and _xy(a) == (750, 1959)
     assert ca._fixed_swipe_run("fixed hily message 5 likes 30", {})
     assert ca._is_fixed_swipe_action(a)
-    st2: Dict[str, Any] = {"hily_run": {"likes": 2, "sent": 0, "phase": "message",
-                                        "fc": {"bulk_message_new": {"done": 0, "typed": False}}}}
-    t = ca.plan_next_action("fixed hily message 2 likes 4", MBM, [], package="com.hily.app",
-                            agent_state=st2)
+    st2: Dict[str, Any] = {
+        "hily_run": {
+            "likes": 2,
+            "sent": 0,
+            "phase": "message",
+            "fc": {"bulk_message_new": {"done": 0, "typed": False}},
+        }
+    }
+    t = ca.plan_next_action(
+        "fixed hily message 2 likes 4", MBM, [], package="com.hily.app", agent_state=st2
+    )
     assert t["action"] == "type" and t["text"] == "hey how are you"
 
 
@@ -278,22 +334,32 @@ def client(monkeypatch):
 
 
 def test_run_counts_api_saves_modes_and_like_caps_per_mode(client):
-    r = client.post("/api/dating/run-counts", json={
-        "counts": {"com.hily.app": 4},
-        "modes": {"com.hily.app": "likes"},
-        "like_caps": {"com.hily.app:likes": 60, "com.hily.app:message_likes": 25},
-    })
+    r = client.post(
+        "/api/dating/run-counts",
+        json={
+            "counts": {"com.hily.app": 4},
+            "modes": {"com.hily.app": "likes"},
+            "like_caps": {"com.hily.app:likes": 60, "com.hily.app:message_likes": 25},
+        },
+    )
     assert r.status_code == 200, r.text
     g = client.get("/api/dating/run-counts").json()
     assert g["modes"] == {"com.hily.app": "likes"}
-    assert g["like_caps"] == {"com.hily.app:likes": 60, "com.hily.app:message_likes": 25}
+    assert g["like_caps"] == {
+        "com.hily.app:likes": 60,
+        "com.hily.app:message_likes": 25,
+    }
     assert g["counts"]["com.hily.app"] == 4
     # changing the mode keeps both mode maxes
-    client.post("/api/dating/run-counts", json={"modes": {"com.hily.app": "message_likes"}})
+    client.post(
+        "/api/dating/run-counts", json={"modes": {"com.hily.app": "message_likes"}}
+    )
     g = client.get("/api/dating/run-counts").json()
     assert g["like_caps"]["com.hily.app:likes"] == 60
-    r = client.post("/api/dating/start", json={
-        "device_id": "phone1", "dry_run": True, "apps": ["com.hily.app"]})
+    r = client.post(
+        "/api/dating/start",
+        json={"device_id": "phone1", "dry_run": True, "apps": ["com.hily.app"]},
+    )
     assert r.status_code == 200, r.text
     assert r.json()["job"]["instruction"] == "fixed hily message 4 likes 25"
 
@@ -307,7 +373,9 @@ def test_r47_bare_finder_waits_then_likes_with_map_heart():
     from backend.hily_fixed_run import finder_without_card_nodes
 
     assert finder_without_card_nodes(BARE)
-    assert not finder_without_card_nodes(CHATS) and not finder_without_card_nodes(LIKES_SENT)
+    assert not finder_without_card_nodes(CHATS) and not finder_without_card_nodes(
+        LIKES_SENT
+    )
     acts, st = _run("fixed hily likes 3", [BARE] * 5)
     assert acts[0]["action"] == "wait"  # card loading — never re-tap the Finder tab
     likes = acts[1:4]
@@ -319,10 +387,12 @@ def test_r47_bare_finder_waits_then_likes_with_map_heart():
 
 def test_r47_bare_finder_routed_without_llm_or_repeat_stop():
     st: Dict[str, Any] = {}
-    a = ca.plan_next_action("fixed hily likes 30", BARE, [], package="com.hily.app",
-                            agent_state=st)
+    a = ca.plan_next_action(
+        "fixed hily likes 30", BARE, [], package="com.hily.app", agent_state=st
+    )
     assert a["planner"] == "hily_fixed_run" and a["action"] == "wait"
-    b = ca.plan_next_action("fixed hily likes 30", BARE, [], package="com.hily.app",
-                            agent_state=st)
+    b = ca.plan_next_action(
+        "fixed hily likes 30", BARE, [], package="com.hily.app", agent_state=st
+    )
     assert _xy(b) == (750, 1959) and ca._is_fixed_swipe_action(b)
     assert b["fastpath_step"].endswith("_fixed_like_swipe")  # same-tap exempt

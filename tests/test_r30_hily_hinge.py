@@ -79,9 +79,10 @@ def test_firewall_allows_tegan_chat_row_not_upsell_or_mbm():
         dry_run=True,
     )
     assert refused.get("action") == "fail"
-    assert "they liked you" in (refused.get("reason") or "").lower() or "like" in (
-        refused.get("reason") or ""
-    ).lower()
+    assert (
+        "they liked you" in (refused.get("reason") or "").lower()
+        or "like" in (refused.get("reason") or "").lower()
+    )
 
 
 def test_existing_chat_rows_skip_paige_mbm():
@@ -96,12 +97,18 @@ def test_existing_chat_rows_skip_paige_mbm():
 
 def test_hinge_is_not_instruction_fail_fast():
     assert unsupported_app_fail_action("like 5 profiles on Hinge") is None
-    assert unsupported_app_fail_action("reply good morning to 1 existing chat on Hinge") is None
+    assert (
+        unsupported_app_fail_action("reply good morning to 1 existing chat on Hinge")
+        is None
+    )
     # r68: Taimi trees work; first-contact / likes are no longer fail-fast.
     assert unsupported_app_fail_action("taimi like 5 profiles") is None
-    assert unsupported_app_fail_action(
-        'send 1 first contact messages on taimi "good evening beautiful"'
-    ) is None
+    assert (
+        unsupported_app_fail_action(
+            'send 1 first contact messages on taimi "good evening beautiful"'
+        )
+        is None
+    )
 
     act = plan_bulk_bench(
         "like 5 profiles on Hinge",
@@ -149,17 +156,31 @@ def test_hily_on_mbm_true_only_with_sheet_chrome():
 def test_dry_run_skips_hinge_like_intent_tap():
     kind, reason, out = apply_dry_run_send_guard(
         dry_run=True,
-        action={"action": "tap", "x": 534, "y": 979, "reason": "Tapping to like the profile."},
+        action={
+            "action": "tap",
+            "x": 534,
+            "y": 979,
+            "reason": "Tapping to like the profile.",
+        },
         kind="tap",
         reason="Tapping to like the profile.",
     )
     assert kind == "done"
-    assert "would like/pass" in (reason or out.get("reason") or "").lower() or "would like" in (reason or "").lower()
+    assert (
+        "would like/pass" in (reason or out.get("reason") or "").lower()
+        or "would like" in (reason or "").lower()
+    )
     assert out.get("action") == "done"
     # Opening a chat must still be allowed
     kind2, _, out2 = apply_dry_run_send_guard(
         dry_run=True,
-        action={"action": "tap", "x": 326, "y": 1102, "reason": "Open Tegan (bulk_message_heuristic)", "fastpath_step": "bulk_open_match"},
+        action={
+            "action": "tap",
+            "x": 326,
+            "y": 1102,
+            "reason": "Open Tegan (bulk_message_heuristic)",
+            "fastpath_step": "bulk_open_match",
+        },
         kind="tap",
         reason="Open Tegan (bulk_message_heuristic)",
     )

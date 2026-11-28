@@ -36,17 +36,28 @@ def _xy(a):
 
 
 def test_match_popup_types_sends_closes_and_counts():
-    acts, st = _run("fixed hily likes 3", [
-        FINDER, MATCH, MATCH_TYPED, MATCH, FINDER, FINDER, FINDER, FINDER])
+    acts, st = _run(
+        "fixed hily likes 3",
+        [FINDER, MATCH, MATCH_TYPED, MATCH, FINDER, FINDER, FINDER, FINDER],
+    )
     steps = [a["fastpath_step"] for a in acts]
-    assert steps[:4] == ["hily_run_fixed_like_swipe", "hily_int_match_type",
-                         "hily_int_match_send", "hily_int_match_close"]
+    assert steps[:4] == [
+        "hily_run_fixed_like_swipe",
+        "hily_int_match_type",
+        "hily_int_match_send",
+        "hily_int_match_close",
+    ]
     assert acts[1]["text"] == "hey how are you"
     assert _xy(acts[2]) == (980, 1700)
-    assert acts[3]["reason"].startswith("Match message sent") and _xy(acts[3]) == (540, 1950)
+    assert acts[3]["reason"].startswith("Match message sent") and _xy(acts[3]) == (
+        540,
+        1950,
+    )
     assert st["hily_run"]["match_msgs"] == 1
     assert acts[-1]["action"] == "done"
-    assert "3/3 likes" in acts[-1]["reason"] and "1 match messages" in acts[-1]["reason"]
+    assert (
+        "3/3 likes" in acts[-1]["reason"] and "1 match messages" in acts[-1]["reason"]
+    )
     assert all(_xy(a) != CRUSH_XY for a in acts)
 
 
@@ -95,7 +106,10 @@ def test_detectors_and_finder_untouched():
     # bare Finder (real tree) still likes with the map heart, no interrupt
     acts, _ = _run("fixed hily likes 2", [BARE, BARE, BARE, BARE])
     assert [a["fastpath_step"] for a in acts][:3] == [
-        "hily_run_wait_card", "hily_run_fixed_like_swipe", "hily_run_fixed_like_swipe"]
+        "hily_run_wait_card",
+        "hily_run_fixed_like_swipe",
+        "hily_run_fixed_like_swipe",
+    ]
 
 
 def test_heart_followed_by_popup_is_not_counted():
@@ -118,6 +132,9 @@ def test_heart_counted_only_finder_to_finder():
 
 def test_routed_without_llm():
     st: dict = {"hily_run": {"likes": 0, "phase": "likes1"}}
-    a = ca.plan_next_action("fixed hily likes 5", MATCH, [], package="com.hily.app",
-                            agent_state=st)
-    assert a["fastpath_step"] == "hily_int_match_type" and a["planner"] == "hily_fixed_run"
+    a = ca.plan_next_action(
+        "fixed hily likes 5", MATCH, [], package="com.hily.app", agent_state=st
+    )
+    assert (
+        a["fastpath_step"] == "hily_int_match_type" and a["planner"] == "hily_fixed_run"
+    )

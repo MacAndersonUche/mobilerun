@@ -521,9 +521,11 @@ def other_running_job_on_device(
                 created_at
             ):
                 continue
-            if created_at is not None and int(j.get("created_at") or 0) == int(
-                created_at
-            ) and jid > except_id:
+            if (
+                created_at is not None
+                and int(j.get("created_at") or 0) == int(created_at)
+                and jid > except_id
+            ):
                 continue
         holder = str(j.get("lease_owner") or "")
         exp = int(j.get("lease_expires_at") or 0)

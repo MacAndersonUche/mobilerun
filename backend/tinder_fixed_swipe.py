@@ -54,8 +54,13 @@ DEFAULT_N = 5
 _DECK_IDS = ("gamepad", "recs_card", "card_stack", "recs_view")
 _NAME_RE = re.compile(r"^([A-Z][\w'’\-]+(?: [A-Z][\w'’\-]+)?),? (\d{2})$")
 _OUT_OF_LIKES = ("out of likes", "you're out of likes", "you’re out of likes")
-_DECK_EMPTY = ("no one new", "run out of potential matches", "there's no one new",
-               "there’s no one new", "no more profiles")
+_DECK_EMPTY = (
+    "no one new",
+    "run out of potential matches",
+    "there's no one new",
+    "there’s no one new",
+    "no more profiles",
+)
 
 
 def _label(n: Dict[str, Any]) -> str:
@@ -102,8 +107,13 @@ def _blob(tree: str) -> str:
 
 
 def _act(kind: str, step: str, reason: str, **kw: Any) -> Dict[str, Any]:
-    a = {"action": kind, "reason": f"{reason} ({PLANNER})", "planner": PLANNER,
-         "llm_provider": None, "_no_llm_handoff": True}
+    a = {
+        "action": kind,
+        "reason": f"{reason} ({PLANNER})",
+        "planner": PLANNER,
+        "llm_provider": None,
+        "_no_llm_handoff": True,
+    }
     a.update(kw)
     return _fp(a, step)
 
@@ -137,8 +147,11 @@ def plan_tinder_fixed_swipe(
 
     def _done(why: str) -> Dict[str, Any]:
         extra = f", {tr['match_msgs']} match messages" if tr.get("match_msgs") else ""
-        return _act("done", "tinder_fixed_done",
-                    f"Tinder auto-swipe: {likes}/{n} likes{extra} — {why}")
+        return _act(
+            "done",
+            "tinder_fixed_done",
+            f"Tinder auto-swipe: {likes}/{n} likes{extra} — {why}",
+        )
 
     if likes >= n:
         return _done("finished")
@@ -146,9 +159,12 @@ def plan_tinder_fixed_swipe(
         return None
     if dry_run:
         if tinder_on_deck(ui_tree):
-            return _act("done", "tinder_fixed_dry",
-                        f"[DRY RUN] Tinder deck found — would right-swipe {n} — nothing done",
-                        dry_run_verified=True)
+            return _act(
+                "done",
+                "tinder_fixed_dry",
+                f"[DRY RUN] Tinder deck found — would right-swipe {n} — nothing done",
+                dry_run_verified=True,
+            )
     blob = _blob(ui_tree)
     if PKG in pk and any(p in blob for p in _OUT_OF_LIKES):
         _drop(tr)
@@ -156,8 +172,13 @@ def plan_tinder_fixed_swipe(
     if PKG in pk and any(p in blob for p in _DECK_EMPTY):
         return _done("no more profiles nearby")
 
-    kw = dict(pkg=PKG, prefix="tinder", chrome=_known_screen, app="Tinder",
-              thread_ids=("id/chat_input", "textMessageInput", "message_input"))
+    kw = dict(
+        pkg=PKG,
+        prefix="tinder",
+        chrome=_known_screen,
+        app="Tinder",
+        thread_ids=("id/chat_input", "textMessageInput", "message_input"),
+    )
     if not dry_run and (is_match_popup(ui_tree) or (tr.get("match") or {}).get("open")):
         ia = handle_interrupt(ui_tree, tr, text, PLANNER, **kw)
         if ia:
@@ -175,9 +196,12 @@ def plan_tinder_fixed_swipe(
                 tr["same"] = int(tr.get("same") or 0) + 1
                 tr["unverified"] = int(tr.get("unverified") or 0) + 1
                 if tr["same"] >= MAX_SAME_CARD:
-                    return _act("fail", "tinder_fixed_stuck",
-                                f"Tinder: card '{sig}' did not move after "
-                                f"{MAX_SAME_CARD} swipes ({likes} likes)")
+                    return _act(
+                        "fail",
+                        "tinder_fixed_stuck",
+                        f"Tinder: card '{sig}' did not move after "
+                        f"{MAX_SAME_CARD} swipes ({likes} likes)",
+                    )
             else:
                 tr["same"] = 0
                 likes += 1
@@ -189,17 +213,30 @@ def plan_tinder_fixed_swipe(
         tr["awaiting"] = True
         tr["sig"] = sig
         x1, y1, x2, y2, ms = LIKE_SWIPE
-        return _act("swipe", "tinder_fixed_like_swipe",
-                    f"Tinder free like — right-swipe {likes + 1}/{n}",
-                    x1=x1, y1=y1, x2=x2, y2=y2, duration_ms=ms, _free_like=True)
+        return _act(
+            "swipe",
+            "tinder_fixed_like_swipe",
+            f"Tinder free like — right-swipe {likes + 1}/{n}",
+            x1=x1,
+            y1=y1,
+            x2=x2,
+            y2=y2,
+            duration_ms=ms,
+            _free_like=True,
+        )
 
     # Not the deck after a swipe → that swipe is not counted
     _drop(tr)
     if dry_run:
         c = safe_close(ui_tree)
         if PKG in pk and c:
-            return _act("tap", "tinder_fixed_dry_close", f"[DRY RUN] close popup '{c[2]}'",
-                        x=c[0], y=c[1])
+            return _act(
+                "tap",
+                "tinder_fixed_dry_close",
+                f"[DRY RUN] close popup '{c[2]}'",
+                x=c[0],
+                y=c[1],
+            )
     else:
         ia = handle_interrupt(ui_tree, tr, text, PLANNER, **kw)
         if ia:
@@ -212,21 +249,36 @@ def plan_tinder_fixed_swipe(
                 tr["recover"] = r
                 if r <= MAX_RECOVER:
                     return ia
-                return _act("fail", "tinder_fixed_lost",
-                            f"Tinder: could not get back to the cards after {MAX_RECOVER} "
-                            f"tries ({likes} likes)")
+                return _act(
+                    "fail",
+                    "tinder_fixed_lost",
+                    f"Tinder: could not get back to the cards after {MAX_RECOVER} "
+                    f"tries ({likes} likes)",
+                )
     if PKG not in pk:
         r = int(tr.get("recover") or 0) + 1
         tr["recover"] = r
         if r > MAX_RECOVER:
-            return _act("fail", "tinder_fixed_lost",
-                        f"Tinder: could not open the cards ({likes} likes)")
-        return _act("open_app", "tinder_fixed_open", "Open Tinder", app="Tinder", package=PKG)
+            return _act(
+                "fail",
+                "tinder_fixed_lost",
+                f"Tinder: could not open the cards ({likes} likes)",
+            )
+        return _act(
+            "open_app", "tinder_fixed_open", "Open Tinder", app="Tinder", package=PKG
+        )
     r = int(tr.get("recover") or 0) + 1
     tr["recover"] = r
     if r > MAX_RECOVER:
-        return _act("fail", "tinder_fixed_lost",
-                    f"Tinder: could not get back to the cards after {MAX_RECOVER} tries "
-                    f"({likes} likes)")
-    return _act("press_button", "tinder_fixed_back", "Back toward the Tinder cards",
-                button="back")
+        return _act(
+            "fail",
+            "tinder_fixed_lost",
+            f"Tinder: could not get back to the cards after {MAX_RECOVER} tries "
+            f"({likes} likes)",
+        )
+    return _act(
+        "press_button",
+        "tinder_fixed_back",
+        "Back toward the Tinder cards",
+        button="back",
+    )

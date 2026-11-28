@@ -214,11 +214,13 @@ def detect_foreign_overlay(
         not active or _is_ime_package(active) or _pkg_matches_target(active, target)
     ):
         others = [
-            p for p in pkgs_all
+            p
+            for p in pkgs_all
             if not _pkg_matches_target(p, target) and not _is_ime_package(p)
         ]
-        if not others and (not active or _is_ime_package(active)
-                           or _pkg_matches_target(active, target)):
+        if not others and (
+            not active or _is_ime_package(active) or _pkg_matches_target(active, target)
+        ):
             rep = (reported_package or "").strip()
             if not rep or _is_ime_package(rep) or _pkg_matches_target(rep, target):
                 return None

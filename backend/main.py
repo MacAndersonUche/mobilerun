@@ -2183,7 +2183,11 @@ def _adopt_existing_dating_job(
         "status": "already_running",
         "state": dating_mode_state,
         "job": job,
-        "queue": [dating_mode_state.get("current_app")] if dating_mode_state.get("current_app") else [],
+        "queue": (
+            [dating_mode_state.get("current_app")]
+            if dating_mode_state.get("current_app")
+            else []
+        ),
         "skipped": [],
         "activity": _activity_for_mode("dating", jid),
     }
@@ -2243,7 +2247,9 @@ def _load_dating_runtime(auth: Optional[dict] = None) -> None:
                 job = None
             if job and str(job.get("status") or "").lower() == "paused":
                 dating_mode_state["paused"] = True
-            if job and (job.get("dating_app") or (job.get("state") or {}).get("current_app")):
+            if job and (
+                job.get("dating_app") or (job.get("state") or {}).get("current_app")
+            ):
                 dating_mode_state["current_app"] = job.get("dating_app") or (
                     job.get("state") or {}
                 ).get("current_app")
@@ -3528,7 +3534,9 @@ def _load_run_modes(auth: Optional[dict]) -> Dict[str, str]:
     return clean_modes(data.get("modes") if isinstance(data, dict) else None)
 
 
-def _save_run_modes(auth: Optional[dict], modes: Optional[Dict[str, Any]]) -> Dict[str, str]:
+def _save_run_modes(
+    auth: Optional[dict], modes: Optional[Dict[str, Any]]
+) -> Dict[str, str]:
     try:
         from storage import save_user_setting
     except ImportError:
@@ -3692,7 +3700,9 @@ async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
 async def set_run_counts(
     body: RunCountsBody, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    counts = _save_run_counts(auth, body.counts) if body.counts else _load_run_counts(auth)
+    counts = (
+        _save_run_counts(auth, body.counts) if body.counts else _load_run_counts(auth)
+    )
     modes = _save_run_modes(auth, body.modes) if body.modes else _load_run_modes(auth)
     caps = (
         _save_like_caps(auth, body.like_caps)
@@ -3843,9 +3853,7 @@ async def _start_dating_apps_run(
         _kick_job(job["job_id"])
     except Exception as e:
         logger.exception("Could not start dating run: %s", e)
-        raise HTTPException(
-            status_code=503, detail=f"Could not start run: {e}"
-        ) from e
+        raise HTTPException(status_code=503, detail=f"Could not start run: {e}") from e
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
     dating_mode_state["job_id"] = job["job_id"]
@@ -3935,12 +3943,8 @@ async def start_dating_mode(
             if live_test
             else (6 if dry_run else secrets.randbelow(401) + 100)
         ),
-        "swipe_cap": (
-            live_test_max_n if live_test else (2 if dry_run else 50)
-        ),
-        "reply_cap": (
-            live_test_max_n if live_test else (2 if dry_run else 50)
-        ),
+        "swipe_cap": (live_test_max_n if live_test else (2 if dry_run else 50)),
+        "reply_cap": (live_test_max_n if live_test else (2 if dry_run else 50)),
     }
     if contact_scope == "new":
         caps["reply_cap"] = 0
@@ -4398,9 +4402,7 @@ async def social_run(
         _kick_job(job["job_id"])
     except Exception as e:
         logger.exception("Could not start social run: %s", e)
-        raise HTTPException(
-            status_code=503, detail=f"Could not start: {e}"
-        ) from e
+        raise HTTPException(status_code=503, detail=f"Could not start: {e}") from e
     _load_social_runtime(auth)
     social_mode_state["running"] = True
     social_mode_state["paused"] = False

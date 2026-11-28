@@ -139,9 +139,10 @@ def test_direct_sheet_selects_direct_not_blast():
     # Unselected Direct in the fixture is (855, 656)
     assert (act.get("x"), act.get("y")) == (855, 656)
     assert "direct" in (act.get("reason") or "").lower()
-    assert "blast" in (act.get("reason") or "").lower() or "never" in (
-        act.get("reason") or ""
-    ).lower()
+    assert (
+        "blast" in (act.get("reason") or "").lower()
+        or "never" in (act.get("reason") or "").lower()
+    )
 
 
 def test_infinity_backs_out():

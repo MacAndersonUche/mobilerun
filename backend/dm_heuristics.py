@@ -2021,7 +2021,10 @@ def _bumble_card_name_ok(name: str) -> bool:
     }:
         return False
     try:
-        from bulk_bench_heuristics import _card_name_is_owner, _card_name_is_real_profile
+        from bulk_bench_heuristics import (
+            _card_name_is_owner,
+            _card_name_is_real_profile,
+        )
     except ImportError:
         from backend.bulk_bench_heuristics import (  # type: ignore
             _card_name_is_owner,
@@ -2435,9 +2438,7 @@ def yubo_on_chat(tree: str) -> bool:
     """
     # Chat list chrome beats thread detection
     blob = (tree or "").lower()
-    if "conversations" in blob and (
-        "new friends" in blob or "reactions" in blob
-    ):
+    if "conversations" in blob and ("new friends" in blob or "reactions" in blob):
         # Only treat as thread when an editable composer is clearly present
         pass
     nodes = _parse_compact_nodes(tree, package_filter="co.yellw.yellowapp")
@@ -3396,9 +3397,7 @@ def hily_dismiss_popup(
         )
 
     # r26: full-screen "They liked you / Find out who" sheet (no chat rows) → back
-    text_blob = " ".join(
-        (n.get("text") or n.get("label") or "") for n in nodes
-    ).lower()
+    text_blob = " ".join((n.get("text") or n.get("label") or "") for n in nodes).lower()
 
     # "Not for you?" (X on a Likes-you card) — confirm with "Skip profile".
     # Video flow is description-only (no frame captured it); the dialog
@@ -3444,9 +3443,7 @@ def hily_dismiss_popup(
                         "action": "tap",
                         "x": close[0],
                         "y": close[1],
-                        "reason": (
-                            f"Dismiss Hily 'They liked you' sheet ({planner})"
-                        ),
+                        "reason": (f"Dismiss Hily 'They liked you' sheet ({planner})"),
                         "planner": planner,
                         "llm_provider": None,
                     },
@@ -4645,11 +4642,7 @@ def hinge_open_matches_tab(planner: str = "hinge_heuristic") -> Dict[str, Any]:
 def _hinge_nodes(tree: str) -> List[Dict[str, Any]]:
     """Hinge-window nodes only. Never the legacy unscoped fallback (launcher)."""
     nodes = _parse_compact_nodes(tree or "", package_filter="co.hinge.app")
-    return [
-        n
-        for n in nodes
-        if "co.hinge.app" in (n.get("package") or "").lower()
-    ]
+    return [n for n in nodes if "co.hinge.app" in (n.get("package") or "").lower()]
 
 
 def hinge_in_foreground(tree: str, package: str = "") -> bool:
@@ -4681,7 +4674,9 @@ def hinge_find_top_match_row(tree: str) -> Optional[Tuple[int, int]]:
         if not text or not n.get("clickable"):
             continue
         low = text.lower()
-        if low.startswith(("your turn", "their turn", "hidden", "enable for", "matches")):
+        if low.startswith(
+            ("your turn", "their turn", "hidden", "enable for", "matches")
+        ):
             continue
         if is_launcher_home_label(text) or looks_like_section_label(text):
             continue
@@ -4726,7 +4721,11 @@ def hinge_composer_visible(tree: str, vision_hint: str = "") -> bool:
     """
     if hinge_find_compose(tree) and hinge_on_thread(tree):
         return True
-    if hinge_find_compose(tree) and not hinge_on_discover(tree) and not hinge_on_matches(tree):
+    if (
+        hinge_find_compose(tree)
+        and not hinge_on_discover(tree)
+        and not hinge_on_matches(tree)
+    ):
         return True
     hint = (vision_hint or "").lower()
     if not hint:
@@ -5518,8 +5517,7 @@ def _looks_like_notif_or_app_title(text: str) -> bool:
     # Multi-word Title Case app names ("Indeed Job Search", "Google Play Store")
     words = low.split()
     if len(words) >= 2 and any(
-        w in ("job", "search", "store", "mail", "maps", "drive", "news")
-        for w in words
+        w in ("job", "search", "store", "mail", "maps", "drive", "news") for w in words
     ):
         return True
     return False

@@ -7,7 +7,6 @@ from mobilerun.dating.config import (
     ensure_default_apps,
 )
 
-
 NEW = [
     "com.tinder",
     "enterprises.dating.boo",
@@ -30,7 +29,12 @@ def test_default_apps_include_new_portal_apps():
 
 def test_ensure_default_apps_merges_without_wiping_saved():
     saved = [
-        AppProfile(name="Bumble", package_name="com.bumble.app", enabled=False, daily_swipe_cap=9),
+        AppProfile(
+            name="Bumble",
+            package_name="com.bumble.app",
+            enabled=False,
+            daily_swipe_cap=9,
+        ),
         AppProfile(name="Taimi", package_name="com.takimi.android", enabled=True),
     ]
     merged = ensure_default_apps(saved)

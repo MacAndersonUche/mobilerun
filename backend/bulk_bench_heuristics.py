@@ -1212,7 +1212,6 @@ def _should_expand_collapsed_section(ui_tree: str) -> bool:
     return False
 
 
-
 def _hinge_empty_tree_recover(
     ui_tree: str,
     history: List[str],
@@ -1240,10 +1239,7 @@ def _hinge_empty_tree_recover(
     if (intent or "").lower() == "message":
         if "hinge_open_matches" not in hist and "open hinge matches" not in hist:
             return hinge_open_matches_tab(planner=planner)
-        if (
-            "hinge_tap_top_chat" not in hist
-            and "open hinge top match" not in hist
-        ):
+        if "hinge_tap_top_chat" not in hist and "open hinge top match" not in hist:
             row = hinge_find_top_match_row(ui_tree)
             if row:
                 return _fp(
@@ -1688,10 +1684,7 @@ def _recover_to_root_action(
                 or "tagged → messages" in str(h).lower()
                 or "bulk_tagged_meet" in str(h).lower()
                 or "bulk_tagged_open_messages" in str(h).lower()
-                or (
-                    "tab xy" in str(h).lower()
-                    and "tagged" in str(h).lower()
-                )
+                or ("tab xy" in str(h).lower() and "tagged" in str(h).lower())
             )
         )
         if tagged_nav_n >= 2:
@@ -1700,8 +1693,7 @@ def _recover_to_root_action(
                     "action": "wait",
                     "seconds": 0.6,
                     "reason": (
-                        f"Tagged nav tap loop — vision locate tab "
-                        f"({planner})"
+                        f"Tagged nav tap loop — vision locate tab " f"({planner})"
                     ),
                     "planner": planner,
                     "llm_provider": None,
@@ -1739,9 +1731,7 @@ def _recover_to_root_action(
                     "action": "tap",
                     "x": int(xy[0]),
                     "y": int(xy[1]),
-                    "reason": (
-                        f"Tagged → Messages tab xy for reply ({planner})"
-                    ),
+                    "reason": (f"Tagged → Messages tab xy for reply ({planner})"),
                     "planner": planner,
                     "llm_provider": None,
                     "label": "Messages",
@@ -2481,8 +2471,10 @@ def plan_bulk_swipe(
         )
     # Hily Top picks / Discover grid OR chats inbox → Finder deck
     # (r30: dry swipe false-passed on chats-list name 'Paige').
-    if app == "hily" and not hily_on_finder(ui_tree, _log=False) and (
-        hily_on_top_picks_grid(ui_tree) or hily_on_chats_list(ui_tree)
+    if (
+        app == "hily"
+        and not hily_on_finder(ui_tree, _log=False)
+        and (hily_on_top_picks_grid(ui_tree) or hily_on_chats_list(ui_tree))
     ):
         from_chats = hily_on_chats_list(ui_tree)
         surface = "Chats" if from_chats else "Top picks"
@@ -3880,7 +3872,11 @@ def plan_bulk_message(
             )
 
     # Nothing to reply to (Your turn (0) / empty list) → done 0, not empty-tree fail
-    if list_ok and not bulk.get("current") and _inbox_nothing_to_reply(app_key, ui_tree):
+    if (
+        list_ok
+        and not bulk.get("current")
+        and _inbox_nothing_to_reply(app_key, ui_tree)
+    ):
         return _fp(
             {
                 "action": "done",
@@ -4232,8 +4228,7 @@ def plan_bulk_message(
                 "x2": 540,
                 "y2": 700,
                 "reason": (
-                    f"Scroll verified chat list once after vision miss "
-                    f"({planner})"
+                    f"Scroll verified chat list once after vision miss " f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -4849,8 +4844,10 @@ def plan_bulk_message_new(
                 bulk["typed"] = False
                 st["bulk_message_new"] = bulk
                 return send
-        if dry_run and not hinge_on_like_sheet(ui_tree) and not bulk.get(
-            "_hinge_like_vision"
+        if (
+            dry_run
+            and not hinge_on_like_sheet(ui_tree)
+            and not bulk.get("_hinge_like_vision")
         ):
             # Discover without sheet — vision find like/comment (r23 hinge_new3)
             bulk["_hinge_like_vision"] = True
@@ -4874,7 +4871,9 @@ def plan_bulk_message_new(
             )
         if _app_tree_empty(ui_tree, "hinge") or not hinge_on_discover(ui_tree):
             # Empty a11y (common on Hinge) — screenshot + vision before fail
-            if _app_tree_empty(ui_tree, "hinge") and not bulk.get("_hinge_empty_vision"):
+            if _app_tree_empty(ui_tree, "hinge") and not bulk.get(
+                "_hinge_empty_vision"
+            ):
                 bulk["_hinge_empty_vision"] = True
                 st["bulk_message_new"] = bulk
                 return _fp(

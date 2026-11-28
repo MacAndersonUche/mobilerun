@@ -162,13 +162,16 @@ def test_compose_not_found_handoff_not_raise():
         dry_run=True,
     )
     assert act is not None
-    assert act.get("action") != "fail" or "hand off" in (
-        act.get("reason") or ""
-    ).lower()
+    assert (
+        act.get("action") != "fail" or "hand off" in (act.get("reason") or "").lower()
+    )
     reason = (act.get("reason") or "").lower()
-    assert "hand off" in reason or act.get("_force_vision") or act.get(
-        "_bulk_llm_handoff"
-    ) or act.get("action") in ("wait", "tap", "back", "press_button")
+    assert (
+        "hand off" in reason
+        or act.get("_force_vision")
+        or act.get("_bulk_llm_handoff")
+        or act.get("action") in ("wait", "tap", "back", "press_button")
+    )
 
 
 def test_blk_super_like_upsell_dismisses():

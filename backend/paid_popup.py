@@ -47,12 +47,25 @@ _PAID_CTA = re.compile(
 )
 _CLOSE_ORDER = (
     ("send like anyway",),
-    ("not now", "no thanks", "no, thanks", "no thanks!", "maybe later", "later",
-     "remind me later", "not interested", "keep swiping", "skip"),
+    (
+        "not now",
+        "no thanks",
+        "no, thanks",
+        "no thanks!",
+        "maybe later",
+        "later",
+        "remind me later",
+        "not interested",
+        "keep swiping",
+        "skip",
+    ),
     ("close", "x", "✕", "×", "cancel", "dismiss", "got it", "got it!"),
 )
-_NEVER = re.compile(r"continue|\bbuy\b|upgrade|subscribe|\btry\b|\bget\b|unlock|allow|purchase"
-                    r"|super ?like\b(?! instead)|boost|\bpay\b", re.I)
+_NEVER = re.compile(
+    r"continue|\bbuy\b|upgrade|subscribe|\btry\b|\bget\b|unlock|allow|purchase"
+    r"|super ?like\b(?! instead)|boost|\bpay\b",
+    re.I,
+)
 
 
 def _label(n: Dict[str, Any]) -> str:
@@ -80,16 +93,19 @@ def paid_close_target(tree: str) -> Optional[Tuple[int, int, str]]:
         for n in nodes:
             lab = _label(n).lower().strip(" .")
             nid = str(n.get("id") or "").lower()
-            if lab in group or (group[0] == "close" and (
-                    "close" in nid or nid.endswith("dismiss") or "button2" in nid)):
+            if lab in group or (
+                group[0] == "close"
+                and ("close" in nid or nid.endswith("dismiss") or "button2" in nid)
+            ):
                 if _NEVER.search(lab) and lab != "send like anyway":
                     continue
                 return (int(n["x"]), int(n["y"]), lab or nid)
     return None
 
 
-def paid_popup_action(tree: str, planner: str, state: Optional[Dict[str, Any]] = None
-                      ) -> Optional[Dict[str, Any]]:
+def paid_popup_action(
+    tree: str, planner: str, state: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     """One close step for a paid popup, or None. Drops any like awaiting
     verification (the popup came up instead of the next card)."""
     if not is_paid_popup(tree):
@@ -103,21 +119,46 @@ def paid_popup_action(tree: str, planner: str, state: Optional[Dict[str, Any]] =
             for a in ("awaiting_like", "awaiting"):
                 if r.get(a):
                     r[a] = False
-                    r["unverified" if k != "hily_run" else "unverified_likes"] = int(
-                        r.get("unverified" if k != "hily_run" else "unverified_likes") or 0) + 1
+                    r["unverified" if k != "hily_run" else "unverified_likes"] = (
+                        int(
+                            r.get(
+                                "unverified" if k != "hily_run" else "unverified_likes"
+                            )
+                            or 0
+                        )
+                        + 1
+                    )
     n = int(st.get("paid_popup_n") or 0) + 1
     st["paid_popup_n"] = n
     st["paid_popups_closed"] = int(st.get("paid_popups_closed") or 0) + 1
     base = {"planner": planner, "llm_provider": None, "_no_llm_handoff": True}
     if n > 6:
-        return _fp({**base, "action": "fail",
-                    "reason": f"Paid popup will not close after 6 tries — stopped, nothing bought ({planner})"},
-                   "paid_popup_stuck")
+        return _fp(
+            {
+                **base,
+                "action": "fail",
+                "reason": f"Paid popup will not close after 6 tries — stopped, nothing bought ({planner})",
+            },
+            "paid_popup_stuck",
+        )
     c = paid_close_target(tree) if n <= 3 else None
     if c:
-        return _fp({**base, "action": "tap", "x": c[0], "y": c[1],
-                    "reason": f"Paid popup — '{c[2]}' (never Continue/Buy/Upgrade) ({planner})"},
-                   "paid_popup_close")
-    return _fp({**base, "action": "press_button", "button": "back",
-                "reason": f"Paid popup — Back (never Continue/Buy/Upgrade) ({planner})"},
-               "paid_popup_back")
+        return _fp(
+            {
+                **base,
+                "action": "tap",
+                "x": c[0],
+                "y": c[1],
+                "reason": f"Paid popup — '{c[2]}' (never Continue/Buy/Upgrade) ({planner})",
+            },
+            "paid_popup_close",
+        )
+    return _fp(
+        {
+            **base,
+            "action": "press_button",
+            "button": "back",
+            "reason": f"Paid popup — Back (never Continue/Buy/Upgrade) ({planner})",
+        },
+        "paid_popup_back",
+    )

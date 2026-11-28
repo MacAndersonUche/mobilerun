@@ -32,7 +32,6 @@ from backend.dating_deck import (
     yubo_paywall_back_action,
 )
 
-
 # --- 1. Like cap by control class, not reason text ---
 
 
@@ -93,7 +92,12 @@ def test_like_control_label_counts_and_caps_before_execute():
 
 def test_like_id_token_is_like_control():
     assert _action_is_like_control(
-        {"action": "tap", "id": "encounters_profile_voting_buttonVoteYes", "x": 1, "y": 2},
+        {
+            "action": "tap",
+            "id": "encounters_profile_voting_buttonVoteYes",
+            "x": 1,
+            "y": 2,
+        },
         "tap",
     )
     assert _action_is_like_control(
@@ -185,7 +189,9 @@ def test_like_job_blocks_type_rewrites_to_open_app():
     )
     assert kind == "open_app"
     assert "hily" in str(action.get("app") or "").lower()
-    assert _instruction_is_like_or_swipe_job("badoo like 5 profiles", {"live_test": True})
+    assert _instruction_is_like_or_swipe_job(
+        "badoo like 5 profiles", {"live_test": True}
+    )
 
 
 # --- 6. Verify like by card name change ---
@@ -203,9 +209,7 @@ def test_live_like_verified_only_on_card_change(monkeypatch):
     def fake_deck(app, tree):
         return "Bob" if "bob" in (tree or "").lower() else "Alice"
 
-    monkeypatch.setattr(
-        "backend.bulk_bench_heuristics.deck_card_name", fake_deck
-    )
+    monkeypatch.setattr("backend.bulk_bench_heuristics.deck_card_name", fake_deck)
     monkeypatch.setattr(
         "backend.bulk_bench_heuristics._card_name_is_real_profile",
         lambda n: bool(n),
@@ -297,9 +301,7 @@ def test_sticky_llm_handoff_skips_heuristics(monkeypatch):
         called["n"] += 1
         return {"action": "tap", "x": 1, "y": 2, "reason": "should not run"}
 
-    monkeypatch.setattr(
-        "backend.bulk_bench_heuristics.plan_bulk_bench", boom
-    )
+    monkeypatch.setattr("backend.bulk_bench_heuristics.plan_bulk_bench", boom)
     st: dict = {"_bulk_llm_handoff": True, "bulk_swipe": {"done": 0, "target": 5}}
     # With handoff + no visible name, plan should not call heuristics
     # (may fall through to LLM which needs keys — expect handoff wait or None/LLM)
@@ -328,9 +330,12 @@ def test_taimi_hinge_unsupported_fail_fast():
     # r68: Taimi is no longer fail-fast. FLAG_SECURE only blacks
     # screenshots; the a11y tree is readable.
     assert unsupported_app_fail_action("taimi like 5 profiles") is None
-    assert unsupported_app_fail_action(
-        'send 1 first contact messages on taimi "good evening beautiful"'
-    ) is None
+    assert (
+        unsupported_app_fail_action(
+            'send 1 first contact messages on taimi "good evening beautiful"'
+        )
+        is None
+    )
     b = unsupported_app_fail_action("hinge auto-swipe 5 profiles")
     assert b is None
 

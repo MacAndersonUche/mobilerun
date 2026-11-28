@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.dm_heuristics import bumble_deck_card_name, _bumble_card_name_ok
-from backend.bulk_bench_heuristics import _card_name_is_owner, _card_name_is_real_profile
+from backend.bulk_bench_heuristics import (
+    _card_name_is_owner,
+    _card_name_is_real_profile,
+)
 from backend.cloud_agent import (
     _visible_dry_swipe_card_name,
     apply_dry_run_send_guard,

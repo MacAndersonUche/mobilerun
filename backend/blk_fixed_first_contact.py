@@ -135,10 +135,7 @@ def plan_blk_fixed_first_contact(
     return _fp(
         {
             "action": "done",
-            "reason": (
-                f"BLK has no free Discover first-message path "
-                f"({planner})"
-            ),
+            "reason": (f"BLK has no free Discover first-message path " f"({planner})"),
             "planner": planner,
             "llm_provider": None,
             "dry_run": bool(dry_run),

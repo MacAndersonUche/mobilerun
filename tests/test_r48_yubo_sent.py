@@ -20,8 +20,13 @@ TYPED = (FIX / "yubo_card_typed_r46.xml").read_text(encoding="utf-8")
 
 def _p(tree, st, target=5):
     return plan_yubo_card_first_contact(
-        "send 5 first contact messages on yubo", tree, [], state=st,
-        message="hey how are you", target=target)
+        "send 5 first contact messages on yubo",
+        tree,
+        [],
+        state=st,
+        message="hey how are you",
+        target=target,
+    )
 
 
 def test_real_direct_sheet_is_direct_not_blast_and_types():
@@ -59,5 +64,7 @@ def test_fixed_wait_skips_stuck_recovery():
 
 
 def test_yubo_max_steps_room_for_five_cards():
-    j = dating_run.build_job(device_id="d", queue=["co.yellw.yellowapp"], count=5, dry_run=False)
+    j = dating_run.build_job(
+        device_id="d", queue=["co.yellw.yellowapp"], count=5, dry_run=False
+    )
     assert j["max_steps"] >= 9 * 5 + 20

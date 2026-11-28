@@ -832,9 +832,11 @@ def process_job(job: Dict[str, Any], *, owner: Optional[str] = None) -> None:
         # r45: first real step after waiting → start the clocks now, so the
         # 90s no-progress wall does not count the time spent queued.
         st_q = job.get("state") if isinstance(job.get("state"), dict) else {}
-        if job.get("first_deferred_at") and not job.get("started_at") and int(
-            st_q.get("steps") or 0
-        ) == 0:
+        if (
+            job.get("first_deferred_at")
+            and not job.get("started_at")
+            and int(st_q.get("steps") or 0) == 0
+        ):
             nowq = int(time.time())
             job["started_at"] = nowq
             st_q["last_ui_progress_at"] = nowq
