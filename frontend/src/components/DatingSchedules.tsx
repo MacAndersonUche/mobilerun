@@ -29,7 +29,6 @@ import {
 type Props = {
   authHeaders: () => Record<string, string>;
   deviceId: string;
-  dryRun: boolean;
   runCounts: Record<string, number>;
   appName: (pkg: string) => string;
 };
@@ -39,7 +38,7 @@ const blank = (p: Props): DatingSchedule => ({
   items: [],
   time: '20:00',
   days: [],
-  dry_run: p.dryRun,
+  dry_run: false,
   device_id: p.deviceId,
 });
 
@@ -61,7 +60,25 @@ export default function DatingSchedules(props: Props) {
   const load = async () => {
     try {
       const r = await axios.get(url, { headers: authHeaders() });
-      setList(r.data.schedules || []);
+      const schedules: DatingSchedule[] = r.data.schedules || [];
+      setList(schedules);
+      // Clear any saved dry_run=true so schedules cannot silently stay dry.
+      for (const s of schedules) {
+        if (!s.id || !s.dry_run) continue;
+        try {
+          await axios.put(
+            `${url}/${s.id}`,
+            scheduleBody({ ...s, dry_run: false }),
+            { headers: authHeaders() }
+          );
+        } catch {
+          /* ignore one-off migrate failures */
+        }
+      }
+      if (schedules.some((s) => s.dry_run)) {
+        const again = await axios.get(url, { headers: authHeaders() });
+        setList(again.data.schedules || []);
+      }
     } catch {
       /* page shows the main error */
     }
@@ -337,14 +354,6 @@ export default function DatingSchedules(props: Props) {
               <span className="text-xs text-mute self-center">(none = every day)</span>
             </div>
           </div>
-          <label className="flex items-center gap-2 text-xs text-mute">
-            <input
-              type="checkbox"
-              checked={edit.dry_run}
-              onChange={(e) => setEdit({ ...edit, dry_run: e.target.checked })}
-            />
-            Dry run (no real likes or messages)
-          </label>
           <div className="flex gap-2">
             <button
               type="button"

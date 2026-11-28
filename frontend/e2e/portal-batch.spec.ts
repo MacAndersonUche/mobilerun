@@ -208,6 +208,27 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Devices$/i })).toBeVisible();
   });
 
+  test('Dating has no dry-run checkbox or Pause; Start stays live', async ({
+    page,
+  }) => {
+    await authAndMock(page);
+    await page.goto('/dating');
+    await expect(page.getByTestId('dating-start')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('dating-stop')).toBeVisible();
+    await expect(page.getByTestId('dating-dry-run')).toHaveCount(0);
+    await expect(page.getByText('Dry-run (no real likes/messages)')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^(Pause|Resume)$/i })).toHaveCount(0);
+    const startWait = page.waitForRequest(
+      (r) =>
+        r.url().includes('/api/dating/start') && r.method() === 'POST',
+      { timeout: 15000 }
+    );
+    await page.getByTestId('dating-start').click();
+    const req = await startWait;
+    const body = req.postDataJSON() as { dry_run?: boolean };
+    expect(body.dry_run).toBe(false);
+  });
+
   test('Account has no Link a phone / Settings / Devices rows', async ({
     page,
   }, testInfo) => {

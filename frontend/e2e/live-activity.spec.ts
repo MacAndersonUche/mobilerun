@@ -42,13 +42,10 @@ test('dating and social live activity views', async ({ page }) => {
       localStorage.setItem('mobilerun_user_email', 'ci-e2e@mobilerun.local');
     }, token);
 
-    // Dating dry-run
+    // Dating Start (always live; dry-run toggle removed)
     await page.goto('/dating');
     await expect(page.getByTestId('live-activity')).toBeVisible({ timeout: 20000 });
-    const dry = page.getByTestId('dating-dry-run');
-    if (await dry.count()) {
-      if (!(await dry.isChecked())) await dry.check();
-    }
+    await expect(page.getByTestId('dating-dry-run')).toHaveCount(0);
     await page.getByTestId('dating-start').click();
     await expect(page.getByTestId('live-activity-status')).not.toHaveText('idle', {
       timeout: 30000,

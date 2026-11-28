@@ -160,7 +160,8 @@ def normalize(
             "items": items,
             "time": t,
             "days": days,
-            "dry_run": bool(raw.get("dry_run", base.get("dry_run", True))),
+            # Portal no longer offers dry-run — never persist / fire as dry.
+            "dry_run": False,
             "device_id": str(raw.get("device_id") or base.get("device_id") or ""),
             "created_at": int(base.get("created_at") or time.time()),
         }
@@ -358,7 +359,7 @@ def fire_due(
                 device_id=did,
                 queue=queue,
                 count=None,
-                dry_run=bool(s.get("dry_run", True)),
+                dry_run=False,
                 counts=counts,
                 modes=build_modes(s),
                 like_caps=build_like_caps(s),

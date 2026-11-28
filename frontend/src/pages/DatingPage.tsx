@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, Play, Pause, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { Heart, Play, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
@@ -229,7 +229,6 @@ export default function DatingPage() {
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
-  const [dryRun, setDryRun] = useState(true);
   // Per app, per run (each app card): swipes or messages. Saved per app on
   // the server; Hily = messages (max 5), Facebook Dating max 50.
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
@@ -434,7 +433,7 @@ export default function DatingPage() {
   }, []);
 
   const control = async (
-    action: 'start' | 'stop' | 'pause',
+    action: 'start' | 'stop',
     onlyApp?: string
   ) => {
     if (action === 'start') {
@@ -494,7 +493,6 @@ export default function DatingPage() {
         action === 'start'
           ? datingStartBody({
               deviceId,
-              dryRun,
               contactScope,
               counts,
               modes: runModes,
@@ -719,7 +717,7 @@ export default function DatingPage() {
             <Heart className="text-rose-400 shrink-0" /> Dating
           </h1>
           <p className="text-mute mt-1 text-sm sm:text-base">
-            MacMobileRun · app selection, dry-run, openers, start/stop, activity
+            MacMobileRun · app selection, openers, start/stop, activity
           </p>
           <p className="text-mute mt-1 text-sm">
             Covers new contacts, existing chats, or both - dating here,{' '}
@@ -768,7 +766,7 @@ export default function DatingPage() {
 
       {/* Controls - stack on phone for one-handed use */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <button
             disabled={loading}
             onClick={() => control('start')}
@@ -777,13 +775,6 @@ export default function DatingPage() {
             title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
           >
             <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
-          </button>
-          <button
-            disabled={loading || !status?.running}
-            onClick={() => control('pause')}
-            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-yellow-700 px-3 text-sm font-medium hover:bg-yellow-600 disabled:opacity-50"
-          >
-            <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
           </button>
           <button
             disabled={loading}
@@ -795,16 +786,6 @@ export default function DatingPage() {
             <Square size={16} /> Stop
           </button>
         </div>
-        <label className="tap-target flex items-center gap-2 text-sm text-mute">
-          <input
-            type="checkbox"
-            className="h-5 w-5 accent-rose-500"
-            checked={dryRun}
-            onChange={(e) => setDryRun(e.target.checked)}
-            data-testid="dating-dry-run"
-          />
-          Dry-run (no real likes/messages)
-        </label>
         {devices.length > 0 && (
           <select
             className="mr-input w-full text-sm sm:max-w-xs"
@@ -1071,7 +1052,6 @@ export default function DatingPage() {
       <DatingSchedules
         authHeaders={authHeaders}
         deviceId={deviceId}
-        dryRun={dryRun}
         runCounts={runCounts}
         appName={(pkg) => datingAppDisplayName(pkg)}
       />

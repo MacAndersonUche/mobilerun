@@ -397,7 +397,8 @@ export function runCountFor(pkg: string, counts: Record<string, number>): number
 
 export function datingStartBody(opts: {
   deviceId: string;
-  dryRun: boolean;
+  /** Ignored — Start always runs live (dry_run=false). Kept for call-site compat. */
+  dryRun?: boolean;
   contactScope: string;
   counts: Record<string, number>;
   apps: string[];
@@ -419,7 +420,8 @@ export function datingStartBody(opts: {
   });
   return {
     device_id: opts.deviceId || undefined,
-    dry_run: opts.dryRun,
+    // Portal no longer offers dry-run — always live likes/messages.
+    dry_run: false,
     contact_scope: opts.contactScope,
     // Each app's own per-run number (saved per app on the server)
     counts,

@@ -67,7 +67,7 @@ assert.equal(canRunApp('ai.mobilerun.mockdating'), false);
 
 const all = datingStartBody({
   deviceId: 'android_x',
-  dryRun: true,
+  dryRun: true, // ignored — Start always live
   contactScope: 'new',
   counts: { 'co.hinge.app': 3, 'com.whatsapp': 9 },
   apps: ['com.whatsapp', 'co.hinge.app', 'com.hily.app', 'com.taggedapp'],
@@ -77,6 +77,7 @@ assert.deepEqual(all.apps, ['co.hinge.app', 'com.hily.app', 'com.taggedapp']);
 // Each app its own number; unset apps use the default 5; no socials
 assert.deepEqual(all.counts, { 'co.hinge.app': 3, 'com.hily.app': 5, 'com.taggedapp': 5 });
 assert.equal(all.device_id, 'android_x');
+assert.equal(all.dry_run, false);
 assert.equal('stand_in_package' in all, false);
 
 const one = datingStartBody({

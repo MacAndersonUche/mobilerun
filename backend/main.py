@@ -3874,13 +3874,13 @@ async def start_dating_mode(
     body: Optional[ModeStartBody] = None,
     auth: Optional[dict] = Depends(optional_verify_token),
     device_id: str = "default",
-    dry_run: bool = True,
+    dry_run: bool = False,
     stand_in_package: Optional[str] = None,
 ):
     """
     Start dating mode as a step-driven cloud job (EventBridge ticks).
     Safe for Lambda — does not hold a long loop in one invocation.
-    Defaults to dry_run=True so no real likes/messages are sent.
+    Always live (dry_run=False); portal no longer offers a dry-run toggle.
     """
     _load_dating_runtime(auth)
 
@@ -3889,13 +3889,14 @@ async def start_dating_mode(
     live_test_max_n = 3
     if body:
         device_id = body.device_id or device_id
-        dry_run = body.dry_run if body.dry_run is not None else dry_run
         live_test = bool(getattr(body, "live_test", False))
         live_test_max_n = int(getattr(body, "live_test_max_n", None) or 3)
         stand_in_package = body.stand_in_package or stand_in_package
         raw_scope = str(body.contact_scope or "both").lower().strip()
         if raw_scope in ("new", "existing", "both"):
             contact_scope = raw_scope
+    # Ignore client/query dry_run — Dating Start is always live.
+    dry_run = False
     if live_test:
         dry_run = False  # real likes/sends under caps
 
