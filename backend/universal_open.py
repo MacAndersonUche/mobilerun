@@ -110,7 +110,9 @@ def _is_intent_only_open(app_or_pkg: str = "", instruction: str = "") -> bool:
     return "hinge" in blob or "co.hinge.app" in blob
 
 
-def _stages_for(state: Optional[Dict[str, Any]] = None, *, intent_only: bool = False) -> Tuple[str, ...]:
+def _stages_for(
+    state: Optional[Dict[str, Any]] = None, *, intent_only: bool = False
+) -> Tuple[str, ...]:
     st = state if isinstance(state, dict) else {}
     if intent_only or st.get("open_intent_only"):
         return _INTENT_ONLY_STAGES

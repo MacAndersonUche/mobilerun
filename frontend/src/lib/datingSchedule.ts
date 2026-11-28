@@ -69,7 +69,8 @@ export function scheduleBody(s: DatingSchedule) {
     items,
     time: s.time.trim(),
     days: s.days.length === 7 ? [] : [...s.days].sort(),
-    dry_run: s.dry_run,
+    // Portal no longer offers dry-run — clear any saved dry_run=true.
+    dry_run: false,
     device_id: s.device_id || undefined,
   };
 }

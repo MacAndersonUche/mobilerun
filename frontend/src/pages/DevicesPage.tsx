@@ -166,7 +166,7 @@ export default function DevicesPage() {
       window.location.href = https;
     }, 1200);
     setConnectHint(
-      'Opening MobileRun… If nothing happens, install the APK first, then tap again — or type the code in the app.',
+      'Opening MobileRun… If nothing happens, install the APK first, then tap again - or type the code in the app.',
     );
   };
 
@@ -281,7 +281,7 @@ export default function DevicesPage() {
 
         {pairQr && pairToken && (
           <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-start">
-            {/* Large high-contrast QR — never hide on mobile */}
+            {/* Large high-contrast QR - never hide on mobile */}
             <div
               className="mx-auto shrink-0 rounded-2xl bg-white p-4 sm:mx-0"
               data-testid="pair-qr"
@@ -320,7 +320,7 @@ export default function DevicesPage() {
                   </button>
                 </div>
                 <p className="text-xs text-mute">
-                  No ambiguous characters — enter this code alone in MobileRun.
+                  No ambiguous characters - enter this code alone in MobileRun.
                 </p>
               </div>
 
@@ -348,7 +348,7 @@ export default function DevicesPage() {
         </div>
         <p className="text-sm text-mute">
           Download-only QR for the latest GitHub release. After install, use
-          Connect phone above — not a separate login.
+          Connect phone above - not a separate login.
         </p>
         {apkQr ? (
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
@@ -453,7 +453,7 @@ function DeviceCard({
         <div className="flex justify-between">
           <span className="text-mute">Route</span>
           <span className="uppercase">
-            {device.route || device.connection_type || '—'}
+            {device.route || device.connection_type || '-'}
           </span>
         </div>
         <div className="flex justify-between">
@@ -461,7 +461,7 @@ function DeviceCard({
           <span>
             {device.latency_ms != null
               ? `${Math.round(device.latency_ms)} ms`
-              : '—'}
+              : '-'}
           </span>
         </div>
         <div className="flex justify-between">
@@ -481,7 +481,7 @@ function DeviceCard({
             <li key={label} className="flex justify-between gap-2">
               <span className="text-mute">{label}</span>
               <span className={ok ? 'text-ok' : 'text-amber-300'}>
-                {ok == null ? '—' : ok ? 'OK' : 'Needed'}
+                {ok == null ? '-' : ok ? 'OK' : 'Needed'}
               </span>
             </li>
           ))}

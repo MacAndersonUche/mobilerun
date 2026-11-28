@@ -162,7 +162,7 @@ function TaskCard({
         </div>
       ) : steps.length > 0 ? (
         <p className="mt-2 text-xs text-mute" data-testid="history-steps-summary">
-          {steps.length} step{steps.length === 1 ? '' : 's'} — expand for the
+          {steps.length} step{steps.length === 1 ? '' : 's'} - expand for the
           plain-language log
           {task.result ? ` · ${task.result}` : ''}
           {task.error ? ` · error: ${task.error}` : ''}

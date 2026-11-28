@@ -18,7 +18,7 @@ export const RUNNABLE_APPS = [
   'social.breeze.breeze_app',
   'com.getpure.pure',
   'com.threesome.swingers.threefun',
-  'com.myyearbook.m', // MeetMe — Apps to come (no working driver yet)
+  'com.myyearbook.m', // MeetMe - Apps to come (no working driver yet)
 ];
 // r50: new apps (Boo, Breeze, Pure, 3Fun) — below BLK and Tinder
 export const NEW_APPS_R50 = [
@@ -92,7 +92,7 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
   {
     id: 'works',
     title: 'Working',
-    subtitle: 'These run reliably — trigger them any time.',
+    subtitle: 'These run reliably - trigger them any time.',
     // Hily: verified live 5/5 via Activity > Likes sent (r53, 27 Nov 2026)
     // Yubo: verified live 5/5 Direct sends (r54, 27 Nov 2026)
     // Hinge: verified live 5/5 with r53n heart ladder (27 Nov 2026)
@@ -111,7 +111,7 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
   {
     id: 'coming-soon',
     title: 'Apps to come',
-    subtitle: 'No working driver yet — coming soon, cannot run.',
+    subtitle: 'No working driver yet - coming soon, cannot run.',
     packages: [
       'com.tinder',
       'enterprises.dating.boo',
@@ -151,7 +151,7 @@ export function clearCollapsibleExpandedPrefs(
 
 /** Taimi is blocked: FLAG_SECURE makes its screenshots black, so the bot cannot see the screen. */
 export const TAIMI_BLOCKED_NOTE =
-  'Blocked — screenshots come out black (FLAG_SECURE), so the bot cannot see the screen.';
+  'Blocked - screenshots come out black (FLAG_SECURE), so the bot cannot see the screen.';
 export function isBlockedApp(pkg: string): boolean {
   return pkg === TAIMI_PKG;
 }
@@ -294,7 +294,12 @@ export type TodayCounterKind = 'swipes' | 'messages' | 'both';
 
 export function todayCounterKind(pkg: string): TodayCounterKind {
   if (pkg === 'com.bumble.app' || pkg === 'com.badoo.mobile') return 'swipes';
-  if (pkg === 'co.hinge.app' || pkg === 'co.yellw.yellowapp') return 'messages';
+  if (
+    pkg === 'co.hinge.app' ||
+    pkg === 'co.yellw.yellowapp' ||
+    pkg === 'com.facebook.katana'
+  )
+    return 'messages';
   return 'both';
 }
 
@@ -313,6 +318,42 @@ export function formatTodayCounters(
     default:
       return `Today: ${swipes} swipes · ${messages} messages`;
   }
+}
+
+/** Small note under the Today line (e.g. Facebook Dating daily cap). */
+export function todayCounterNote(pkg: string): string | null {
+  if (pkg === 'com.facebook.katana') return 'Max 50 a day';
+  return null;
+}
+
+/**
+ * Sum today's swipes/messages for Working apps, respecting per-app rules
+ * (swipes-only / messages-only / both). Used in the Working section header.
+ */
+export function sumWorkingTodayCounters(
+  apps: Array<{
+    package: string;
+    today?: { swipes?: number; openers?: number } | null;
+  }>
+): { swipes: number; messages: number } {
+  let swipes = 0;
+  let messages = 0;
+  for (const app of apps || []) {
+    const kind = todayCounterKind(app.package);
+    const s = app.today?.swipes ?? 0;
+    const m = app.today?.openers ?? 0;
+    if (kind === 'swipes' || kind === 'both') swipes += s;
+    if (kind === 'messages' || kind === 'both') messages += m;
+  }
+  return { swipes, messages };
+}
+
+/** Header line next to "Working" (no em dashes). */
+export function formatWorkingTodayTotals(totals: {
+  swipes: number;
+  messages: number;
+}): string {
+  return `${totals.swipes} swipes · ${totals.messages} messages`;
 }
 
 /** Hint shown under a count box: the real cap only (no minimum clamp). */
@@ -356,7 +397,8 @@ export function runCountFor(pkg: string, counts: Record<string, number>): number
 
 export function datingStartBody(opts: {
   deviceId: string;
-  dryRun: boolean;
+  /** Ignored — Start always runs live (dry_run=false). Kept for call-site compat. */
+  dryRun?: boolean;
   contactScope: string;
   counts: Record<string, number>;
   apps: string[];
@@ -378,7 +420,8 @@ export function datingStartBody(opts: {
   });
   return {
     device_id: opts.deviceId || undefined,
-    dry_run: opts.dryRun,
+    // Portal no longer offers dry-run — always live likes/messages.
+    dry_run: false,
     contact_scope: opts.contactScope,
     // Each app's own per-run number (saved per app on the server)
     counts,

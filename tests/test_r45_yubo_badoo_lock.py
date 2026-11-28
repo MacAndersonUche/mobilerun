@@ -23,6 +23,7 @@ INST = "send 5 first contact messages on yubo"
 
 # ---- message text -------------------------------------------------------
 
+
 def test_instruction_is_not_message_text():
     # Yubo typed "5 first contact messages on yubo" on 24 Nov 01:49
     assert extract_user_message_text(INST) is None
@@ -30,10 +31,14 @@ def test_instruction_is_not_message_text():
 
 
 def test_real_user_text_still_extracted():
-    assert extract_user_message_text("message Amy and say Goodnight baby") == "Goodnight baby"
+    assert (
+        extract_user_message_text("message Amy and say Goodnight baby")
+        == "Goodnight baby"
+    )
 
 
 # ---- Yubo Blast sheet ---------------------------------------------------
+
 
 def test_blast_sheet_detected():
     assert blast_selected(BLAST)
@@ -48,8 +53,13 @@ def test_heuristic_selects_direct_on_real_blast_sheet():
 
 def _plan(tree, st, hist=None):
     return plan_yubo_fixed_first_contact(
-        INST, tree, hist or ["Opened Yubo"], state=st, dry_run=False,
-        message="hey how are you", target=5,
+        INST,
+        tree,
+        hist or ["Opened Yubo"],
+        state=st,
+        dry_run=False,
+        message="hey how are you",
+        target=5,
     )
 
 
@@ -72,7 +82,13 @@ def test_blast_that_wont_switch_stops_without_sending():
 def test_send_not_counted_until_box_clears_then_retry_then_fail():
     hello_typed = HELLO.replace('t="" h="Aa"', 't="hey how are you" h="Aa"')
     assert hello_typed != HELLO
-    st = {"bulk_message_new": {"done": 0, "typed": True, "awaiting_sent": "hey how are you"}}
+    st = {
+        "bulk_message_new": {
+            "done": 0,
+            "typed": True,
+            "awaiting_sent": "hey how are you",
+        }
+    }
     a1 = _plan(hello_typed, st)
     assert a1["action"] == "tap" and "again" in a1["reason"]
     assert st["bulk_message_new"]["done"] == 0
@@ -82,6 +98,7 @@ def test_send_not_counted_until_box_clears_then_retry_then_fail():
 
 
 # ---- no LLM for fixed first-contact ------------------------------------
+
 
 def test_fixed_first_contact_runs_never_use_llm():
     assert _fixed_swipe_run(INST, {})
@@ -95,6 +112,7 @@ def test_fixed_first_contact_runs_never_use_llm():
 
 # ---- device lock deadlock ----------------------------------------------
 
+
 @pytest.fixture
 def local_jobs(monkeypatch):
     monkeypatch.delenv("USE_AWS_STORAGE", raising=False)
@@ -106,9 +124,13 @@ def local_jobs(monkeypatch):
 
 def _job(jid, created, steps, updated, lease=0):
     return {
-        "job_id": jid, "status": "running", "device_id": "dev1",
-        "created_at": created, "updated_at": updated,
-        "lease_owner": "w" if lease else "", "lease_expires_at": lease,
+        "job_id": jid,
+        "status": "running",
+        "device_id": "dev1",
+        "created_at": created,
+        "updated_at": updated,
+        "lease_owner": "w" if lease else "",
+        "lease_expires_at": lease,
         "state": {"steps": steps},
     }
 
@@ -145,7 +167,9 @@ def test_defer_does_not_bump_updated_at_and_gives_up(monkeypatch):
     from backend import step_worker as sw
 
     saved = []
-    monkeypatch.setattr(sw, "other_running_job_on_device", lambda *a, **k: {"job_id": "yubo"})
+    monkeypatch.setattr(
+        sw, "other_running_job_on_device", lambda *a, **k: {"job_id": "yubo"}
+    )
     monkeypatch.setattr(sw, "put_job", lambda j: saved.append(dict(j)))
     now = int(time.time())
     job = _job("badoo1", now - 50, 0, now - 50)
@@ -160,6 +184,7 @@ def test_defer_does_not_bump_updated_at_and_gives_up(monkeypatch):
 
 
 # ---- Stop sweep ----------------------------------------------------------
+
 
 def test_stop_sweeps_every_running_dating_job():
     jobs = [
@@ -180,8 +205,14 @@ from backend.bumble_fixed_swipe import plan_fixed_swipe  # noqa: E402
 def _badoo(name):
     t = (FIX / f"{name}.xml").read_text(encoding="utf-8")
     return plan_fixed_swipe(
-        "fixed swipe 2 on badoo", t, [], state={}, package="com.badoo.mobile",
-        dry_run=False, planner="badoo_fixed", app="badoo",
+        "fixed swipe 2 on badoo",
+        t,
+        [],
+        state={},
+        package="com.badoo.mobile",
+        dry_run=False,
+        planner="badoo_fixed",
+        app="badoo",
     )
 
 
@@ -222,8 +253,13 @@ def test_dating_run_first_contact_reaches_fixed_planners_not_llm():
     # planners entirely, so the LLM drove Hily (opened Google Messages).
     t = (FIX / "hily_chats_r30.xml").read_text(encoding="utf-8")
     a = _ca.plan_next_action(
-        "send 5 first contact messages on hily", t, ["Opened Hily"], None,
-        package="com.hily.app", dry_run=False, agent_state={},
+        "send 5 first contact messages on hily",
+        t,
+        ["Opened Hily"],
+        None,
+        package="com.hily.app",
+        dry_run=False,
+        agent_state={},
     )
     assert a["planner"].startswith("hily_fixed_first_contact")
     assert (a["x"], a["y"]) == (740, 2190)  # Activity, not a chat row
@@ -232,8 +268,13 @@ def test_dating_run_first_contact_reaches_fixed_planners_not_llm():
 def test_bank_text_passes_guard_for_fixed_planners():
     t = (FIX / "hily_mbm.xml").read_text(encoding="utf-8")
     a = _ca.plan_next_action(
-        "send 5 first contact messages on hily", t, ["Opened Hily"], None,
-        package="com.hily.app", dry_run=False, agent_state={},
+        "send 5 first contact messages on hily",
+        t,
+        ["Opened Hily"],
+        None,
+        package="com.hily.app",
+        dry_run=False,
+        agent_state={},
     )
     assert a["action"] == "type" and a["text"] == "hey how are you"
 
@@ -244,8 +285,13 @@ def test_hily_likes_sent_empty_goes_to_discover():
     # r53: Likes sent tapped and already scrolled to the end
     st = {"bulk_message_new": {"done": 2, "_ls_tapped": True, "_ls_scrolls": 4}}
     a = plan_hily_fixed_first_contact(
-        "send 5 first contact messages on hily", t, [], state=st,
-        dry_run=False, message="hi miss", target=5,
+        "send 5 first contact messages on hily",
+        t,
+        [],
+        state=st,
+        dry_run=False,
+        message="hi miss",
+        target=5,
     )
     assert (a["x"], a["y"]) == DISCOVER_TAB_XY
 
@@ -254,8 +300,13 @@ def test_hily_discover_grid_opens_person_not_crush():
     t = (FIX / "hily_top_picks_grid.xml").read_text(encoding="utf-8")
     st = {"bulk_message_new": {"done": 2, "_via_discover": True}}
     a = plan_hily_fixed_first_contact(
-        "send 5 first contact messages on hily", t, [], state=st,
-        dry_run=False, message="hi miss", target=5,
+        "send 5 first contact messages on hily",
+        t,
+        [],
+        state=st,
+        dry_run=False,
+        message="hi miss",
+        target=5,
     )
     assert a["action"] == "tap"
     assert (a["x"], a["y"]) != (900, 700)  # Crush icon
@@ -263,15 +314,22 @@ def test_hily_discover_grid_opens_person_not_crush():
 
 # ---- Hinge: stuck in Matches → tap the H Discover tab -----------------
 
-from backend.hinge_fixed_first_contact import plan_hinge_fixed_first_contact  # noqa: E402
+from backend.hinge_fixed_first_contact import (
+    plan_hinge_fixed_first_contact,
+)  # noqa: E402
 
 
 def _hinge(name, hist=("Open Hinge Discover tab",)):
     t = (FIX / f"{name}.xml").read_text(encoding="utf-8")
     st = {"bulk_message_new": {"done": 1, "_opened_discover": True}}
     return plan_hinge_fixed_first_contact(
-        "send 5 first contact messages on hinge", t, list(hist), state=st,
-        dry_run=False, message="hi miss", target=5,
+        "send 5 first contact messages on hinge",
+        t,
+        list(hist),
+        state=st,
+        dry_run=False,
+        message="hi miss",
+        target=5,
     )
 
 
@@ -294,8 +352,13 @@ def test_hinge_discover_still_hearts():
 def test_hinge_dating_run_goes_to_fixed_planner():
     t = (FIX / "hinge_matches_your_turn.xml").read_text(encoding="utf-8")
     a = _ca.plan_next_action(
-        "send 5 first contact messages on hinge", t, ["Opened Hinge"], None,
-        package="co.hinge.app", dry_run=False, agent_state={},
+        "send 5 first contact messages on hinge",
+        t,
+        ["Opened Hinge"],
+        None,
+        package="co.hinge.app",
+        dry_run=False,
+        agent_state={},
     )
     assert a["planner"].startswith("hinge_fixed_first_contact")
     assert (a["x"], a["y"]) == (110, 2195)

@@ -35,11 +35,12 @@ assert.deepEqual(body.items, [
 ]);
 assert.equal(body.time, '21:05');
 assert.deepEqual(body.days, []);
+assert.equal(body.dry_run, false); // persisted dry_run=true cleared on save
 assert.equal(
   scheduleSummary(
-    { enabled: true, items: body.items, time: '21:05', days: [], dry_run: true },
+    { enabled: true, items: body.items, time: '21:05', days: [], dry_run: false },
     (p) => (p === 'com.bumble.app' ? 'Bumble' : 'Facebook Dating')
   ),
-  'Bumble ×2 (20/run) → Facebook Dating (50/run) · 21:05 Every day · dry run'
+  'Bumble ×2 (20/run) → Facebook Dating (50/run) · 21:05 Every day'
 );
 console.log('datingSchedule ok');

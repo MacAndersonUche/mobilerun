@@ -83,7 +83,9 @@ class ScheduleError(ValueError):
     pass
 
 
-def normalize(raw: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def normalize(
+    raw: Dict[str, Any], existing: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Validate + clean a schedule from the portal. Raises ScheduleError."""
     if not isinstance(raw, dict):
         raise ScheduleError("schedule must be an object")
@@ -158,7 +160,8 @@ def normalize(raw: Dict[str, Any], existing: Optional[Dict[str, Any]] = None) ->
             "items": items,
             "time": t,
             "days": days,
-            "dry_run": bool(raw.get("dry_run", base.get("dry_run", True))),
+            # Portal no longer offers dry-run — never persist / fire as dry.
+            "dry_run": False,
             "device_id": str(raw.get("device_id") or base.get("device_id") or ""),
             "created_at": int(base.get("created_at") or time.time()),
         }
@@ -240,9 +243,7 @@ def build_queue(s: Dict[str, Any]) -> Tuple[List[str], Dict[str, int]]:
 def build_modes(s: Dict[str, Any]) -> Dict[str, str]:
     """r45: per-app run mode from schedule items (Tagged swipe / message)."""
     return {
-        it["app"]: str(it.get("mode"))
-        for it in s.get("items") or []
-        if it.get("mode")
+        it["app"]: str(it.get("mode")) for it in s.get("items") or [] if it.get("mode")
     }
 
 
@@ -358,7 +359,7 @@ def fire_due(
                 device_id=did,
                 queue=queue,
                 count=None,
-                dry_run=bool(s.get("dry_run", True)),
+                dry_run=False,
                 counts=counts,
                 modes=build_modes(s),
                 like_caps=build_like_caps(s),
@@ -367,9 +368,8 @@ def fire_due(
             put_job(job)
             res["result"] = "queued"
             res["job_id"] = job["job_id"]
-        s["last_result"] = (
-            f"{key}: {res['result']}"
-            + (f" {res['job_id']}" if res.get("job_id") else "")
+        s["last_result"] = f"{key}: {res['result']}" + (
+            f" {res['job_id']}" if res.get("job_id") else ""
         )
         logger.info(
             "dating schedule fire id=%s slot=%s result=%s job=%s",

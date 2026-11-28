@@ -42,13 +42,10 @@ test('dating and social live activity views', async ({ page }) => {
       localStorage.setItem('mobilerun_user_email', 'ci-e2e@mobilerun.local');
     }, token);
 
-    // Dating dry-run
+    // Dating Start (always live; dry-run toggle removed)
     await page.goto('/dating');
     await expect(page.getByTestId('live-activity')).toBeVisible({ timeout: 20000 });
-    const dry = page.getByTestId('dating-dry-run');
-    if (await dry.count()) {
-      if (!(await dry.isChecked())) await dry.check();
-    }
+    await expect(page.getByTestId('dating-dry-run')).toHaveCount(0);
     await page.getByTestId('dating-start').click();
     await expect(page.getByTestId('live-activity-status')).not.toHaveText('idle', {
       timeout: 30000,
@@ -107,7 +104,7 @@ test('dating and social live activity views', async ({ page }) => {
             {
               n: 1,
               action: 'opener',
-              reason: 'dry_run — no real send/like',
+              reason: 'dry_run - no real send/like',
               package: 'ai.mobilerun.mockdating',
               screen: 'ai.mobilerun.mockdating',
               ok: true,
@@ -117,7 +114,7 @@ test('dating and social live activity views', async ({ page }) => {
             {
               n: 2,
               action: 'opener',
-              reason: 'dry_run — composing template',
+              reason: 'dry_run - composing template',
               package: 'ai.mobilerun.mockdating',
               screen: 'ai.mobilerun.mockdating',
               ok: true,
@@ -162,7 +159,7 @@ test('dating and social live activity views', async ({ page }) => {
               {
                 n: 1,
                 action: 'open_app',
-                reason: 'dry_run — open stand-in messaging app',
+                reason: 'dry_run - open stand-in messaging app',
                 package: 'com.google.android.apps.messaging',
                 screen: 'com.google.android.apps.messaging',
                 ok: true,
@@ -188,7 +185,7 @@ test('dating and social live activity views', async ({ page }) => {
             signature_enabled: true,
           },
         ],
-        signature: { enabled_global: true, text: '— from MacAI' },
+        signature: { enabled_global: true, text: '- from MacAI' },
         escalation: { always_ask_new_contacts: true },
         speed_preset: 'balanced',
       }),

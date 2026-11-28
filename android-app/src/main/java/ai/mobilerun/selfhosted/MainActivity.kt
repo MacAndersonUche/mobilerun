@@ -222,7 +222,7 @@ fun MainScreen(
     onEnsureAutoGrants: () -> Unit,
 ) {
     var connectionStatus by remember { mutableStateOf("Disconnected") }
-    var routeStatus by remember { mutableStateOf("Route: —") }
+    var routeStatus by remember { mutableStateOf("Route: -") }
     var lastTask by remember { mutableStateOf("No tasks yet") }
     var streamStatus by remember { mutableStateOf("idle") }
     var paired by remember { mutableStateOf(backendClient.isPaired()) }
@@ -447,7 +447,7 @@ fun MainScreen(
                             Text(
                                 when {
                                     showA11yStuck ->
-                                        "Accessibility is stuck Binding after install. Tap Recover — or toggle it Off/On in system settings."
+                                        "Accessibility is stuck Binding after install. Tap Recover - or toggle it Off/On in system settings."
                                     showA11y ->
                                         "One manual step: turn on Accessibility. Notifications, battery, and overlay are requested automatically."
                                     else ->
@@ -528,9 +528,9 @@ fun MainScreen(
                     StatusCard(
                         "Setup",
                         if (snap.accessibilityBound) {
-                            "Ready — Accessibility bound · notifications + battery OK"
+                            "Ready - Accessibility bound · notifications + battery OK"
                         } else {
-                            "Ready — Accessibility on · notifications + battery OK"
+                            "Ready - Accessibility on · notifications + battery OK"
                         },
                         true,
                     )

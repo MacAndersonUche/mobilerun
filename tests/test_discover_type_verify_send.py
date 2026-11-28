@@ -253,7 +253,10 @@ def test_hinge_send_retry_when_text_stays_in_box():
     typed = (FIX / "hinge_like_sheet_typed.xml").read_text(encoding="utf-8")
     st = {"bulk_message_new": {"done": 0, "typed": False}}
     assert _hinge(sheet, st, ["Opened Hinge"]).get("action") == "type"
-    assert _hinge(typed, st, ["Opened Hinge", "Type like-sheet comment"]).get("action") == "tap"
+    assert (
+        _hinge(typed, st, ["Opened Hinge", "Type like-sheet comment"]).get("action")
+        == "tap"
+    )
     assert st["bulk_message_new"]["done"] == 1
     # Text still in the box after Send Like: one more Send Like tap,
     # no recount, never Rose.

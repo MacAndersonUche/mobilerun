@@ -134,9 +134,7 @@ def _on_activity(tree: str) -> bool:
 
 def _message_sent_sheet(tree: str) -> bool:
     blob = _blob(tree)
-    return "message sent" in blob or (
-        hily_on_mbm(tree) and "message sent" in blob
-    )
+    return "message sent" in blob or (hily_on_mbm(tree) and "message sent" in blob)
 
 
 def _first_chat_request(tree: str) -> Optional[Tuple[int, int]]:
@@ -265,8 +263,7 @@ def plan_hily_fixed_first_contact(
                 "action": "press_button",
                 "button": "back",
                 "reason": (
-                    f"Close Hily Crush/profile sheet — never deck Crush "
-                    f"({planner})"
+                    f"Close Hily Crush/profile sheet — never deck Crush " f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -280,8 +277,7 @@ def plan_hily_fixed_first_contact(
                 "action": "press_button",
                 "button": "back",
                 "reason": (
-                    f"Hily first-contact paywall — Back, never pay "
-                    f"({planner})"
+                    f"Hily first-contact paywall — Back, never pay " f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,
@@ -295,12 +291,15 @@ def plan_hily_fixed_first_contact(
     if _message_sent_sheet(ui_tree) or (
         hily_on_mbm(ui_tree) and "message sent" in _blob(ui_tree)
     ):
-        close = _tree_id_center(
-            ui_tree,
-            "closeButton",
-            "id/closeButton",
-            "com.hily.app:id/closeButton",
-        ) or CLOSE_XY
+        close = (
+            _tree_id_center(
+                ui_tree,
+                "closeButton",
+                "id/closeButton",
+                "com.hily.app:id/closeButton",
+            )
+            or CLOSE_XY
+        )
         cx, cy = int(close[0]), int(close[1])
         return _fp(
             {
@@ -365,11 +364,18 @@ def plan_hily_fixed_first_contact(
             compose = _tree_id_center(
                 ui_tree, "textInput", "id/textInput", "com.hily.app:id/textInput"
             )
-            if compose and "focus" not in hist and "type " not in hist and "typed" not in hist:
+            if (
+                compose
+                and "focus" not in hist
+                and "type " not in hist
+                and "typed" not in hist
+            ):
                 # Already focused in live tests — type directly when focused.
                 focused = False
                 for n in _parse_compact_nodes(ui_tree):
-                    if "textinput" in str(n.get("id") or "").lower() and n.get("focused"):
+                    if "textinput" in str(n.get("id") or "").lower() and n.get(
+                        "focused"
+                    ):
                         focused = True
                         break
                 if not focused:
@@ -390,9 +396,7 @@ def plan_hily_fixed_first_contact(
                 {
                     "action": "type",
                     "text": text,
-                    "reason": (
-                        f"Type MBM first-contact '{text}' ({planner})"
-                    ),
+                    "reason": (f"Type MBM first-contact '{text}' ({planner})"),
                     "planner": planner,
                     "llm_provider": None,
                     "clear": True,
@@ -444,9 +448,7 @@ def plan_hily_fixed_first_contact(
                 {
                     "action": "type",
                     "text": text,
-                    "reason": (
-                        f"Type MBM first-contact '{text}' (retry) ({planner})"
-                    ),
+                    "reason": (f"Type MBM first-contact '{text}' (retry) ({planner})"),
                     "planner": planner,
                     "llm_provider": None,
                     "clear": True,
@@ -617,7 +619,8 @@ def plan_hily_fixed_first_contact(
         # grid row behind the bottom nav — scroll Likes sent before calling
         # it empty. Stop scrolling once the visible names stop changing.
         names = "|".join(
-            str(n.get("text") or "") for n in _parse_compact_nodes(ui_tree)
+            str(n.get("text") or "")
+            for n in _parse_compact_nodes(ui_tree)
             if str(n.get("id") or "").lower().endswith("center_name")
         )
         scrolls = int(bulk.get("_ls_scrolls") or 0)
@@ -628,7 +631,10 @@ def plan_hily_fixed_first_contact(
             return _fp(
                 {
                     "action": "swipe",
-                    "x1": 540, "y1": 1800, "x2": 540, "y2": 900,
+                    "x1": 540,
+                    "y1": 1800,
+                    "x2": 540,
+                    "y2": 900,
                     "duration_ms": 450,
                     "reason": (
                         f"Scroll Hily Likes sent for more envelopes "
@@ -694,8 +700,7 @@ def plan_hily_fixed_first_contact(
             "x": ACTIVITY_TAB_XY[0],
             "y": ACTIVITY_TAB_XY[1],
             "reason": (
-                f"Open Hily Activity for Likes-sent first-contact "
-                f"({planner})"
+                f"Open Hily Activity for Likes-sent first-contact " f"({planner})"
             ),
             "planner": planner,
             "llm_provider": None,

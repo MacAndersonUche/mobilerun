@@ -132,7 +132,7 @@ function Shell() {
   return (
     <div className="min-h-screen bg-canvas text-white">
       <div className="mx-auto flex min-h-screen max-w-6xl">
-        {/* Desktop sidebar — hidden on home (tiles are the nav) */}
+        {/* Desktop sidebar - hidden on home (tiles are the nav) */}
         {!isHome && (
           <aside
             className="hidden w-60 shrink-0 border-r border-line bg-canvas-elev/80 p-4 md:block"
@@ -175,7 +175,7 @@ function Shell() {
         )}
 
         <main className="relative min-w-0 flex-1 overflow-x-clip">
-          {/* Mobile top bar — brand + hamburger (not on home) */}
+          {/* Mobile top bar - brand + hamburger (not on home) */}
           {!isHome && (
             <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur md:hidden pt-[max(0.5rem,env(safe-area-inset-top))]">
               <Link to="/" className="min-w-0">
@@ -227,7 +227,7 @@ function Shell() {
         <MobileMenu open={menuOpen} onClose={() => setMenuOpen(false)} />
       )}
 
-      {/* Mobile bottom nav — hidden on home */}
+      {/* Mobile bottom nav - hidden on home */}
       {!isHome && (
         <nav
           className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-canvas-elev/95 backdrop-blur md:hidden"

@@ -50,12 +50,33 @@ def test_detectors():
 
 def test_full_card_cycle_two_messages():
     st: dict = {}
-    seq = [DECK, BLAST, DIRECT, TYPED, SENT, DIRECT, DECK,
-           DECK2, BLAST, DIRECT, TYPED, SENT, DIRECT, DECK2, DECK]
+    seq = [
+        DECK,
+        BLAST,
+        DIRECT,
+        TYPED,
+        SENT,
+        DIRECT,
+        DECK,
+        DECK2,
+        BLAST,
+        DIRECT,
+        TYPED,
+        SENT,
+        DIRECT,
+        DECK2,
+        DECK,
+    ]
     acts = [_p(t, st) for t in seq]
     steps = [a["fastpath_step"] for a in acts]
-    assert steps[:6] == ["yubo_card_open_send", "yubo_card_select_direct", "yubo_card_type",
-                         "yubo_card_send", "yubo_card_close_sheet", "yubo_card_close_sheet"]
+    assert steps[:6] == [
+        "yubo_card_open_send",
+        "yubo_card_select_direct",
+        "yubo_card_type",
+        "yubo_card_send",
+        "yubo_card_close_sheet",
+        "yubo_card_close_sheet",
+    ]
     assert _xy(acts[0]) == (210, 2000)  # the pill, not the rocket
     assert acts[2]["text"] == "hey how are you" and acts[2]["clear"] is True
     assert _xy(acts[3]) == SEND_XY
@@ -135,6 +156,8 @@ def test_routed_from_bulk_and_cloud_agent_without_llm():
     a = plan_bulk_bench(INSTR, DECK, [], state=st, package="co.yellw.yellowapp")
     assert a["fastpath_step"] == "yubo_card_open_send"
     st2: dict = {}
-    b = ca.plan_next_action(INSTR, DECK, [], package="co.yellw.yellowapp", agent_state=st2)
+    b = ca.plan_next_action(
+        INSTR, DECK, [], package="co.yellw.yellowapp", agent_state=st2
+    )
     assert b["fastpath_step"] == "yubo_card_open_send"
     assert ca._is_fixed_swipe_action(b) and ca._fixed_swipe_run(INSTR, st2)

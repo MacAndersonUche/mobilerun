@@ -29,7 +29,7 @@ def test_normalize_per_app_and_combo():
     assert s["kind"] == "app" and s["items"] == [
         {"app": "com.bumble.app", "runs": 1, "count": 20}
     ]
-    assert s["enabled"] and s["dry_run"] and s["days"] == []
+    assert s["enabled"] and s["dry_run"] is False and s["days"] == []
     c = _sch(
         items=[
             {"app": "hinge", "runs": 2, "count": 3},
@@ -92,7 +92,9 @@ def _fire(s, now, jobs=(), reachable=True):
 
 
 def test_fire_queues_same_chain_as_start_once():
-    s = _sch(items=[{"app": "bumble", "count": 20}, {"app": "badoo", "runs": 2, "count": 7}])
+    s = _sch(
+        items=[{"app": "bumble", "count": 20}, {"app": "badoo", "runs": 2, "count": 7}]
+    )
     now = _ts(2026, 11, 24, 9, 31)
     res, saved, put = _fire(s, now)
     assert res[0]["result"] == "queued"
@@ -100,7 +102,7 @@ def test_fire_queues_same_chain_as_start_once():
     assert job["instruction"] == "fixed swipe 20 on bumble"
     assert job["run_queue"] == ["com.badoo.mobile", "com.badoo.mobile"]
     assert job["run_counts"]["com.badoo.mobile"] == 7
-    assert job["dry_run"] is True and job["schedule_id"] == s["id"]
+    assert job["dry_run"] is False and job["schedule_id"] == s["id"]
     assert saved and s["last_fired_key"] == "2026-11-24 09:30"
     # Same slot never fires twice
     res2, _, put2 = _fire(s, now + 60)
@@ -111,7 +113,9 @@ def test_fire_skips_when_run_active_or_offline():
     s = _sch()
     now = _ts(2026, 11, 24, 9, 31)
     res, _, put = _fire(
-        s, now, jobs=[{"job_id": "task_1", "status": "running", "device_id": "android_x"}]
+        s,
+        now,
+        jobs=[{"job_id": "task_1", "status": "running", "device_id": "android_x"}],
     )
     assert put == [] and "already active" in res[0]["result"]
     assert "skipped" in s["last_result"]

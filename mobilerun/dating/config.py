@@ -134,8 +134,9 @@ DEFAULT_APPS = [
 _PACKAGE_DISPLAY_NAMES = {app.package_name: app.name for app in DEFAULT_APPS}
 
 
-
-def ensure_default_apps(apps: Optional[List["AppProfile"]] = None) -> List["AppProfile"]:
+def ensure_default_apps(
+    apps: Optional[List["AppProfile"]] = None,
+) -> List["AppProfile"]:
     """Keep any saved app rows, then append default profiles that are missing.
 
     The dating portal renders whatever /api/dating/config returns, so new
@@ -158,7 +159,9 @@ def display_name_for_package(package_name: str, app_name: Optional[str] = None) 
     pkg = (package_name or "").strip()
     if pkg in _PACKAGE_DISPLAY_NAMES:
         return _PACKAGE_DISPLAY_NAMES[pkg]
-    parts = [p for p in pkg.split(".") if p and p.lower() not in {"app", "android", "mobile"}]
+    parts = [
+        p for p in pkg.split(".") if p and p.lower() not in {"app", "android", "mobile"}
+    ]
     tail = parts[-1] if parts else pkg
     return tail[:1].upper() + tail[1:] if tail else "Unknown"
 

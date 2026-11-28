@@ -44,25 +44,84 @@ _MATCH_NEEDLES = (
     "it’s mutual",
 )
 _PAID_NEEDLES = (
-    "premium", "subscribe", "upgrade", "buy ", "purchase", "£", "$", "€",
-    "per week", "per month", "/week", "/month", "major crush", "boost",
-    "free trial", "unlock",
+    "premium",
+    "subscribe",
+    "upgrade",
+    "buy ",
+    "purchase",
+    "£",
+    "$",
+    "€",
+    "per week",
+    "per month",
+    "/week",
+    "/month",
+    "major crush",
+    "boost",
+    "free trial",
+    "unlock",
     # r49 Tinder
-    "super like", "gold", "platinum", "tinder plus", "tinder+", "see who likes you",
+    "super like",
+    "gold",
+    "platinum",
+    "tinder plus",
+    "tinder+",
+    "see who likes you",
 )
 _SAFE_CLOSE = (
-    "not now", "maybe later", "no thanks", "no, thanks", "later", "skip",
-    "got it", "got it!", "keep swiping", "keep browsing", "continue swiping",
-    "back to finder", "close", "keep playing", "maybe later", "no thanks!", "dismiss", "cancel", "not interested",
-    "don't allow", "don’t allow", "deny", "never", "remind me later", "ok",
+    "not now",
+    "maybe later",
+    "no thanks",
+    "no, thanks",
+    "later",
+    "skip",
+    "got it",
+    "got it!",
+    "keep swiping",
+    "keep browsing",
+    "continue swiping",
+    "back to finder",
+    "close",
+    "keep playing",
+    "maybe later",
+    "no thanks!",
+    "dismiss",
+    "cancel",
+    "not interested",
+    "don't allow",
+    "don’t allow",
+    "deny",
+    "never",
+    "remind me later",
+    "ok",
 )
 _NEVER = (
-    "allow", "buy", "upgrade", "subscribe", "get premium", "try premium",
-    "crush", "boost", "purchase", "unlock", "send a crush", "continue",
-    "rate", "rate us", "rate now", "5 stars",
+    "allow",
+    "buy",
+    "upgrade",
+    "subscribe",
+    "get premium",
+    "try premium",
+    "crush",
+    "boost",
+    "purchase",
+    "unlock",
+    "send a crush",
+    "continue",
+    "rate",
+    "rate us",
+    "rate now",
+    "5 stars",
     # r49 Tinder: never Super Like / Boost / Gold / Platinum / Plus
-    "super like", "get gold", "get platinum", "get tinder", "try gold", "see who likes you",
-    "upgrade", "get super likes", "rewind",
+    "super like",
+    "get gold",
+    "get platinum",
+    "get tinder",
+    "try gold",
+    "see who likes you",
+    "upgrade",
+    "get super likes",
+    "rewind",
 )
 _RE_SEND = re.compile(r"\bsend\b", re.I)
 
@@ -75,9 +134,16 @@ def _blob(tree: str) -> str:
     return " ".join(_label(n) for n in _parse_compact_nodes(tree)).lower()
 
 
-_KNOWN_SCREENS = ("finderFiltersButton", "bottomNavTab_", "threadInputFieldText",
-                  "threadToolBar", "dialogMessageItem", "chat_request", "center_name",
-                  "ActionButton_LIKE")
+_KNOWN_SCREENS = (
+    "finderFiltersButton",
+    "bottomNavTab_",
+    "threadInputFieldText",
+    "threadToolBar",
+    "dialogMessageItem",
+    "chat_request",
+    "center_name",
+    "ActionButton_LIKE",
+)
 
 
 def finder_chrome(tree: str) -> bool:
@@ -101,7 +167,9 @@ def _editable(tree: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _send_button(tree: str, edit: Optional[Dict[str, Any]]) -> Optional[Tuple[int, int]]:
+def _send_button(
+    tree: str, edit: Optional[Dict[str, Any]]
+) -> Optional[Tuple[int, int]]:
     c = _tree_id_center(tree, "threadSend", "sendMessageButton", "id/threadSend")
     if c:
         return (int(c[0]), int(c[1]))
@@ -120,7 +188,10 @@ def _send_button(tree: str, edit: Optional[Dict[str, Any]]) -> Optional[Tuple[in
         for n in _parse_compact_nodes(tree):
             if n is edit or n.get("x1") is None or not n.get("clickable"):
                 continue
-            if int(n["x1"]) >= int(edit["x2"]) - 20 and abs(int(n["y"]) - int(edit["y"])) < 80:
+            if (
+                int(n["x1"]) >= int(edit["x2"]) - 20
+                and abs(int(n["y"]) - int(edit["y"])) < 80
+            ):
                 best = (int(n["x"]), int(n["y"]))
         return best
     return None
@@ -139,22 +210,36 @@ def safe_close(tree: str) -> Optional[Tuple[int, int, str]]:
             continue
         if "allow" in lab and "don" not in lab:
             continue
-        hit = lab in _SAFE_CLOSE or lab in ("x", "✕", "×") or (
-            "close" in nid or nid.endswith("dismiss") or "closebutton" in nid
+        hit = (
+            lab in _SAFE_CLOSE
+            or lab in ("x", "✕", "×")
+            or ("close" in nid or nid.endswith("dismiss") or "closebutton" in nid)
         )
         if not hit:
             continue
         if paid and lab in ("ok",):
             continue
         best = (int(n["x"]), int(n["y"]), lab or nid)
-        if lab in ("not now", "maybe later", "no thanks", "close", "don't allow", "don’t allow"):
+        if lab in (
+            "not now",
+            "maybe later",
+            "no thanks",
+            "close",
+            "don't allow",
+            "don’t allow",
+        ):
             break
     return best
 
 
 def _act(planner: str, kind: str, step: str, reason: str, **kw: Any) -> Dict[str, Any]:
-    a = {"action": kind, "reason": f"{reason} ({planner})", "planner": planner,
-         "llm_provider": None, "_no_llm_handoff": True}
+    a = {
+        "action": kind,
+        "reason": f"{reason} ({planner})",
+        "planner": planner,
+        "llm_provider": None,
+        "_no_llm_handoff": True,
+    }
     a.update(kw)
     return _fp(a, step)
 
@@ -174,15 +259,30 @@ def handle_interrupt(
     pkgs = re.search(r'packages="([^"]*)"', tree or "")
     pk = pkgs.group(1) if pkgs else ""
     # System notification shade / heads-up / permission dialog
-    if pk and PKG not in pk and (
-        "systemui" in pk or "permissioncontroller" in pk or "packageinstaller" in pk
+    if (
+        pk
+        and PKG not in pk
+        and (
+            "systemui" in pk or "permissioncontroller" in pk or "packageinstaller" in pk
+        )
     ):
         c = safe_close(tree)
         if c and "permission" in pk:
-            return _act(planner, "tap", f"{prefix}_int_permission",
-                        f"Permission prompt → '{c[2]}' (never Allow)", x=c[0], y=c[1])
-        return _act(planner, "press_button", f"{prefix}_int_system_back",
-                    f"Close the notification / system sheet → back to {app}", button="back")
+            return _act(
+                planner,
+                "tap",
+                f"{prefix}_int_permission",
+                f"Permission prompt → '{c[2]}' (never Allow)",
+                x=c[0],
+                y=c[1],
+            )
+        return _act(
+            planner,
+            "press_button",
+            f"{prefix}_int_system_back",
+            f"Close the notification / system sheet → back to {app}",
+            button="back",
+        )
 
     m = hr.setdefault("match", {})
     # ---- match popup (or the thread it opened) ----
@@ -191,33 +291,76 @@ def handle_interrupt(
         if m.get("sent_here"):
             c = safe_close(tree)
             if c and not on_thread:
-                return _act(planner, "tap", f"{prefix}_int_match_close",
-                            f"Match message sent — close the popup ('{c[2]}')", x=c[0], y=c[1])
+                return _act(
+                    planner,
+                    "tap",
+                    f"{prefix}_int_match_close",
+                    f"Match message sent — close the popup ('{c[2]}')",
+                    x=c[0],
+                    y=c[1],
+                )
             m.clear()
-            return _act(planner, "press_button", f"{prefix}_int_match_back",
-                        "Match message sent — back to the cards", button="back")
+            return _act(
+                planner,
+                "press_button",
+                f"{prefix}_int_match_back",
+                "Match message sent — back to the cards",
+                button="back",
+            )
         edit = _editable(tree)
         if edit is None:
             if on_thread and "locked" in _blob(tree):
                 m.clear()
-                return _act(planner, "press_button", f"{prefix}_int_match_locked",
-                            "Match chat is locked — back to Finder", button="back")
+                return _act(
+                    planner,
+                    "press_button",
+                    f"{prefix}_int_match_locked",
+                    "Match chat is locked — back to Finder",
+                    button="back",
+                )
             # "Say hi" / "Send a message" button opens the composer
             for n in _parse_compact_nodes(tree):
                 lab = _label(n).lower()
-                if lab in ("say hi", "say hi!", "say hello", "send a message", "message",
-                           "send message", "start chatting", "chat") and n.get("x") is not None:
+                if (
+                    lab
+                    in (
+                        "say hi",
+                        "say hi!",
+                        "say hello",
+                        "send a message",
+                        "message",
+                        "send message",
+                        "start chatting",
+                        "chat",
+                    )
+                    and n.get("x") is not None
+                ):
                     m["open"] = True
-                    return _act(planner, "tap", f"{prefix}_int_match_open",
-                                f"Match — open the message box ('{lab}')",
-                                x=int(n["x"]), y=int(n["y"]))
+                    return _act(
+                        planner,
+                        "tap",
+                        f"{prefix}_int_match_open",
+                        f"Match — open the message box ('{lab}')",
+                        x=int(n["x"]),
+                        y=int(n["y"]),
+                    )
             c = safe_close(tree)
             if c:
-                return _act(planner, "tap", f"{prefix}_int_match_close_nomsg",
-                            f"Match without a free message box — close ('{c[2]}')",
-                            x=c[0], y=c[1])
-            return _act(planner, "press_button", f"{prefix}_int_match_back_nomsg",
-                        "Match without a free message box — Back", button="back")
+                return _act(
+                    planner,
+                    "tap",
+                    f"{prefix}_int_match_close_nomsg",
+                    f"Match without a free message box — close ('{c[2]}')",
+                    x=c[0],
+                    y=c[1],
+                )
+            return _act(
+                planner,
+                "press_button",
+                f"{prefix}_int_match_back_nomsg",
+                "Match without a free message box — Back",
+                button="back",
+            )
         m["open"] = True
         box = str(edit.get("text") or "").strip()
         hint = str(edit.get("hint") or "").strip()
@@ -231,8 +374,14 @@ def handle_interrupt(
                 m["retry"] = 1
                 xy = _send_button(tree, edit)
                 if xy:
-                    return _act(planner, "tap", f"{prefix}_int_match_send_retry",
-                                "Match message still in the box — Send again", x=xy[0], y=xy[1])
+                    return _act(
+                        planner,
+                        "tap",
+                        f"{prefix}_int_match_send_retry",
+                        "Match message still in the box — Send again",
+                        x=xy[0],
+                        y=xy[1],
+                    )
             m.clear()
             m["sent_here"] = True  # give up on this one; never retype
             return handle_interrupt(tree, hr, text, planner, **kw)
@@ -241,15 +390,27 @@ def handle_interrupt(
                 m["sent_here"] = True
                 return handle_interrupt(tree, hr, text, planner, **kw)
             m["typed"] = int(m.get("typed") or 0) + 1
-            return _act(planner, "type", f"{prefix}_int_match_type",
-                        f"Match — type '{text}'", text=text, clear=True)
+            return _act(
+                planner,
+                "type",
+                f"{prefix}_int_match_type",
+                f"Match — type '{text}'",
+                text=text,
+                clear=True,
+            )
         xy = _send_button(tree, edit)
         if not xy:
             m["sent_here"] = True
             return handle_interrupt(tree, hr, text, planner, **kw)
         m["awaiting"] = True
-        return _act(planner, "tap", f"{prefix}_int_match_send",
-                    f"Match — send '{text}' (free send)", x=xy[0], y=xy[1])
+        return _act(
+            planner,
+            "tap",
+            f"{prefix}_int_match_send",
+            f"Match — send '{text}' (free send)",
+            x=xy[0],
+            y=xy[1],
+        )
 
     if PKG not in pk:
         return None  # another app — caller reopens Hily
@@ -258,7 +419,18 @@ def handle_interrupt(
     # ---- any other Hily overlay: free close, else Back ----
     c = safe_close(tree)
     if c:
-        return _act(planner, "tap", f"{prefix}_int_close",
-                    f"Close {app} popup ('{c[2]}') — back to the cards", x=c[0], y=c[1])
-    return _act(planner, "press_button", f"{prefix}_int_back",
-                f"Unknown {app} screen over the cards — Back (never buy)", button="back")
+        return _act(
+            planner,
+            "tap",
+            f"{prefix}_int_close",
+            f"Close {app} popup ('{c[2]}') — back to the cards",
+            x=c[0],
+            y=c[1],
+        )
+    return _act(
+        planner,
+        "press_button",
+        f"{prefix}_int_back",
+        f"Unknown {app} screen over the cards — Back (never buy)",
+        button="back",
+    )

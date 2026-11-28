@@ -203,10 +203,7 @@ def test_list_ok_when_rows_visible_blk():
 
 
 def test_bulk_vision_wait_deferred_when_screenshot_present():
-    empty = (
-        '<hierarchy nodes="0" empty="true" packages="">'
-        "<w/></hierarchy>"
-    )
+    empty = '<hierarchy nodes="0" empty="true" packages="">' "<w/></hierarchy>"
     st: dict = {
         "bulk_message": {
             "done": 0,

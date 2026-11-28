@@ -55,7 +55,7 @@ export default function TasksPage() {
         setTaskLog(
           [d.result, planner || provider ? `${planner}${provider}`.trim() : '']
             .filter(Boolean)
-            .join(' — ') || 'Running…'
+            .join(' - ') || 'Running…'
         );
         setTaskError(d.error || '');
         if (d.instruction) setTaskInstruction(String(d.instruction));
@@ -149,7 +149,7 @@ export default function TasksPage() {
 
     setSubmitting(true);
     setTaskStatus('running');
-    setTaskLog('Submitted — waiting for first step…');
+    setTaskLog('Submitted - waiting for first step…');
     setTaskError('');
     setTaskSteps([]);
     setTaskInstruction(instruction.trim());
@@ -247,7 +247,7 @@ export default function TasksPage() {
             error={taskError || undefined}
             steps={taskSteps}
             loading={!!activeTaskId}
-            emptyText="Task submitted — steps will appear here as soon as the agent acts."
+            emptyText="Task submitted - steps will appear here as soon as the agent acts."
             showScreenshots
             linkToHistory
           />

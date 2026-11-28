@@ -584,7 +584,7 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
         f"pair-create:{owner or 'anon'}", limit=10, window_seconds=60
     ):
         raise HTTPException(
-            status_code=429, detail="Too many pairing codes — try again shortly"
+            status_code=429, detail="Too many pairing codes - try again shortly"
         )
 
     try:
@@ -632,7 +632,7 @@ async def _create_pairing_token(request: PairingRequest, owner: Optional[str]):
     except Exception:
         logger.exception("save_pairing_token failed for owner=%s", owner)
         raise HTTPException(
-            status_code=503, detail="Could not persist pairing code — retry"
+            status_code=503, detail="Could not persist pairing code - retry"
         )
 
     # Compact deep link: short code only (c=) — QR encodes even shorter HTTPS /p/CODE
@@ -1395,12 +1395,12 @@ async def submit_task(
             raise HTTPException(status_code=404, detail="Device not found")
         raise HTTPException(
             status_code=400,
-            detail="Device offline — open MobileRun on the phone and wait until Devices shows Connected",
+            detail="Device offline - open MobileRun on the phone and wait until Devices shows Connected",
         )
     if not reachable:
         raise HTTPException(
             status_code=400,
-            detail="Device offline — no live WebSocket. Re-open the app on the phone.",
+            detail="Device offline - no live WebSocket. Re-open the app on the phone.",
         )
 
     task_id = f"task_{secrets.token_hex(8)}"
@@ -2183,7 +2183,11 @@ def _adopt_existing_dating_job(
         "status": "already_running",
         "state": dating_mode_state,
         "job": job,
-        "queue": [dating_mode_state.get("current_app")] if dating_mode_state.get("current_app") else [],
+        "queue": (
+            [dating_mode_state.get("current_app")]
+            if dating_mode_state.get("current_app")
+            else []
+        ),
         "skipped": [],
         "activity": _activity_for_mode("dating", jid),
     }
@@ -2243,7 +2247,9 @@ def _load_dating_runtime(auth: Optional[dict] = None) -> None:
                 job = None
             if job and str(job.get("status") or "").lower() == "paused":
                 dating_mode_state["paused"] = True
-            if job and (job.get("dating_app") or (job.get("state") or {}).get("current_app")):
+            if job and (
+                job.get("dating_app") or (job.get("state") or {}).get("current_app")
+            ):
                 dating_mode_state["current_app"] = job.get("dating_app") or (
                     job.get("state") or {}
                 ).get("current_app")
@@ -3091,7 +3097,7 @@ async def compose_dating_message_api(
 
         if get_safety_state().is_paused(body.package_name or None):
             raise HTTPException(
-                status_code=409, detail="Safety pause active — resume in UI first"
+                status_code=409, detail="Safety pause active - resume in UI first"
             )
     except HTTPException:
         raise
@@ -3100,7 +3106,7 @@ async def compose_dating_message_api(
 
     if dating_mode_state.get("paused"):
         raise HTTPException(
-            status_code=409, detail="Dating mode paused — resume before composing"
+            status_code=409, detail="Dating mode paused - resume before composing"
         )
 
     lib, _ = _load_opener_library(auth)
@@ -3528,7 +3534,9 @@ def _load_run_modes(auth: Optional[dict]) -> Dict[str, str]:
     return clean_modes(data.get("modes") if isinstance(data, dict) else None)
 
 
-def _save_run_modes(auth: Optional[dict], modes: Optional[Dict[str, Any]]) -> Dict[str, str]:
+def _save_run_modes(
+    auth: Optional[dict], modes: Optional[Dict[str, Any]]
+) -> Dict[str, str]:
     try:
         from storage import save_user_setting
     except ImportError:
@@ -3692,7 +3700,9 @@ async def get_run_counts(auth: Optional[dict] = Depends(optional_verify_token)):
 async def set_run_counts(
     body: RunCountsBody, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    counts = _save_run_counts(auth, body.counts) if body.counts else _load_run_counts(auth)
+    counts = (
+        _save_run_counts(auth, body.counts) if body.counts else _load_run_counts(auth)
+    )
     modes = _save_run_modes(auth, body.modes) if body.modes else _load_run_modes(auth)
     caps = (
         _save_like_caps(auth, body.like_caps)
@@ -3788,7 +3798,7 @@ async def _start_dating_apps_run(
     if not (mem.get("connected") or device_is_reachable(did)):
         raise HTTPException(
             status_code=400,
-            detail="Phone offline — open MobileRun on the phone and wait "
+            detail="Phone offline - open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
     # One Start = one job per device (dedupe double-tap / racing Lambdas)
@@ -3843,9 +3853,7 @@ async def _start_dating_apps_run(
         _kick_job(job["job_id"])
     except Exception as e:
         logger.exception("Could not start dating run: %s", e)
-        raise HTTPException(
-            status_code=503, detail=f"Could not start run: {e}"
-        ) from e
+        raise HTTPException(status_code=503, detail=f"Could not start run: {e}") from e
     dating_mode_state["running"] = True
     dating_mode_state["paused"] = False
     dating_mode_state["job_id"] = job["job_id"]
@@ -3866,13 +3874,13 @@ async def start_dating_mode(
     body: Optional[ModeStartBody] = None,
     auth: Optional[dict] = Depends(optional_verify_token),
     device_id: str = "default",
-    dry_run: bool = True,
+    dry_run: bool = False,
     stand_in_package: Optional[str] = None,
 ):
     """
     Start dating mode as a step-driven cloud job (EventBridge ticks).
     Safe for Lambda — does not hold a long loop in one invocation.
-    Defaults to dry_run=True so no real likes/messages are sent.
+    Always live (dry_run=False); portal no longer offers a dry-run toggle.
     """
     _load_dating_runtime(auth)
 
@@ -3881,13 +3889,14 @@ async def start_dating_mode(
     live_test_max_n = 3
     if body:
         device_id = body.device_id or device_id
-        dry_run = body.dry_run if body.dry_run is not None else dry_run
         live_test = bool(getattr(body, "live_test", False))
         live_test_max_n = int(getattr(body, "live_test_max_n", None) or 3)
         stand_in_package = body.stand_in_package or stand_in_package
         raw_scope = str(body.contact_scope or "both").lower().strip()
         if raw_scope in ("new", "existing", "both"):
             contact_scope = raw_scope
+    # Ignore client/query dry_run — Dating Start is always live.
+    dry_run = False
     if live_test:
         dry_run = False  # real likes/sends under caps
 
@@ -3935,12 +3944,8 @@ async def start_dating_mode(
             if live_test
             else (6 if dry_run else secrets.randbelow(401) + 100)
         ),
-        "swipe_cap": (
-            live_test_max_n if live_test else (2 if dry_run else 50)
-        ),
-        "reply_cap": (
-            live_test_max_n if live_test else (2 if dry_run else 50)
-        ),
+        "swipe_cap": (live_test_max_n if live_test else (2 if dry_run else 50)),
+        "reply_cap": (live_test_max_n if live_test else (2 if dry_run else 50)),
     }
     if contact_scope == "new":
         caps["reply_cap"] = 0
@@ -4390,7 +4395,7 @@ async def social_run(
     if not (mem.get("connected") or device_is_reachable(did)):
         raise HTTPException(
             status_code=400,
-            detail="Phone offline — open MobileRun on the phone and wait "
+            detail="Phone offline - open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
     try:
@@ -4398,9 +4403,7 @@ async def social_run(
         _kick_job(job["job_id"])
     except Exception as e:
         logger.exception("Could not start social run: %s", e)
-        raise HTTPException(
-            status_code=503, detail=f"Could not start: {e}"
-        ) from e
+        raise HTTPException(status_code=503, detail=f"Could not start: {e}") from e
     _load_social_runtime(auth)
     social_mode_state["running"] = True
     social_mode_state["paused"] = False

@@ -152,7 +152,7 @@ export default function HomePage() {
 
       {error && (
         <p className="text-sm text-mute" role="status">
-          {error} — check Settings → Backend URL
+          {error} - check Settings → Backend URL
         </p>
       )}
 

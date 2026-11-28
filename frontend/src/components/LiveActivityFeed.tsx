@@ -40,7 +40,7 @@ export default function LiveActivityFeed({
       steps={activity?.steps || []}
       loading={loading}
       newestFirst
-      emptyText="No steps yet — start the mode to see each action in plain words as it happens."
+      emptyText="No steps yet - start the mode to see each action in plain words as it happens."
       showScreenshots
       linkToHistory
       testId="live-activity"

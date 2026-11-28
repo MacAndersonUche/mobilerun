@@ -15,12 +15,16 @@ import {
   hasLikeCap,
   todayCounterKind,
   formatTodayCounters,
+  todayCounterNote,
+  sumWorkingTodayCounters,
+  formatWorkingTodayTotals,
 } from './datingRun.ts';
 
 assert.equal(todayCounterKind('com.badoo.mobile'), 'swipes');
 assert.equal(todayCounterKind('com.bumble.app'), 'swipes');
 assert.equal(todayCounterKind('co.hinge.app'), 'messages');
 assert.equal(todayCounterKind('co.yellw.yellowapp'), 'messages');
+assert.equal(todayCounterKind('com.facebook.katana'), 'messages');
 assert.equal(todayCounterKind('com.hily.app'), 'both');
 assert.equal(todayCounterKind('com.taggedapp'), 'both');
 assert.equal(
@@ -32,9 +36,30 @@ assert.equal(
   'Today: 5 messages'
 );
 assert.equal(
+  formatTodayCounters('com.facebook.katana', { swipes: 9, openers: 12 }),
+  'Today: 12 messages'
+);
+assert.equal(
   formatTodayCounters('com.hily.app', { swipes: 3, openers: 2 }),
   'Today: 3 swipes · 2 messages'
 );
+assert.equal(todayCounterNote('com.facebook.katana'), 'Max 50 a day');
+assert.equal(todayCounterNote('co.hinge.app'), null);
+// Working header totals: only count metrics each app tracks
+assert.deepEqual(
+  sumWorkingTodayCounters([
+    { package: 'com.bumble.app', today: { swipes: 9, openers: 4 } }, // swipes only
+    { package: 'co.hinge.app', today: { swipes: 2, openers: 5 } }, // messages only
+    { package: 'com.facebook.katana', today: { swipes: 6, openers: 11 } }, // messages
+    { package: 'com.hily.app', today: { swipes: 3, openers: 2 } }, // both
+  ]),
+  { swipes: 12, messages: 18 }
+);
+assert.equal(
+  formatWorkingTodayTotals({ swipes: 12, messages: 18 }),
+  '12 swipes · 18 messages'
+);
+assert.ok(!formatWorkingTodayTotals({ swipes: 1, messages: 2 }).includes('—'));
 
 assert.equal(canRunApp('co.hinge.app'), true);
 assert.equal(canRunApp('com.whatsapp'), false);
@@ -42,7 +67,7 @@ assert.equal(canRunApp('ai.mobilerun.mockdating'), false);
 
 const all = datingStartBody({
   deviceId: 'android_x',
-  dryRun: true,
+  dryRun: true, // ignored — Start always live
   contactScope: 'new',
   counts: { 'co.hinge.app': 3, 'com.whatsapp': 9 },
   apps: ['com.whatsapp', 'co.hinge.app', 'com.hily.app', 'com.taggedapp'],
@@ -52,6 +77,7 @@ assert.deepEqual(all.apps, ['co.hinge.app', 'com.hily.app', 'com.taggedapp']);
 // Each app its own number; unset apps use the default 5; no socials
 assert.deepEqual(all.counts, { 'co.hinge.app': 3, 'com.hily.app': 5, 'com.taggedapp': 5 });
 assert.equal(all.device_id, 'android_x');
+assert.equal(all.dry_run, false);
 assert.equal('stand_in_package' in all, false);
 
 const one = datingStartBody({

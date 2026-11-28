@@ -89,8 +89,13 @@ def test_recover_then_swipe_after_back_on_deck():
     tabs = "".join(
         f'<n t="{t}" d="{t}" cls="View"{"" if t == "Chats" else CLICK} '
         f'xy="{x},2197" b="{x - 108},2120,{x + 108},2274"/>'
-        for t, x in (("Profile", 108), ("Discover", 324), ("People", 540),
-                     ("Liked You", 756), ("Chats", 972))
+        for t, x in (
+            ("Profile", 108),
+            ("Discover", 324),
+            ("People", 540),
+            ("Liked You", 756),
+            ("Chats", 972),
+        )
     )
     chats = (
         '<hierarchy windows="1" packages="com.bumble.app">'
@@ -149,7 +154,9 @@ def test_per_app_counts_drive_each_job():
     assert run_count("com.hily.app", None, counts) == 5  # Hily messages cap
     assert run_count("com.hily.app#like", None, counts) == 12  # likes after
     queue, _ = split_supported(["bumble", "badoo", "hily"])
-    job = build_job(device_id="d", queue=queue, count=None, dry_run=False, counts=counts)
+    job = build_job(
+        device_id="d", queue=queue, count=None, dry_run=False, counts=counts
+    )
     assert job["instruction"] == "fixed swipe 20 on bumble"
     job["status"] = "completed"
     j2 = next_job_after(job)

@@ -83,13 +83,17 @@ def test_dry_swipe_rejects_section_label_forces_vision():
     assert act is not None
     # Must not pass with Intentions as the card name
     reason = (act.get("reason") or "").lower()
-    assert "intentions" not in reason or "reject" in reason or act.get("action") != "done"
+    assert (
+        "intentions" not in reason or "reject" in reason or act.get("action") != "done"
+    )
     if act.get("action") == "done":
         assert act.get("dry_run_verified") is not True or "intentions" not in reason
     else:
-        assert act.get("needs_vision") or act.get("_force_vision") or act.get(
-            "action"
-        ) in ("fail", "wait", "back", "tap")
+        assert (
+            act.get("needs_vision")
+            or act.get("_force_vision")
+            or act.get("action") in ("fail", "wait", "back", "tap")
+        )
 
 
 def test_dry_swipe_accepts_real_name_n1():
@@ -173,9 +177,10 @@ def test_stall_handoff_after_two_no_progress(monkeypatch):
         package="com.bumble.app",
     )
     assert a1 is not None
-    assert not _bulk_action_is_verified_fastpath(a1) or int(
-        st.get("bulk_stall_n") or 0
-    ) >= 1
+    assert (
+        not _bulk_action_is_verified_fastpath(a1)
+        or int(st.get("bulk_stall_n") or 0) >= 1
+    )
     assert int(st.get("bulk_stall_n") or 0) >= 1
 
     # Step 2 without image: stall≥2 → wait + force vision handoff

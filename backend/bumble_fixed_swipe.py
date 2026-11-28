@@ -99,8 +99,7 @@ _HARMLESS_POPUP_RE = re.compile(
     re.I,
 )
 _HARMLESS_TITLE_RE = re.compile(
-    r"permission|to send you notifications|access (this )?device|"
-    r"enjoying bumble",
+    r"permission|to send you notifications|access (this )?device|" r"enjoying bumble",
     re.I,
 )
 _BOTTOM_TABS = ("profile", "discover", "people", "liked you", "chats")
@@ -312,13 +311,8 @@ def bumble_fixed_on_deck(tree: str) -> bool:
         return True
     # Selected tab unknown: a card container or Filters + People/Discover.
     if tab is None:
-        ids = " ".join(
-            str(n.get("id") or "") for n in _visible_nodes(tree)
-        ).lower()
-        if (
-            "profile_root_container" in ids
-            or "encountersgriditem_summary" in ids
-        ):
+        ids = " ".join(str(n.get("id") or "") for n in _visible_nodes(tree)).lower()
+        if "profile_root_container" in ids or "encountersgriditem_summary" in ids:
             return True
         blob = visible_ui_text(tree).lower()
         if "filters" in blob and ("people" in blob or "discover" in blob):
@@ -368,9 +362,7 @@ def scale_like_swipe(
     )
 
 
-def _harmless_popup_action(
-    tree: str, planner: str
-) -> Optional[Dict[str, Any]]:
+def _harmless_popup_action(tree: str, planner: str) -> Optional[Dict[str, Any]]:
     """Dismiss system / permission / 'Enjoying Bumble?' only — never paid CTAs."""
     if bumble_fixed_guard(tree):
         return None
@@ -426,7 +418,6 @@ def _harmless_popup_action(
     return None
 
 
-
 MAX_RUN_SWIPES = 500
 # Consecutive recovery steps allowed between two likes before stopping.
 MAX_RECOVER_STEPS = 10
@@ -441,8 +432,16 @@ _LAUNCH = {
 }
 # Recovery ladder: index = recovery step (1-based, cycles).
 _RECOVER_LADDER = (
-    "tab", "scroll_top", "back", "tab", "relaunch",
-    "back", "tab", "scroll_top", "relaunch", "back",
+    "tab",
+    "scroll_top",
+    "back",
+    "tab",
+    "relaunch",
+    "back",
+    "tab",
+    "scroll_top",
+    "relaunch",
+    "back",
 )
 
 
@@ -487,11 +486,14 @@ def _bottom_nav_visible(tree: str) -> bool:
     # r45: Badoo's tabs carry ids even when their labels are not read
     if "nav_bar_button_" in (tree or ""):
         return True
-    return sum(
-        1
-        for n in _visible_nodes(tree)
-        if int(n.get("y") or 0) >= 1800 and _tab_name(n.get("label") or "")
-    ) >= 3
+    return (
+        sum(
+            1
+            for n in _visible_nodes(tree)
+            if int(n.get("y") or 0) >= 1800 and _tab_name(n.get("label") or "")
+        )
+        >= 3
+    )
 
 
 def _scroll_top_action(
@@ -600,7 +602,11 @@ def _recover_action(
         step = "back"
     if step == "scroll_top":
         return _scroll_top_action(
-            app, sw, sh, planner, dry_run,
+            app,
+            sw,
+            sh,
+            planner,
+            dry_run,
             f"{label} recover {n}: not on {surface} — scroll profile back up",
         )
     if step == "relaunch":
@@ -628,8 +634,17 @@ def _recover_action(
 
 
 _DISMISS_LABELS = (
-    "close", "not now", "no thanks", "no, thanks", "maybe later", "later",
-    "skip", "dismiss", "cancel", "x", "×",
+    "close",
+    "not now",
+    "no thanks",
+    "no, thanks",
+    "maybe later",
+    "later",
+    "skip",
+    "dismiss",
+    "cancel",
+    "x",
+    "×",
     # "Back" is a safe dismiss on a paid popup (same as pressing Back) —
     # the Bumble compliment picker has a Back node, no X.
     "back",
@@ -643,7 +658,9 @@ def _paid_popup_dismiss(tree: str) -> Optional[Tuple[int, int, str]]:
         lab = (n.get("label") or "").strip()
         low = lab.lower()
         nid = str(n.get("id") or "").lower()
-        if low in _DISMISS_LABELS or nid.endswith(("/close", "_close", "close_button", "closebutton")):
+        if low in _DISMISS_LABELS or nid.endswith(
+            ("/close", "_close", "close_button", "closebutton")
+        ):
             if bumble_fixed_guard(lab):
                 continue
             if int(n.get("y") or 0) >= 2100:  # bottom nav, not a popup
@@ -795,11 +812,7 @@ def plan_fixed_swipe(
 
     # Count a completed swipe when the previous step was our like swipe
     # and we did not land on a paid/match screen. A failed dump still counts.
-    if (
-        not dry_run
-        and bulk.get("awaiting_verify")
-        and "fixed like swipe" in hist_l
-    ):
+    if not dry_run and bulk.get("awaiting_verify") and "fixed like swipe" in hist_l:
         bulk["awaiting_verify"] = False
         hit = None if failed_dump else bumble_fixed_guard(ui_tree)
         if hit is None:
@@ -970,7 +983,11 @@ def plan_fixed_swipe(
         bulk["_fixed_top_done"] = True
         st["bulk_swipe"] = bulk
         return _scroll_top_action(
-            app, sw, sh, planner, dry_run,
+            app,
+            sw,
+            sh,
+            planner,
+            dry_run,
             f"{label} fixed swipe: scroll card back to top before likes",
         )
 

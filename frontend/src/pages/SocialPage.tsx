@@ -22,7 +22,7 @@ export default function SocialPage() {
   const [apps, setApps] = useState<AppRow[]>([]);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [sigOn, setSigOn] = useState(true);
-  const [sigText, setSigText] = useState('— from MacMobileRun');
+  const [sigText, setSigText] = useState('- from MacMobileRun');
   const [askNew, setAskNew] = useState(true);
   const [emailNotify, setEmailNotify] = useState(false);
   const [running, setRunning] = useState(false);
@@ -50,7 +50,7 @@ export default function SocialPage() {
       setApps(cfg.data.apps || []);
       setSpeed(cfg.data.speed_preset || 'balanced');
       setSigOn(cfg.data.signature?.enabled_global ?? true);
-      setSigText(cfg.data.signature?.text || '— from MacMobileRun');
+      setSigText(cfg.data.signature?.text || '- from MacMobileRun');
       setAskNew(cfg.data.escalation?.always_ask_new_contacts ?? true);
       setEmailNotify(!!cfg.data.email_notify);
       setRunning(!!status.data.running);
@@ -205,7 +205,7 @@ export default function SocialPage() {
           <Link to="/dating" className="text-accent underline underline-offset-2">
             Dating
           </Link>
-          . WhatsApp, Messenger, X, Snapchat, Instagram — unread counts + auto
+          . WhatsApp, Messenger, X, Snapchat, Instagram - unread counts + auto
           replies with humanizer pacing.
         </p>
       </div>

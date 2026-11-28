@@ -174,8 +174,11 @@ def test_dry_plan_returns_coords_and_does_not_swipe():
 
 def test_live_plan_swipes_right_and_caps_at_five():
     # r43: live_test jobs keep the 5 cap (real runs use the per-run count)
-    st = {"bulk_swipe": {"done": 0, "target": 20}, "live_test": True,
-          "live_test_max_n": 5}
+    st = {
+        "bulk_swipe": {"done": 0, "target": 20},
+        "live_test": True,
+        "live_test_max_n": 5,
+    }
     top = plan_bumble_fixed_swipe(
         "like 20 profiles on Bumble (fixed)",
         KALIA,
@@ -334,7 +337,7 @@ def test_bumble_compliment_picker_backs_out_never_swipes():
     tree = (
         '<hierarchy packages="com.bumble.app"><w p="com.bumble.app">'
         '<n t="Second time\'s a charm" xy="540,400" b="80,350,1000,450"/>'
-        '<n t="You\'ve already liked these bees, why not use Compliments to '
+        "<n t=\"You've already liked these bees, why not use Compliments to "
         'help you stand out?" xy="540,600" b="80,550,1000,700"/>'
         '<n t="3 Compliments left" xy="540,800" b="80,750,1000,850"/>'
         '<n t="Juliana, 26" xy="540,1200" b="80,1100,1000,1300"/>'

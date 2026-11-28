@@ -201,7 +201,7 @@ export default function ChatPage() {
     const text = (override ?? input).trim();
     if (!text && !confirmed) return;
     if (!deviceId && devices.length === 0) {
-      setSendError('No phone linked — open Devices and Connect this phone first.');
+      setSendError('No phone linked - open Devices and Connect this phone first.');
       return;
     }
     setBusy(true);
@@ -383,7 +383,7 @@ export default function ChatPage() {
                 error={taskError || undefined}
                 steps={taskSteps}
                 loading={!!activeTaskId}
-                emptyText="Task submitted — each phone action will appear here in plain words."
+                emptyText="Task submitted - each phone action will appear here in plain words."
                 showScreenshots
                 linkToHistory
                 testId="chat-task-step-log"

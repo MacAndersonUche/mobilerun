@@ -30,16 +30,19 @@ def _load(*names: str) -> str:
 
 def _plan(tree: str, **kw):
     st = kw.pop("state", {})
-    return plan_taimi_fixed_first_contact(
-        INSTR,
-        tree,
-        kw.pop("history", []),
-        state=st,
-        package=kw.get("package", "com.takimi.android"),
-        dry_run=kw.get("dry_run", False),
-        message="good evening beautiful",
-        target=kw.get("target", 5),
-    ), st
+    return (
+        plan_taimi_fixed_first_contact(
+            INSTR,
+            tree,
+            kw.pop("history", []),
+            state=st,
+            package=kw.get("package", "com.takimi.android"),
+            dry_run=kw.get("dry_run", False),
+            message="good evening beautiful",
+            target=kw.get("target", 5),
+        ),
+        st,
+    )
 
 
 def test_instruction_is_taimi_first_contact_no_llm():
@@ -53,7 +56,9 @@ def test_live_deck_taps_eleanor_chip_never_like_or_instant_chat():
     chips = deck_suggested_chips(tree)
     texts = [c["text"] for c in chips]
     assert any("Heyy Eleanor" in t for t in texts)
-    picked = pick_suggested_chip(tree, preferred="good evening beautiful", card_name="Eleanor")
+    picked = pick_suggested_chip(
+        tree, preferred="good evening beautiful", card_name="Eleanor"
+    )
     assert picked and "Heyy Eleanor" in picked["text"]
     # Must not pick Katie's chip while Eleanor is the front card.
     assert "Katie" not in picked["text"]
@@ -71,7 +76,9 @@ def test_live_deck_taps_eleanor_chip_never_like_or_instant_chat():
 
 def test_compact_people_taps_coffee_chip():
     tree = _load("taimi_people.xml")
-    picked = pick_suggested_chip(tree, preferred="good evening beautiful", card_name="Alex")
+    picked = pick_suggested_chip(
+        tree, preferred="good evening beautiful", card_name="Alex"
+    )
     assert picked and "Coffee" in picked["text"]
     a, st = _plan(tree)
     assert a["action"] == "tap"
@@ -93,7 +100,9 @@ def test_prefers_chip_matching_good_evening_beautiful():
         tree = tree.replace("</w>", inject + "</w>", 1)
     else:
         tree = tree + inject
-    picked = pick_suggested_chip(tree, preferred="good evening beautiful", card_name="Alex")
+    picked = pick_suggested_chip(
+        tree, preferred="good evening beautiful", card_name="Alex"
+    )
     assert picked and "good evening beautiful" in picked["text"].lower()
     a, _ = _plan(tree)
     assert a["fastpath_step"] == "taimi_fc_suggested"
@@ -116,7 +125,10 @@ def test_gold_paywall_backs_then_stops_never_continue():
     a, st = _plan(tree)
     assert a["action"] == "press_button"
     assert a.get("button") == "back"
-    assert "continue" not in (a.get("reason") or "").lower() or "never continue" in (a.get("reason") or "").lower()
+    assert (
+        "continue" not in (a.get("reason") or "").lower()
+        or "never continue" in (a.get("reason") or "").lower()
+    )
     a2, st = _plan(tree, state=st)
     a3, st = _plan(tree, state=st)
     assert a3["action"] == "fail"
@@ -321,6 +333,7 @@ def test_plan_dismisses_cast_prompt_before_open():
     assert a["action"] == "tap"
     assert a.get("fastpath_step") == "cast_prompt_cancel"
     from backend.cast_prompt import CANCEL_XY, START_XY
+
     assert (a["x"], a["y"]) == CANCEL_XY
     assert (a["x"], a["y"]) != START_XY
     assert st.get("dismissed_cast_prompt") is True

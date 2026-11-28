@@ -85,8 +85,12 @@ def test_photo_heart_ladder_tries_each_position_once_then_fails():
     acts = []
     for _ in range(7):
         act = plan_bulk_bench(
-            "send 2 first contact messages on Hinge", tree, hist, state=st,
-            package="co.hinge.app", dry_run=False,
+            "send 2 first contact messages on Hinge",
+            tree,
+            hist,
+            state=st,
+            package="co.hinge.app",
+            dry_run=False,
         )
         assert act is not None
         acts.append(act)
@@ -98,7 +102,10 @@ def test_photo_heart_ladder_tries_each_position_once_then_fails():
     focus = [a for a in acts if a.get("fastpath_step") == "hinge_fixed_fc_blind_focus"]
     assert focus and all(a["y"] == PHOTO_HEART_XY[1] + 200 for a in focus)
     assert acts[-1]["action"] == "fail"
-    assert all(not in_rose_bounds(a.get("x"), a.get("y")) for a in acts if a["action"] == "tap")
+    assert all(
+        not in_rose_bounds(a.get("x"), a.get("y")) for a in acts if a["action"] == "tap"
+    )
+
 
 def test_heart_ladder_resets_when_sheet_opens():
     # One heart tap, then the sheet appears: the planner types the comment
@@ -107,12 +114,20 @@ def test_heart_ladder_resets_when_sheet_opens():
     st = {"bulk_message_new": {"done": 0, "typed": False, "_opened_discover": True}}
     hist = ["Opened Hinge", "tap(110,2195) — Open Hinge Discover tab (nav xy)"]
     plan_bulk_bench(
-        "send 2 first contact messages on Hinge", tree, hist, state=st,
-        package="co.hinge.app", dry_run=False,
+        "send 2 first contact messages on Hinge",
+        tree,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
     )  # wait
     act = plan_bulk_bench(
-        "send 2 first contact messages on Hinge", tree, hist, state=st,
-        package="co.hinge.app", dry_run=False,
+        "send 2 first contact messages on Hinge",
+        tree,
+        hist,
+        state=st,
+        package="co.hinge.app",
+        dry_run=False,
     )  # heart try 1
     assert (act.get("x"), act.get("y")) == PHOTO_HEART_XY
     assert st["bulk_message_new"]["heart_tries"] == 1
@@ -228,7 +243,9 @@ def test_like_sheet_types_then_send_like_not_rose():
     assert act2 is not None
     assert act2.get("action") == "tap"
     assert not in_rose_bounds(int(act2["x"]), int(act2["y"]))
-    assert int(act2["x"]) == SEND_LIKE_XY[0] or "Send Like" in (act2.get("reason") or "")
+    assert int(act2["x"]) == SEND_LIKE_XY[0] or "Send Like" in (
+        act2.get("reason") or ""
+    )
     assert "Rose" in (act2.get("reason") or "")  # "never Rose"
     x0, y0, x1, y1 = ROSE_BOUNDS
     assert not (x0 <= int(act2["x"]) <= x1 and y0 <= int(act2["y"]) <= y1)
@@ -583,18 +600,27 @@ def test_heart_ladder_rungs_have_distinct_decision_keys():
     acts = []
     for _ in range(7):
         act = plan_bulk_bench(
-            "send 2 first contact messages on Hinge", tree, hist, state=st,
-            package="co.hinge.app", dry_run=False,
+            "send 2 first contact messages on Hinge",
+            tree,
+            hist,
+            state=st,
+            package="co.hinge.app",
+            dry_run=False,
         )
         assert act is not None
         acts.append(act)
         if act["action"] == "tap":
             hist.append(f"tap({act['x']},{act['y']}) — {act['reason']}")
     hearts = [
-        a for a in acts
+        a
+        for a in acts
         if a.get("action") == "tap" and "photo heart" in (a.get("reason") or "").lower()
     ]
     assert len(hearts) == 1
     keys = [(a.get("action"), a.get("x"), a.get("y"), a.get("reason")) for a in acts]
-    assert all(keys[i] != keys[i + 1] or keys[i][0] != "tap" or "focus" in str(keys[i][3]).lower()
-               for i in range(len(keys) - 1))
+    assert all(
+        keys[i] != keys[i + 1]
+        or keys[i][0] != "tap"
+        or "focus" in str(keys[i][3]).lower()
+        for i in range(len(keys) - 1)
+    )

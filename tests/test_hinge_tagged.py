@@ -115,9 +115,10 @@ def test_hinge_dry_run_bulk_verifies_once():
     assert act.get("_dry_run_advance") is not True
     if act.get("action") == "done":
         assert act.get("dry_run_verified") is True
-        assert "Alex" in (act.get("reason") or "") or "would like/pass" in (
-            act.get("reason") or ""
-        ).lower()
+        assert (
+            "Alex" in (act.get("reason") or "")
+            or "would like/pass" in (act.get("reason") or "").lower()
+        )
     else:
         assert act.get("action") in ("swipe", "tap", "wait", "press_button")
         if act.get("action") == "swipe":

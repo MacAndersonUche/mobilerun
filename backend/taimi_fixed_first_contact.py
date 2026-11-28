@@ -293,7 +293,9 @@ def plan_taimi_fixed_first_contact(
         return prompt_act
 
     if not tree.strip():
-        return _act("wait", "taimi_fc_wait_tree", "Taimi first-contact — waiting for a tree")
+        return _act(
+            "wait", "taimi_fc_wait_tree", "Taimi first-contact — waiting for a tree"
+        )
 
     # r70: compact dump can be empty while Taimi is in front. Wait for a
     # full / uiautomator tree. Never Back / never re-open from the launcher.
@@ -304,7 +306,9 @@ def plan_taimi_fixed_first_contact(
             is_empty_tree,
             tree_has_useful_nodes,
         )
-    if _in_taimi_tree(tree) and (is_empty_tree(tree) or not tree_has_useful_nodes(tree)):
+    if _in_taimi_tree(tree) and (
+        is_empty_tree(tree) or not tree_has_useful_nodes(tree)
+    ):
         w = int(fc.get("empty_dump_waits") or 0) + 1
         fc["empty_dump_waits"] = w
         if w > 12:
@@ -543,7 +547,9 @@ def plan_taimi_fixed_first_contact(
         n = int(fc.get("tab_tries") or 0) + 1
         fc["tab_tries"] = n
         if n > 5:
-            return _act("fail", "taimi_fc_no_deck", "Could not open the Taimi People deck")
+            return _act(
+                "fail", "taimi_fc_no_deck", "Could not open the Taimi People deck"
+            )
         return _act(
             "tap",
             "taimi_fc_people_tab",

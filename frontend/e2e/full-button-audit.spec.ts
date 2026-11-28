@@ -449,11 +449,21 @@ test.describe('full button audit', () => {
     }
     await page.screenshot({ path: path.join(OUT, '04-history.png'), fullPage: true });
 
-    // ---------- Dating (dry-run only) ----------
+    // ---------- Dating (live Start; no dry-run toggle) ----------
     await page.goto('/dating');
     await page.waitForTimeout(1000);
-    await ensureDryRun(page, 'dating-dry-run');
-    record('dating', 'Dry-run toggle', 'checked', true);
+    record(
+      'dating',
+      'Dry-run toggle removed',
+      'absent',
+      (await page.getByTestId('dating-dry-run').count()) === 0
+    );
+    record(
+      'dating',
+      'Pause removed',
+      'absent',
+      (await page.getByRole('button', { name: /^(Pause|Resume)$/i }).count()) === 0
+    );
     // Stop any prior — only if enabled (disabled Stop hangs Playwright actionability)
     try {
       const stopBtn = page.getByTestId('dating-stop');
@@ -486,12 +496,23 @@ test.describe('full button audit', () => {
       );
       await startBtn.click({ timeout: 10000 });
       const startResp = await startWait.catch(() => null);
+      let startDry: boolean | null = null;
+      if (startResp) {
+        try {
+          const posted = startResp.request().postDataJSON() as { dry_run?: boolean };
+          startDry = posted?.dry_run ?? null;
+        } catch {
+          startDry = null;
+        }
+      }
       record(
         'dating',
-        'Start (dry-run)',
+        'Start (live)',
         'POST /api/dating/start',
-        !!startResp && startResp.ok(),
-        startResp ? `status=${startResp.status()}` : 'no start response'
+        !!startResp && startResp.ok() && startDry === false,
+        startResp
+          ? `status=${startResp.status()} dry_run=${String(startDry)}`
+          : 'no start response'
       );
       await page.waitForTimeout(4000);
       const feed = await page.getByTestId('live-activity').count();
@@ -514,7 +535,7 @@ test.describe('full button audit', () => {
         record('dating', 'Stop', 'API fallback', true, 'UI stop disabled');
       }
     } catch (e) {
-      record('dating', 'Start/Stop dry-run', 'flow', false, String(e).slice(0, 200));
+      record('dating', 'Start/Stop', 'flow', false, String(e).slice(0, 200));
     }
     // Speed / save if present — click non-destructive controls
     for (const speed of ['Fast', 'Balanced', 'Careful']) {
@@ -629,7 +650,7 @@ test.describe('full button audit', () => {
     record(
       'needs-you',
       'Approve/Send buttons',
-      'enumerate (not clicked — safety)',
+      'enumerate (not clicked - safety)',
       true,
       `approve=${await approve.count()} reject=${await reject.count()}`
     );

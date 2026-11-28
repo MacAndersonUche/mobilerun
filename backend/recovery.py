@@ -190,8 +190,7 @@ def recovery_action(
                 "action": "wait",
                 "seconds": 1.0,
                 "reason": (
-                    "No popup center on Taimi — wait, never Back "
-                    f"({planner})"
+                    "No popup center on Taimi — wait, never Back " f"({planner})"
                 ),
                 "planner": planner,
                 "llm_provider": None,

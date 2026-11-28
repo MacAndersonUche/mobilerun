@@ -143,7 +143,7 @@ export default function ModeSpeedPicker({
         </div>
         <p className="mt-2 text-xs text-mute">
           Log-normal delays, micro-pauses, rare longer breaks, per-message typing
-          speed, shuffled apps/chats — never fixed intervals. Caps still apply.
+          speed, shuffled apps/chats - never fixed intervals. Caps still apply.
         </p>
       </div>
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Heart, Play, Pause, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { Heart, Play, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
 import axios from 'axios';
 import ModeSpeedPicker from '../components/ModeSpeedPicker';
@@ -34,6 +34,9 @@ import {
   TAIMI_BLOCKED_NOTE,
   clearCollapsibleExpandedPrefs,
   formatTodayCounters,
+  todayCounterNote,
+  sumWorkingTodayCounters,
+  formatWorkingTodayTotals,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -209,10 +212,10 @@ export default function DatingPage() {
     'snapchat',
   ]);
   const [contactAskWhatsappText, setContactAskWhatsappText] = useState(
-    'Would it be easier to chat on WhatsApp? Totally optional — no pressure either way.'
+    'Would it be easier to chat on WhatsApp? Totally optional - no pressure either way.'
   );
   const [contactAskSnapchatText, setContactAskSnapchatText] = useState(
-    'No worries — would Snapchat be easier instead? Totally optional, only if you like.'
+    'No worries - would Snapchat be easier instead? Totally optional, only if you like.'
   );
   const [dateFlowStats, setDateFlowStats] = useState<{
     chats_active: number;
@@ -226,7 +229,6 @@ export default function DatingPage() {
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
-  const [dryRun, setDryRun] = useState(true);
   // Per app, per run (each app card): swipes or messages. Saved per app on
   // the server; Hily = messages (max 5), Facebook Dating max 50.
   const [runCounts, setRunCounts] = useState<Record<string, number>>({});
@@ -431,7 +433,7 @@ export default function DatingPage() {
   }, []);
 
   const control = async (
-    action: 'start' | 'stop' | 'pause',
+    action: 'start' | 'stop',
     onlyApp?: string
   ) => {
     if (action === 'start') {
@@ -491,7 +493,6 @@ export default function DatingPage() {
         action === 'start'
           ? datingStartBody({
               deviceId,
-              dryRun,
               contactScope,
               counts,
               modes: runModes,
@@ -716,10 +717,10 @@ export default function DatingPage() {
             <Heart className="text-rose-400 shrink-0" /> Dating
           </h1>
           <p className="text-mute mt-1 text-sm sm:text-base">
-            MacMobileRun · app selection, dry-run, openers, start/stop, activity
+            MacMobileRun · app selection, openers, start/stop, activity
           </p>
           <p className="text-mute mt-1 text-sm">
-            Covers new contacts, existing chats, or both — dating here,{' '}
+            Covers new contacts, existing chats, or both - dating here,{' '}
             <Link to="/social" className="text-accent underline underline-offset-2">
               Social
             </Link>{' '}
@@ -763,9 +764,9 @@ export default function DatingPage() {
         onSpeedChange={onSpeedChange}
       />
 
-      {/* Controls — stack on phone for one-handed use */}
+      {/* Controls - stack on phone for one-handed use */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
           <button
             disabled={loading}
             onClick={() => control('start')}
@@ -774,13 +775,6 @@ export default function DatingPage() {
             title={status?.running ? 'Restarts dating mode (stops current job first)' : 'Start dating mode'}
           >
             <Play size={16} /> {status?.running ? 'Restart' : 'Start'}
-          </button>
-          <button
-            disabled={loading || !status?.running}
-            onClick={() => control('pause')}
-            className="tap-target flex items-center justify-center gap-2 rounded-xl bg-yellow-700 px-3 text-sm font-medium hover:bg-yellow-600 disabled:opacity-50"
-          >
-            <Pause size={16} /> {status?.paused ? 'Resume' : 'Pause'}
           </button>
           <button
             disabled={loading}
@@ -792,16 +786,6 @@ export default function DatingPage() {
             <Square size={16} /> Stop
           </button>
         </div>
-        <label className="tap-target flex items-center gap-2 text-sm text-mute">
-          <input
-            type="checkbox"
-            className="h-5 w-5 accent-rose-500"
-            checked={dryRun}
-            onChange={(e) => setDryRun(e.target.checked)}
-            data-testid="dating-dry-run"
-          />
-          Dry-run (no real likes/messages)
-        </label>
         {devices.length > 0 && (
           <select
             className="mr-input w-full text-sm sm:max-w-xs"
@@ -840,6 +824,9 @@ export default function DatingPage() {
                 : isWorking
                   ? workingExpanded
                   : true;
+              const workingTotals = isWorking
+                ? sumWorkingTodayCounters(groupApps)
+                : null;
               return (
               <section
                 key={group.id}
@@ -880,7 +867,19 @@ export default function DatingPage() {
                       <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
                     )}
                     <span className="min-w-0">
-                      <span className="block text-lg font-semibold text-white">{group.title}</span>
+                      <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                        <span className="text-lg font-semibold text-white">
+                          {group.title}
+                        </span>
+                        {workingTotals && (
+                          <span
+                            className="text-sm font-medium text-mute"
+                            data-testid="dating-working-today-totals"
+                          >
+                            {formatWorkingTodayTotals(workingTotals)}
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-xs text-mute">{group.subtitle}</span>
                     </span>
                   </button>
@@ -914,7 +913,7 @@ export default function DatingPage() {
                       <h4 className="font-semibold text-white">{app.name}</h4>
                       {datingAppGroup(app.package) === 'coming-soon' && (
                         <span className="mt-1 inline-block rounded bg-surface-elev px-2 py-0.5 text-xs text-mute">
-                          Coming soon — no working driver yet
+                          Coming soon - no working driver yet
                         </span>
                       )}
                       {isBlockedApp(app.package) && (
@@ -926,6 +925,14 @@ export default function DatingPage() {
                       >
                         {formatTodayCounters(app.package, app.today)}
                       </p>
+                      {todayCounterNote(app.package) && (
+                        <p
+                          className="mt-0.5 text-[11px] text-mute/80"
+                          data-testid={`dating-today-note-${app.package}`}
+                        >
+                          {todayCounterNote(app.package)}
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
                       {!isWorking && <div>{app.inbox.unread} unread</div>}
@@ -1045,12 +1052,11 @@ export default function DatingPage() {
       <DatingSchedules
         authHeaders={authHeaders}
         deviceId={deviceId}
-        dryRun={dryRun}
         runCounts={runCounts}
         appName={(pkg) => datingAppDisplayName(pkg)}
       />
 
-      {/* App toggles + persona — collapsed on every page load */}
+      {/* App toggles + persona - collapsed on every page load */}
       <div
         className="bg-surface border border-line rounded-lg space-y-4 overflow-hidden"
         data-testid="dating-apps-for-start"
@@ -1207,9 +1213,9 @@ export default function DatingPage() {
         <h3 className="text-lg font-semibold">Reply persona & date flow</h3>
         <p className="text-xs text-mute">
           AI replies to existing chats. After a warm chat window, one polite
-          public-place invite — never stay-over / his home. After she agrees a
+          public-place invite - never stay-over / his home. After she agrees a
           date, ask WhatsApp first (then Snapchat if she declines). Then
-          Needs-you handoff. Never auto-message WhatsApp/Snap — you continue
+          Needs-you handoff. Never auto-message WhatsApp/Snap - you continue
           personally.
         </p>
         {dateFlowStats ? (
@@ -1485,7 +1491,7 @@ export default function DatingPage() {
         <p className="text-xs text-mute">
           Multiple layout variants per app version (default up to{' '}
           {selectorApps[0]?.max_layout_variants ?? 4}, min 2). Tried by success
-          rate — no LLM when any variant matches. Off-screen targets use scroll
+          rate - no LLM when any variant matches. Off-screen targets use scroll
           explore; failures escalate to Needs you.
         </p>
         {selectorApps.length === 0 ? (
@@ -1506,7 +1512,7 @@ export default function DatingPage() {
                   {app.max_layout_variants ?? 4} variants · last{' '}
                   {app.last_discovered_at
                     ? new Date(app.last_discovered_at).toLocaleString()
-                    : '—'}
+                    : '-'}
                 </span>
               </div>
               <ul className="text-xs text-mute space-y-2">

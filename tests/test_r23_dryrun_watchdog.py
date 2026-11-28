@@ -34,9 +34,9 @@ def test_dry_run_never_emits_horizontal_swipe_or_like_pass():
     st: dict = {"bulk_swipe": {"done": 0, "target": 5}}
     act = plan_bulk_swipe(
         "swipe right on 5 profiles on Yubo",
-        _bumble_deck("Cerys").replace("bumble", "yellw").replace(
-            "com.bumble.app", "co.yellw.yellowapp"
-        ),
+        _bumble_deck("Cerys")
+        .replace("bumble", "yellw")
+        .replace("com.bumble.app", "co.yellw.yellowapp"),
         ["Opened Yubo[open_ok]"],
         package="co.yellw.yellowapp",
         dry_run=True,
@@ -122,7 +122,7 @@ def test_blk_your_turn_zero_is_nothing_to_reply():
 
 def test_app_tree_empty_only_under_three_useful_nodes():
     rich = (
-        '<hierarchy><w>'
+        "<hierarchy><w>"
         '<n t="Your turn (0)" xy="200,400"/>'
         '<n t="Their turn (2)" xy="200,500"/>'
         '<n t="Hidden (1)" xy="200,600"/>'
@@ -155,9 +155,10 @@ def test_enforce_job_wall_clock_no_progress():
     failed = enforce_job_wall_clock(job)
     assert failed is not None
     assert failed["status"] == "failed"
-    assert "progress" in (failed.get("error") or "").lower() or "wall" in (
-        failed.get("error") or ""
-    ).lower()
+    assert (
+        "progress" in (failed.get("error") or "").lower()
+        or "wall" in (failed.get("error") or "").lower()
+    )
 
 
 def test_tagged_reply_opens_messages_not_meet_me():
@@ -203,6 +204,7 @@ def test_hinge_dry_editable_sheet_is_success():
     )
     assert act and act.get("action") == "done"
     assert act.get("dry_run_verified") is True
-    assert "editable" in (act.get("reason") or "").lower() or "never typed" in (
-        act.get("reason") or ""
-    ).lower()
+    assert (
+        "editable" in (act.get("reason") or "").lower()
+        or "never typed" in (act.get("reason") or "").lower()
+    )

@@ -113,7 +113,7 @@ export default function AgentSettingsSheet({
 
       {tab === 'routines' && (
         <div className="rounded-2xl border border-line bg-canvas-elev p-4 text-sm text-mute">
-          No routine planned yet — Build one with {name}.
+          No routine planned yet - Build one with {name}.
         </div>
       )}
 

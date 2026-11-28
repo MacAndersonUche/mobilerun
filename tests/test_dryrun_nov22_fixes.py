@@ -234,9 +234,11 @@ def test_hily_new_dry_run_fails_without_profile():
         assert act2.get("action") in ("fail", "done")
         if act2.get("action") == "done":
             # Explicit dry_run note that Crush ≠ composer
-            assert act2.get("dry_run_verified") is not True or "crush" in (
-                act2.get("reason") or ""
-            ).lower() or "no free" in (act2.get("reason") or "").lower()
+            assert (
+                act2.get("dry_run_verified") is not True
+                or "crush" in (act2.get("reason") or "").lower()
+                or "no free" in (act2.get("reason") or "").lower()
+            )
         else:
             assert act2.get("dry_run_verified") is False
     else:

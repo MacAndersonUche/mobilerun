@@ -46,6 +46,15 @@ async function authAndMock(page: import('@playwright/test').Page) {
               inbox: { unread: 0, new_matches: 0 },
               last_active: null,
             },
+            {
+              name: 'Facebook Dating',
+              package: 'com.facebook.katana',
+              today: { swipes: 6, likes: 0, openers: 11, replies: 0, total_messages: 11 },
+              targets: { opener_target: 50, opener_progress: 11 },
+              total: { swipes: 6, openers: 11, replies: 0, messages: 11, matches: 0 },
+              inbox: { unread: 0, new_matches: 0 },
+              last_active: null,
+            },
           ],
         }),
       });
@@ -133,11 +142,17 @@ test.describe('portal batch', () => {
     await expect(workingToggle).toBeVisible();
     await expect(workingToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(page.getByTestId('dating-today-co.hinge.app')).toHaveCount(0);
+    // Header totals visible while collapsed (per-app rules: Bumble 9 + Hily 3
+    // swipes; Hinge 5 + Yubo 8 + Hily 2 + FB 11 messages).
+    await expect(page.getByTestId('dating-working-today-totals')).toHaveText(
+      '12 swipes · 26 messages'
+    );
 
     await workingToggle.click();
     await expect(workingToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByTestId('dating-working-today-totals')).toBeVisible();
 
-    // Bumble/Badoo: swipes only. Hinge/Yubo: messages only. Others: both.
+    // Bumble/Badoo: swipes only. Hinge/Yubo/Facebook: messages only. Others: both.
     await expect(page.getByTestId('dating-today-com.bumble.app')).toHaveText(
       'Today: 9 swipes'
     );
@@ -150,6 +165,12 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('dating-today-com.hily.app')).toHaveText(
       'Today: 3 swipes · 2 messages'
     );
+    await expect(page.getByTestId('dating-today-com.facebook.katana')).toHaveText(
+      'Today: 11 messages'
+    );
+    await expect(
+      page.getByTestId('dating-today-note-com.facebook.katana')
+    ).toHaveText('Max 50 a day');
   });
 
   test('/usage redirects home; no Usage tile', async ({ page }) => {
@@ -185,5 +206,47 @@ test.describe('portal batch', () => {
     await expect(menu.getByRole('link', { name: /^Devices$/i })).toHaveCount(0);
     await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Settings$/i })).toBeVisible();
     await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Devices$/i })).toBeVisible();
+  });
+
+  test('Dating has no dry-run checkbox or Pause; Start stays live', async ({
+    page,
+  }) => {
+    await authAndMock(page);
+    await page.goto('/dating');
+    await expect(page.getByTestId('dating-start')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('dating-stop')).toBeVisible();
+    await expect(page.getByTestId('dating-dry-run')).toHaveCount(0);
+    await expect(page.getByText('Dry-run (no real likes/messages)')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^(Pause|Resume)$/i })).toHaveCount(0);
+    const startWait = page.waitForRequest(
+      (r) =>
+        r.url().includes('/api/dating/start') && r.method() === 'POST',
+      { timeout: 15000 }
+    );
+    await page.getByTestId('dating-start').click();
+    const req = await startWait;
+    const body = req.postDataJSON() as { dry_run?: boolean };
+    expect(body.dry_run).toBe(false);
+  });
+
+  test('Account has no Link a phone / Settings / Devices rows', async ({
+    page,
+  }, testInfo) => {
+    await authAndMock(page);
+    await page.goto('/account');
+    const account = page.getByTestId('account-page');
+    await expect(account).toBeVisible({ timeout: 15000 });
+    await expect(account.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
+    await expect(account.getByRole('heading', { name: 'Link a phone' })).toHaveCount(0);
+    await expect(account.getByRole('link', { name: /^Open Devices$/i })).toHaveCount(0);
+    await expect(account.getByRole('link', { name: /^Devices$/i })).toHaveCount(0);
+    await expect(account.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
+    await expect(account.getByRole('button', { name: /Log out/i })).toBeVisible();
+    // Bottom nav still exposes Devices once (mobile only; desktop uses sidebar).
+    if (testInfo.project.name !== 'desktop') {
+      await expect(
+        page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Devices$/i })
+      ).toBeVisible();
+    }
   });
 });

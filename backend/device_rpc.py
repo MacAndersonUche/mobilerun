@@ -93,7 +93,7 @@ def call_device(
         if budget > 0:
             wait_until_reachable(device_id, timeout_s=budget)
         if not device_is_reachable(device_id):
-            raise RuntimeError("Device offline — no live WebSocket")
+            raise RuntimeError("Device offline - no live WebSocket")
 
     request_id = f"rpc_{uuid.uuid4().hex[:16]}"
     _put_pending(request_id)

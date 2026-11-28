@@ -46,18 +46,30 @@ def test_bad_social_requests_rejected(pkg, action, contact, msg):
 
 def test_whatsapp_follows_dry_run_toggle():
     job = social_run.build_job(
-        device_id="d", pkg="com.whatsapp", action="message",
-        contact="Jo", message="hi", dry_run=False,
+        device_id="d",
+        pkg="com.whatsapp",
+        action="message",
+        contact="Jo",
+        message="hi",
+        dry_run=False,
     )
     assert job["dry_run"] is False and job["state"]["dry_run"] is False
     dry = social_run.build_job(
-        device_id="d", pkg="com.whatsapp", action="message",
-        contact="Jo", message="hi", dry_run=True,
+        device_id="d",
+        pkg="com.whatsapp",
+        action="message",
+        contact="Jo",
+        message="hi",
+        dry_run=True,
     )
     assert dry["dry_run"] is True
     ig = social_run.build_job(
-        device_id="d", pkg="com.instagram.android", action="message",
-        contact="Jo", message="hi", dry_run=False,
+        device_id="d",
+        pkg="com.instagram.android",
+        action="message",
+        contact="Jo",
+        message="hi",
+        dry_run=False,
     )
     assert ig["dry_run"] is False
     assert ig["mode"] == "social" and ig["kind"] == "agent"
@@ -65,7 +77,10 @@ def test_whatsapp_follows_dry_run_toggle():
 
 @pytest.mark.parametrize(
     "inst,pkg",
-    [("swipe 5 on whatsapp", "com.whatsapp"), ("swipe 3 on instagram", "com.instagram.android")],
+    [
+        ("swipe 5 on whatsapp", "com.whatsapp"),
+        ("swipe 3 on instagram", "com.instagram.android"),
+    ],
 )
 def test_bulk_swipe_never_runs_on_socials(inst, pkg):
     act = plan_bulk_swipe(inst, "<hierarchy/>", [], state={}, package=pkg)
@@ -100,7 +115,8 @@ def client(monkeypatch):
     saved = {}
     monkeypatch.setattr(main_mod, "_load_social_runtime", lambda *a, **k: None)
     monkeypatch.setattr(
-        main_mod, "_save_social_runtime",
+        main_mod,
+        "_save_social_runtime",
         lambda *a, **k: saved.update(job_id=main_mod.social_mode_state.get("job_id")),
     )
     c = TestClient(main_mod.app)
@@ -111,8 +127,14 @@ def client(monkeypatch):
 def test_social_run_endpoint(client):
     r = client.post(
         "/api/social/run",
-        json={"device_id": "phone1", "app": "com.whatsapp", "action": "message",
-              "contact": "Jo", "message": "hi", "dry_run": False},
+        json={
+            "device_id": "phone1",
+            "app": "com.whatsapp",
+            "action": "message",
+            "contact": "Jo",
+            "message": "hi",
+            "dry_run": False,
+        },
     )
     assert r.status_code == 200, r.text
     job = r.json()["job"]
@@ -121,13 +143,22 @@ def test_social_run_endpoint(client):
     assert client.saved["job_id"] == job["job_id"]  # Stop works cross-Lambda
     bad = client.post(
         "/api/social/run",
-        json={"device_id": "phone1", "app": "com.snapchat.android", "action": "message",
-              "contact": "Jo", "message": "hi"},
+        json={
+            "device_id": "phone1",
+            "app": "com.snapchat.android",
+            "action": "message",
+            "contact": "Jo",
+            "message": "hi",
+        },
     )
     assert bad.status_code == 400
     off = client.post(
         "/api/social/run",
-        json={"device_id": "gone", "app": "com.instagram.android", "action": "reply",
-              "message": "hey"},
+        json={
+            "device_id": "gone",
+            "app": "com.instagram.android",
+            "action": "reply",
+            "message": "hey",
+        },
     )
     assert off.status_code == 400 and "offline" in off.json()["detail"].lower()
