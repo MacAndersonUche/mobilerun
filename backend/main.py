@@ -2105,11 +2105,88 @@ def _active_mode_job(kind: str, job_id: Optional[str]) -> bool:
         return False
     if not job:
         return False
-    if kind and str(job.get("kind") or "") not in ("", kind):
-        # Allow missing kind for older rows
-        if str(job.get("kind") or "") != kind:
-            pass
+    # Portal dating runs use kind=agent + dating_run; legacy jobs use kind=dating.
+    job_kind = str(job.get("kind") or "")
+    if kind == "dating":
+        is_dating = (
+            job_kind in ("", "dating", "agent")
+            or bool(job.get("dating_run"))
+            or str(job.get("mode") or "") == "dating"
+        )
+        if not is_dating:
+            return False
+    elif kind and job_kind not in ("", kind):
+        return False
     return str(job.get("status") or "") in ("running", "paused")
+
+
+def _active_dating_job_on_device(device_id: str) -> Optional[Dict[str, Any]]:
+    """Return the newest running/paused dating job on this phone, if any.
+
+    Used so one portal Start cannot enqueue two Hily (or other) jobs in the
+    same second when two requests race across Lambda instances.
+    """
+    did = (device_id or "").strip()
+    if not did or did == "default":
+        return None
+    try:
+        try:
+            from dating_run import running_dating_jobs
+            from storage import list_recent_jobs
+        except ImportError:
+            from backend.dating_run import running_dating_jobs  # type: ignore
+            from backend.storage import list_recent_jobs  # type: ignore
+
+        for j in running_dating_jobs(list_recent_jobs(limit=50)):
+            if str(j.get("device_id") or "") != did:
+                continue
+            if str(j.get("status") or "") in ("running", "paused"):
+                return j
+        # Also catch paused (running_dating_jobs only lists status=running)
+        for j in list_recent_jobs(limit=50):
+            if not isinstance(j, dict):
+                continue
+            if str(j.get("device_id") or "") != did:
+                continue
+            if str(j.get("status") or "") != "paused":
+                continue
+            if (
+                j.get("dating_run")
+                or j.get("dating_app")
+                or str(j.get("mode") or "") == "dating"
+                or str(j.get("kind") or "") == "dating"
+            ):
+                return j
+    except Exception:
+        logger.exception("active dating job lookup failed device=%s", did)
+    return None
+
+
+def _adopt_existing_dating_job(
+    job: Dict[str, Any], auth: Optional[dict]
+) -> Dict[str, Any]:
+    """Point dating_mode_state at an already-running job (idempotent Start)."""
+    dating_mode_state["running"] = True
+    dating_mode_state["paused"] = str(job.get("status") or "") == "paused"
+    dating_mode_state["job_id"] = job.get("job_id")
+    dating_mode_state["current_app"] = (
+        job.get("dating_app")
+        or (job.get("state") or {}).get("current_app")
+        or dating_mode_state.get("current_app")
+    )
+    try:
+        _save_dating_runtime(auth)
+    except Exception:
+        pass
+    jid = str(job.get("job_id") or "")
+    return {
+        "status": "already_running",
+        "state": dating_mode_state,
+        "job": job,
+        "queue": [dating_mode_state.get("current_app")] if dating_mode_state.get("current_app") else [],
+        "skipped": [],
+        "activity": _activity_for_mode("dating", jid),
+    }
 
 
 def _load_dating_runtime(auth: Optional[dict] = None) -> None:
@@ -2140,6 +2217,8 @@ def _load_dating_runtime(auth: Optional[dict] = None) -> None:
         dating_mode_state["paused"] = bool(prefs["paused"])
     if prefs.get("job_id"):
         dating_mode_state["job_id"] = prefs["job_id"]
+    if prefs.get("current_app"):
+        dating_mode_state["current_app"] = prefs["current_app"]
     # Reconcile stale "running" after job completed/stopped (or Lambda cold start)
     jid = dating_mode_state.get("job_id")
     if dating_mode_state.get("running") and not _active_mode_job("dating", jid):
@@ -2147,6 +2226,27 @@ def _load_dating_runtime(auth: Optional[dict] = None) -> None:
         dating_mode_state["paused"] = False
         try:
             _save_dating_runtime(auth)
+        except Exception:
+            pass
+    elif (not dating_mode_state.get("running")) and _active_mode_job("dating", jid):
+        # Recover running flag when another Lambda started the job (same as social)
+        dating_mode_state["running"] = True
+        try:
+            job = None
+            try:
+                from storage import get_job
+            except ImportError:
+                from backend.storage import get_job  # type: ignore
+            try:
+                job = get_job(str(jid)) if jid else None
+            except Exception:
+                job = None
+            if job and str(job.get("status") or "").lower() == "paused":
+                dating_mode_state["paused"] = True
+            if job and (job.get("dating_app") or (job.get("state") or {}).get("current_app")):
+                dating_mode_state["current_app"] = job.get("dating_app") or (
+                    job.get("state") or {}
+                ).get("current_app")
         except Exception:
             pass
 
@@ -3296,34 +3396,47 @@ async def get_dating_stats(auth: Optional[dict] = Depends(optional_verify_token)
     Also lifts Today totals from recent live dating_run jobs so the Working
     cards never show 0 when the bot already completed sends/likes tonight
     (covers missed step-sync and Tagged's tagged_fixed counter).
-    """
-    try:
-        from dating_stats_io import (
-            load_dating_stats,
-            merge_recent_dating_jobs_into_stats,
-            save_dating_stats,
-        )
-    except ImportError:
-        from backend.dating_stats_io import (  # type: ignore
-            load_dating_stats,
-            merge_recent_dating_jobs_into_stats,
-            save_dating_stats,
-        )
 
-    uid = _dating_user_id(auth)
-    stats = load_dating_stats(uid)
+    Never 500 — a stats failure must not blank the Dating page (status/activity
+    still load). Empty summary is preferable to a red "Failed to load" banner.
+    """
+    empty = {
+        "total_sessions": 0,
+        "total_runtime_minutes": 0,
+        "today": {"swipes": 0, "messages": 0},
+        "apps": [],
+    }
     try:
         try:
-            from storage import list_recent_jobs
+            from dating_stats_io import (
+                load_dating_stats,
+                merge_recent_dating_jobs_into_stats,
+                save_dating_stats,
+            )
         except ImportError:
-            from backend.storage import list_recent_jobs  # type: ignore
+            from backend.dating_stats_io import (  # type: ignore
+                load_dating_stats,
+                merge_recent_dating_jobs_into_stats,
+                save_dating_stats,
+            )
 
-        jobs = list_recent_jobs(80)
-        if merge_recent_dating_jobs_into_stats(stats, jobs, user_id=uid):
-            save_dating_stats(stats, uid)
+        uid = _dating_user_id(auth)
+        stats = load_dating_stats(uid)
+        try:
+            try:
+                from storage import list_recent_jobs
+            except ImportError:
+                from backend.storage import list_recent_jobs  # type: ignore
+
+            jobs = list_recent_jobs(80)
+            if merge_recent_dating_jobs_into_stats(stats, jobs, user_id=uid):
+                save_dating_stats(stats, uid)
+        except Exception:
+            logger.exception("dating stats merge from recent jobs failed")
+        return stats.get_summary()
     except Exception:
-        logger.exception("dating stats merge from recent jobs failed")
-    return stats.get_summary()
+        logger.exception("dating stats endpoint failed")
+        return empty
 
 
 class ModeStartBody(BaseModel):
@@ -3678,6 +3791,10 @@ async def _start_dating_apps_run(
             detail="Phone offline — open MobileRun on the phone and wait "
             "until Devices shows Connected",
         )
+    # One Start = one job per device (dedupe double-tap / racing Lambdas)
+    existing_on_device = _active_dating_job_on_device(did)
+    if existing_on_device:
+        return _adopt_existing_dating_job(existing_on_device, auth)
     # Each app card's own number; fall back to the saved per-app numbers.
     try:
         counts = (
@@ -3758,12 +3875,6 @@ async def start_dating_mode(
     Defaults to dry_run=True so no real likes/messages are sent.
     """
     _load_dating_runtime(auth)
-    existing = dating_mode_state.get("job_id")
-    if dating_mode_state.get("running") and _active_mode_job("dating", existing):
-        raise HTTPException(status_code=400, detail="Dating mode already running")
-    # Stale in-memory flag after Lambda reuse / stopped job — allow restart
-    dating_mode_state["running"] = False
-    dating_mode_state.pop("job_id", None)
 
     contact_scope = "both"
     live_test = False
@@ -3779,6 +3890,29 @@ async def start_dating_mode(
             contact_scope = raw_scope
     if live_test:
         dry_run = False  # real likes/sends under caps
+
+    # Idempotent Start: reuse any active dating job for this phone (or the
+    # runtime job_id) instead of creating a second Hily/etc. job.
+    existing = dating_mode_state.get("job_id")
+    if dating_mode_state.get("running") and _active_mode_job("dating", existing):
+        try:
+            from storage import get_job
+        except ImportError:
+            from backend.storage import get_job  # type: ignore
+        try:
+            job = get_job(str(existing)) if existing else None
+        except Exception:
+            job = None
+        if job:
+            return _adopt_existing_dating_job(job, auth)
+        raise HTTPException(status_code=400, detail="Dating mode already running")
+    active_on_device = _active_dating_job_on_device(device_id)
+    if active_on_device:
+        return _adopt_existing_dating_job(active_on_device, auth)
+
+    # Stale in-memory flag after Lambda reuse / stopped job — allow restart
+    dating_mode_state["running"] = False
+    dating_mode_state.pop("job_id", None)
 
     if body and body.apps is not None:
         return await _start_dating_apps_run(body, auth, device_id, dry_run)

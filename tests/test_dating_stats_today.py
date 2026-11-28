@@ -52,6 +52,50 @@ def test_daily_reset_uses_london_date_not_stale_string():
         assert stats.last_session_date == london_today()
 
 
+def test_save_swallows_readonly_filesystem_errors(tmp_path):
+    """Lambda home is often read-only — save must not 500 the stats API."""
+    stats = DatingStats(
+        app_stats={},
+        stats_file=Path("/proc/mobilerun-no-write/dating_stats.json"),
+    )
+    stats.last_session_date = "2020-01-01"
+    # Would raise OSError without the guard; must complete and still reset.
+    stats.check_and_reset_daily()
+    assert stats.last_session_date == london_today()
+    summary = stats.get_summary()
+    assert summary["today"]["messages"] == 0
+
+
+def test_default_file_honors_mobilerun_data(monkeypatch, tmp_path):
+    from backend import dating_stats_io as dio
+
+    monkeypatch.setenv("MOBILERUN_DATA", str(tmp_path / "data"))
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
+    monkeypatch.delenv("LAMBDA_TASK_ROOT", raising=False)
+    assert dio._default_file() == tmp_path / "data" / "dating_stats.json"
+
+
+def test_load_dating_stats_survives_reset_save_failure(monkeypatch, tmp_path):
+    """load must return stats even when day-reset local save hits Errno 30."""
+    from backend import dating_stats_io as dio
+
+    store: dict = {}
+    monkeypatch.setattr(
+        dio,
+        "_storage",
+        lambda: (
+            lambda uid, name: store.get(f"{uid}:{name}"),
+            lambda uid, name, data: store.__setitem__(f"{uid}:{name}", data) or True,
+        ),
+    )
+    monkeypatch.setattr(
+        dio, "_default_file", lambda: Path("/proc/mobilerun-no-write/dating_stats.json")
+    )
+    stats = dio.load_dating_stats("mac")
+    assert stats.get_summary()["today"]["messages"] == 0
+    assert stats.last_session_date == london_today()
+
+
 def test_sync_dating_stats_from_job_records_message_delta(monkeypatch, tmp_path):
     from backend import dating_stats_io as dio
 

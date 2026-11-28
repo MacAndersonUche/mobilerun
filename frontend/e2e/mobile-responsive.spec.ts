@@ -55,7 +55,7 @@ test.describe('mobile responsive portal', () => {
   test('authenticated shell: nav + pages fit phone width', async ({ page }) => {
     await auth(page);
     await page.goto('/dating');
-    await expect(page.getByRole('heading', { name: /Dating/i })).toBeVisible({
+    await expect(page.getByRole('heading', { name: 'Dating', exact: true })).toBeVisible({
       timeout: 15000,
     });
     await assertNoHorizontalScroll(page);

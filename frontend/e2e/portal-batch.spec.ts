@@ -167,4 +167,23 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('settings-workspace')).toBeVisible();
     await expect(page.getByTestId('settings-ai-tools')).toBeVisible();
   });
+
+  test('hamburger omits Settings and Devices (bottom nav has them)', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name === 'desktop', 'hamburger is mobile-only');
+    await authAndMock(page);
+    await page.goto('/dating');
+    await expect(page.getByTestId('mobile-menu-button')).toBeVisible({
+      timeout: 15000,
+    });
+    await page.getByTestId('mobile-menu-button').click();
+    const menu = page.getByRole('dialog', { name: /^Menu$/i });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('link', { name: /^Dating$/i })).toBeVisible();
+    await expect(menu.getByRole('link', { name: /^Settings$/i })).toHaveCount(0);
+    await expect(menu.getByRole('link', { name: /^Devices$/i })).toHaveCount(0);
+    await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Settings$/i })).toBeVisible();
+    await expect(page.getByTestId('mobile-bottom-nav').getByRole('link', { name: /^Devices$/i })).toBeVisible();
+  });
 });

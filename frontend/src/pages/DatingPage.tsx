@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Heart, Play, Pause, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
@@ -221,6 +221,8 @@ export default function DatingPage() {
     by_app?: Record<string, { chats_active: number; invites_sent: number; dates_booked: number }>;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  // Sync lock so a double-tap cannot fire two Starts before React re-renders.
+  const startLockRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
@@ -302,22 +304,34 @@ export default function DatingPage() {
       }
     };
     try {
-      // Core dating endpoints must succeed; queue/selectors are soft so a
-      // missing Lambda module never blanks the whole page as "not connected".
-      const [statusRes, statsRes, configRes, openersRes] = await Promise.all([
-        axios.get(`${getBackendUrl()}/api/dating/status`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/stats`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/config`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/openers`, {
-          headers: authHeaders(),
-        }),
-      ]);
+      // Status is required for Running/Stopped. Stats/config/openers are soft
+      // so a 500 on /api/dating/stats (e.g. Lambda FS) never blanks the page
+      // while a dating job is actively running.
+      const statusRes = await axios.get(`${getBackendUrl()}/api/dating/status`, {
+        headers: authHeaders(),
+      });
+      const statsRes = await soft<{ apps?: AppStats[]; today?: { swipes?: number; messages?: number } }>(
+        '/api/dating/stats',
+        { apps: [], today: { swipes: 0, messages: 0 } }
+      );
+      const configRes = await soft<{
+        apps?: AppConfig[];
+        persona_prompt?: string;
+        date_flow?: Record<string, unknown>;
+        reply_persona_prompt?: string;
+        date_flow_stats?: typeof dateFlowStats;
+        speed_preset?: string;
+        opener_mode?: string;
+      }>('/api/dating/config', { apps: [] });
+      const openersRes = await soft<{
+        library?: { templates?: OpenerTemplate[] };
+        bucket_now?: string;
+        bucket_counts?: Record<string, number>;
+      }>('/api/dating/openers', {
+        library: { templates: [] },
+        bucket_now: 'morning',
+        bucket_counts: {},
+      });
       type SelectorApp = (typeof selectorApps)[number];
       const selData = await soft<{ apps?: SelectorApp[] }>(
         '/api/selectors/status',
@@ -332,15 +346,15 @@ export default function DatingPage() {
       setRunModes(rc.modes || {});
       setLikeCaps(rc.like_caps || {});
       setStatus(statusRes.data);
-      const appRows = statsRes.data.apps || [];
+      const appRows = statsRes.apps || [];
       setApps(appRows);
       setConfigApps(
-        ensureRunnableConfigApps(configRes.data.apps || [], seedConfigApp)
+        ensureRunnableConfigApps(configRes.apps || [], seedConfigApp)
       );
-      setPersona(configRes.data.persona_prompt || '');
-      const df = configRes.data.date_flow || {};
+      setPersona(configRes.persona_prompt || '');
+      const df = (configRes.date_flow || {}) as Record<string, any>;
       setReplyPersona(
-        df.reply_persona_prompt || configRes.data.reply_persona_prompt || ''
+        df.reply_persona_prompt || configRes.reply_persona_prompt || ''
       );
       setInviteDaysMin(df.invite_days_min ?? 3);
       setInviteDaysMax(df.invite_days_max ?? 7);
@@ -361,19 +375,22 @@ export default function DatingPage() {
       if (df.contact_ask_snapchat_text) {
         setContactAskSnapchatText(df.contact_ask_snapchat_text);
       }
-      setDateFlowStats(configRes.data.date_flow_stats || null);
-      if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
-        setSpeed(configRes.data.speed_preset);
+      setDateFlowStats(configRes.date_flow_stats || null);
+      if (
+        configRes.speed_preset &&
+        ['fast', 'balanced', 'careful'].includes(configRes.speed_preset)
+      ) {
+        setSpeed(configRes.speed_preset as Speed);
       }
       if (
-        configRes.data.opener_mode === 'templates' ||
-        configRes.data.opener_mode === 'ai'
+        configRes.opener_mode === 'templates' ||
+        configRes.opener_mode === 'ai'
       ) {
-        setOpenerMode(configRes.data.opener_mode);
+        setOpenerMode(configRes.opener_mode);
       }
-      setTemplates(openersRes.data.library?.templates || []);
-      setBucketNow(openersRes.data.bucket_now || 'morning');
-      setBucketCounts(openersRes.data.bucket_counts || {});
+      setTemplates(openersRes.library?.templates || []);
+      setBucketNow(openersRes.bucket_now || 'morning');
+      setBucketCounts(openersRes.bucket_counts || {});
       setSelectorApps(selData.apps || []);
       setActivity(statusRes.data.activity || null);
       setError(null);
@@ -417,10 +434,15 @@ export default function DatingPage() {
     action: 'start' | 'stop' | 'pause',
     onlyApp?: string
   ) => {
+    if (action === 'start') {
+      if (startLockRef.current || loading) return;
+      startLockRef.current = true;
+    }
     setLoading(true);
     try {
-      if (action === 'start') {
-        // Clear stale "running" from a stopped job so Start is never stuck
+      // Restart only: stop the active job first. Do not stop on a fresh Start
+      // — that raced with double-taps and created two Hily jobs in one second.
+      if (action === 'start' && status?.running) {
         try {
           await axios.post(
             `${getBackendUrl()}/api/dating/stop`,
@@ -490,6 +512,7 @@ export default function DatingPage() {
         : `Failed to ${action} dating mode`;
       alert(detail);
     } finally {
+      if (action === 'start') startLockRef.current = false;
       setLoading(false);
     }
   };

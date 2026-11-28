@@ -47,12 +47,11 @@ function MobileMenu({
   }, [location.pathname]);
 
   if (!open) return null;
+  // Devices + Settings live in the bottom nav — keep hamburger for the rest.
   const links = [
     { to: '/dating', icon: Heart, label: 'Dating' },
     { to: '/social', icon: MessageCircle, label: 'Social' },
     { to: '/tasks', icon: History, label: 'Tasks' },
-    { to: '/devices', icon: Smartphone, label: 'Devices' },
-    { to: '/settings', icon: Settings, label: 'Settings' },
     { to: '/account', icon: User, label: 'Account' },
     { to: '/chat', icon: MessageCircle, label: 'Chat' },
   ];
