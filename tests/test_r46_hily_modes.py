@@ -15,6 +15,7 @@ from backend import dating_run
 from backend.dating_schedule import build_like_caps, build_modes, build_queue, normalize
 from backend.hily_fixed_run import (
     FINDER_TAB_XY,
+    likes_to_do,
     parse_hily_instruction,
     plan_hily_fixed_run,
 )
@@ -59,6 +60,14 @@ def test_parse_instruction():
     # messages capped at 5; likes never below messages
     assert parse_hily_instruction("fixed hily message 9 likes 2") == (5, 5)
     assert parse_hily_instruction("send 5 first contact messages on hily") is None
+
+
+def test_likes_to_do_formula():
+    # Mac: Messages=5, Max likes=15 → 5 msgs + 10 Finder hearts
+    assert likes_to_do(5, 15) == 10
+    assert likes_to_do(5, 5) == 0
+    assert likes_to_do(0, 15) == 15
+    assert likes_to_do(3, 2) == 0  # max_likes floored to msgs at parse time
 
 
 def test_modes_and_like_caps_per_mode():
@@ -203,7 +212,7 @@ def test_likes_only_finder_hearts_then_done_never_crush():
     assert _xy(acts[0]) == (142, 2190)
     likes = [a for a in acts if a["fastpath_step"] == "hily_run_fixed_like_swipe"]
     assert len(likes) == 3 and all(_xy(a) == (750, 1959) for a in likes)
-    assert acts[4]["action"] == "done" and "3/3 likes" in acts[4]["reason"]
+    assert acts[4]["action"] == "done" and "3/3 Finder likes" in acts[4]["reason"]
     for a in acts:
         assert _xy(a) not in (CRUSH_XY, DISCOVER_XY)
         assert a["action"] != "type"
@@ -211,8 +220,8 @@ def test_likes_only_finder_hearts_then_done_never_crush():
 
 
 def test_message_and_likes_full_cycle():
-    # r53 (Mac, 27 Nov 2026: "I wanna send messages, not like"): a message run
-    # sends its N messages from Likes sent and finishes — no Finder likes.
+    # Messages from Likes sent first, then likes_to_do Finder hearts
+    # (2 msgs, max 4 → 2 hearts). Message "done" must not end the job early.
     trees = [
         FINDER,  # → Activity
         LIKES_SENT,
@@ -222,7 +231,10 @@ def test_message_and_likes_full_cycle():
         LIKES_SENT,
         MBM,
         MBM_TYPED,  # confirm 1, envelope, type, send 2
-        LIKES_SENT,  # confirm 2 → done
+        LIKES_SENT,  # confirm 2 → message done → likes phase
+        FINDER,
+        FINDER,  # heart 1 (await), heart 2
+        FINDER,  # confirm heart 2 → done
     ]
     acts, st = _run("fixed hily message 2 likes 4", trees)
     steps = [a["fastpath_step"] for a in acts]
@@ -232,16 +244,80 @@ def test_message_and_likes_full_cycle():
     assert len(typed) == 2 and all(a["text"] == "hey how are you" for a in typed)
     assert steps.count("hily_fixed_fc_send") == 2
     assert st["hily_run"]["sent"] == 2
-    assert not any(
-        s.startswith("hily_run_fixed_like") for s in steps
-    )  # never a bare like
-    assert acts[-1]["action"] == "done" and "sent 2/2" in acts[-1]["reason"]
+    hearts = [a for a in acts if a["fastpath_step"] == "hily_run_fixed_like_swipe"]
+    assert len(hearts) == 2 and all(_xy(a) == (750, 1959) for a in hearts)
+    assert st["hily_run"]["likes"] == 2
+    assert acts[-1]["action"] == "done"
+    assert "sent 2/2" in acts[-1]["reason"] and "2/2 Finder likes" in acts[-1]["reason"]
     for a in acts:
         assert _xy(a) not in (CRUSH_XY, DISCOVER_XY)
         assert a["planner"] == "hily_fixed_run" and a.get("_no_llm_handoff")
 
 
-def test_no_envelopes_left_finishes_without_likes():
+def test_message_likes_counters_5_15_5_5_0_15():
+    """Mac: 5/15 → 5 msgs + 10 likes; 5/5 → 0 likes; 0/15 → 15 likes."""
+    assert likes_to_do(5, 15) == 10
+    assert likes_to_do(5, 5) == 0
+    assert likes_to_do(0, 15) == 15
+
+    # 5/5: after messages, no Finder likes — done without hearts
+    st55 = {
+        "hily_run": {
+            "likes": 0,
+            "sent": 5,
+            "phase": "message",
+            "fc": {"bulk_message_new": {"done": 5, "typed": False}},
+        }
+    }
+    a55 = plan_hily_fixed_run(
+        "fixed hily message 5 likes 5", LIKES_SENT_EMPTY, [], state=st55
+    )
+    assert a55["action"] == "done"
+    assert st55["hily_run"]["phase"] == "finished"
+    assert "0/0 Finder likes" in a55["reason"] or "0/0" in a55["reason"]
+    assert not a55["fastpath_step"].startswith("hily_run_fixed_like")
+
+    # 5/15: message done with hearts remaining → enter likes (not job done)
+    st515 = {
+        "hily_run": {
+            "likes": 0,
+            "sent": 5,
+            "phase": "message",
+            "fc": {"bulk_message_new": {"done": 5, "typed": False}},
+        }
+    }
+    a515 = plan_hily_fixed_run("fixed hily message 5 likes 15", FINDER, [], state=st515)
+    assert st515["hily_run"]["phase"] == "likes"
+    assert a515["action"] != "done"
+    assert a515["fastpath_step"] == "hily_run_fixed_like_swipe"
+    # Drive 10 Finder hearts to completion
+    acts, st = _run(
+        "fixed hily message 5 likes 15",
+        [FINDER] * 12,
+        st={
+            "hily_run": {
+                "likes": 0,
+                "sent": 5,
+                "phase": "likes",
+                "msg_end": "sent 5/5",
+            }
+        },
+    )
+    hearts = [a for a in acts if a.get("fastpath_step") == "hily_run_fixed_like_swipe"]
+    assert len(hearts) == 10
+    assert st["hily_run"]["likes"] == 10
+    assert acts[-1]["action"] == "done" and "10/10 Finder likes" in acts[-1]["reason"]
+
+    # 0/15: likes-only instruction
+    acts0, st0 = _run("fixed hily likes 15", [FINDER] * 17)
+    hearts0 = [
+        a for a in acts0 if a.get("fastpath_step") == "hily_run_fixed_like_swipe"
+    ]
+    assert len(hearts0) == 15 and st0["hily_run"]["likes"] == 15
+    assert acts0[-1]["action"] == "done"
+
+
+def test_no_envelopes_left_still_runs_remaining_likes():
     st = {
         "hily_run": {
             "likes": 0,
@@ -252,12 +328,22 @@ def test_no_envelopes_left_finishes_without_likes():
             },
         }
     }
+    # Empty Likes sent ends the message phase; remaining hearts still run.
     a = plan_hily_fixed_run(
         "fixed hily message 2 likes 5", LIKES_SENT_EMPTY, [], state=st
     )
-    assert st["hily_run"]["phase"] == "finished"
-    assert a["action"] == "done"
     assert "no more Likes-sent envelopes" in st["hily_run"]["msg_end"]
+    # likes_to_do(2, 5) = 3 — do not finish the job on message done
+    assert st["hily_run"]["phase"] == "likes"
+    assert a["action"] != "done"
+    # Off Finder (still on Activity) → recover toward Finder, not job done
+    assert a["fastpath_step"] in (
+        "hily_run_finder_tab",
+        "hily_run_finder_tab_xy",
+        "hily_run_fixed_like_swipe",
+    )
+    a2 = plan_hily_fixed_run("fixed hily message 2 likes 5", FINDER, [], state=st)
+    assert a2["fastpath_step"] == "hily_run_fixed_like_swipe"
 
 
 def test_paywall_closed_with_back():

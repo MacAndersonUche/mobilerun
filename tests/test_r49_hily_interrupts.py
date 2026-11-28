@@ -56,7 +56,8 @@ def test_match_popup_types_sends_closes_and_counts():
     assert st["hily_run"]["match_msgs"] == 1
     assert acts[-1]["action"] == "done"
     assert (
-        "3/3 likes" in acts[-1]["reason"] and "1 match messages" in acts[-1]["reason"]
+        "3/3 Finder likes" in acts[-1]["reason"]
+        and "1 match messages" in acts[-1]["reason"]
     )
     assert all(_xy(a) != CRUSH_XY for a in acts)
 

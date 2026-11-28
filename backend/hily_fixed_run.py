@@ -1,13 +1,15 @@
 """r46: Hily fixed run — "Likes only" or "Message + likes". No LLM, never paid.
 
-Mac (24 Nov): auto-like from the **Finder** tab (not Discover). Message +
-likes: like N cards, then Activity → Likes sent → open each one → envelope →
-message tab → send a message-bank line; repeat until N sent; then keep liking
-in Finder up to the mode's max likes (the N likes count toward it).
+Mac (24 Nov / 28 Nov): auto-like from the **Finder** tab (not Discover).
+Message + likes:
+  1. Activity → Likes sent → envelope → message tab → send a message-bank
+     line; repeat until M messages sent (existing first-contact route).
+  2. Then free hearts in Finder for ``likes_to_do = max(0, L - M)`` cards.
+Likes-only: Finder hearts only, up to L.
 
 Instructions (dating_run):
-  ``fixed hily likes L``              — Likes only
-  ``fixed hily message M likes L``    — Message + likes (L includes the M likes)
+  ``fixed hily likes L``              — Likes only (L Finder hearts)
+  ``fixed hily message M likes L``    — Message + likes (M msgs, L-M hearts)
 
 Coordinates (S21+ 1080x2400):
   Finder tab   ``bottomNavTab_1`` (142, 2190) — id from the Finder map; the
@@ -18,7 +20,8 @@ Coordinates (S21+ 1080x2400):
   MBM send ``sendMessageButton`` (980, 1329) — verified 23 Nov (Shann, Charlotte).
 The message part reuses ``plan_hily_fixed_first_contact`` (send confirm,
 allowance 0 → stop, paywall → Back, never Crush) with its Discover fallback
-switched off: when Likes sent has no envelopes left the message phase ends.
+switched off: when Likes sent has no envelopes left the message phase ends
+and any remaining Finder likes still run.
 
 Deck recovery (25 Nov 2026): the Finder tab tap is at the right coords
 (verified against Mac's 24 Nov video: the tab sits at (142, 2190)), but
@@ -114,6 +117,16 @@ def parse_hily_instruction(instruction: str) -> Optional[Tuple[int, int]]:
     return msgs, likes
 
 
+def likes_to_do(msgs: int, max_likes: int) -> int:
+    """Finder free hearts after (or instead of) the message phase.
+
+    Message + likes: max_likes is total people; messages come from Likes
+    sent, so remaining hearts are ``max(0, max_likes - messages)``.
+    Likes only (msgs=0): all max_likes are Finder hearts.
+    """
+    return max(0, int(max_likes) - int(msgs))
+
+
 def finder_without_card_nodes(tree: str) -> bool:
     """r47: the Finder screen whose card + buttons are not in the a11y tree.
 
@@ -196,33 +209,52 @@ def plan_hily_fixed_run(
     if not parsed:
         return None
     msgs, max_likes = parsed
+    extra_likes = likes_to_do(msgs, max_likes)
     st = state if isinstance(state, dict) else {}
-    # r53 (Mac, 27 Nov 2026: "I wanna send messages, not like"): a message
-    # run sends its N messages from Activity → Likes sent → envelope and
-    # finishes — never a bare Finder like before or after. Likes only
-    # mode is unchanged.
+    # Message + likes: messages from Likes sent first, then Finder hearts
+    # for likes_to_do = max(0, max_likes - messages). Do not treat the
+    # message-phase "done" as the whole job finishing when hearts remain.
     hr = st.setdefault(
         "hily_run",
-        {"likes": 0, "sent": 0, "phase": "message" if msgs else "likes1"},
+        {
+            "likes": 0,
+            "sent": 0,
+            "phase": "message" if msgs else "likes",
+        },
     )
     st["hily_run"] = hr
+    # Legacy phase names from older runs / tests.
+    if hr.get("phase") in ("likes1", "likes2"):
+        hr["phase"] = "likes"
     likes = int(hr.get("likes") or 0)
-    phase = str(hr.get("phase") or "likes1")
+    phase = str(hr.get("phase") or ("message" if msgs else "likes"))
     mode = "Message + likes" if msgs else "Likes only"
 
     if dry_run:
+        dry_bits = []
+        if msgs:
+            dry_bits.append(f"send {msgs} messages from Likes sent")
+        if extra_likes:
+            dry_bits.append(f"like {extra_likes} in Finder")
         return _act(
             "done",
             "hily_run_dry",
-            f"[DRY RUN] Hily {mode}: would like {msgs or max_likes} in Finder"
-            + (
-                f", send {msgs} messages from Likes sent, then like up to {max_likes}"
-                if msgs
-                else ""
-            )
-            + " — nothing tapped",
+            f"[DRY RUN] Hily {mode}: "
+            + (", ".join(dry_bits) if dry_bits else f"like {max_likes} in Finder")
+            + " - nothing tapped",
             True,
             dry_run_verified=True,
+        )
+
+    def _finish_reason() -> str:
+        bits = [f"Hily {mode} finished"]
+        if msgs:
+            bits.append(hr.get("msg_end") or f"sent {int(hr.get('sent') or 0)}/{msgs}")
+        bits.append(f"{likes}/{extra_likes} Finder likes")
+        if hr.get("match_msgs"):
+            bits.append(f"{hr.get('match_msgs')} match messages")
+        return ": ".join(bits[:1]) + (
+            (" - " + ", ".join(bits[1:])) if len(bits) > 1 else ""
         )
 
     # Message phase: delegate to the verified Likes-sent → envelope planner
@@ -257,50 +289,33 @@ def plan_hily_fixed_run(
             or out_of_targets
             or (stopped and a.get("action") != "press_button")
         ):
-            hr["phase"] = "finished"
             hr["msg_end"] = f"sent {sent}/{msgs}" + (
                 " (no more Likes-sent envelopes)" if out_of_targets else ""
             )
-            return _act(
-                "done",
-                "hily_run_done",
-                f"Hily message run finished: {hr['msg_end']} — no bare likes",
-                False,
-            )
-        else:
-            return _mark(a)
-    if phase == "finished":
-        return _act(
-            "done",
-            "hily_run_done",
-            f"Hily message run finished: {hr.get('msg_end') or ''}",
-            False,
-        )
+            # Message "done" must not end the job when Finder likes remain.
+            if extra_likes > 0 and likes < extra_likes:
+                hr["phase"] = "likes"
+                hr["recover"] = 0
+                return plan_hily_fixed_run(
+                    instruction,
+                    ui_tree,
+                    history,
+                    state=st,
+                    dry_run=dry_run,
+                    message=message,
+                )
+            hr["phase"] = "finished"
+            return _act("done", "hily_run_done", _finish_reason(), False)
+        return _mark(a)
 
-    target_likes = msgs if (phase == "likes1" and msgs) else max_likes
-    if likes >= target_likes and phase == "likes1" and msgs:
-        hr["phase"] = "message"
-        hr["recover"] = 0
-        return plan_hily_fixed_run(
-            instruction, ui_tree, history, state=st, dry_run=dry_run, message=message
-        )
-    if likes >= max_likes and phase != "likes1" or (not msgs and likes >= max_likes):
-        return _act(
-            "done",
-            "hily_run_done",
-            f"Hily {mode} finished: {likes}/{max_likes} likes"
-            + (
-                f", {hr.get('match_msgs')} match messages"
-                if hr.get("match_msgs")
-                else ""
-            )
-            + (
-                f", {hr.get('msg_end') or ('sent %d/%d' % (hr.get('sent', 0), msgs))}"
-                if msgs
-                else ""
-            ),
-            False,
-        )
+    if phase == "finished":
+        return _act("done", "hily_run_done", _finish_reason(), False)
+
+    # Finder like phase: target is likes_to_do (0 when max_likes == messages).
+    target_likes = extra_likes
+    if target_likes <= 0 or likes >= target_likes:
+        hr["phase"] = "finished"
+        return _act("done", "hily_run_done", _finish_reason(), False)
 
     # ---- Finder like phases ----
     # r49: a match popup (or the chat it opened) → free bank message first
@@ -338,17 +353,7 @@ def plan_hily_fixed_run(
             hr["awaiting_like"] = False
             likes += 1
             hr["likes"] = likes
-            if phase == "likes1" and msgs and likes >= msgs:
-                hr["phase"] = "message"
-                return plan_hily_fixed_run(
-                    instruction,
-                    ui_tree,
-                    history,
-                    state=st,
-                    dry_run=dry_run,
-                    message=message,
-                )
-            if likes >= max_likes:
+            if likes >= target_likes:
                 return plan_hily_fixed_run(
                     instruction,
                     ui_tree,
