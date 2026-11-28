@@ -248,5 +248,3 @@ def test_rediscovery_cap_escalates(cache: SelectorCache):
     assert last is not None
     assert last.needs_you is True
     assert needs
-
-

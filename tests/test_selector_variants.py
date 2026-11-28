@@ -285,5 +285,3 @@ def test_status_includes_variant_hit_counts(cache: SelectorCache):
     assert role["variant_count"] >= 3
     assert all("hits" in v for v in role["variants"])
     assert sum(v["hits"] for v in role["variants"]) >= 4
-
-

@@ -249,5 +249,3 @@ def test_replay_nav_path_helper():
         perform_tap_tab=lambda t: seen.append(("tab", t)),
     )
     assert seen == [("tab", "Matches"), ("scroll", "down")]
-
-
