@@ -393,29 +393,6 @@ def _call_gemini(user_prompt: str) -> str:
         if not text.strip():
             last_err = RuntimeError(f"Empty LLM response from {model}: {data}")
             continue
-        try:
-            from token_usage_io import record_llm_tokens
-        except ImportError:
-            from backend.token_usage_io import record_llm_tokens  # type: ignore
-        meta = data.get("usageMetadata") or data.get("usage_metadata") or {}
-        record_llm_tokens(
-            provider="gemini",
-            model=model,
-            prompt_tokens=int(
-                meta.get("promptTokenCount") or meta.get("prompt_token_count") or 0
-            ),
-            completion_tokens=int(
-                meta.get("candidatesTokenCount")
-                or meta.get("candidates_token_count")
-                or 0
-            )
-            + int(
-                meta.get("thoughtsTokenCount") or meta.get("thoughts_token_count") or 0
-            ),
-            total_tokens=int(
-                meta.get("totalTokenCount") or meta.get("total_token_count") or 0
-            ),
-        )
         return text
     raise RuntimeError(f"All Gemini models failed: {last_err}")
 
@@ -472,18 +449,6 @@ def _call_openai(user_prompt: str, image_b64: Optional[str] = None) -> str:
     )
     with urllib.request.urlopen(req, timeout=50) as resp:
         data = json.load(resp)
-    try:
-        from token_usage_io import record_llm_tokens
-    except ImportError:
-        from backend.token_usage_io import record_llm_tokens  # type: ignore
-    usage = data.get("usage") or {}
-    record_llm_tokens(
-        provider="openai",
-        model=model,
-        prompt_tokens=int(usage.get("prompt_tokens") or 0),
-        completion_tokens=int(usage.get("completion_tokens") or 0),
-        total_tokens=int(usage.get("total_tokens") or 0),
-    )
     return data["choices"][0]["message"]["content"]
 
 
@@ -4901,35 +4866,6 @@ def run_one_agent_step(job: Dict[str, Any]) -> Dict[str, Any]:
         from device_push import push_to_device, device_is_reachable
     except ImportError:
         from backend.device_push import push_to_device, device_is_reachable  # type: ignore
-    try:
-        from token_usage_io import set_usage_user, clear_usage_user
-    except ImportError:
-        from backend.token_usage_io import (  # type: ignore
-            set_usage_user,
-            clear_usage_user,
-        )
-
-    set_usage_user(str(job.get("user_id") or job.get("owner") or "local"))
-    try:
-        return _run_one_agent_step_inner(
-            job,
-            call_device=call_device,
-            push_to_device=push_to_device,
-            device_is_reachable=device_is_reachable,
-        )
-    finally:
-        clear_usage_user()
-
-
-def _run_one_agent_step_inner(
-    job: Dict[str, Any],
-    *,
-    call_device,
-    push_to_device,
-    device_is_reachable,
-) -> Dict[str, Any]:
-    """Inner body of run_one_agent_step (token usage user already bound)."""
-    import time
 
     state = job.setdefault("state", {})
     device_id = str(job.get("device_id") or "")

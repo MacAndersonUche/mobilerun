@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Heart, Play, Pause, Square, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { getBackendUrl, getAuthToken } from '../config';
@@ -33,6 +33,7 @@ import {
   isBlockedApp,
   TAIMI_BLOCKED_NOTE,
   clearCollapsibleExpandedPrefs,
+  formatTodayCounters,
 } from '../lib/datingRun';
 import { isSocialPackage } from '../lib/socialRun';
 import DatingSchedules from '../components/DatingSchedules';
@@ -179,34 +180,6 @@ interface OpenerTemplate {
   enabled: boolean;
 }
 
-function ProgressBar({
-  value,
-  max,
-  label,
-}: {
-  value: number;
-  max: number;
-  label: string;
-}) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-mute">
-        <span>{label}</span>
-        <span>
-          {value}/{max || '—'} ({pct}%)
-        </span>
-      </div>
-      <div className="h-2 bg-surface-elev rounded overflow-hidden">
-        <div
-          className="h-full bg-rose-500 transition-all"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function omitKey<T>(o: Record<string, T>, k: string): Record<string, T> {
   const out = { ...o };
   delete out[k];
@@ -247,9 +220,9 @@ export default function DatingPage() {
     dates_booked: number;
     by_app?: Record<string, { chats_active: number; invites_sent: number; dates_booked: number }>;
   } | null>(null);
-  const [globalMin, setGlobalMin] = useState(100);
-  const [globalMax, setGlobalMax] = useState(500);
   const [loading, setLoading] = useState(false);
+  // Sync lock so a double-tap cannot fire two Starts before React re-renders.
+  const startLockRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState<Speed>('balanced');
   const [activity, setActivity] = useState<ActivityPayload | null>(null);
@@ -272,10 +245,8 @@ export default function DatingPage() {
   // left phones expanded after a prior open). Session toggle only.
   const [appsToComeExpanded, setAppsToComeExpanded] = useState(false);
   const [appsForStartExpanded, setAppsForStartExpanded] = useState(false);
-  // Working app rows start collapsed; expand one at a time (or several).
-  const [expandedWorking, setExpandedWorking] = useState<Record<string, boolean>>(
-    {}
-  );
+  // Single Working section — collapsed on every page load.
+  const [workingExpanded, setWorkingExpanded] = useState(false);
   useEffect(() => {
     clearCollapsibleExpandedPrefs();
   }, []);
@@ -333,22 +304,34 @@ export default function DatingPage() {
       }
     };
     try {
-      // Core dating endpoints must succeed; queue/selectors are soft so a
-      // missing Lambda module never blanks the whole page as "not connected".
-      const [statusRes, statsRes, configRes, openersRes] = await Promise.all([
-        axios.get(`${getBackendUrl()}/api/dating/status`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/stats`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/config`, {
-          headers: authHeaders(),
-        }),
-        axios.get(`${getBackendUrl()}/api/dating/openers`, {
-          headers: authHeaders(),
-        }),
-      ]);
+      // Status is required for Running/Stopped. Stats/config/openers are soft
+      // so a 500 on /api/dating/stats (e.g. Lambda FS) never blanks the page
+      // while a dating job is actively running.
+      const statusRes = await axios.get(`${getBackendUrl()}/api/dating/status`, {
+        headers: authHeaders(),
+      });
+      const statsRes = await soft<{ apps?: AppStats[]; today?: { swipes?: number; messages?: number } }>(
+        '/api/dating/stats',
+        { apps: [], today: { swipes: 0, messages: 0 } }
+      );
+      const configRes = await soft<{
+        apps?: AppConfig[];
+        persona_prompt?: string;
+        date_flow?: Record<string, unknown>;
+        reply_persona_prompt?: string;
+        date_flow_stats?: typeof dateFlowStats;
+        speed_preset?: string;
+        opener_mode?: string;
+      }>('/api/dating/config', { apps: [] });
+      const openersRes = await soft<{
+        library?: { templates?: OpenerTemplate[] };
+        bucket_now?: string;
+        bucket_counts?: Record<string, number>;
+      }>('/api/dating/openers', {
+        library: { templates: [] },
+        bucket_now: 'morning',
+        bucket_counts: {},
+      });
       type SelectorApp = (typeof selectorApps)[number];
       const selData = await soft<{ apps?: SelectorApp[] }>(
         '/api/selectors/status',
@@ -363,15 +346,15 @@ export default function DatingPage() {
       setRunModes(rc.modes || {});
       setLikeCaps(rc.like_caps || {});
       setStatus(statusRes.data);
-      const appRows = statsRes.data.apps || [];
+      const appRows = statsRes.apps || [];
       setApps(appRows);
       setConfigApps(
-        ensureRunnableConfigApps(configRes.data.apps || [], seedConfigApp)
+        ensureRunnableConfigApps(configRes.apps || [], seedConfigApp)
       );
-      setPersona(configRes.data.persona_prompt || '');
-      const df = configRes.data.date_flow || {};
+      setPersona(configRes.persona_prompt || '');
+      const df = (configRes.date_flow || {}) as Record<string, any>;
       setReplyPersona(
-        df.reply_persona_prompt || configRes.data.reply_persona_prompt || ''
+        df.reply_persona_prompt || configRes.reply_persona_prompt || ''
       );
       setInviteDaysMin(df.invite_days_min ?? 3);
       setInviteDaysMax(df.invite_days_max ?? 7);
@@ -392,21 +375,22 @@ export default function DatingPage() {
       if (df.contact_ask_snapchat_text) {
         setContactAskSnapchatText(df.contact_ask_snapchat_text);
       }
-      setDateFlowStats(configRes.data.date_flow_stats || null);
-      setGlobalMin(configRes.data.min_total_messages_per_day ?? 100);
-      setGlobalMax(configRes.data.max_total_messages_per_day ?? 500);
-      if (['fast', 'balanced', 'careful'].includes(configRes.data.speed_preset)) {
-        setSpeed(configRes.data.speed_preset);
+      setDateFlowStats(configRes.date_flow_stats || null);
+      if (
+        configRes.speed_preset &&
+        ['fast', 'balanced', 'careful'].includes(configRes.speed_preset)
+      ) {
+        setSpeed(configRes.speed_preset as Speed);
       }
       if (
-        configRes.data.opener_mode === 'templates' ||
-        configRes.data.opener_mode === 'ai'
+        configRes.opener_mode === 'templates' ||
+        configRes.opener_mode === 'ai'
       ) {
-        setOpenerMode(configRes.data.opener_mode);
+        setOpenerMode(configRes.opener_mode);
       }
-      setTemplates(openersRes.data.library?.templates || []);
-      setBucketNow(openersRes.data.bucket_now || 'morning');
-      setBucketCounts(openersRes.data.bucket_counts || {});
+      setTemplates(openersRes.library?.templates || []);
+      setBucketNow(openersRes.bucket_now || 'morning');
+      setBucketCounts(openersRes.bucket_counts || {});
       setSelectorApps(selData.apps || []);
       setActivity(statusRes.data.activity || null);
       setError(null);
@@ -450,10 +434,15 @@ export default function DatingPage() {
     action: 'start' | 'stop' | 'pause',
     onlyApp?: string
   ) => {
+    if (action === 'start') {
+      if (startLockRef.current || loading) return;
+      startLockRef.current = true;
+    }
     setLoading(true);
     try {
-      if (action === 'start') {
-        // Clear stale "running" from a stopped job so Start is never stuck
+      // Restart only: stop the active job first. Do not stop on a fresh Start
+      // — that raced with double-taps and created two Hily jobs in one second.
+      if (action === 'start' && status?.running) {
         try {
           await axios.post(
             `${getBackendUrl()}/api/dating/stop`,
@@ -523,6 +512,7 @@ export default function DatingPage() {
         : `Failed to ${action} dating mode`;
       alert(detail);
     } finally {
+      if (action === 'start') startLockRef.current = false;
       setLoading(false);
     }
   };
@@ -603,8 +593,9 @@ export default function DatingPage() {
           persona_prompt: persona,
           active_hours_start: '09:00',
           active_hours_end: '23:00',
-          min_total_messages_per_day: globalMin,
-          max_total_messages_per_day: globalMax,
+          // Daily target UI removed — keep backend defaults when saving.
+          min_total_messages_per_day: 100,
+          max_total_messages_per_day: 500,
           speed_preset: speed,
           opener_mode: openerMode,
           per_app_opener_mode: perApp,
@@ -835,8 +826,7 @@ export default function DatingPage() {
         loading={!!status?.running && !status?.paused}
       />
 
-      {/* Global progress — totals must match the sum of per-app today cards */}
-      {/* Per-app stats: Working (rows collapsed on load) + Apps to come */}
+      {/* Working (one collapsible) + Apps to come */}
       <div className="space-y-6" data-testid="dating-apps-to-run">
             {groupDatingCards(
               cardsForDatingApps(apps, configApps).filter(
@@ -845,7 +835,11 @@ export default function DatingPage() {
             ).map(({ group, apps: groupApps }) => {
               const isComingSoon = group.id === 'coming-soon';
               const isWorking = group.id === 'works';
-              const groupExpanded = isComingSoon ? appsToComeExpanded : true;
+              const groupExpanded = isComingSoon
+                ? appsToComeExpanded
+                : isWorking
+                  ? workingExpanded
+                  : true;
               return (
               <section
                 key={group.id}
@@ -859,16 +853,28 @@ export default function DatingPage() {
                       : undefined
                 }
               >
-                {isComingSoon ? (
+                {(isComingSoon || isWorking) ? (
                   <button
                     type="button"
                     className="flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-4 py-3 text-left hover:bg-canvas-elev"
-                    aria-expanded={appsToComeExpanded}
-                    aria-controls="dating-apps-to-come-panel"
-                    data-testid="dating-apps-to-come-toggle"
-                    onClick={() => setAppsToComeExpanded((prev) => !prev)}
+                    aria-expanded={groupExpanded}
+                    aria-controls={
+                      isComingSoon
+                        ? 'dating-apps-to-come-panel'
+                        : 'dating-apps-working-panel'
+                    }
+                    data-testid={
+                      isComingSoon
+                        ? 'dating-apps-to-come-toggle'
+                        : 'dating-apps-working-toggle'
+                    }
+                    onClick={() =>
+                      isComingSoon
+                        ? setAppsToComeExpanded((prev) => !prev)
+                        : setWorkingExpanded((prev) => !prev)
+                    }
                   >
-                    {appsToComeExpanded ? (
+                    {groupExpanded ? (
                       <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
                     ) : (
                       <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
@@ -886,76 +892,26 @@ export default function DatingPage() {
                 )}
                 {groupExpanded && (
                 <div
-                  id={isComingSoon ? 'dating-apps-to-come-panel' : undefined}
+                  id={
+                    isComingSoon
+                      ? 'dating-apps-to-come-panel'
+                      : isWorking
+                        ? 'dating-apps-working-panel'
+                        : undefined
+                  }
                   className={isWorking ? 'space-y-2' : 'grid md:grid-cols-2 gap-4'}
-                  role={isComingSoon ? 'region' : undefined}
-                  aria-label={isComingSoon ? group.title : undefined}
+                  role={isComingSoon || isWorking ? 'region' : undefined}
+                  aria-label={isComingSoon || isWorking ? group.title : undefined}
                 >
-                  {groupApps.map((app) => {
-                    const rowExpanded = isWorking
-                      ? Boolean(expandedWorking[app.package])
-                      : true;
-                    return (
+                  {groupApps.map((app) => (
                 <div
                   key={app.package}
                   className="bg-surface border border-line rounded-lg overflow-hidden"
                   data-testid={`dating-app-card-${app.package}`}
                 >
-                  {isWorking ? (
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-canvas-elev"
-                      aria-expanded={rowExpanded}
-                      data-testid={`dating-working-toggle-${app.package}`}
-                      onClick={() =>
-                        setExpandedWorking((prev) => ({
-                          ...prev,
-                          [app.package]: !prev[app.package],
-                        }))
-                      }
-                    >
-                      {rowExpanded ? (
-                        <ChevronDown size={18} className="shrink-0 text-mute" aria-hidden />
-                      ) : (
-                        <ChevronRight size={18} className="shrink-0 text-mute" aria-hidden />
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block font-semibold text-white">{app.name}</span>
-                        <span
-                          className="block text-xs text-mute"
-                          data-testid={`dating-today-${app.package}`}
-                        >
-                          Today: {app.today?.swipes ?? 0} swipes ·{' '}
-                          {app.today?.openers ?? 0} messages
-                        </span>
-                      </span>
-                      {canRunFromCard(app.package) && (
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            control('start', app.package);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              control('start', app.package);
-                            }
-                          }}
-                          className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500"
-                          data-testid={`dating-run-${app.package}`}
-                          title={`Start only ${app.name}`}
-                        >
-                          <Play size={12} /> Start
-                        </span>
-                      )}
-                    </button>
-                  ) : (
-                  <div className="flex justify-between items-start p-4">
-                    <div>
-                      <h4 className="font-semibold text-lg text-white">{app.name}</h4>
+                  <div className="flex flex-wrap items-start justify-between gap-2 px-4 py-3">
+                    <div className="min-w-0">
+                      <h4 className="font-semibold text-white">{app.name}</h4>
                       {datingAppGroup(app.package) === 'coming-soon' && (
                         <span className="mt-1 inline-block rounded bg-surface-elev px-2 py-0.5 text-xs text-mute">
                           Coming soon — no working driver yet
@@ -964,19 +920,32 @@ export default function DatingPage() {
                       {isBlockedApp(app.package) && (
                         <p className="mt-1 text-xs text-yellow-300">{TAIMI_BLOCKED_NOTE}</p>
                       )}
-                      <p className="mt-1 text-xs text-mute">
-                        Today: {app.today?.swipes ?? 0} swipes ·{' '}
-                        {app.today?.openers ?? 0} messages
+                      <p
+                        className="mt-1 text-xs text-mute"
+                        data-testid={`dating-today-${app.package}`}
+                      >
+                        {formatTodayCounters(app.package, app.today)}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 text-right text-sm text-mute">
-                      <div>{app.inbox.unread} unread</div>
+                      {!isWorking && <div>{app.inbox.unread} unread</div>}
+                      {canRunFromCard(app.package) && (
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={() => control('start', app.package)}
+                          className="flex items-center gap-1 rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+                          data-testid={`dating-run-${app.package}`}
+                          title={`Start only ${app.name}`}
+                        >
+                          <Play size={12} /> Start
+                        </button>
+                      )}
                     </div>
                   </div>
-                  )}
-                  {rowExpanded && (
+                  {canRunFromCard(app.package) && (
                   <div className="space-y-3 border-t border-line px-4 py-3">
-                  {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
+                  {showsCount(app.package, runModes) && (
                     <label className="flex items-center justify-between gap-2 rounded bg-canvas-elev px-3 py-2 text-sm text-white">
                       <span>{runCountLabel(app.package)}</span>
                       <input
@@ -997,7 +966,7 @@ export default function DatingPage() {
                       />
                     </label>
                   )}
-                  {canRunFromCard(app.package) && hasRunMode(app.package) && (
+                  {hasRunMode(app.package) && (
                     <div
                       className="flex overflow-hidden rounded-lg border border-line text-xs"
                       data-testid={`dating-run-mode-${app.package}`}
@@ -1020,8 +989,7 @@ export default function DatingPage() {
                       ))}
                     </div>
                   )}
-                  {canRunFromCard(app.package) &&
-                    hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
+                  {hasLikeCap(app.package, runModeFor(app.package, runModes)) &&
                     (() => {
                       const mode = runModeFor(app.package, runModes);
                       const key = likeCapKey(app.package, mode);
@@ -1054,7 +1022,7 @@ export default function DatingPage() {
                         </>
                       );
                     })()}
-                  {canRunFromCard(app.package) && showsCount(app.package, runModes) && (
+                  {showsCount(app.package, runModes) && (
                     <div
                       className={`-mt-1 px-3 text-xs ${countErrors[app.package] ? 'text-red-300' : 'text-mute'}`}
                       data-testid={`dating-run-count-hint-${app.package}`}
@@ -1062,24 +1030,10 @@ export default function DatingPage() {
                       {countErrors[app.package] || runCountHint(app.package)}
                     </div>
                   )}
-                  <div className="text-sm text-mute">
-                    <p data-testid={`dating-today-detail-${app.package}`}>
-                      Today: {app.today?.swipes ?? 0} swipes ·{' '}
-                      {app.today?.openers ?? 0} messages
-                    </p>
-                    <div className="pt-2">
-                      <ProgressBar
-                        value={app.targets.opener_progress}
-                        max={app.targets.opener_target || 75}
-                        label="Messages vs daily target"
-                      />
-                    </div>
-                  </div>
                   </div>
                   )}
                 </div>
-                    );
-                  })}
+                  ))}
                 </div>
                 )}
               </section>
@@ -1204,35 +1158,9 @@ export default function DatingPage() {
       {/* r44: rarely-changed settings, collapsed by default */}
       <details className="space-y-4" data-testid="dating-advanced">
         <summary className="cursor-pointer select-none rounded-lg border border-line bg-surface px-4 py-3 text-sm font-medium text-white">
-          Advanced settings (daily limits, openers, persona, date flow, selector cache)
+          Advanced settings (openers, persona, date flow, selector cache)
         </summary>
         <div className="space-y-4 pt-4">
-      {/* Global daily limits */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="text-lg font-semibold">Daily message limits</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <label className="text-sm">
-            Global min/day
-            <input
-              type="number"
-              value={globalMin}
-              onChange={(e) => setGlobalMin(Number(e.target.value))}
-              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
-            />
-          </label>
-          <label className="text-sm">
-            Global max/day
-            <input
-              type="number"
-              value={globalMax}
-              onChange={(e) => setGlobalMax(Number(e.target.value))}
-              className="mt-1 w-full bg-canvas-elev border border-line rounded px-3 py-2"
-            />
-          </label>
-        </div>
-        <p className="text-xs text-mute">Saved with “Save config” under Apps.</p>
-      </div>
-
       {/* Global opener mode */}
       <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

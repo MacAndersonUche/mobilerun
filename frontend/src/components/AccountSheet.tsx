@@ -42,7 +42,6 @@ export default function AccountSheet({
 
   const rows: [string, string][] = [
     ['Settings', '/settings'],
-    ['Usage', '/usage'],
     ['Devices', '/devices'],
   ];
 

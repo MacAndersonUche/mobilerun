@@ -152,7 +152,7 @@ export default function SettingsPage() {
         <section className="mr-card space-y-4" data-testid="settings-ai-tools">
           <h3 className="text-xl font-semibold">Connect AI tools</h3>
           <p className="text-xs text-mute">
-            Provider, model, and API key. Token spend appears under Usage.
+            Provider, model, and API key for dating and social runs.
           </p>
 
           <div>

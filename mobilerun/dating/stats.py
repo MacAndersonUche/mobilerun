@@ -135,13 +135,21 @@ class DatingStats:
         return cls(app_stats={}, stats_file=stats_file)
 
     def save(self):
-        """Save stats to the local file when one is configured."""
+        """Save stats to the local file when one is configured.
+
+        Never raises — Lambda's home dir is not writable; durable stats live
+        in Dynamo via dating_stats_io.save_dating_stats. A local write failure
+        must not 500 GET /api/dating/stats (dashboard load).
+        """
         if not self.stats_file:
             return
-
-        self.stats_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.stats_file, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
+        try:
+            self.stats_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.stats_file, "w") as f:
+                json.dump(self.to_dict(), f, indent=2)
+        except OSError:
+            # Read-only FS (AWS Lambda) or full disk — ignore.
+            pass
 
     def get_or_create_app_stats(self, app_name: str, package_name: str) -> AppStats:
         """Get or create stats for an app."""

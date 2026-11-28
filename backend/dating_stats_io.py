@@ -27,11 +27,26 @@ def _storage():
 
 
 def _default_file() -> Path:
+    """Local cache path. Honor MOBILERUN_DATA (Lambda sets /tmp/mobilerun).
+
+    Never use Path.home() on Lambda — home is read-only (Errno 30) and
+    check_and_reset_daily() → save() used to 500 GET /api/dating/stats.
+    """
+    import os
+
+    root = os.environ.get("MOBILERUN_DATA") or ""
+    if root.strip():
+        return Path(root.strip()) / "dating_stats.json"
+    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or os.environ.get("LAMBDA_TASK_ROOT"):
+        return Path("/tmp/mobilerun") / "dating_stats.json"
     return Path.home() / ".mobilerun" / "dating_stats.json"
 
 
 def load_dating_stats(user_id: Optional[str] = None):
-    """Load DatingStats for a user (or the shared local file)."""
+    """Load DatingStats for a user (or the shared local file).
+
+    Local day-reset save failures must never raise — Dynamo is authoritative.
+    """
     from mobilerun.dating.stats import DatingStats
 
     uid = (user_id or "local").strip() or "local"
@@ -45,8 +60,16 @@ def load_dating_stats(user_id: Optional[str] = None):
         stats = DatingStats.from_dict(blob, stats_file=_default_file())
     else:
         # Migrate legacy ~/.mobilerun/dating_stats.json once if present
-        stats = DatingStats.load(_default_file())
-    stats.check_and_reset_daily()
+        try:
+            stats = DatingStats.load(_default_file())
+        except Exception:
+            logger.exception("dating_stats local load failed; starting empty")
+            stats = DatingStats(app_stats={}, stats_file=_default_file())
+    try:
+        stats.check_and_reset_daily()
+    except Exception:
+        # save() inside reset must not blow up the dashboard
+        logger.exception("dating_stats check_and_reset_daily failed user=%s", uid)
     return stats
 
 

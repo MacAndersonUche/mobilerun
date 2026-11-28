@@ -13,7 +13,28 @@ import {
   runModesOf,
   runModeFor,
   hasLikeCap,
+  todayCounterKind,
+  formatTodayCounters,
 } from './datingRun.ts';
+
+assert.equal(todayCounterKind('com.badoo.mobile'), 'swipes');
+assert.equal(todayCounterKind('com.bumble.app'), 'swipes');
+assert.equal(todayCounterKind('co.hinge.app'), 'messages');
+assert.equal(todayCounterKind('co.yellw.yellowapp'), 'messages');
+assert.equal(todayCounterKind('com.hily.app'), 'both');
+assert.equal(todayCounterKind('com.taggedapp'), 'both');
+assert.equal(
+  formatTodayCounters('com.bumble.app', { swipes: 7, openers: 3 }),
+  'Today: 7 swipes'
+);
+assert.equal(
+  formatTodayCounters('co.hinge.app', { swipes: 4, openers: 5 }),
+  'Today: 5 messages'
+);
+assert.equal(
+  formatTodayCounters('com.hily.app', { swipes: 3, openers: 2 }),
+  'Today: 3 swipes · 2 messages'
+);
 
 assert.equal(canRunApp('co.hinge.app'), true);
 assert.equal(canRunApp('com.whatsapp'), false);

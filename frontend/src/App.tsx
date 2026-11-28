@@ -17,7 +17,6 @@ import {
   Menu,
   X,
   User,
-  BarChart3,
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth';
 import LoginPage from './pages/LoginPage';
@@ -27,7 +26,6 @@ import DevicesPage from './pages/DevicesPage';
 import TasksPage from './pages/TasksPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
-import UsagePage from './pages/UsagePage';
 import DatingPage from './pages/DatingPage';
 import ChatPage from './pages/ChatPage';
 import SocialPage from './pages/SocialPage';
@@ -49,13 +47,11 @@ function MobileMenu({
   }, [location.pathname]);
 
   if (!open) return null;
+  // Devices + Settings live in the bottom nav — keep hamburger for the rest.
   const links = [
     { to: '/dating', icon: Heart, label: 'Dating' },
     { to: '/social', icon: MessageCircle, label: 'Social' },
     { to: '/tasks', icon: History, label: 'Tasks' },
-    { to: '/devices', icon: Smartphone, label: 'Devices' },
-    { to: '/usage', icon: BarChart3, label: 'Usage' },
-    { to: '/settings', icon: Settings, label: 'Settings' },
     { to: '/account', icon: User, label: 'Account' },
     { to: '/chat', icon: MessageCircle, label: 'Chat' },
   ];
@@ -174,13 +170,6 @@ function Shell() {
                 <MessageCircle size={14} />
                 Social
               </Link>
-              <Link
-                to="/usage"
-                className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-mute hover:bg-surface hover:text-white"
-              >
-                <BarChart3 size={18} />
-                Usage
-              </Link>
             </nav>
           </aside>
         )}
@@ -215,17 +204,17 @@ function Shell() {
             <Route path="/dating" element={<DatingPage />} />
             <Route path="/devices" element={<DevicesPage />} />
             <Route path="/history" element={<HistoryPage />} />
-            <Route path="/usage" element={<UsagePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/social" element={<SocialPage />} />
             {/* Kept for job-run / pairing deep links; not in primary nav */}
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/account" element={<AccountPage />} />
-            {/* Legacy Needs you / Matches / Live View / Run URLs → Dating / home */}
+            {/* Legacy Needs you / Matches / Live View / Run / Usage → Dating / home */}
             <Route path="/needs-you" element={<Navigate to="/dating" replace />} />
             <Route path="/matches" element={<Navigate to="/dating" replace />} />
             <Route path="/run" element={<Navigate to="/dating" replace />} />
+            <Route path="/usage" element={<Navigate to="/" replace />} />
             <Route path="/live" element={<Navigate to="/" replace />} />
             <Route path="/pair" element={<PairPage />} />
             <Route path="/p/:code" element={<PairPage />} />

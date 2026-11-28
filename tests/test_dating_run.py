@@ -115,6 +115,48 @@ def test_start_single_app_creates_agent_job(client):
     assert st["job_id"] == job["job_id"]
 
 
+def test_double_start_same_device_returns_already_running(client):
+    """One portal Start must not create two Hily jobs in the same second."""
+    body = {
+        "device_id": "phone1",
+        "dry_run": True,
+        "apps": ["com.hily.app"],
+        "count": 5,
+    }
+    r1 = client.post("/api/dating/start", json=body)
+    assert r1.status_code == 200, r1.text
+    jid = r1.json()["job"]["job_id"]
+    r2 = client.post("/api/dating/start", json=body)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["status"] == "already_running"
+    assert r2.json()["job"]["job_id"] == jid
+    assert len(client.jobs) == 1
+    assert client.kicked == [jid]
+
+
+def test_start_dedupes_active_job_on_device_when_runtime_cleared(client):
+    from backend import main as main_mod
+
+    body = {
+        "device_id": "phone1",
+        "dry_run": False,
+        "apps": ["com.hily.app"],
+        "count": 3,
+    }
+    r1 = client.post("/api/dating/start", json=body)
+    assert r1.status_code == 200, r1.text
+    jid = r1.json()["job"]["job_id"]
+    # Simulate another Lambda that lost in-memory dating_mode_state
+    main_mod.dating_mode_state["running"] = False
+    main_mod.dating_mode_state.pop("job_id", None)
+    main_mod.dating_mode_state.pop("current_app", None)
+    r2 = client.post("/api/dating/start", json=body)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["status"] == "already_running"
+    assert r2.json()["job"]["job_id"] == jid
+    assert len(client.jobs) == 1
+
+
 def test_start_all_runs_supported_apps_in_order(client):
     r = client.post(
         "/api/dating/start",
