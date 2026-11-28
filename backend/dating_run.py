@@ -108,7 +108,11 @@ def hily_plan(
     modes: Optional[Dict[str, str]] = None,
     like_caps: Optional[Dict[str, int]] = None,
 ) -> Tuple[str, int, int]:
-    """-> (mode, messages, max_likes). Likes include the N message likes."""
+    """-> (mode, messages, max_likes).
+
+    Message + likes: messages from Likes sent; Finder hearts =
+    ``max(0, max_likes - messages)``. max_likes is never below messages.
+    """
     mode = (modes or {}).get(HILY_PKG) or DEFAULT_MODE[HILY_PKG]
     likes = int((like_caps or {}).get(f"{HILY_PKG}:{mode}") or DEFAULT_LIKES)
     likes = max(1, min(MAX_LIKES, likes))

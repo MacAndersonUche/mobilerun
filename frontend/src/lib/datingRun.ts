@@ -253,7 +253,7 @@ export function likeCapHint(pkg: string, mode: string): string {
   if (pkg !== HILY_PKG) return '';
   return mode === 'likes'
     ? `Max ${LIKES_MAX} · free hearts from Finder`
-    : `Max ${LIKES_MAX} · includes the likes before the messages`;
+    : `Max ${LIKES_MAX} · messages from Likes sent, then free hearts for the rest (max likes minus messages)`;
 }
 /** Hily in Likes only sends no messages, so its message box is hidden. */
 export function showsCount(pkg: string, modes: Record<string, string>): boolean {
@@ -360,7 +360,7 @@ export function formatWorkingTodayTotals(totals: {
 export function runCountHint(pkg: string): string {
   if (pkg === 'com.facebook.katana') return 'Max 50 (Facebook Dating limit)';
   if (pkg === 'com.hily.app')
-    return `Max ${HILY_MESSAGES_MAX} · likes N in Finder, messages N from Likes sent, then likes`;
+    return `Max ${HILY_MESSAGES_MAX} · messages from Likes sent, then Finder hearts (max likes minus messages)`;
   return `Max ${RUN_COUNT_MAX}`;
 }
 
