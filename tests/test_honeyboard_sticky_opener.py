@@ -193,3 +193,94 @@ def test_hinge_blind_type_reuses_stuck_text():
     assert stuck.lower() in (b.get("reason") or "").lower() or stuck in str(
         b.get("_vision_check") or ""
     )
+
+
+def test_facebook_instruction_quote_no_longer_forces_bank_text():
+    """Regression: baked quote → guard exclusive-allow → typed bank line."""
+    from backend import dating_run
+    from backend.message_text_guard import allowed_message_texts, enforce_message_text
+    from backend.facebook_dating_fixed_first_contact import comment_text
+
+    inst = dating_run.instruction_for("com.facebook.katana", 2)
+    assert "hi miss you look beautiful" not in inst
+    allowed = allowed_message_texts(inst)
+    assert allowed != ["hi miss you look beautiful"]
+
+    bulk: dict = {"done": 0}
+    st: dict = {"bulk_message_new": bulk}
+    picked = comment_text(inst, "", state=st, store=bulk)
+    assert picked == bulk["text"]
+    # Same person, next step — sticky, no re-pick
+    again = comment_text(inst, "", state=st, store=bulk)
+    assert again == picked
+    assert st.get("last_opener_template_id") or bulk.get("template_id")
+
+    # Guard must not rewrite a library pick when instruction has no quote
+    act = enforce_message_text(
+        {"action": "type", "text": picked, "reason": "type FB"},
+        inst,
+        job={},
+        history=[],
+    )
+    assert act.get("action") == "type"
+    assert act.get("text") == picked
+    assert "forced" not in str(act.get("_text_source") or "")
+
+
+def test_facebook_old_quoted_instruction_still_forces_via_guard():
+    """Custom Mac quote in the instruction remains authoritative."""
+    from backend.message_text_guard import enforce_message_text
+
+    inst = 'send 2 first contact messages on facebook dating "custom mac line here"'
+    act = enforce_message_text(
+        {"action": "type", "text": "hey how are you", "reason": "type"},
+        inst,
+        job={},
+        history=[],
+    )
+    assert act.get("text") == "custom mac line here"
+    assert act.get("_text_source") == "forced_user_or_bank"
+
+
+def test_sticky_records_template_id_and_promote_to_parent():
+    from mobilerun.dating.openers import promote_opener_state
+
+    lib = OpenerLibrary(
+        templates=[
+            OpenerTemplate(id="n01", text="hey how are you", bucket="any", enabled=True),
+            OpenerTemplate(id="n02", text="hi miss", bucket="any", enabled=True),
+        ],
+        opener_mode="templates",
+        min_active=2,
+        max_active=50,
+    )
+    child: dict = {
+        "opener_library": lib.to_dict(),
+        "bulk_message_new": {"done": 0},
+    }
+    bulk = child["bulk_message_new"]
+    text = sticky_first_contact_text(
+        bulk,
+        fallback_bank=["hey how are you"],
+        state=child,
+        package_name="com.hily.app",
+        now=datetime(2026, 6, 1, 15, 0, 0),
+        rng=__import__("random").Random(1),
+    )
+    assert text
+    assert child.get("last_opener_template_id")
+    assert bulk.get("template_id") == child["last_opener_template_id"]
+    # Reuse resurfaces ids
+    child.pop("last_opener_template_id", None)
+    sticky_first_contact_text(
+        bulk,
+        fallback_bank=["hey how are you"],
+        state=child,
+        package_name="com.hily.app",
+    )
+    assert child.get("last_opener_template_id") == bulk["template_id"]
+
+    parent: dict = {}
+    promote_opener_state(child, parent)
+    assert parent.get("last_opener_template_id") == bulk["template_id"]
+    assert parent.get("opener_library")

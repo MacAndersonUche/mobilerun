@@ -271,6 +271,13 @@ def plan_hily_fixed_run(
             message=message,
             target=msgs,
         )
+        # Opener pick lives on nested fc_state — promote so the job records
+        # last_opener_template_id / opener_library (was empty on phone).
+        try:
+            from mobilerun.dating.openers import promote_opener_state
+        except ImportError:  # pragma: no cover
+            from dating.openers import promote_opener_state  # type: ignore
+        promote_opener_state(fc_state, st)
         sent = int(bulk.get("done") or 0)
         hr["sent"] = sent
         step = str((a or {}).get("fastpath_step") or "")

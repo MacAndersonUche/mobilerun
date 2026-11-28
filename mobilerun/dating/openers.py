@@ -520,7 +520,17 @@ def sticky_first_contact_text(
     if existing:
         if require_keyable and not _honeyboard_keyable(existing):
             store.pop("text", None)
+            store.pop("template_id", None)
+            store.pop("bucket", None)
         else:
+            # Re-surface pick metadata on state every step (nested Hily fc
+            # state used to leave job-level last_opener_template_id empty).
+            if isinstance(state, dict):
+                tid = store.get("template_id")
+                if tid:
+                    state["last_opener_template_id"] = tid
+                if store.get("bucket"):
+                    state["last_opener_bucket"] = store.get("bucket")
             return existing
     text = pick_runner_first_contact_text(
         fallback_bank=fallback_bank,
@@ -541,6 +551,12 @@ def sticky_first_contact_text(
             list(fallback_bank or ()) + [message or "", "hey how are you"]
         )
     store["text"] = text
+    if isinstance(state, dict):
+        tid = state.get("last_opener_template_id")
+        if tid:
+            store["template_id"] = tid
+        if state.get("last_opener_bucket"):
+            store["bucket"] = state.get("last_opener_bucket")
     return text
 
 
@@ -548,6 +564,23 @@ def clear_sticky_opener(store: Optional[Dict[str, Any]]) -> None:
     """Drop the stuck opener so the next person gets a fresh pick."""
     if isinstance(store, dict):
         store.pop("text", None)
+        store.pop("template_id", None)
+        store.pop("bucket", None)
+
+
+def promote_opener_state(
+    child: Optional[Dict[str, Any]], parent: Optional[Dict[str, Any]]
+) -> None:
+    """Copy opener pick metadata from a nested planner state onto the job state.
+
+    Hily fixed-run keeps first-contact bulk under ``hr['fc']``; without this,
+    ``last_opener_template_id`` stays empty on the job.
+    """
+    if not isinstance(child, dict) or not isinstance(parent, dict):
+        return
+    for k in ("opener_library", "last_opener_template_id", "last_opener_bucket"):
+        if k in child and child[k] is not None:
+            parent[k] = child[k]
 
 
 def clamp_enabled_to_max(lib: OpenerLibrary) -> int:

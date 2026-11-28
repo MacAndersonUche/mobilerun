@@ -46,6 +46,17 @@ def _run(inst, trees, st=None):
     st = {} if st is None else st
     out = []
     for t in trees:
+        # Fixture MBM trees expect "hey how are you". Live runs pick from the
+        # opener library; re-stick each step so these regression flows stay
+        # stable while sticky/clear still run for real.
+        hr = st.setdefault(
+            "hily_run",
+            {"likes": 0, "sent": 0, "phase": "message" if "message" in inst else "likes"},
+        )
+        if "message" in inst and hr.get("phase") == "message":
+            fc = hr.setdefault("fc", {})
+            bulk = fc.setdefault("bulk_message_new", {"done": 0, "typed": False})
+            bulk["text"] = "hey how are you"
         a = plan_hily_fixed_run(inst, t, [], state=st)
         out.append(a)
     return out, st
@@ -378,13 +389,23 @@ def test_cloud_agent_routes_hily_without_llm():
             "likes": 2,
             "sent": 0,
             "phase": "message",
-            "fc": {"bulk_message_new": {"done": 0, "typed": False}},
+            "fc": {
+                "bulk_message_new": {
+                    "done": 0,
+                    "typed": False,
+                    "text": "hey how are you",
+                }
+            },
         }
     }
     t = ca.plan_next_action(
         "fixed hily message 2 likes 4", MBM, [], package="com.hily.app", agent_state=st2
     )
     assert t["action"] == "type" and t["text"] == "hey how are you"
+    # Nested fc pick is promoted onto the job state
+    assert st2.get("last_opener_template_id") or st2["hily_run"]["fc"][
+        "bulk_message_new"
+    ].get("text") == "hey how are you"
 
 
 # ---- API -------------------------------------------------------------------

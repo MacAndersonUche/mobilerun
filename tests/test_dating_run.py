@@ -31,9 +31,15 @@ def test_instruction_parses_to_fixed_planner(pkg, count, app, kind, n):
     assert goal["count"] == n
 
 
-def test_facebook_text_is_exact():
-    goal = parse_bulk_goal(dating_run.instruction_for("com.facebook.katana", 3))
-    assert goal["message"] == "hi miss you look beautiful"
+def test_facebook_instruction_has_no_baked_quote():
+    """Quoted FB instruction made message_text_guard force bank text over library."""
+    inst = dating_run.instruction_for("com.facebook.katana", 3)
+    assert "facebook dating" in inst
+    assert '"' not in inst and "'" not in inst
+    assert "hi miss you look beautiful" not in inst
+    goal = parse_bulk_goal(inst)
+    assert goal is not None
+    assert goal["count"] == 3
 
 
 def test_swipe_instruction_is_fixed_mode():

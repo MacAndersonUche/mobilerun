@@ -69,9 +69,10 @@ def comment_text(
 ) -> str:
     """Photo-comment from portal opener library (fallback: MESSAGE_BANK).
 
-    Custom quoted text in the instruction (not the baked-in dating_run default)
-    still wins. The baked-in ``hi miss you look beautiful`` quote is treated as
-    a library hint so the opener bank can rotate.
+    Custom quoted text in the instruction (not a known bank / library line)
+    still wins. dating_run no longer bakes a default quote into the FB
+    instruction — a quote there used to make message_text_guard force
+    "hi miss you look beautiful" over the library pick.
 
     When ``store`` (bulk_message_new) is given, stick the chosen line on
     ``store['text']`` for that person so every planner step reuses it.
@@ -86,6 +87,7 @@ def comment_text(
         if isinstance(store, dict):
             store["text"] = quoted
         return quoted
+    # Known bank quotes in old instructions are library hints, not locks.
     try:
         from mobilerun.dating.openers import sticky_first_contact_text
     except ImportError:  # pragma: no cover
@@ -94,7 +96,7 @@ def comment_text(
         return sticky_first_contact_text(
             store,
             fallback_bank=MESSAGE_BANK,
-            message=message or quoted or PHOTO_COMMENT_TEXT,
+            message=message or PHOTO_COMMENT_TEXT,
             state=state if isinstance(state, dict) else None,
             package_name="com.facebook.katana",
         )
@@ -104,7 +106,7 @@ def comment_text(
         from dating.openers import pick_runner_first_contact_text  # type: ignore
     return pick_runner_first_contact_text(
         fallback_bank=MESSAGE_BANK,
-        message=message or quoted or PHOTO_COMMENT_TEXT,
+        message=message or PHOTO_COMMENT_TEXT,
         state=state if isinstance(state, dict) else None,
         package_name="com.facebook.katana",
     )
