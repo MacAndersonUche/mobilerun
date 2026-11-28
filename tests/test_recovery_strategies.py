@@ -23,7 +23,7 @@ def test_tree_looks_blocked_anr_and_permission():
         '<hierarchy><n t="App isn\'t responding"/><n t="Wait"/><n t="Close app"/></hierarchy>'
     )
     assert tree_looks_blocked(
-        '<hierarchy><n t="Allow MobileRun to send you notifications"/>'
+        '<hierarchy><n t="Allow PhonePilot to send you notifications"/>'
         '<n t="Allow" c="1" xy="200,1800"/></hierarchy>'
     )
     assert not tree_looks_blocked(

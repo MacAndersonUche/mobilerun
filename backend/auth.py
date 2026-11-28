@@ -110,7 +110,7 @@ def _normalize(payload: dict) -> dict:
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account not authorized for this MobileRun instance",
+                detail="Account not authorized for this PhonePilot instance",
             )
     return normalized
 

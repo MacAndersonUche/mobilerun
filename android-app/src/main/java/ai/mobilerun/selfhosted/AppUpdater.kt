@@ -244,7 +244,7 @@ object AppUpdater {
             Log.w(TAG, "open unknown-sources settings: ${e.message}")
             Toast.makeText(
                 activity,
-                "Enable “Install unknown apps” for MacMobileRun, then retry",
+                "Enable “Install unknown apps” for PhonePilot, then retry",
                 Toast.LENGTH_LONG,
             ).show()
         }

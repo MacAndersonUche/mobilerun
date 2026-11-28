@@ -688,7 +688,7 @@ export default function DatingPage() {
             <Heart className="text-rose-400 shrink-0" /> Dating
           </h1>
           <p className="text-mute mt-1 text-sm sm:text-base">
-            MacMobileRun · app selection, openers, start/stop, activity
+            PhonePilot · app selection, openers, start/stop, activity
           </p>
           <p className="text-mute mt-1 text-sm">
             Covers new contacts, existing chats, or both - dating here,{' '}

@@ -109,8 +109,7 @@ export default function HomePage() {
     <div className="mr-page space-y-6" data-testid="home-page">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">MacMobileRun</h1>
-          <p className="text-sm text-mute">Dating & social on your phone</p>
+          <h1 className="text-2xl font-semibold tracking-tight">PhonePilot</h1>
         </div>
         <Link
           to="/settings"

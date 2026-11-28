@@ -32,7 +32,7 @@ const routes = [
 
 test('login a11y', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /MacMobileRun|MobileRun/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /PhonePilot/i })).toBeVisible();
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa'])
     .disableRules(['color-contrast']) // design tokens reviewed separately; muted UI chrome

@@ -166,7 +166,7 @@ export default function DevicesPage() {
       window.location.href = https;
     }, 1200);
     setConnectHint(
-      'Opening MobileRun… If nothing happens, install the APK first, then tap again - or type the code in the app.',
+      'Opening PhonePilot… If nothing happens, install the APK first, then tap again - or type the code in the app.',
     );
   };
 
@@ -235,7 +235,7 @@ export default function DevicesPage() {
             <ExternalLink size={16} /> Connect this phone
           </button>
           <p className="text-xs text-mute">
-            Opens the MobileRun app with this pairing code (no camera needed).
+            Opens the PhonePilot app with this pairing code (no camera needed).
           </p>
           {connectHint && (
             <p className="text-xs text-amber-200" data-testid="connect-hint">
@@ -320,7 +320,7 @@ export default function DevicesPage() {
                   </button>
                 </div>
                 <p className="text-xs text-mute">
-                  No ambiguous characters - enter this code alone in MobileRun.
+                  No ambiguous characters - enter this code alone in PhonePilot.
                 </p>
               </div>
 

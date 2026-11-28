@@ -1,7 +1,7 @@
-<!-- MacMobileRun stole FG — dating app window missing / empty -->
+<!-- PhonePilot stole FG - dating app window missing / empty -->
 <hierarchy windows="1" nodes="3" partial="false" empty="false" mode="compact" packages="ai.mobilerun.selfhosted">
 <w id="active" t="active" p="ai.mobilerun.selfhosted" f="1">
- <n t="MacMobileRun" xy="540,200" b="100,150,980,250"/>
+ <n t="PhonePilot" xy="540,200" b="100,150,980,250"/>
  <n t="Connected" xy="540,400" b="100,360,980,440"/>
 </w>
 </hierarchy>
