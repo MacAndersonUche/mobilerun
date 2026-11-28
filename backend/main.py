@@ -481,7 +481,7 @@ async def start_device_code(body: DeviceCodeStart):
         "expires_in": 600,
         "interval": 3,
         "verification_uri": f"{ui.rstrip('/')}/settings" if ui else "/settings",
-        "message": "Enter this code on the MobileRun Settings page while signed in",
+        "message": "Enter this code on the PhonePilot Settings page while signed in",
     }
 
 
@@ -1530,7 +1530,7 @@ async def submit_task(
             raise HTTPException(status_code=404, detail="Device not found")
         raise HTTPException(
             status_code=400,
-            detail="Device offline - open MobileRun on the phone and wait until Devices shows Connected",
+            detail="Device offline - open PhonePilot on the phone and wait until Devices shows Connected",
         )
     if not reachable:
         raise HTTPException(
@@ -3371,7 +3371,7 @@ async def dating_matches_removed(match_id: str = ""):
     """Matches CRM removed — MacMobileRun does not track matches."""
     raise HTTPException(
         status_code=410,
-        detail="Matches tracking removed from MacMobileRun",
+        detail="Matches tracking removed from PhonePilot",
     )
 
 
@@ -3778,7 +3778,7 @@ async def _start_dating_apps_run(
     if not (mem.get("connected") or device_is_reachable(did)):
         raise HTTPException(
             status_code=400,
-            detail="Phone offline - open MobileRun on the phone and wait "
+            detail="Phone offline - open PhonePilot on the phone and wait "
             "until Devices shows Connected",
         )
     # One Start = one job per device (dedupe double-tap / racing Lambdas)
@@ -4378,7 +4378,7 @@ async def social_run(
     if not (mem.get("connected") or device_is_reachable(did)):
         raise HTTPException(
             status_code=400,
-            detail="Phone offline - open MobileRun on the phone and wait "
+            detail="Phone offline - open PhonePilot on the phone and wait "
             "until Devices shows Connected",
         )
     try:
@@ -4587,7 +4587,7 @@ async def list_needs_you(
 @app.post("/api/needs-you/{item_id}/edit")
 async def needs_you_actions_removed(item_id: str):
     raise HTTPException(
-        status_code=410, detail="Needs-you portal removed from MacMobileRun"
+        status_code=410, detail="Needs-you portal removed from PhonePilot"
     )
 
 

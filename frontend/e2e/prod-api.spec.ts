@@ -37,7 +37,7 @@ test.describe('prod API + hosted UI', () => {
       );
     });
     await page.goto(PROD_UI);
-    await expect(page.getByRole('heading', { name: 'MobileRun' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: 'PhonePilot' })).toBeVisible({
       timeout: 20000,
     });
 

@@ -39,10 +39,10 @@ export default function PairPage() {
 
   return (
     <div className="mx-auto flex min-h-screen max-w-lg flex-col justify-center gap-4 p-6">
-      <h1 className="text-2xl font-semibold">Connect MacMobileRun</h1>
+      <h1 className="text-2xl font-semibold">Connect PhonePilot</h1>
       <Card className="space-y-3">
         <p className="text-sm text-mute">
-          Opening the MacMobileRun app… If nothing happens, install the APK from{' '}
+          Opening the PhonePilot app… If nothing happens, install the APK from{' '}
           <Link to="/devices" className="text-accent">
             Devices
           </Link>
@@ -55,7 +55,7 @@ export default function PairPage() {
         )}
         {deepLink && (
           <a href={deepLink} className="inline-block text-sm text-accent break-all">
-            Open in MacMobileRun app
+            Open in PhonePilot app
           </a>
         )}
         {!code && (

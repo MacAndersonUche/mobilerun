@@ -47,7 +47,7 @@ test.describe('mobile responsive portal', () => {
 
   test('login has no horizontal scroll', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /PhonePilot/i })).toBeVisible();
     await assertNoHorizontalScroll(page);
     await shot(page, '01-login');
   });

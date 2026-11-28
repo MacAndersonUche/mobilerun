@@ -338,7 +338,7 @@ fun MainScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(text = "MacMobileRun", style = MaterialTheme.typography.headlineLarge)
+            Text(text = "PhonePilot", style = MaterialTheme.typography.headlineLarge)
             Text(
                 text = "Executor · wireless · MacAI",
                 style = MaterialTheme.typography.bodyMedium,
@@ -459,7 +459,7 @@ fun MainScreen(
                             if (showRestricted) {
                                 AssistCard(
                                     title = "Allow restricted settings (Android 13+)",
-                                    body = "Sideloaded apps need this before Accessibility can turn on. Apps → MacMobileRun → ⋮ → Allow restricted settings.",
+                                    body = "Sideloaded apps need this before Accessibility can turn on. Apps → PhonePilot → ⋮ → Allow restricted settings.",
                                     actionLabel = "Open app settings",
                                     onClick = {
                                         onOpenRestrictedSettings()

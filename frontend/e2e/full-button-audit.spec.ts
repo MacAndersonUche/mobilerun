@@ -58,11 +58,11 @@ async function loginViaUi(page: Page) {
   // Already logged in via storage?
   if (
     await page
-      .getByRole('heading', { name: /Your agents|MacMobileRun|MobileRun/i })
+      .getByRole('heading', { name: /Your agents|PhonePilot/i })
       .count()
   ) {
     const hasHome = await page
-      .getByRole('heading', { name: /Your agents|MacMobileRun/i })
+      .getByRole('heading', { name: /Your agents|PhonePilot/i })
       .count();
     if (hasHome) return;
   }
@@ -74,7 +74,7 @@ async function loginViaUi(page: Page) {
   });
   await page.getByRole('button', { name: /sign in|log in|continue/i }).click();
   await expect(
-    page.getByRole('heading', { name: /Your agents|Home|MacMobileRun|MobileRun/i }).first()
+    page.getByRole('heading', { name: /Your agents|Home|PhonePilot/i }).first()
   ).toBeVisible({
     timeout: 30000,
   });
@@ -196,7 +196,7 @@ test.describe('full button audit', () => {
     // ---------- Home ----------
     await page.goto('/');
     await expect(
-      page.getByRole('heading', { name: /Your agents|MacMobileRun|MobileRun/i }).first()
+      page.getByRole('heading', { name: /Your agents|PhonePilot/i }).first()
     ).toBeVisible({
       timeout: 30000,
     });

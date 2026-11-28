@@ -235,7 +235,7 @@ class ConnectionService : Service() {
         nm.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
-                "MacMobileRun connection",
+                "PhonePilot connection",
                 NotificationManager.IMPORTANCE_LOW,
             ),
         )
@@ -261,9 +261,9 @@ class ConnectionService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val title = if (status == "Connected") {
-            "MacMobileRun connected"
+            "PhonePilot connected"
         } else {
-            "MacMobileRun · $status"
+            "PhonePilot · $status"
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)

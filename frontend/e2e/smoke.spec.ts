@@ -16,7 +16,7 @@ async function shot(page: import('@playwright/test').Page, name: string) {
 
 test('login screen', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /PhonePilot/i })).toBeVisible();
   await shot(page, '01-login');
 });
 
@@ -26,7 +26,7 @@ test('authenticated routes', async ({ page }) => {
     localStorage.setItem('mobilerun_user_email', 'mac@macai.local');
   });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /MacMobileRun/i })).toBeVisible({
+  await expect(page.getByRole('heading', { name: /PhonePilot/i })).toBeVisible({
     timeout: 15000,
   });
   // Home has nav tiles (no sidebar/bottom nav). Settings is avatar / bottom nav only.

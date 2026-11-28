@@ -136,10 +136,7 @@ function Shell() {
             data-testid="desktop-sidebar"
           >
             <Link to="/" className="mb-8 block px-2 hover:opacity-90">
-              <p className="text-lg font-semibold tracking-tight">MacMobileRun</p>
-              <p className="text-[10px] uppercase tracking-[0.22em] text-mute">
-                Dating & social
-              </p>
+              <p className="text-lg font-semibold tracking-tight">PhonePilot</p>
             </Link>
             <nav className="space-y-0.5">
               {tabs.map((t) => (
@@ -177,10 +174,7 @@ function Shell() {
             <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur md:hidden pt-[max(0.5rem,env(safe-area-inset-top))]">
               <Link to="/" className="min-w-0">
                 <p className="truncate text-base font-semibold tracking-tight">
-                  MacMobileRun
-                </p>
-                <p className="text-[10px] uppercase tracking-[0.18em] text-mute">
-                  Dating & social
+                  PhonePilot
                 </p>
               </Link>
               <button

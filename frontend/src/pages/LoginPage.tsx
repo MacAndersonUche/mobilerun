@@ -17,8 +17,8 @@ export default function LoginPage() {
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-1">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">MacMobileRun</p>
-            <h1 className="text-3xl font-semibold tracking-tight">Welcome to MacMobileRun</h1>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-mute">PhonePilot</p>
+            <h1 className="text-3xl font-semibold tracking-tight">Welcome to PhonePilot</h1>
             <p className="text-sm text-mute">
               Sign in to run dating & social on your phone. The APK uses the same account.
             </p>
@@ -105,7 +105,7 @@ export default function LoginPage() {
           }}
         />
         <div className="relative">
-          <p className="text-[10px] uppercase tracking-[0.25em] text-mute">MacMobileRun</p>
+          <p className="text-[10px] uppercase tracking-[0.25em] text-mute">PhonePilot</p>
         </div>
         <div className="relative space-y-4">
           <p className="font-mono text-3xl font-semibold uppercase leading-tight tracking-wide text-white">

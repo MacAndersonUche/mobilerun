@@ -39,8 +39,8 @@ async function runViewport(label, viewport) {
   // Login page
   await page.goto(baseURL + '/', { waitUntil: 'networkidle', timeout: 60000 });
   await page.screenshot({ path: path.join(outDir, `${label}-01-login.png`), fullPage: true });
-  const loginHeading = await page.getByRole('heading', { name: /MobileRun/i }).count();
-  if (!loginHeading) defects.push(`${label}: login missing MobileRun heading`);
+  const loginHeading = await page.getByRole('heading', { name: /PhonePilot/i }).count();
+  if (!loginHeading) defects.push(`${label}: login missing PhonePilot heading`);
 
   await page.addInitScript(() => {
     localStorage.setItem('mobilerun_auth_token', 'visual-preview-token');

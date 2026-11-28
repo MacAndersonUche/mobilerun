@@ -324,7 +324,7 @@ export default function SettingsPage() {
         Log out
       </Button>
 
-      <p className="pt-2 text-center text-xs text-mute">MacMobileRun</p>
+      <p className="pt-2 text-center text-xs text-mute">PhonePilot</p>
     </div>
   );
 }
