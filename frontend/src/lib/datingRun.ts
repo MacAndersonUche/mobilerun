@@ -113,9 +113,11 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     // Hinge: verified live 5/5 with r53n heart ladder (27 Nov 2026)
     // Tagged: Mac confirmed messages sending on phone (27 Nov 2026)
     // Facebook Dating: verified live 5/5 photo-comment first-contact (r63–r66, 27 Nov 2026)
+    // Boo: r50, 28 Nov 2026 (accessibility + fractional coords, FLAG_SECURE)
     packages: [
       'com.badoo.mobile',
       'com.bumble.app',
+      'enterprises.dating.boo',
       'com.hily.app',
       'co.yellw.yellowapp',
       'co.hinge.app',
@@ -129,7 +131,6 @@ export const DATING_APP_GROUPS: DatingAppGroupDef[] = [
     subtitle: 'No working driver yet - coming soon, cannot run.',
     packages: [
       'com.tinder',
-      'enterprises.dating.boo',
       'social.breeze.breeze_app',
       'com.getpure.pure',
       'com.threesome.swingers.threefun',

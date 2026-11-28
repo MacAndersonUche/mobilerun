@@ -38,7 +38,7 @@ RUN_APPS: Dict[str, Tuple[str, str, Optional[int]]] = {
     "com.tinder": ("tinder", "tinder", None),
     # r50: generic fixed like / message runs (fixed_like_run.py)
     "com.takimi.android": ("taimi", "fixed_app", None),
-    "enterprises.dating.boo": ("boo", "fixed_app", None),
+    "enterprises.dating.boo": ("boo", "boo", None),  # r50: dedicated Boo runner
     "social.breeze.breeze_app": ("breeze", "fixed_app", None),
     "com.getpure.pure": ("pure", "fixed_app", None),
     "com.threesome.swingers.threefun": ("threefun", "fixed_app", None),
@@ -56,6 +56,7 @@ TAGGED_PKG = "com.taggedapp"
 TAGGED_MODES = ("swipe", "message")
 HILY_PKG = "com.hily.app"
 HILY_MODES = ("likes", "message_likes")  # Likes only | Message + likes
+BOO_PKG = "enterprises.dating.boo"
 DEFAULT_MODE = {
     TAGGED_PKG: "swipe",
     HILY_PKG: "message_likes",
@@ -234,6 +235,13 @@ def instruction_for(
         if mode == "likes":
             return f"fixed hily likes {likes}"
         return f"fixed hily message {msgs} likes {likes}"
+    if pkg == BOO_PKG:
+        mode, msgs, likes = fixed_app_plan(pkg, count, counts, modes, like_caps)
+        if mode == "likes":
+            return f"fixed boo likes messages 0 likes {likes}"
+        if mode == "message":
+            return f"fixed boo message messages {msgs} likes 0"
+        return f"fixed boo message_likes messages {msgs} likes {likes}"
     if pkg == TAGGED_PKG:
         mode = (modes or {}).get(pkg) or "swipe"
         return f"fixed tagged {mode} {n}"

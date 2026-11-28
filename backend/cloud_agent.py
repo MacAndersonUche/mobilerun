@@ -2004,9 +2004,9 @@ def _is_fixed_swipe_action(action: Dict[str, Any]) -> bool:
         # r49: Tinder fixed auto-swipe (same right-swipe each card by design)
         or planner == "tinder_fixed"
         or step.startswith("tinder_fixed")
-        # r50: paid-popup guard + generic fixed liker (Boo/Breeze/Pure/3Fun/Taimi)
-        or planner in ("paid_popup_guard", "fixed_like_run")
-        or step.startswith(("paid_popup", "fixed_like"))
+        # r50: paid-popup guard + generic fixed liker (Breeze/Pure/3Fun/Taimi) + Boo
+        or planner in ("paid_popup_guard", "fixed_like_run", "boo_fixed_run")
+        or step.startswith(("paid_popup", "fixed_like", "boo_"))
     )
 
 
@@ -2016,7 +2016,7 @@ def _fixed_swipe_run(instruction: str, state: Optional[Dict[str, Any]]) -> bool:
     if "fixed" in inst and ("bumble" in inst or "badoo" in inst):
         return True
     if (
-        "fixed hily" in inst or "fixed tinder" in inst or "fixed app " in inst
+        "fixed hily" in inst or "fixed tinder" in inst or "fixed boo" in inst or "fixed app " in inst
     ):  # r46/r49/r50
         return True
     # r45: Yubo / Hily / Hinge first-contact never use the LLM (Yubo tapped the
@@ -2169,7 +2169,33 @@ def plan_next_action(
                 )
             return _enf_tg(tg_act, instruction, history=history)
 
-    # r50: Boo / Breeze / Taimi / Pure / 3Fun fixed like / message runs
+    # r50: Boo dedicated runner (FLAG_SECURE, accessibility + fractional coords)
+    if "fixed boo" in instr_l:
+        try:
+            from boo_fixed_run import plan_boo_fixed_run
+        except ImportError:
+            from backend.boo_fixed_run import plan_boo_fixed_run  # type: ignore
+        st_boo = agent_state if isinstance(agent_state, dict) else {}
+        boo_act = plan_boo_fixed_run(
+            instruction, ui_tree, history, state=st_boo, dry_run=dry_run, message=_instruction_text(instruction)
+        )
+        if boo_act is None:
+            boo_act = {
+                "action": "wait",
+                "reason": "Boo fixed run: waiting for a readable screen",
+                "planner": "boo_fixed_run",
+                "llm_provider": None,
+                "_no_llm_handoff": True,
+            }
+        try:
+            from message_text_guard import enforce_message_text as _enf_boo
+        except ImportError:
+            from backend.message_text_guard import (  # type: ignore
+                enforce_message_text as _enf_boo,
+            )
+        return _enf_boo(boo_act, instruction, history=history)
+
+    # r50: Breeze / Taimi / Pure / 3Fun fixed like / message runs
     if "fixed app " in instr_l:
         try:
             from fixed_like_run import plan_fixed_like_run
