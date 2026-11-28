@@ -317,6 +317,19 @@ test.describe('portal batch', () => {
     await expect(page.getByTestId('live-activity-panel')).toBeVisible();
   });
 
+  test('Social has no Signature or Notifications sections', async ({ page }) => {
+    await authAndMock(page);
+    await page.goto('/social');
+    await expect(page.getByRole('heading', { name: 'Social', exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByRole('heading', { name: 'Signature', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Notifications', exact: true })).toHaveCount(0);
+    await expect(page.getByText('Append signature')).toHaveCount(0);
+    await expect(page.getByText('Email notify')).toHaveCount(0);
+    await expect(page.getByTestId('social-save-config')).toBeVisible();
+  });
+
   test('/account redirects to Settings with account controls', async ({
     page,
   }, testInfo) => {

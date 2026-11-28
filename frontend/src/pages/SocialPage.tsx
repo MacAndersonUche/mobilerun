@@ -15,16 +15,11 @@ type AppRow = {
   name: string;
   package_name: string;
   enabled: boolean;
-  signature_enabled?: boolean | null;
 };
 
 export default function SocialPage() {
   const [apps, setApps] = useState<AppRow[]>([]);
   const [speed, setSpeed] = useState<Speed>('balanced');
-  const [sigOn, setSigOn] = useState(true);
-  const [sigText, setSigText] = useState('- from MacMobileRun');
-  const [askNew, setAskNew] = useState(true);
-  const [emailNotify, setEmailNotify] = useState(false);
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [unread, setUnread] = useState(0);
@@ -48,10 +43,6 @@ export default function SocialPage() {
       ]);
       setApps(cfg.data.apps || []);
       setSpeed(cfg.data.speed_preset || 'balanced');
-      setSigOn(cfg.data.signature?.enabled_global ?? true);
-      setSigText(cfg.data.signature?.text || '- from MacMobileRun');
-      setAskNew(cfg.data.escalation?.always_ask_new_contacts ?? true);
-      setEmailNotify(!!cfg.data.email_notify);
       setRunning(!!status.data.running);
       setPaused(!!status.data.paused);
       setUnread(status.data.unread?.total_unread || 0);
@@ -89,21 +80,17 @@ export default function SocialPage() {
   const save = async () => {
     setLoading(true);
     try {
-      const perApp: Record<string, boolean> = {};
-      apps.forEach((a) => {
-        if (a.signature_enabled != null) perApp[a.package_name] = !!a.signature_enabled;
-      });
       await axios.post(
         `${getBackendUrl()}/api/social/config`,
         {
           enabled_apps: apps.filter((a) => a.enabled).map((a) => a.package_name),
           speed_preset: speed,
-          signature_enabled: sigOn,
-          signature_text: sigText,
-          per_app_signature: perApp,
-          always_ask_new_contacts: askNew,
-          email_notify: emailNotify,
-          email_to: 'macandersonuche@yahoo.com',
+          // Signature / notifications removed from portal; keep backend off.
+          signature_enabled: false,
+          signature_text: '',
+          per_app_signature: {},
+          always_ask_new_contacts: false,
+          email_notify: false,
         },
         { headers: headers() }
       );
@@ -170,7 +157,7 @@ export default function SocialPage() {
         body,
         { headers: headers() }
       );
-      // Apply start/stop response immediately — status may hit another Lambda
+      // Apply start/stop response immediately; status may hit another Lambda
       const st = res.data?.state;
       if (st && typeof st === 'object') {
         setRunning(!!st.running);
@@ -335,56 +322,11 @@ export default function SocialPage() {
         </div>
       </div>
 
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="font-semibold">Signature</h3>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={sigOn}
-            onChange={(e) => setSigOn(e.target.checked)}
-          />
-          Append signature (default ON)
-        </label>
-        <label htmlFor="social-signature-text" className="block text-sm text-mute">
-          Signature text
-        </label>
-        <input
-          id="social-signature-text"
-          value={sigText}
-          onChange={(e) => setSigText(e.target.value)}
-          className="mr-input"
-          aria-label="Signature text"
-        />
-        <p className="text-xs text-mute">
-          Per-app / per-contact overrides are stored with config; toggle apps above,
-          then use API or chat for contact-level overrides.
-        </p>
-      </div>
-
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="font-semibold">Notifications</h3>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={askNew}
-            onChange={(e) => setAskNew(e.target.checked)}
-          />
-          Prefer careful pacing for brand-new contacts
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={emailNotify}
-            onChange={(e) => setEmailNotify(e.target.checked)}
-          />
-          Email notify (SES → macandersonuche@yahoo.com, off by default)
-        </label>
-      </div>
-
       <button
         onClick={save}
         disabled={loading}
         className="px-4 py-2 bg-accent hover:bg-accent-soft disabled:opacity-50 rounded"
+        data-testid="social-save-config"
       >
         Save config
       </button>

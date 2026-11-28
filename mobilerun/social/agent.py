@@ -1,4 +1,4 @@
-"""Social mode helpers: unread reporting, draft prep with signature + escalation."""
+"""Social mode helpers: unread reporting, draft prep + escalation."""
 
 from __future__ import annotations
 
@@ -35,13 +35,9 @@ def apply_signature(
     conversation_id: str = "",
     contact_name: str = "",
 ) -> str:
-    config.sync_signature_app_overrides()
-    return config.signature.apply(
-        text,
-        package_name=package_name,
-        conversation_id=conversation_id,
-        contact_name=contact_name,
-    )
+    """Pass-through: portal no longer appends message signatures."""
+    del config, package_name, conversation_id, contact_name
+    return (text or "").rstrip()
 
 
 def prepare_outbound(
@@ -58,14 +54,15 @@ def prepare_outbound(
     is_new_contact: bool = False,
 ) -> OutboundDecision:
     """
-    Apply signature and classify escalation for logging.
+    Prepare outbound text (no signature) and classify escalation for logging.
 
-    Needs-you portal was removed — always auto-ok so social/dating auto-send
+    Needs-you portal was removed; always auto-ok so social/dating auto-send
     proceeds without a human review queue. ``queue`` is unused (kept for API
     compatibility with callers).
     """
     del queue  # portal queue retired
-    signed = apply_signature(
+    del app_name
+    final = apply_signature(
         draft_reply,
         config,
         package_name=package_name,
@@ -73,7 +70,7 @@ def prepare_outbound(
         contact_name=contact_name,
     )
     decision = classify_escalation(
-        draft_reply=signed,
+        draft_reply=final,
         inbound_text=inbound_preview,
         confidence=confidence,
         is_new_contact=is_new_contact,
@@ -81,7 +78,7 @@ def prepare_outbound(
         contact_name=contact_name,
         rules=config.escalation,
     )
-    return OutboundDecision(final_text=signed, needs_you=False, escalation=decision)
+    return OutboundDecision(final_text=final, needs_you=False, escalation=decision)
 
 
 def summarize_unreads(threads: List[Dict[str, Any]]) -> Dict[str, Any]:

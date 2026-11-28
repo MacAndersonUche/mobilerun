@@ -12,42 +12,34 @@ from mobilerun.social.config import SocialModeConfig
 from mobilerun.social.signature import DEFAULT_SIGNATURE, SignatureConfig
 
 
-def test_signature_default_on_appends():
+def test_signature_never_appends():
+    """Portal removed signature UI; apply() is always a pass-through."""
     sig = SignatureConfig()
-    out = sig.apply("Hey there")
-    assert out.endswith(DEFAULT_SIGNATURE)
-    assert "Hey there" in out
+    assert sig.apply("Hey there") == "Hey there"
+    assert sig.is_enabled() is False
 
 
-def test_signature_global_off():
-    sig = SignatureConfig(enabled_global=False)
-    assert sig.apply("Hi") == "Hi"
-
-
-def test_signature_per_app_override():
-    sig = SignatureConfig(enabled_global=True)
-    sig.per_app["com.whatsapp"] = False
+def test_signature_ignores_enabled_flags():
+    sig = SignatureConfig(enabled_global=True, text=DEFAULT_SIGNATURE)
+    sig.per_app["com.whatsapp"] = True
     assert sig.apply("Hi", package_name="com.whatsapp") == "Hi"
-    assert DEFAULT_SIGNATURE in sig.apply("Hi", package_name="com.instagram.android")
+    assert sig.apply("Hi", package_name="com.instagram.android") == "Hi"
 
 
-def test_signature_per_contact_overrides_app():
-    sig = SignatureConfig(enabled_global=False)
-    sig.per_app["com.whatsapp"] = False
+def test_signature_ignores_per_contact():
+    sig = SignatureConfig(enabled_global=True, text=DEFAULT_SIGNATURE)
     key = sig.contact_key("com.whatsapp", "c1", "Alex")
     sig.per_contact[key] = True
     out = sig.apply(
         "Yo", package_name="com.whatsapp", conversation_id="c1", contact_name="Alex"
     )
-    assert out.endswith(DEFAULT_SIGNATURE)
+    assert out == "Yo"
 
 
-def test_signature_idempotent():
-    sig = SignatureConfig(text="— from MacAI")
-    once = sig.apply("Hello")
-    twice = sig.apply(once)
-    assert once == twice
-    assert once.count("— from MacAI") == 1
+def test_signature_strips_trailing_whitespace_only():
+    sig = SignatureConfig(text="- from MacAI")
+    assert sig.apply("Hello  \n") == "Hello"
+    assert sig.apply(sig.apply("Hello")) == "Hello"
 
 
 def test_escalation_money():
@@ -87,7 +79,7 @@ def test_escalation_autosend_trusted_simple():
 
 
 def test_prepare_outbound_never_queues_needs_you():
-    """Needs-you portal removed — escalations no longer block auto-send."""
+    """Needs-you portal removed; escalations no longer block auto-send."""
     q = NeedsYouQueue()
     cfg = SocialModeConfig()
     decision = prepare_outbound(
@@ -104,7 +96,8 @@ def test_prepare_outbound_never_queues_needs_you():
     assert decision.needs_you is False
     assert decision.needs_you_id is None
     assert q.pending_count() == 0
-    assert DEFAULT_SIGNATURE in decision.final_text
+    assert decision.final_text == "I can meet tomorrow at 8pm"
+    assert DEFAULT_SIGNATURE not in decision.final_text
 
 
 def test_prepare_outbound_autosend_clean():
@@ -207,7 +200,8 @@ def test_api_social_draft_autosends_without_needs_you(client):
     body = draft.json()
     assert body["needs_you"] is False
     assert body["badge"] == 0
-    assert "— from MacAI" in body["final_text"]
+    assert body["final_text"] == "Want to grab dinner Friday at 7?"
+    assert "from MacAI" not in body["final_text"]
 
     ny = client.get("/api/needs-you")
     assert ny.status_code == 200
