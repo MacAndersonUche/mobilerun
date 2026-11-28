@@ -80,7 +80,7 @@ jobs:
           echo "DEVICE_ID=$DID" | tee "$ARTIFACTS_DIR/device.txt"
           cp /tmp/prod-e2e/sim_device.json "$ARTIFACTS_DIR/" || true
           # Dating must load (no backend-not-connected)
-          for path in /api/dating/status /api/dating/openers /api/selectors/status; do
+          for path in /api/dating/status /api/dating/openers; do
             code=$(curl -sS -o /tmp/dating.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$API_URL$path")
             echo "HTTP $code $path"
             test "$code" = "200"

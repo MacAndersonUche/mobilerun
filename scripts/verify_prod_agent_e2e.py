@@ -218,7 +218,6 @@ def main() -> int:
         "/api/dating/status",
         "/api/dating/review-queue",
         "/api/dating/openers",
-        "/api/selectors/status",
         "/api/mode",
         "/api/humanizer",
     ):

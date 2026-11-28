@@ -265,32 +265,6 @@ export default function DatingPage() {
   const [bucketCounts, setBucketCounts] = useState<Record<string, number>>({});
   const [newTemplateText, setNewTemplateText] = useState('');
   const [newTemplateBucket, setNewTemplateBucket] = useState('any');
-  const [selectorApps, setSelectorApps] = useState<
-    {
-      package_name: string;
-      version_code: string;
-      total_llm_calls: number;
-      last_discovered_at?: string | null;
-      max_layout_variants?: number;
-      roles: {
-        role: string;
-        source: string;
-        llm_calls: number;
-        discovered_at: string;
-        variant_count?: number;
-        nav_path?: { kind?: string; direction?: string; count?: number }[];
-        variants?: {
-          id?: string;
-          label?: string;
-          hits?: number;
-          misses?: number;
-          success_rate?: number;
-          source?: string;
-          selector?: { resource_id?: string; text?: string; hint?: string };
-        }[];
-      }[];
-    }[]
-  >([]);
 
   const authHeaders = () => ({
     Authorization: `Bearer ${getAuthToken()}`,
@@ -337,11 +311,6 @@ export default function DatingPage() {
         bucket_now: 'morning',
         bucket_counts: {},
       });
-      type SelectorApp = (typeof selectorApps)[number];
-      const selData = await soft<{ apps?: SelectorApp[] }>(
-        '/api/selectors/status',
-        { apps: [] }
-      );
       const rc = await soft<{
         counts?: Record<string, number>;
         modes?: Record<string, string>;
@@ -396,7 +365,6 @@ export default function DatingPage() {
       setTemplates(openersRes.library?.templates || []);
       setBucketNow(openersRes.bucket_now || 'morning');
       setBucketCounts(openersRes.bucket_counts || {});
-      setSelectorApps(selData.apps || []);
       setActivity(statusRes.data.activity || null);
       setError(null);
     } catch (e: unknown) {
@@ -1169,7 +1137,7 @@ export default function DatingPage() {
       {/* r44: rarely-changed settings, collapsed by default */}
       <details className="space-y-4" data-testid="dating-advanced">
         <summary className="cursor-pointer select-none rounded-lg border border-line bg-surface px-4 py-3 text-sm font-medium text-white">
-          Advanced settings (openers, persona, date flow, selector cache)
+          Advanced settings (openers, persona, date flow)
         </summary>
         <div className="space-y-4 pt-4">
       {/* Global opener mode */}
@@ -1490,63 +1458,6 @@ export default function DatingPage() {
         </button>
       </div>
 
-      {/* Selector cache status */}
-      <div className="bg-surface border border-line rounded-lg p-4 space-y-3">
-        <h3 className="text-lg font-semibold">Selector cache</h3>
-        <p className="text-xs text-mute">
-          Multiple layout variants per app version (default up to{' '}
-          {selectorApps[0]?.max_layout_variants ?? 4}, min 2). Tried by success
-          rate - no LLM when any variant matches. Off-screen targets use scroll
-          explore; failures escalate to Needs you.
-        </p>
-        {selectorApps.length === 0 ? (
-          <p className="text-sm text-mute">No cached apps yet.</p>
-        ) : (
-          selectorApps.map((app) => (
-            <div
-              key={`${app.package_name}@${app.version_code}`}
-              className="rounded-xl border border-line bg-canvas-elev p-3 text-sm space-y-2"
-            >
-              <div className="flex flex-wrap justify-between gap-2">
-                <span className="font-medium">
-                  {app.package_name}{' '}
-                  <span className="text-mute">v{app.version_code}</span>
-                </span>
-                <span className="text-mute">
-                  LLM calls: {app.total_llm_calls} · cap{' '}
-                  {app.max_layout_variants ?? 4} variants · last{' '}
-                  {app.last_discovered_at
-                    ? new Date(app.last_discovered_at).toLocaleString()
-                    : '-'}
-                </span>
-              </div>
-              <ul className="text-xs text-mute space-y-2">
-                {(app.roles || []).map((r) => (
-                  <li key={r.role} className="space-y-1">
-                    <div>
-                      {r.role}: {r.source} · {r.variant_count ?? 1} variant
-                      {(r.variant_count ?? 1) === 1 ? '' : 's'} (llm {r.llm_calls})
-                    </div>
-                    {(r.variants || []).length > 0 ? (
-                      <ul className="pl-3 space-y-0.5 border-l border-line">
-                        {r.variants!.map((v, i) => (
-                          <li key={v.id || i}>
-                            {v.label || v.selector?.resource_id?.split('/').pop() || v.id || `variant ${i + 1}`}
-                            : hits {v.hits ?? 0} / misses {v.misses ?? 0}
-                            {typeof v.success_rate === 'number'
-                              ? ` (${Math.round(v.success_rate * 100)}%)`
-                              : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))
-        )}
-      </div>
         </div>
       </details>
     </div>

@@ -81,7 +81,7 @@ PY
 echo "DEVICE_ID=$DEVICE_ID" | tee "$ARTIFACTS_DIR/device_id.txt"
 
 echo "== Dating endpoints (must be 200) =="
-for path in /api/dating/status /api/dating/review-queue /api/selectors/status /api/mode; do
+for path in /api/dating/status /api/dating/review-queue /api/mode; do
   code=$(curl -sS -o "$ARTIFACTS_DIR/dating_${path##*/}.json" -w '%{http_code}' \
     -H "Authorization: Bearer $TOKEN" "$API_URL$path")
   echo "HTTP $code $path"
