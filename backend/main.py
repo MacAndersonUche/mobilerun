@@ -2466,10 +2466,12 @@ class SocialConfigUpdate(BaseModel):
     enabled_apps: Optional[List[str]] = None
     speed_preset: str = "balanced"
     tone_prompt: Optional[str] = None
-    signature_enabled: bool = True
-    signature_text: str = "— from MacAI"
+    # Ignored: portal removed signature UI; backend never appends.
+    signature_enabled: bool = False
+    signature_text: str = ""
     per_app_signature: Optional[Dict[str, bool]] = None
-    always_ask_new_contacts: bool = True
+    always_ask_new_contacts: bool = False
+    # Ignored: portal removed notifications UI.
     email_notify: bool = False
     email_to: str = "macandersonuche@yahoo.com"
 
@@ -4312,16 +4314,16 @@ async def update_social_config(
     cfg.speed_preset = body.speed_preset
     if body.tone_prompt is not None:
         cfg.tone_prompt = body.tone_prompt
-    cfg.signature.enabled_global = body.signature_enabled
-    cfg.signature.text = body.signature_text or cfg.signature.text
-    if body.per_app_signature:
-        cfg.signature.per_app.update(body.per_app_signature)
-        for app in cfg.apps:
-            if app.package_name in body.per_app_signature:
-                app.signature_enabled = body.per_app_signature[app.package_name]
-    cfg.escalation.always_ask_new_contacts = body.always_ask_new_contacts
-    cfg.email_notify = body.email_notify
-    cfg.email_to = body.email_to
+    # Signature / notifications removed from portal; never append or email.
+    cfg.signature.enabled_global = False
+    cfg.signature.text = ""
+    cfg.signature.per_app.clear()
+    for app in cfg.apps:
+        app.signature_enabled = False
+    cfg.escalation.always_ask_new_contacts = False
+    cfg.email_notify = False
+    if body.email_to:
+        cfg.email_to = body.email_to
     social_mode_state["speed_preset"] = body.speed_preset
     agent_mode_state["speed_preset"] = body.speed_preset
     agent_mode_state["mode"] = "social"
@@ -4557,7 +4559,7 @@ async def report_social_unreads(
 async def social_prepare_draft(
     body: SocialDraftRequest, auth: Optional[dict] = Depends(optional_verify_token)
 ):
-    """Prepare outbound reply: signature applied; always auto-ok (no Needs-you)."""
+    """Prepare outbound reply (no signature); always auto-ok (no Needs-you)."""
     from mobilerun.social.agent import prepare_outbound
 
     cfg = _social_config()
